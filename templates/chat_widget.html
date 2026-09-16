@@ -1,0 +1,77 @@
+{% set co = company() %}
+<div id="bsc-chat" class="fixed bottom-5 right-5 z-50" data-open="false">
+    <div id="bsc-chat-panel" class="hidden w-[min(92vw,22rem)] bg-white rounded-3xl border border-slate-200 shadow-2xl overflow-hidden">
+        <div class="flex items-center justify-between px-4 py-3 bg-indigo-600 text-white">
+            <div class="flex items-center gap-2.5">
+                <span class="w-8 h-8 rounded-full bg-white/15 flex items-center justify-center text-base">🛠️</span>
+                <div>
+                    <p class="text-sm font-bold leading-tight">{{ co.name }} Help</p>
+                    <p class="text-[11px] text-indigo-100 leading-tight">Typically replies instantly</p>
+                </div>
+            </div>
+            <button type="button" id="bsc-chat-close" class="text-white/80 hover:text-white text-lg leading-none w-7 h-7 rounded-full hover:bg-white/10">✕</button>
+        </div>
+        <div id="bsc-chat-log" class="h-72 overflow-y-auto px-4 py-4 space-y-3 bg-slate-50 text-sm">
+            <div class="max-w-[85%] bg-white rounded-2xl rounded-tl-sm border border-slate-200 px-3.5 py-2.5 text-slate-700">
+                Hi there 👋 Ask me anything — instant ballpark prices, whether you need a permit, timelines, or how to book a free walkthrough.
+            </div>
+        </div>
+        <form id="bsc-chat-form" class="flex items-center gap-2 border-t border-slate-100 px-3 py-3 bg-white">
+            <input id="bsc-chat-input" type="text" autocomplete="off" placeholder="Type a message…" required
+                   class="flex-1 px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+            <button type="submit" class="w-10 h-10 shrink-0 rounded-xl bg-indigo-600 text-white flex items-center justify-center hover:bg-indigo-700">
+                <svg class="w-4.5 h-4.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M5 12h14M13 6l6 6-6 6"/></svg>
+            </button>
+        </form>
+    </div>
+    <button id="bsc-chat-launch" type="button" class="w-14 h-14 rounded-full bg-indigo-600 text-white shadow-lg shadow-indigo-300 flex items-center justify-center text-2xl hover:bg-indigo-700 transition-transform hover:scale-105">
+        💬
+    </button>
+</div>
+<script>
+(function () {
+    var root = document.getElementById('bsc-chat');
+    var launch = document.getElementById('bsc-chat-launch');
+    var panel = document.getElementById('bsc-chat-panel');
+    var close = document.getElementById('bsc-chat-close');
+    var log = document.getElementById('bsc-chat-log');
+    var form = document.getElementById('bsc-chat-form');
+    var input = document.getElementById('bsc-chat-input');
+
+    function push(text, mine) {
+        var div = document.createElement('div');
+        div.className = mine
+            ? 'max-w-[85%] ml-auto bg-indigo-600 text-white rounded-2xl rounded-tr-sm px-3.5 py-2.5'
+            : 'max-w-[85%] bg-white rounded-2xl rounded-tl-sm border border-slate-200 px-3.5 py-2.5 text-slate-700';
+        div.textContent = text;
+        log.appendChild(div);
+        log.scrollTop = log.scrollHeight;
+    }
+
+    launch.addEventListener('click', function () {
+        panel.classList.toggle('hidden');
+        launch.classList.toggle('hidden');
+        if (!panel.classList.contains('hidden')) input.focus();
+    });
+    close.addEventListener('click', function () {
+        panel.classList.add('hidden');
+        launch.classList.remove('hidden');
+    });
+    form.addEventListener('submit', async function (e) {
+        e.preventDefault();
+        var msg = input.value.trim();
+        if (!msg) return;
+        push(msg, true);
+        input.value = '';
+        var body = new FormData();
+        body.append('message', msg);
+        try {
+            var res = await fetch('/api/chat', { method: 'POST', body: body });
+            var json = await res.json();
+            push(json.reply || 'Sorry, I had trouble answering that. Call {{ co.phone }} for help.');
+        } catch (err) {
+            push('Connection trouble — call us at {{ co.phone }}.');
+        }
+    });
+})();
+</script>

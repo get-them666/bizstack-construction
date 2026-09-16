@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% set co = company() %}
+{% block title %}Recent Projects | {{ co.name }} — Renovations &amp; Repairs Portfolio{% endblock %}
+{% block meta %}<meta name="description" content="Browse recent Buildstack Construction renovations and repairs across {{ co.service_area }}: kitchens, baths, whole-home rehabs, decks, roofing and rental make-readies.">{% endblock %}
+
+{% block content %}
+<section class="bg-gradient-to-br from-slate-900 to-indigo-900 text-white">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16 lg:py-20">
+        <p class="text-sm font-bold text-indigo-300 uppercase tracking-widest">Our work</p>
+        <h1 class="text-4xl sm:text-5xl font-black tracking-tight mt-3 max-w-3xl">Projects we're proud to put our name on.</h1>
+        <p class="mt-5 text-lg text-slate-300 max-w-2xl">A sample of recent renovations, repairs, and rental make-readies across {{ co.service_area }}. Photos being added as projects complete.</p>
+    </div>
+</section>
+
+<section class="py-16 bg-white">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+            {% set projects = [
+                ("Whole-Home Renovation", "Virginia Beach, VA", "🏠", "3 bed / 2 bath gut rehab: new kitchen, two baths, LVP flooring, paint, lighting, and trim throughout.", ["Structural repair", "Kitchen &amp; baths", "Flooring", "Paint"]),
+                ("Kitchen Remodel", "Williamsburg, VA", "🍳", "Opened a galley kitchen into the dining area, new cabinets, quartz counters, tile backsplash, and under-cabinet lighting.", ["Carpentry", "Electrical", "Tile"]),
+                ("Primary Bath Rebuild", "Newport News, VA", "🚿", "Full shower rebuild with new waterproofing, custom tile, niche, glass door, and new vanity and fixtures.", ["Plumbing", "Tile", "Waterproofing"]),
+                ("Roof &amp; Siding Refresh", "Hampton, VA", "🏗️", "Tear-off and reroof, new flashing and gutters, repaired siding, and fresh exterior paint.", ["Roofing", "Siding", "Exterior"]),
+                ("Deck &amp; Fence Build", "Yorktown, VA", "🌳", "New composite deck with stairs and railing, plus a privacy fence with two gates.", ["Decks", "Fences"]),
+                ("STR Make-Ready", "Outer Banks, NC", "🏡", "Rental make-ready: repairs, fresh paint, LVP flooring, new fixtures, and a furnished, photo-ready finish for listing.", ["Renovation", "Flooring", "Rental-ready"])
+            ] %}
+            {% for title, location, icon, desc, tags in projects %}
+            <article class="rounded-3xl border border-slate-200 bg-slate-50 overflow-hidden flex flex-col">
+                <div class="aspect-[4/3] bg-gradient-to-br from-indigo-100 to-slate-200 flex items-center justify-center text-6xl">{{ icon }}</div>
+                <div class="p-6 flex flex-col flex-1">
+                    <p class="text-xs font-semibold text-indigo-600 uppercase tracking-wider">{{ location }}</p>
+                    <h3 class="font-bold text-slate-900 mt-1">{{ title | safe }}</h3>
+                    <p class="text-sm text-slate-600 mt-2 flex-1">{{ desc | safe }}</p>
+                    <div class="flex flex-wrap gap-2 mt-4">
+                        {% for tag in tags %}
+                        <span class="px-2.5 py-1 text-xs font-semibold bg-white border border-slate-200 text-slate-600 rounded-full">{{ tag | safe }}</span>
+                        {% endfor %}
+                    </div>
+                </div>
+            </article>
+            {% endfor %}
+        </div>
+        <p class="mt-10 text-center text-sm text-slate-500">Want to see work like yours? Ask us for references from projects in your area — we'll happily connect you with past clients.</p>
+    </div>
+</section>
+
+<section class="py-16 bg-slate-50 border-t border-slate-200">
+    <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
+        <h2 class="text-3xl font-black tracking-tight">Let's add your project to the list.</h2>
+        <a href="/quote" class="mt-6 inline-flex px-7 py-4 text-base font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-2xl transition-all">Get a Free Estimate</a>
+    </div>
+</section>
+{% endblock %}

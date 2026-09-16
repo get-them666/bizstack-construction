@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% set co = company() %}
+{% block title %}Dashboard | {{ co.name }} Owner Portal{% endblock %}
+{% block meta %}<meta name="robots" content="noindex, nofollow">{% endblock %}
+
+{% block content %}
+<section class="py-10 bg-slate-50">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="flex flex-wrap items-end justify-between gap-4 mb-8">
+            <div>
+                <p class="text-sm font-bold text-indigo-600 uppercase tracking-widest">Owner portal</p>
+                <h1 class="text-3xl font-black tracking-tight text-slate-900">Dashboard</h1>
+            </div>
+            <div class="flex gap-3">
+                <a href="/leads" class="px-4 py-2.5 text-sm font-semibold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 rounded-xl transition-colors">View all leads</a>
+                <a href="/payments" class="px-4 py-2.5 text-sm font-semibold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 rounded-xl transition-colors">Payments</a>
+            </div>
+        </div>
+
+        <!-- Stat cards -->
+        <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            <div class="bg-white rounded-3xl border border-slate-200 p-6">
+                <p class="text-xs font-bold text-slate-500 uppercase tracking-wider">Total leads</p>
+                <p class="mt-2 text-3xl font-black text-slate-900">{{ stats.total_leads }}</p>
+            </div>
+            <div class="bg-white rounded-3xl border border-slate-200 p-6">
+                <p class="text-xs font-bold text-slate-500 uppercase tracking-wider">New / needs contact</p>
+                <p class="mt-2 text-3xl font-black {% if stats.new_leads %}text-amber-500{% else %}text-slate-900{% endif %}">{{ stats.new_leads }}</p>
+            </div>
+            <div class="bg-white rounded-3xl border border-slate-200 p-6">
+                <p class="text-xs font-bold text-slate-500 uppercase tracking-wider">Active jobs</p>
+                <p class="mt-2 text-3xl font-black text-indigo-600">{{ stats.active }}</p>
+            </div>
+            <div class="bg-white rounded-3xl border border-slate-200 p-6">
+                <p class="text-xs font-bold text-slate-500 uppercase tracking-wider">Deposits collected</p>
+                <p class="mt-2 text-3xl font-black text-emerald-600">${{ "%.0f" | format(stats.deposit_total / 100) }}</p>
+                <p class="text-xs text-slate-400">{{ stats.deposits_count }} payment{{ 's' if stats.deposits_count != 1 else '' }}</p>
+            </div>
+        </div>
+
+        <!-- Recent leads -->
+        <div class="mt-10 bg-white rounded-3xl border border-slate-200">
+            <div class="px-6 py-5 border-b border-slate-100 flex items-center justify-between">
+                <h2 class="font-bold text-slate-900">Recent leads</h2>
+                <a href="/leads" class="text-sm font-semibold text-indigo-600 hover:text-indigo-700">See all →</a>
+            </div>
+            {% if recent %}
+            <div class="overflow-x-auto">
+                <table class="w-full text-sm">
+                    <thead>
+                        <tr class="text-left text-xs text-slate-500 uppercase tracking-wider border-b border-slate-100">
+                            <th class="px-6 py-3">Name</th>
+                            <th class="px-6 py-3">Project</th>
+                            <th class="px-6 py-3">Status</th>
+                            <th class="px-6 py-3">Deposit</th>
+                            <th class="px-6 py-3">Received</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100">
+                        {% for lead in recent %}
+                        <tr class="hover:bg-slate-50">
+                            <td class="px-6 py-3.5">
+                                <p class="font-semibold text-slate-800">{{ lead.name }}</p>
+                                <p class="text-xs text-slate-500">{{ lead.phone }}</p>
+                            </td>
+                            <td class="px-6 py-3.5 text-slate-600">{{ lead.project_type or '—' }}</td>
+                            <td class="px-6 py-3.5">
+                                <span class="inline-block px-2.5 py-1 text-xs font-bold rounded-full
+                                    {% if lead.status == 'new' %}bg-amber-50 text-amber-700 border border-amber-200
+                                    {% elif lead.status == 'contacted' %}bg-blue-50 text-blue-700 border border-blue-200
+                                    {% elif lead.status == 'quoted' %}bg-violet-50 text-violet-700 border border-violet-200
+                                    {% elif lead.status == 'deposit' %}bg-emerald-50 text-emerald-700 border border-emerald-200
+                                    {% elif lead.status == 'in_progress' %}bg-indigo-50 text-indigo-700 border border-indigo-200
+                                    {% elif lead.status == 'completed' %}bg-slate-100 text-slate-700 border border-slate-200
+                                    {% else %}bg-slate-50 text-slate-400 border border-slate-200{% endif %}">
+                                    {{ status_labels.get(lead.status, lead.status) }}
+                                </span>
+                            </td>
+                            <td class="px-6 py-3.5">
+                                {% if lead.deposit_status == 'paid' %}<span class="inline-flex items-center gap-1 font-semibold text-emerald-600">✅ Paid</span>
+                                {% elif lead.deposit_status == 'pending' %}<span class="font-semibold text-amber-600">Pending</span>
+                                {% else %}<span class="text-slate-400">—</span>{% endif %}
+                            </td>
+                            <td class="px-6 py-3.5 text-xs text-slate-500">{{ lead.created_at }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="px-6 py-14 text-center">
+                <p class="text-4xl mb-3">📭</p>
+                <p class="font-semibold text-slate-700">No leads yet</p>
+                <p class="text-sm text-slate-500 mt-1">Website forms, phone calls, and texts will land here.</p>
+                <a href="/quote" class="mt-4 inline-block text-sm font-semibold text-indigo-600 hover:text-indigo-700">Try the quote form →</a>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</section>
+{% endblock %}

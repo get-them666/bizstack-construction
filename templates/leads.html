@@ -1,0 +1,193 @@
+{% extends "base.html" %}
+{% set co = company() %}
+{% block title %}Leads | {{ co.name }} Owner Portal{% endblock %}
+{% block meta %}<meta name="robots" content="noindex, nofollow">{% endblock %}
+
+{% block content %}
+<section class="py-10 bg-slate-50 min-h-[80vh]">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="flex flex-wrap items-end justify-between gap-4 mb-6">
+            <div>
+                <p class="text-sm font-bold text-indigo-600 uppercase tracking-widest">Owner portal</p>
+                <h1 class="text-3xl font-black tracking-tight text-slate-900">Leads</h1>
+            </div>
+            <a href="/dashboard" class="px-4 py-2.5 text-sm font-semibold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 rounded-xl transition-colors">← Dashboard</a>
+        </div>
+
+        <!-- Filters -->
+        <form method="get" action="/leads" class="bg-white rounded-3xl border border-slate-200 p-4 mb-6 flex flex-wrap items-center gap-3">
+            <div class="flex flex-wrap gap-2">
+                <a href="/leads" class="px-3 py-1.5 text-sm font-semibold rounded-full border transition-colors {% if not active_status %}bg-indigo-600 text-white border-indigo-600{% else %}bg-white text-slate-600 border-slate-200 hover:border-indigo-300{% endif %}">All ({{ counts.values() | sum }})</a>
+                {% for s in statuses %}
+                <a href="/leads?status={{ s }}" class="px-3 py-1.5 text-sm font-semibold rounded-full border transition-colors {% if active_status == s %}bg-indigo-600 text-white border-indigo-600{% else %}bg-white text-slate-600 border-slate-200 hover:border-indigo-300{% endif %}">{{ status_labels.get(s, s) }} ({{ counts.get(s, 0) }})</a>
+                {% endfor %}
+            </div>
+            <div class="flex-1 min-w-[220px] flex gap-2">
+                <input type="hidden" name="status" value="{{ active_status }}">
+                <input type="search" name="q" value="{{ q }}" placeholder="Search name, phone, email, address…" class="flex-1 px-4 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                <button type="submit" class="px-4 py-2.5 text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition-colors">Search</button>
+            </div>
+        </form>
+
+        <!-- Status badges legend -->
+        <div class="flex flex-wrap gap-2 mb-6 text-xs text-slate-500">
+            {% for s in statuses %}
+            <span class="inline-flex items-center gap-1.5">
+                <span class="w-2.5 h-2.5 rounded-full
+                    {% if s == 'new' %}bg-amber-400
+                    {% elif s == 'contacted' %}bg-blue-400
+                    {% elif s == 'quoted' %}bg-violet-400
+                    {% elif s == 'deposit' %}bg-emerald-500
+                    {% elif s == 'in_progress' %}bg-indigo-500
+                    {% elif s == 'completed' %}bg-slate-500
+                    {% else %}bg-slate-300{% endif %}"></span>
+                {{ status_labels.get(s, s) }}
+            </span>
+            {% endfor %}
+        </div>
+
+        {% if leads %}
+        <div class="space-y-4">
+            {% for lead in leads %}
+            <div class="bg-white rounded-3xl border border-slate-200 overflow-hidden">
+                <details class="group" {% if loop.first %}open{% endif %}>
+                    <summary class="cursor-pointer list-none px-5 py-4 flex flex-wrap items-center gap-x-6 gap-y-2 hover:bg-slate-50">
+                        <div class="flex-1 min-w-[200px]">
+                            <div class="flex items-center gap-3">
+                                <p class="font-bold text-slate-900">{{ lead.name }}</p>
+                                {% if lead.deposit_status == 'paid' %}<span class="text-xs font-bold text-emerald-600">✅ deposit paid</span>{% endif %}
+                                {% if lead.deposit_status == 'pending' %}<span class="text-xs font-bold text-amber-600">💰 deposit pending</span>{% endif %}
+                            </div>
+                            <p class="text-sm text-slate-500 mt-0.5">{{ lead.phone }} · {{ lead.project_type or '—' }}</p>
+                        </div>
+                        <span class="px-2.5 py-1 text-xs font-bold rounded-full
+                            {% if lead.status == 'new' %}bg-amber-50 text-amber-700 border border-amber-200
+                            {% elif lead.status == 'contacted' %}bg-blue-50 text-blue-700 border border-blue-200
+                            {% elif lead.status == 'quoted' %}bg-violet-50 text-violet-700 border border-violet-200
+                            {% elif lead.status == 'deposit' %}bg-emerald-50 text-emerald-700 border border-emerald-200
+                            {% elif lead.status == 'in_progress' %}bg-indigo-50 text-indigo-700 border border-indigo-200
+                            {% elif lead.status == 'completed' %}bg-slate-100 text-slate-700 border border-slate-200
+                            {% else %}bg-slate-50 text-slate-400 border border-slate-200{% endif %}">
+                            {{ status_labels.get(lead.status, lead.status) }}
+                        </span>
+                        <span class="text-xs text-slate-400">{{ lead.created_at }}</span>
+                        <span class="text-slate-400 text-sm group-open:rotate-180 transition-transform">▾</span>
+                    </summary>
+                    <div class="px-5 pb-5 pt-1 border-t border-slate-100">
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-2 text-sm mt-4">
+                            <div class="grid grid-cols-2 gap-y-2">
+                                <span class="text-slate-500">Phone</span>
+                                <span class="font-semibold text-slate-800">{{ lead.phone }}</span>
+                                <span class="text-slate-500">Email</span>
+                                <span class="font-semibold text-slate-800 break-all">{{ lead.email or '—' }}</span>
+                                <span class="text-slate-500">Address</span>
+                                <span class="font-semibold text-slate-800">{{ lead.address or '—' }}</span>
+                                <span class="text-slate-500">Budget</span>
+                                <span class="font-semibold text-slate-800">{{ lead.budget or '—' }}</span>
+                                <span class="text-slate-500">Timeline</span>
+                                <span class="font-semibold text-slate-800">{{ lead.timeline or '—' }}</span>
+                                <span class="text-slate-500">Source</span>
+                                <span class="font-semibold text-slate-800">{{ lead.source or '—' }}</span>
+                            </div>
+                            <div>
+                                <span class="text-slate-500">Project details</span>
+                                <p class="mt-1 text-slate-800 whitespace-pre-wrap bg-slate-50 rounded-xl p-3 border border-slate-100 min-h-[4rem]">{{ lead.description or '—' }}</p>
+                            </div>
+                        </div>
+
+                        <div class="mt-5 flex flex-wrap items-center gap-3">
+                            <form method="POST" action="/api/leads/{{ lead.id }}/status" class="flex items-center gap-2">
+                                <select name="status_val" onchange="this.form.submit()" class="px-3 py-2 rounded-xl bg-slate-50 border border-slate-200 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                                    {% for s in statuses %}
+                                    <option value="{{ s }}" {% if s == lead.status %}selected{% endif %}>{{ status_labels.get(s, s) }}</option>
+                                    {% endfor %}
+                                </select>
+                            </form>
+
+                            {% if lead.deposit_status != 'paid' %}
+                            <div class="flex items-center gap-2">
+                                <input id="amt-{{ lead.id }}" type="number" step="50" min="50" value="{{ (lead.deposit_cents or default_deposit * 100) / 100 }}" class="w-32 px-3 py-2 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                                <button data-deposit data-lead="{{ lead.id }}" type="button"
+                                        class="px-4 py-2 text-sm font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl transition-colors">
+                                    Send deposit link
+                                </button>
+                            </div>
+                            {% endif %}
+
+                            <div class="flex-1"></div>
+                            <div class="flex items-center gap-2">
+                                <a href="tel:{{ lead.phone }}" class="px-3 py-2 text-sm font-semibold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 rounded-xl transition-colors">Call</a>
+                                <a href="sms:{{ lead.phone }}" class="px-3 py-2 text-sm font-semibold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 rounded-xl transition-colors">Text</a>
+                                <form method="POST" action="/api/leads/{{ lead.id }}/delete" onsubmit="return confirm('Delete this lead permanently?')">
+                                    <button type="submit" class="px-3 py-2 text-sm font-semibold text-red-600 bg-white border border-red-200 hover:bg-red-50 rounded-xl transition-colors">Delete</button>
+                                </form>
+                            </div>
+                        </div>
+
+                        <div class="mt-4">
+                            <p class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5">Internal notes</p>
+                            <form data-notes action="/api/leads/{{ lead.id }}/notes" class="flex gap-2">
+                                <input type="text" name="notes" value="{{ lead.notes or '' }}" placeholder="Estimate date, permits, contact notes…" class="flex-1 px-4 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                                <button type="submit" class="px-4 py-2.5 text-sm font-semibold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 rounded-xl transition-colors">Save notes</button>
+                            </form>
+                        </div>
+                    </div>
+                </details>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="bg-white rounded-3xl border border-slate-200 px-6 py-16 text-center">
+            <p class="text-4xl mb-3">📭</p>
+            <p class="font-semibold text-slate-700">No leads found</p>
+            <p class="text-sm text-slate-500 mt-1">{% if q or active_status %}Try a different filter or search.{% else %}New inquiries land here automatically.{% endif %}</p>
+        </div>
+        {% endif %}
+    </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    document.querySelectorAll('[data-deposit]').forEach(function(btn) {
+        btn.addEventListener('click', async function() {
+            const leadId = btn.dataset.lead;
+            const amtInput = document.getElementById('amt-' + leadId);
+            btn.disabled = true;
+            btn.textContent = 'Creating…';
+            try {
+                const res = await fetch('/api/leads/' + leadId + '/deposit-link?amount=' + encodeURIComponent(amtInput.value || ''));
+                const json = await res.json();
+                if (json.url) {
+                    window.open(json.url, '_blank');
+                    btn.textContent = 'Opened payment link';
+                } else {
+                    btn.textContent = json.error || 'Failed';
+                    btn.disabled = false;
+                    setTimeout(function() { btn.textContent = 'Send deposit link'; }, 4000);
+                }
+            } catch (e) {
+                btn.textContent = 'Network error';
+                btn.disabled = false;
+                setTimeout(function() { btn.textContent = 'Send deposit link'; }, 4000);
+            }
+        });
+    });
+    document.querySelectorAll('form[data-notes]').forEach(function(form) {
+        form.addEventListener('submit', async function(e) {
+            e.preventDefault();
+            const body = new FormData(form);
+            body.set('notes', body.get('notes') || '');
+            try {
+                await fetch(form.action, { method: 'POST', body: body });
+                form.querySelector('input[name="notes"]').style.borderColor = '#10b981';
+                setTimeout(function() { form.querySelector('input[name="notes"]').style.borderColor = ''; }, 1200);
+            } catch (e) {
+                alert('Could not save notes');
+            }
+        });
+    });
+});
+</script>
+{% endblock %}

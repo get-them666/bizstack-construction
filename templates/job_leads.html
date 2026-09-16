@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% set co = company() %}
+{% block title %}Job Finder | {{ co.name }} Owner Portal{% endblock %}
+{% block meta %}<meta name="robots" content="noindex, nofollow">{% endblock %}
+
+{% block content %}
+<section class="py-10 bg-slate-50 min-h-[80vh]">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="flex flex-wrap items-end justify-between gap-4 mb-6">
+            <div>
+                <p class="text-sm font-bold text-indigo-600 uppercase tracking-widest">Owner portal · New-build &amp; renovation permits</p>
+                <h1 class="text-3xl font-black tracking-tight text-slate-900">Job Finder</h1>
+                <p class="text-sm text-slate-500 mt-1">Permits pulled from local building departments — who's about to build or gut a place near us?</p>
+            </div>
+            <a href="/dashboard" class="px-4 py-2.5 text-sm font-semibold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 rounded-xl transition-colors">← Dashboard</a>
+        </div>
+
+        <form method="POST" action="/api/job-leads/refresh" class="bg-white rounded-3xl border border-slate-200 p-4 mb-4 flex flex-wrap items-center gap-3">
+            <input type="text" name="city" value="Williamsburg" placeholder="City" class="w-40 px-4 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+            <select name="state" class="px-4 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                <option value="VA">VA</option>
+                <option value="NC">NC</option>
+            </select>
+            <button type="submit" class="px-5 py-2.5 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition-colors">↻ Scan for new permits</button>
+            <span class="text-xs text-slate-400">{% if shovels_configured %}Live via Shovels.ai{% else %}Demo data (add SHOVELS_API_KEY for live){% endif %}</span>
+        </form>
+
+        <div class="flex flex-wrap items-center gap-2 mb-6">
+            <a href="/job-leads" class="px-3 py-1.5 text-sm font-semibold rounded-full border transition-colors {% if not active_status %}bg-indigo-600 text-white border-indigo-600{% else %}bg-white text-slate-600 border-slate-200 hover:border-indigo-300{% endif %}">All ({{ counts.values() | sum }})</a>
+            {% for s in ['new', 'contacted', 'closed'] %}
+            <a href="/job-leads?status_filter={{ s }}" class="px-3 py-1.5 text-sm font-semibold rounded-full border transition-colors {% if active_status == s %}bg-indigo-600 text-white border-indigo-600{% else %}bg-white text-slate-600 border-slate-200 hover:border-indigo-300{% endif %}">{{ {'new':'New','contacted':'Contacted','closed':'Closed'}.get(s, s) }} ({{ counts.get(s, 0) }})</a>
+            {% endfor %}
+        </div>
+
+        {% if leads %}
+        <div class="space-y-3">
+            {% for j in leads %}
+            <div class="bg-white rounded-2xl border border-slate-200 p-5">
+                <div class="flex flex-wrap items-start gap-x-6 gap-y-2">
+                    <div class="flex-1 min-w-[240px]">
+                        <div class="flex flex-wrap items-center gap-2">
+                            <p class="font-bold text-slate-900">{{ j.work_type or 'Permit' }} <span class="text-slate-400 font-normal">@</span> {{ j.address or '—' }}</p>
+                            {% if j.is_demo %}<span class="text-[10px] font-bold text-slate-400 bg-slate-100 border border-slate-200 rounded-full px-2 py-0.5">DEMO</span>{% endif %}
+                        </div>
+                        <p class="text-sm text-slate-500 mt-0.5 line-clamp-2">{{ j.job_description or '—' }}</p>
+                        <p class="text-xs text-slate-400 mt-1.5">Permit #{{ j.permit_number or '—' }} · {{ j.city or '' }}, {{ j.state or '' }} · Issued {{ j.issue_date or '—' }} · Found {{ j.found_at.strftime('%b %d') if j.found_at else '—' }}</p>
+                    </div>
+                    <div class="text-sm font-bold text-slate-800">{% if j.estimated_value %}≈ ${{ '{:,.0f}'.format(j.estimated_value or 0) }}{% else %}—{% endif %}</div>
+                    {% if j.contractor_name %}<span class="px-2.5 py-1 text-xs font-semibold rounded-full bg-slate-100 text-slate-600">{{ j.contractor_name }}</span>{% endif %}
+                    <span class="px-2.5 py-1 text-xs font-bold rounded-full
+                        {% if j.status == 'new' %}bg-amber-50 text-amber-700 border border-amber-200
+                        {% elif j.status == 'contacted' %}bg-blue-50 text-blue-700 border border-blue-200
+                        {% else %}bg-slate-100 text-slate-600 border border-slate-200{% endif %}">{{ {'new':'New','contacted':'Contacted','closed':'Closed'}.get(j.status, j.status) }}</span>
+                </div>
+                <div class="mt-4 flex flex-wrap items-center gap-2">
+                    <form method="POST" action="/api/job-leads/{{ j.id }}/convert">
+                        <button type="submit" class="px-4 py-2 text-sm font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl transition-colors">→ Convert to a lead</button>
+                    </form>
+                    {% if j.status == 'new' %}
+                    <form method="POST" action="/api/job-leads/{{ j.id }}/dismiss">
+                        <button type="submit" class="px-4 py-2 text-sm font-semibold text-slate-600 bg-white border border-slate-200 hover:border-slate-300 rounded-xl transition-colors">Dismiss</button>
+                    </form>
+                    {% endif %}
+                    <form method="POST" action="/api/job-leads/{{ j.id }}/delete" onsubmit="return confirm('Delete this permit record?')">
+                        <button type="submit" class="px-4 py-2 text-sm font-semibold text-red-600 bg-white border border-red-200 hover:bg-red-50 rounded-xl transition-colors">Delete</button>
+                    </form>
+                    <div class="flex-1"></div>
+                    {% if j.address %}
+                    <a href="{{ map_directions(j.address) }}" target="_blank" rel="noopener" class="px-4 py-2 text-sm font-semibold text-indigo-600 bg-indigo-50 hover:bg-indigo-100 rounded-xl transition-colors">Map →</a>
+                    {% endif %}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="bg-white rounded-3xl border border-slate-200 px-6 py-16 text-center">
+            <p class="text-4xl mb-3">🗺️</p>
+            <p class="font-semibold text-slate-700">No permits loaded yet</p>
+            <p class="text-sm text-slate-500 mt-1">Hit "Scan for new permits" above to pull the latest building-permit work near us.</p>
+        </div>
+        {% endif %}
+    </div>
+</section>
+{% endblock %}

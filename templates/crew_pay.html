@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% set co = company() %}
+{% block title %}Pay | {{ co.name }} Crew Portal{% endblock %}
+{% block meta %}<meta name="robots" content="noindex, nofollow">{% endblock %}
+
+{% block content %}
+<section class="py-8 bg-slate-50 min-h-[80vh]">
+    <div class="max-w-2xl mx-auto px-4 sm:px-6">
+        <div class="flex items-center justify-between mb-6">
+            <a href="/crew/dashboard" class="text-sm font-semibold text-slate-500 hover:text-indigo-600">← Back to dashboard</a>
+            <a href="/crew/logout" class="text-sm font-semibold text-slate-400 hover:text-slate-600">Log out</a>
+        </div>
+
+        <h1 class="text-2xl font-black tracking-tight text-slate-900 mb-6">Pay</h1>
+
+        <div class="bg-white rounded-2xl border border-slate-200 p-5 mb-6">
+            <p class="text-sm font-bold text-slate-900 mb-1">Rate</p>
+            <p class="text-2xl font-black text-slate-900">${{ '{:,.2f}'.format(worker.pay_rate or 0) }}{% if worker.pay_type == 'hourly' %} <span class="text-sm font-semibold text-slate-400">/ hour</span>{% elif worker.pay_type == 'salary' %}<span class="text-sm font-semibold text-slate-400"> / period</span>{% else %}<span class="text-sm font-semibold text-slate-400"> ({{ worker.pay_type or 'contract' }})</span>{% endif %}</p>
+        </div>
+
+        <div class="bg-white rounded-2xl border border-slate-200 p-5 mb-8">
+            <div class="flex items-center justify-between gap-3 flex-wrap">
+                <div>
+                    <p class="text-sm font-bold text-slate-900">Direct deposit</p>
+                    <p class="text-sm text-slate-500 mt-0.5">
+                        {% if worker.bank_status == 'connected' %}
+                        ✅ Connected — {{ worker.stripe_account_id }}
+                        {% elif worker.bank_status == 'pending' %}
+                        ℹ️ Onboarding in progress
+                        {% else %}
+                        Not set up yet. Banking is handled securely through Stripe — we never see your account number.
+                        {% endif %}
+                    </p>
+                </div>
+                <form method="POST" action="/api/crew/direct-deposit">
+                    <button type="submit" class="px-5 py-2.5 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition-colors">
+                        {% if worker.bank_status %}{% if worker.bank_status == 'none' %}Set up direct deposit{% else %}Update banking{% endif %}{% else %}Set up direct deposit{% endif %}
+                    </button>
+                </form>
+            </div>
+        </div>
+
+        <p class="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Pay history</p>
+        {% if pay_history %}
+        <div class="space-y-2">
+            {% for p in pay_history %}
+            <div class="bg-white rounded-xl border border-slate-200 px-4 py-3 flex items-center gap-x-4 gap-y-1 flex-wrap text-sm">
+                <span class="font-bold text-slate-800">{{ p.period_start }} → {{ p.period_end }}</span>
+                <span class="px-2 py-0.5 text-xs font-bold rounded-full {% if p.run_status == 'closed' %}bg-emerald-50 text-emerald-700 border border-emerald-200{% else %}bg-amber-50 text-amber-700 border border-amber-200{% endif %}">{{ p.run_status }}</span>
+                <span class="flex-1"></span>
+                <span class="text-slate-500">{{ '{:,.1f}'.format(p.hours or 0) }}h{% if p.overtime_hours %}<span class="text-amber-600"> +{{ '{:,.1f}'.format(p.overtime_hours or 0) }} OT</span>{% endif %}</span>
+                <span class="text-lg font-black text-slate-900">${{ '{:,.2f}'.format((p.gross_cents or 0)/100) }}</span>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="bg-white rounded-2xl border border-slate-200 px-6 py-10 text-center">
+            <p class="text-slate-400 text-sm">No pay runs yet. They show up here after the office runs payroll.</p>
+        </div>
+        {% endif %}
+
+        <p class="mt-6 text-xs text-slate-400 leading-relaxed">
+            Payment method: <strong>Direct deposit via Stripe Connect</strong>. Your bank details are encrypted by Stripe and never stored on our systems. Pay runs are cut by the office on their pay schedule.
+        </p>
+    </div>
+</section>
+{% endblock %}

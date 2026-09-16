@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% set co = company() %}
+{% block title %}Terms, Privacy &amp; Disclaimer | {{ co.name }}{% endblock %}
+{% block meta %}<meta name="robots" content="index, follow">{% endblock %}
+
+{% block content %}
+<section class="py-14 bg-gradient-to-br from-slate-900 to-indigo-900 text-white">
+    <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
+        <h1 class="text-4xl font-black tracking-tight">Terms, Privacy &amp; Disclaimer</h1>
+        <p class="mt-3 text-slate-300">Last updated: {{ co.founded }}</p>
+    </div>
+</section>
+
+<section class="py-14 bg-white">
+    <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 space-y-10 text-slate-700 leading-relaxed text-sm sm:text-base">
+        <div>
+            <h2 class="text-xl font-black text-slate-900 mb-3">1. Our services</h2>
+            <p>{{ co.name }} is a licensed, bonded, and insured general contractor providing construction, renovation, and repair services across {{ co.service_area }}. Estimates are free; no work begins without a signed written agreement plus any deposits required to reserve scheduling and order materials.</p>
+        </div>
+        <div>
+            <h2 class="text-xl font-black text-slate-900 mb-3">2. Estimates &amp; pricing</h2>
+            <p>Written quotes are fixed-price based on the agreed scope of work at the time of signing. Changes requested after signing are documented as change orders and priced before work proceeds. Quotes typically have a stated validity period; contact us before that period lapses. Our marketing pages and phone/SMS assistant may share ballpark ranges for planning only — they are not bids.</p>
+        </div>
+        <div>
+            <h2 class="text-xl font-black text-slate-900 mb-3">3. Deposits &amp; payments</h2>
+            <p>Deposits are collected securely by card via Stripe and applied to your project total. Scheduling and material purchasing begin once your deposit clears. Remaining balances follow the payment schedule in your written agreement. Please review the Stripe Checkout terms presented at payment.</p>
+        </div>
+        <div>
+            <h2 class="text-xl font-black text-slate-900 mb-3">4. Estimates &amp; AI assistant</h2>
+            <p>To make sure we never miss a call, calls and texts to {{ co.phone }} may be handled by an AI assistant. Conversations may be logged to maintain accurate records and improve service. The assistant can schedule estimates and answer common questions; the estimator and office team confirm all specifics before any commitment.</p>
+        </div>
+        <div>
+            <h2 class="text-xl font-black text-slate-900 mb-3">5. Privacy</h2>
+            <p>We collect only the information you provide (name, phone, email, address, and project details) to respond to your request, prepare estimates, and deliver services. We do not sell your data. We may contact you by phone, text, or email regarding your project. Payment details are processed by Stripe under Stripe's privacy policy; we do not store full card numbers. You may ask us to delete your information at any time by contacting us.</p>
+        </div>
+        <div>
+            <h2 class="text-xl font-black text-slate-900 mb-3">6. Safety &amp; use of content</h2>
+            <p>All work performed complies with applicable local building codes as required by the jurisdiction; permitting that is required by code is included and handled by us. Portfolio descriptions and examples are illustrative. Before acting on any site content, confirm with your project file.</p>
+        </div>
+        <div>
+            <h2 class="text-xl font-black text-slate-900 mb-3">7. Disclaimers</h2>
+            <p>Information on this site is provided in good faith but without warranties of any kind. Photos used for illustrative purposes may include stock imagery. Nothing here creates a contract, warranty, or bid unless separately agreed in writing and signed by {{ co.name }}.</p>
+        </div>
+        <div>
+            <h2 class="text-xl font-black text-slate-900 mb-3">8. Contact</h2>
+            <p>{{ co.name }} · {{ co.phone }} · <a href="mailto:{{ co.email }}" class="font-semibold text-indigo-600">{{ co.email }}</a></p>
+        </div>
+    </div>
+</section>
+{% endblock %}

@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% set co = company() %}
+{% block title %}Payment Not Completed | {{ co.name }}{% endblock %}
+{% block meta %}<meta name="robots" content="noindex, nofollow">{% endblock %}
+
+{% block content %}
+<section class="min-h-[70vh] flex items-center py-16 bg-slate-50">
+    <div class="max-w-lg w-full mx-auto px-4 sm:px-6 text-center">
+        <div class="w-20 h-20 mx-auto rounded-full bg-amber-100 flex items-center justify-center text-4xl">💳</div>
+        <h1 class="mt-6 text-3xl font-black tracking-tight text-slate-900">Payment wasn't completed</h1>
+        <p class="mt-4 text-slate-600">No worries — your spot isn't affected and nothing was charged. You can try again anytime, or reach us directly to pay another way.</p>
+        <div class="mt-8 flex flex-wrap justify-center gap-3">
+            <a href="/" class="px-6 py-3 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-2xl transition-all">Back to Home</a>
+            <a href="tel:{{ co.phone_e164 }}" class="px-6 py-3 text-sm font-bold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 rounded-2xl transition-all">Call {{ co.phone }}</a>
+        </div>
+    </div>
+</section>
+{% endblock %}

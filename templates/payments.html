@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% set co = company() %}
+{% block title %}Payments | {{ co.name }} Owner Portal{% endblock %}
+{% block meta %}<meta name="robots" content="noindex, nofollow">{% endblock %}
+
+{% block content %}
+<section class="py-10 bg-slate-50 min-h-[80vh]">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="flex flex-wrap items-end justify-between gap-4 mb-6">
+            <div>
+                <p class="text-sm font-bold text-indigo-600 uppercase tracking-widest">Owner portal</p>
+                <h1 class="text-3xl font-black tracking-tight text-slate-900">Payments</h1>
+            </div>
+            <a href="/dashboard" class="px-4 py-2.5 text-sm font-semibold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 rounded-xl transition-colors">← Dashboard</a>
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
+            <div class="bg-white rounded-3xl border border-slate-200 p-6">
+                <p class="text-xs font-bold text-slate-500 uppercase tracking-wider">Total deposits collected</p>
+                <p class="mt-2 text-3xl font-black text-emerald-600">${{ totals.amt | money }}</p>
+            </div>
+            <div class="bg-white rounded-3xl border border-slate-200 p-6">
+                <p class="text-xs font-bold text-slate-500 uppercase tracking-wider">Payment count</p>
+                <p class="mt-2 text-3xl font-black text-slate-900">{{ totals.c }}</p>
+            </div>
+        </div>
+
+        {% if payments %}
+        <div class="bg-white rounded-3xl border border-slate-200 overflow-hidden">
+            <div class="overflow-x-auto">
+                <table class="w-full text-sm">
+                    <thead>
+                        <tr class="text-left text-xs text-slate-500 uppercase tracking-wider border-b border-slate-100">
+                            <th class="px-6 py-3">Date</th>
+                            <th class="px-6 py-3">Lead</th>
+                            <th class="px-6 py-3">Project</th>
+                            <th class="px-6 py-3">Amount</th>
+                            <th class="px-6 py-3">Status</th>
+                            <th class="px-6 py-3">Session</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100">
+                        {% for p in payments %}
+                        <tr class="hover:bg-slate-50">
+                            <td class="px-6 py-3.5 text-xs text-slate-500">{{ p.created_at }}</td>
+                            <td class="px-6 py-3.5 font-semibold text-slate-800">{{ p.lead_name or '—' }}</td>
+                            <td class="px-6 py-3.5 text-slate-600">{{ p.project_type or '—' }}</td>
+                            <td class="px-6 py-3.5 font-bold text-emerald-600">{{ (p.amount_cents or 0) | money }}</td>
+                            <td class="px-6 py-3.5">
+                                <span class="inline-block px-2.5 py-1 text-xs font-bold rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">PAID</span>
+                            </td>
+                            <td class="px-6 py-3.5 text-xs text-slate-400 font-mono">{{ (p.stripe_payment_intent_id or p.stripe_session_id or '') | truncate(22) }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% else %}
+        <div class="bg-white rounded-3xl border border-slate-200 px-6 py-16 text-center">
+            <p class="text-4xl mb-3">💳</p>
+            <p class="font-semibold text-slate-700">No payments yet</p>
+            <p class="text-sm text-slate-500 mt-1">Deposits paid via Stripe show up here automatically.</p>
+        </div>
+        {% endif %}
+    </div>
+</section>
+{% endblock %}

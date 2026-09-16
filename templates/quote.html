@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+{% set co = company() %}
+{% block title %}Get a Free Quote | {{ co.name }} — Licensed Contractor in {{ co.service_area }}{% endblock %}
+{% block meta %}<meta name="description" content="Request a free, no-obligation estimate from {{ co.name }}. Licensed general contractor serving {{ co.service_area }}. Same-week walkthroughs available.">{% endblock %}
+
+{% block content %}
+<section class="py-16 bg-gradient-to-br from-slate-900 to-indigo-900 text-white">
+    <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
+        <p class="text-sm font-bold text-indigo-300 uppercase tracking-widest">Free estimate</p>
+        <h1 class="text-4xl sm:text-5xl font-black tracking-tight mt-3">Request your quote</h1>
+        <p class="mt-5 text-lg text-slate-300">Fill this out and an estimator will call to schedule your free on-site walkthrough. You'll get a written, fixed-price scope — no obligation.</p>
+    </div>
+</section>
+
+<section class="py-16 bg-white">
+    <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
+    {% set pre = request.query_params.get('project') %}
+        <form id="lead-form" class="bg-slate-50 rounded-3xl border border-slate-200 p-6 sm:p-8 space-y-5">
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-5">
+                <div>
+                    <label class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Full Name *</label>
+                    <input name="name" required placeholder="Jane Smith" class="w-full px-4 py-3 rounded-xl bg-white border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                </div>
+                <div>
+                    <label class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Phone *</label>
+                    <input name="phone" data-phone-format type="tel" required placeholder="(757) 555-0123" class="w-full px-4 py-3 rounded-xl bg-white border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                </div>
+                <div>
+                    <label class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Email</label>
+                    <input name="email" type="email" placeholder="jane@example.com" class="w-full px-4 py-3 rounded-xl bg-white border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                </div>
+                <div>
+                    <label class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Project Type</label>
+                    <select name="project_type" class="w-full px-4 py-3 rounded-xl bg-white border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                        <option value="">Select…</option>
+                        <option {% if pre == 'Short-Term Rental Make-Ready' %}selected{% endif %}>Short-Term Rental Make-Ready</option>
+                        <option>Whole-Home Renovation</option>
+                        <option>Kitchen</option>
+                        <option>Bathroom</option>
+                        <option>Drywall &amp; Paint</option>
+                        <option>Roofing &amp; Siding</option>
+                        <option>Plumbing</option>
+                        <option>Electrical</option>
+                        <option>Carpentry &amp; Trim</option>
+                        <option>Tile, Carpet &amp; Flooring</option>
+                        <option>Deck &amp; Fence</option>
+                        <option>Something else</option>
+                    </select>
+                </div>
+            </div>
+            <div>
+                <label class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Property Address *</label>
+                <input name="address" required placeholder="123 Main St, Virginia Beach, VA" class="w-full px-4 py-3 rounded-xl bg-white border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+            </div>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-5">
+                <div>
+                    <label class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Budget Range</label>
+                    <select name="budget" class="w-full px-4 py-3 rounded-xl bg-white border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                        <option value="">Not sure yet</option>
+                        <option>Under $10k</option>
+                        <option>$10k–$25k</option>
+                        <option>$25k–$50k</option>
+                        <option>$50k–$100k</option>
+                        <option>$100k+</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Timeline</label>
+                    <select name="timeline" class="w-full px-4 py-3 rounded-xl bg-white border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                        <option value="">Flexible</option>
+                        <option>ASAP</option>
+                        <option>Within 30 days</option>
+                        <option>1–3 months</option>
+                        <option>3–6 months</option>
+                        <option>Just planning</option>
+                    </select>
+                </div>
+            </div>
+            <div>
+                <label class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Project Details</label>
+                <textarea name="description" rows="5" placeholder="What needs to be done? Rough dimensions and any details help us scope faster. Photos welcome by text or email." class="w-full px-4 py-3 rounded-xl bg-white border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"></textarea>
+            </div>
+            <div id="lead-result" class="hidden rounded-2xl p-4 text-sm"></div>
+            <button type="submit" class="w-full py-4 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-2xl transition-all uppercase tracking-wider shadow-lg shadow-indigo-100">
+                Request My Free Estimate
+            </button>
+            <p class="text-xs text-center text-slate-500">Prefer to talk? Call or text <a href="tel:{{ co.phone_e164 }}" class="font-semibold text-indigo-600">{{ co.phone }}</a> — our assistant answers 24/7 and can handle scheduling.</p>
+        </form>
+    </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const form = document.getElementById('lead-form');
+    if (!form) return;
+    form.addEventListener('submit', async function(e) {
+        e.preventDefault();
+        const box = document.getElementById('lead-result');
+        const data = new FormData(form);
+        data.set('source', 'quotes_page');
+        try {
+            const res = await fetch('/submit-lead', { method: 'POST', body: data });
+            const json = await res.json();
+            box.classList.remove('hidden');
+            if (json.status === 'success') {
+                box.className = 'rounded-2xl p-4 text-sm bg-emerald-50 border border-emerald-200 text-emerald-800 font-semibold';
+                box.innerHTML = '✅ Thanks — we got it. Our estimator will call you shortly to schedule your free walkthrough.';
+                form.reset();
+            } else {
+                box.className = 'rounded-2xl p-4 text-sm bg-red-50 border border-red-200 text-red-700 font-semibold';
+                box.textContent = 'Something went wrong. Please call or text us instead.';
+            }
+        } catch (err) {
+            box.classList.remove('hidden');
+            box.className = 'rounded-2xl p-4 text-sm bg-red-50 border border-red-200 text-red-700 font-semibold';
+            box.textContent = 'Network error. Please call or text us instead.';
+        }
+    });
+});
+</script>
+{% endblock %}

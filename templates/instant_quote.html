@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+{% set co = company() %}
+{% block title %}Instant Ballpark Quote | {{ co.name }}{% endblock %}
+
+{% block content %}
+<section class="py-12 bg-slate-50">
+    <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="text-center mb-10">
+            <p class="text-sm font-bold text-indigo-600 uppercase tracking-widest">Free ballpark in under a minute</p>
+            <h1 class="text-4xl sm:text-5xl font-black tracking-tight text-slate-900 mt-2">Instant Quote</h1>
+            <p class="mt-3 text-lg text-slate-500 max-w-2xl mx-auto">Enter your address and we'll pull property data and give you a realistic range. It's a start, not a bid — your true fixed price comes from a free on-site walkthrough.</p>
+        </div>
+
+        <div class="bg-white rounded-3xl border border-slate-200 shadow-sm p-6 sm:p-8">
+            <form method="POST" action="/instant-quote" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div class="md:col-span-2">
+                    <label class="block text-sm font-semibold text-slate-700 mb-1.5">Project type</label>
+                    <select name="project_type" required class="w-full px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                        {% for t in project_types %}
+                        <option value="{{ t }}" {% if t == project_type %}selected{% endif %}>{{ t }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="md:col-span-2">
+                    <label class="block text-sm font-semibold text-slate-700 mb-1.5">Property address</label>
+                    <input type="text" name="address" id="prop-address" value="{{ address }}"
+                           {% if api_configured %}placeholder="e.g. 123 Main St, Williamsburg, VA"{% else %}placeholder="e.g. 123 Main St (auto-detect unavailable — add sq ft below)"{% endif %}
+                           class="w-full px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                </div>
+                <div class="md:col-span-2 hidden" id="prop-detect-row">
+                    <p id="prop-detect" class="text-xs font-semibold text-emerald-600"></p>
+                </div>
+                <div>
+                    <label class="block text-sm font-semibold text-slate-700 mb-1.5">Square footage <span class="font-normal text-slate-400">(if auto-detect misses)</span></label>
+                    <input type="number" name="sqft" value="{{ sqft }}" min="1" step="50" placeholder="e.g. 1800"
+                           class="w-full px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                </div>
+                <div>
+                    <label class="block text-sm font-semibold text-slate-700 mb-1.5">Your name</label>
+                    <input type="text" name="name" value="{{ name or '' }}" class="w-full px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                </div>
+                <div>
+                    <label class="block text-sm font-semibold text-slate-700 mb-1.5">Phone</label>
+                    <input type="tel" name="phone" value="{{ phone or '' }}" data-phone-format class="w-full px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                </div>
+                <div>
+                    <label class="block text-sm font-semibold text-slate-700 mb-1.5">Email <span class="font-normal text-slate-400">(optional)</span></label>
+                    <input type="email" name="email" value="{{ email or '' }}" class="w-full px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                </div>
+                <div class="md:col-span-2 mt-2">
+                    <button type="submit" class="w-full py-4 text-base font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-2xl shadow-lg shadow-indigo-200 transition-colors">Get My Ballpark →</button>
+                </div>
+            </form>
+
+            {% if error %}
+            <div class="mt-5 px-4 py-3 rounded-2xl bg-amber-50 border border-amber-200 text-sm font-semibold text-amber-800">{{ error }}</div>
+            {% endif %}
+
+            <p class="mt-6 text-xs text-slate-400 leading-relaxed">
+                Ballpark ranges are generated from public property data and our own price book. They are <strong>not bids</strong> and are <strong>not binding</strong>. Every project gets a free on-site walkthrough and a written, fixed-price scope before any work begins.
+            </p>
+        </div>
+
+        {% if quote %}
+        <div class="mt-6 bg-white rounded-3xl border-2 border-indigo-600 shadow-lg overflow-hidden">
+            <div class="px-6 py-4 bg-indigo-600 text-white flex items-center justify-between">
+                <p class="font-black tracking-tight">Your ballpark</p>
+                <span class="text-xs font-semibold bg-white/15 px-3 py-1 rounded-full">{{ quote.quantifier }}</span>
+            </div>
+            <div class="p-6 sm:p-8">
+                <div class="flex items-baseline flex-wrap gap-x-4 gap-y-1">
+                    <span class="text-4xl sm:text-5xl font-black text-slate-900">${{ '{:,.0f}'.format(quote.low_est) }}</span>
+                    <span class="text-2xl font-bold text-slate-400">–</span>
+                    <span class="text-4xl sm:text-5xl font-black text-slate-900">${{ '{:,.0f}'.format(quote.high_est) }}</span>
+                </div>
+                <p class="mt-1 text-sm font-semibold text-indigo-600">{{ quote.label }}</p>
+                {% if prop %}
+                <div class="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">
+                    <div class="bg-slate-50 rounded-2xl border border-slate-100 py-3"><p class="text-sm font-black text-slate-800">{{ '{:,.0f}'.format(prop.sqft or 0) }}</p><p class="text-xs text-slate-500">sq ft</p></div>
+                    <div class="bg-slate-50 rounded-2xl border border-slate-100 py-3"><p class="text-sm font-black text-slate-800">{{ '{:,.0f}'.format(prop.beds or 0) }} bd</p><p class="text-xs text-slate-500">{{ '{:,.0f}'.format(prop.baths or 0) }} ba</p></div>
+                    <div class="bg-slate-50 rounded-2xl border border-slate-100 py-3"><p class="text-sm font-black text-slate-800">{{ '{:,.0f}'.format(prop.year_built or 0) }}</p><p class="text-xs text-slate-500">built</p></div>
+                    <div class="bg-slate-50 rounded-2xl border border-slate-100 py-3"><p class="text-sm font-black text-slate-800">{{ prop.property_type or '—' }}</p><p class="text-xs text-slate-500">type</p></div>
+                </div>
+                {% endif %}
+                {% if quote.notes %}
+                <p class="mt-4 text-sm text-slate-500">Overrides applied: {% for n in quote.notes %}<span class="inline-block bg-amber-50 text-amber-700 border border-amber-200 rounded-full px-2.5 py-0.5 text-xs font-semibold mr-1 mt-1">{{ n }}</span>{% endfor %}</p>
+                {% endif %}
+                <div class="mt-5 px-4 py-3 rounded-2xl bg-slate-50 border border-slate-100 text-sm text-slate-600 leading-relaxed">{{ quote.disclaimer }}</div>
+                <div class="mt-6 flex flex-col sm:flex-row gap-3">
+                    <a href="tel:{{ co.phone_e164 }}" class="flex-1 text-center px-5 py-3.5 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-2xl transition-colors">Book a Free Walkthrough → Call {{ co.phone }}</a>
+                    <a href="/contact" class="flex-1 text-center px-5 py-3.5 text-sm font-bold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 rounded-2xl transition-colors">Send us the details</a>
+                </div>
+                <p class="mt-3 text-xs text-slate-400 text-center">We've saved this as a new lead ({% if lead_id %}#{{ lead_id }}{% else %}contact us to confirm{% endif %}) — we'll reach out to schedule your walkthrough.</p>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+{% if api_configured %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const addr = document.getElementById('prop-address');
+    const row = document.getElementById('prop-detect-row');
+    const msg = document.getElementById('prop-detect');
+    let timer;
+    addr.addEventListener('input', function() {
+        clearTimeout(timer);
+        timer = setTimeout(async function() {
+            const v = addr.value.trim();
+            if (v.length < 6) { row.classList.add('hidden'); return; }
+            try {
+                const res = await fetch('/api/property?address=' + encodeURIComponent(v));
+                const json = await res.json();
+                if (json.sqft) {
+                    msg.textContent = '🏠 Found: ' + json.address + ' · ' + (json.sqft ? Math.round(json.sqft).toLocaleString() + ' sq ft · ' : '') + (json.beds ? json.beds + ' bd / ' : '') + (json.baths ? json.baths + ' ba' : '');
+                    row.classList.remove('hidden');
+                } else {
+                    row.classList.add('hidden');
+                }
+            } catch (e) { row.classList.add('hidden'); }
+        }, 700);
+    });
+});
+</script>
+{% endif %}
+{% endblock %}

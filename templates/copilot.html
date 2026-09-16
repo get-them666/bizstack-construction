@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% set co = company() %}
+{% block title %}Copilot | {{ co.name }} Owner Portal{% endblock %}
+{% block meta %}<meta name="robots" content="noindex, nofollow">{% endblock %}
+
+{% block content %}
+<section class="py-10 bg-slate-50" style="height: calc(100vh - 5rem);">
+    <div class="max-w-4xl h-full mx-auto px-4 sm:px-6 lg:px-8 flex flex-col">
+        <div class="flex flex-wrap items-end justify-between gap-4 mb-5">
+            <div>
+                <p class="text-sm font-bold text-indigo-600 uppercase tracking-widest">Owner portal</p>
+                <h1 class="text-3xl font-black tracking-tight text-slate-900">Copilot</h1>
+                <p class="mt-1 text-sm text-slate-500">Ask anything about your leads, pipeline, or business.</p>
+            </div>
+            <a href="/dashboard" class="px-4 py-2.5 text-sm font-semibold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 rounded-xl transition-colors">← Dashboard</a>
+        </div>
+
+        <div class="bg-white rounded-3xl border border-slate-200 shadow-sm flex-1 flex flex-col overflow-hidden">
+            <div id="chat" class="flex-1 overflow-y-auto p-6 space-y-4">
+                <div class="max-w-[85%] bg-indigo-50 border border-indigo-100 text-slate-800 rounded-2xl rounded-tl-md px-4 py-3 text-sm whitespace-pre-wrap">
+                    Hey {{ co.name }} owner! I can look up leads, update statuses, and summarize your pipeline. Try a suggestion below.
+                </div>
+            </div>
+
+            <div class="px-4 pb-3 pt-1 flex flex-wrap gap-2">
+                {% for s in ["How many new leads came in?", "Summarize my pipeline", "Which leads are waiting for a deposit?", "Quickest wins this week?"] %}
+                <button data-suggest="{{ s }}" class="px-3 py-1.5 text-xs font-semibold text-indigo-600 bg-indigo-50 border border-indigo-100 hover:bg-indigo-100 rounded-full transition-colors">{{ s }}</button>
+                {% endfor %}
+            </div>
+
+            <div class="border-t border-slate-100 p-4 bg-slate-50">
+                <form id="copilot-form" class="flex items-end gap-2">
+                    <textarea id="copilot-msg" rows="1" placeholder="Ask about your business…" class="flex-1 px-4 py-3 rounded-2xl bg-white border border-slate-200 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-indigo-500 max-h-40"></textarea>
+                    <button type="submit" class="px-5 py-3 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-2xl transition-colors shrink-0">Send</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const chat = document.getElementById('chat');
+    const form = document.getElementById('copilot-form');
+    const msg = document.getElementById('copilot-msg');
+    const MAX = 80;
+
+    function addBubble(text, mine) {
+        const wrap = document.createElement('div');
+        wrap.className = 'max-w-[85%] ' + (mine ? 'ml-auto bg-indigo-600 text-white rounded-2xl rounded-tr-md' : 'bg-slate-100 text-slate-800 rounded-2xl rounded-tl-md');
+        wrap.innerHTML = '<div class="px-4 py-3 text-sm whitespace-pre-wrap"></div>';
+        wrap.firstElementChild.textContent = text;
+        chat.appendChild(wrap);
+        wrap.scrollIntoView({ block: 'end', behavior: 'smooth' });
+        return wrap;
+    }
+
+    form.addEventListener('submit', async function(e) {
+        e.preventDefault();
+        const text = msg.value.trim();
+        if (!text) return;
+        addBubble(text, true);
+        msg.value = '';
+        const load = addBubble('Thinking…', false);
+        try {
+            const body = new FormData();
+            body.set('message', text);
+            const res = await fetch('/api/copilot', { method: 'POST', body: body });
+            const json = await res.json();
+            load.firstElementChild.textContent = json.reply || '(no response)';
+        } catch (err) {
+            load.firstElementChild.textContent = 'Something went wrong talking to Copilot.';
+        }
+        while (chat.children.length > MAX) chat.removeChild(chat.firstChild);
+    });
+
+    msg.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); form.requestSubmit(); }
+    });
+
+    document.querySelectorAll('[data-suggest]').forEach(function(b) {
+        b.addEventListener('click', function() {
+            msg.value = b.dataset.suggest;
+            form.requestSubmit();
+        });
+    });
+});
+</script>
+{% endblock %}

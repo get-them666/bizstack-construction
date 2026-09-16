@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+{% set co = company() %}
+{% block title %}Crew Dashboard | {{ co.name }}{% endblock %}
+{% block meta %}<meta name="robots" content="noindex, nofollow">{% endblock %}
+
+{% block content %}
+<section class="py-8 bg-slate-50 min-h-[80vh]">
+    <div class="max-w-3xl mx-auto px-4 sm:px-6">
+        <div class="flex items-center justify-between mb-8">
+            <div>
+                <p class="text-sm font-bold text-indigo-600 uppercase tracking-widest">Crew portal</p>
+                <h1 class="text-2xl sm:text-3xl font-black tracking-tight text-slate-900">Hey, {{ worker.name.split(' ')[0] }}!</h1>
+            </div>
+            <a href="/crew/logout" class="px-4 py-2.5 text-sm font-semibold text-slate-600 bg-white border border-slate-200 hover:border-slate-300 rounded-xl transition-colors">Log out</a>
+        </div>
+
+        <div class="grid grid-cols-2 gap-3 mb-8">
+            <div class="bg-emerald-600 text-white rounded-2xl p-4">
+                <p class="text-2xl font-black">{{ '{:,.1f}'.format(week_hours or 0) }}</p>
+                <p class="text-xs font-semibold text-emerald-100 mt-0.5">hours this week</p>
+            </div>
+            <a href="/crew/pay" class="bg-indigo-600 text-white rounded-2xl p-4 hover:bg-indigo-700 transition-colors">
+                <p class="text-sm font-bold">Pay &amp; direct deposit</p>
+                <p class="text-xs text-indigo-100 mt-0.5">stubs, transfers, banking →</p>
+            </a>
+        </div>
+
+        <p class="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">My jobs</p>
+        <div class="space-y-3 mb-8">
+            {% for j in jobs %}
+            <a href="/crew/jobs/{{ j.id }}" class="block bg-white rounded-2xl border border-slate-200 p-4 hover:border-indigo-300 transition-colors">
+                <div class="flex items-center justify-between gap-3">
+                    <div class="min-w-0">
+                        <p class="font-bold text-slate-900 truncate">{{ j.name }}</p>
+                        <p class="text-sm text-slate-500 truncate">{{ j.address or 'Address TBD' }}</p>
+                    </div>
+                    <span class="shrink-0 text-indigo-600 font-semibold text-sm">{{ j.photo_count }} 📷</span>
+                </div>
+            </a>
+            {% else %}
+            <div class="bg-white rounded-2xl border border-slate-200 px-5 py-8 text-center">
+                <p class="text-slate-400 text-sm">No jobs assigned yet — check back soon.</p>
+            </div>
+            {% endfor %}
+        </div>
+
+        <p class="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Clock</p>
+        <div class="bg-white rounded-2xl border border-slate-200 p-5 mb-8">
+            {% if not open_punch %}
+            <div class="flex flex-wrap items-center justify-between gap-3 mb-3">
+                <form method="POST" action="/api/crew/clock-in" data-geo class="flex flex-wrap items-center gap-2 flex-1">
+                    {% if jobs|length == 1 %}
+                    <input type="hidden" name="project_id" value="{{ jobs[0].id }}">
+                    <p class="text-sm font-semibold text-slate-700">Start work on <span class="font-bold text-slate-900">{{ jobs[0].name }}</span>?</p>
+                    {% elif jobs|length > 1 %}
+                    <select name="project_id" class="flex-1 min-w-[180px] px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                        {% for j in jobs %}<option value="{{ j.id }}">{{ j.name }}</option>{% endfor %}
+                    </select>
+                    {% else %}
+                    <input type="hidden" name="project_id" value="0">
+                    <p class="text-sm font-semibold text-slate-700">Start your shift? (no jobs assigned yet)</p>
+                    {% endif %}
+                    <input type="hidden" name="lat" class="geo-lat">
+                    <input type="hidden" name="lng" class="geo-lng">
+                    <button type="submit" class="px-5 py-2.5 text-sm font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl transition-colors">Clock In</button>
+                </form>
+            </div>
+            {% else %}
+            <div class="flex items-center justify-between gap-3">
+                <div>
+                    <p class="text-sm font-bold text-emerald-600">Clocked in since {{ open_punch.punch_in_at.strftime('%I:%M %p') }}</p>
+                    <p class="text-xs text-slate-400">Location sharing enabled while on the clock</p>
+                </div>
+                <form method="POST" action="/api/crew/clock-out" data-geo>
+                    <input type="hidden" name="clock_id" value="{{ open_punch.id }}">
+                    <input type="hidden" name="lat" class="geo-lat">
+                    <input type="hidden" name="lng" class="geo-lng">
+                    <button type="submit" class="px-5 py-2.5 text-sm font-bold text-white bg-red-500 hover:bg-red-600 rounded-xl transition-colors">Clock Out</button>
+                </form>
+            </div>
+            {% endif %}
+        </div>
+
+        <div class="flex gap-3 mb-8">
+            <a href="/crew/hours" class="flex-1 text-center px-5 py-3 text-sm font-bold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 rounded-2xl transition-colors">My Hours</a>
+            <a href="/crew/pay" class="flex-1 text-center px-5 py-3 text-sm font-bold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 rounded-2xl transition-colors">Pay</a>
+        </div>
+
+        <p class="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Recent entries</p>
+        <div class="space-y-2">
+            {% for t in recent %}
+            <div class="bg-white rounded-xl border border-slate-200 px-4 py-3 flex items-center justify-between text-sm">
+                <span class="text-slate-600">{{ t.work_date }}</span>
+                <span class="font-bold text-slate-800">{{ '{:,.1f}'.format(t.hours or 0) }} hrs</span>
+                <span class="text-xs text-slate-400">{{ t.work_type }}{% if t.status != 'paid' %} · {{ t.status }}{% endif %}</span>
+            </div>
+            {% else %}
+            <p class="text-sm text-slate-400">Nothing yet.</p>
+            {% endfor %}
+        </div>
+    </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    document.querySelectorAll('form[data-geo]').forEach(function(form) {
+        form.addEventListener('submit', function(e) {
+            navigator.geolocation.getCurrentPosition(function(pos) {
+                var lat = form.querySelector('.geo-lat');
+                var lng = form.querySelector('.geo-lng');
+                if (lat) lat.value = pos.coords.latitude;
+                if (lng) lng.value = pos.coords.longitude;
+                form.submit();
+            }, function() { form.submit(); }, { enableHighAccuracy: true, timeout: 6000 });
+            e.preventDefault();
+        });
+    });
+});
+</script>
+{% endblock %}

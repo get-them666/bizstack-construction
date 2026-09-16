@@ -1,0 +1,124 @@
+{% extends "base.html" %}
+{% set co = company() %}
+{% block title %}Projects | {{ co.name }} Owner Portal{% endblock %}
+{% block meta %}<meta name="robots" content="noindex, nofollow">{% endblock %}
+
+{% block content %}
+<section class="py-10 bg-slate-50 min-h-[80vh]">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="flex flex-wrap items-end justify-between gap-4 mb-6">
+            <div>
+                <p class="text-sm font-bold text-indigo-600 uppercase tracking-widest">Owner portal · Active jobs</p>
+                <h1 class="text-3xl font-black tracking-tight text-slate-900">Projects</h1>
+                <p class="text-sm text-slate-500 mt-1">Turn leads into jobs, assign crew, track status.</p>
+            </div>
+            <a href="/dashboard" class="px-4 py-2.5 text-sm font-semibold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 rounded-xl transition-colors">← Dashboard</a>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div class="lg:col-span-2">
+                <div class="flex flex-wrap items-center gap-2 mb-4">
+                    <a href="/projects" class="px-3 py-1.5 text-sm font-semibold rounded-full border transition-colors {% if not active_status %}bg-indigo-600 text-white border-indigo-600{% else %}bg-white text-slate-600 border-slate-200 hover:border-indigo-300{% endif %}">All</a>
+                    {% for s in statuses %}
+                    <a href="/projects?status_filter={{ s }}" class="px-3 py-1.5 text-sm font-semibold rounded-full border transition-colors {% if active_status == s %}bg-indigo-600 text-white border-indigo-600{% else %}bg-white text-slate-600 border-slate-200 hover:border-indigo-300{% endif %}">{{ s }}</a>
+                    {% endfor %}
+                </div>
+
+                {% if projects %}
+                <div class="space-y-4">
+                    {% for p in projects %}
+                    <div class="bg-white rounded-3xl border border-slate-200 overflow-hidden">
+                        <details class="group" {% if loop.first %}open{% endif %}>
+                            <summary class="cursor-pointer list-none px-5 py-4 flex flex-wrap items-center gap-x-6 gap-y-2 hover:bg-slate-50">
+                                <div class="flex-1 min-w-[200px]">
+                                    <div class="flex items-center gap-3">
+                                        <p class="font-bold text-slate-900">{{ p.name }}</p>
+                                        {% if p.lead_name %}<span class="text-xs text-slate-400">lead: {{ p.lead_name }}</span>{% endif %}
+                                    </div>
+                                    <p class="text-sm text-slate-500 mt-0.5">{{ p.address or '—' }} · {{ p.crew_names or 'unassigned' }}</p>
+                                </div>
+                                <span class="px-2.5 py-1 text-xs font-bold rounded-full
+                                    {% if p.status == 'planned' %}bg-amber-50 text-amber-700 border border-amber-200
+                                    {% elif p.status == 'active' %}bg-emerald-50 text-emerald-700 border border-emerald-200
+                                    {% elif p.status == 'on_hold' %}bg-slate-100 text-slate-600 border border-slate-200
+                                    {% elif p.status == 'completed' %}bg-indigo-50 text-indigo-700 border border-indigo-200
+                                    {% else %}bg-slate-50 text-slate-400 border border-slate-200{% endif %}">{{ p.status }}</span>
+                                <span class="text-xs text-slate-400">{{ p.photo_count }} 📷</span>
+                                <span class="text-slate-400 text-sm group-open:rotate-180 transition-transform">▾</span>
+                            </summary>
+                            <div class="px-5 pb-5 pt-1 border-t border-slate-100">
+                                {% if p.summary %}<p class="text-sm text-slate-600 mt-3 whitespace-pre-wrap">{{ p.summary }}</p>{% endif %}
+                                {% if p.notes %}<p class="mt-2 text-xs text-slate-400 whitespace-pre-wrap bg-slate-50 rounded-xl p-3 border border-slate-100">📝 {{ p.notes }}</p>{% endif %}
+                                {% if p.start_date or p.end_date %}<p class="mt-2 text-xs font-semibold text-slate-500">{{ p.start_date or '—' }} → {{ p.end_date or 'open' }}</p>{% endif %}
+
+                                <form method="POST" action="/api/projects/{{ p.id }}/update" class="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                    <input type="text" name="name" value="{{ p.name }}" placeholder="Project name" class="px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                                    <input type="text" name="address" value="{{ p.address or '' }}" placeholder="Address" class="px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                                    <input type="text" name="summary" value="{{ p.summary or '' }}" placeholder="Scope / summary" class="sm:col-span-2 px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                                    <input type="text" name="notes" value="{{ p.notes or '' }}" placeholder="Internal notes" class="sm:col-span-2 px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                                    <input type="date" name="start_date" value="{{ p.start_date or '' }}" class="px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                                    <input type="date" name="end_date" value="{{ p.end_date or '' }}" class="px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                                    <select name="status_val" class="px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                                        {% for s in statuses %}<option value="{{ s }}" {% if s == p.status %}selected{% endif %}>{{ s }}</option>{% endfor %}
+                                    </select>
+                                    <button type="submit" class="px-4 py-2.5 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition-colors">Save</button>
+                                </form>
+
+                                <div class="mt-4">
+                                    <p class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5">Assigned crew ({{ p.crew_count or 0 }})</p>
+                                    <div class="flex flex-wrap gap-2">
+                                        {% for c in crew %}
+                                        <form method="POST" action="/api/projects/{{ p.id }}/assign" class="flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-xl px-2 py-1">
+                                            <input type="hidden" name="crew_id" value="{{ c.id }}">
+                                            <button type="submit" class="text-sm font-semibold text-slate-700 hover:text-indigo-600">{{ c.name }}</button>
+                                            {% if c.id|string in (p.crew_names or '').split(', ') %}<span class="text-emerald-600 text-xs">✓</span>{% endif %}
+                                        </form>
+                                        {% if c.id|string in (p.crew_names or '').split(', ') %}
+                                        <form method="POST" action="/api/projects/{{ p.id }}/unassign" class="flex items-center">
+                                            <input type="hidden" name="crew_id" value="{{ c.id }}">
+                                            <button type="submit" class="text-xs font-semibold text-red-500 hover:text-red-600 px-2">✕</button>
+                                        </form>
+                                        {% endif %}
+                                        {% endfor %}
+                                    </div>
+                                </div>
+
+                                <div class="mt-4 flex items-center justify-between">
+                                    {% if p.address %}<a href="{{ map_directions(p.address) }}" target="_blank" rel="noopener" class="text-sm font-semibold text-indigo-600 hover:text-indigo-700">Map & directions →</a>{% endif %}
+                                    <form method="POST" action="/api/projects/{{ p.id }}/delete" onsubmit="return confirm('Delete project {{ p.name }}?')">
+                                        <button type="submit" class="px-3 py-2 text-sm font-semibold text-red-600 bg-white border border-red-200 hover:bg-red-50 rounded-xl transition-colors">Delete</button>
+                                    </form>
+                                </div>
+                            </div>
+                        </details>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <div class="bg-white rounded-3xl border border-slate-200 px-6 py-16 text-center">
+                    <p class="text-4xl mb-3">🏗️</p>
+                    <p class="font-semibold text-slate-700">No projects yet</p>
+                    <p class="text-sm text-slate-500 mt-1">Create one from a lead on the right.</p>
+                </div>
+                {% endif %}
+            </div>
+
+            <div>
+                <div class="bg-white rounded-3xl border border-slate-200 p-5">
+                    <p class="text-sm font-bold text-slate-900 mb-3">Create project</p>
+                    <form method="POST" action="/api/projects" class="space-y-3">
+                        <select name="lead_id" class="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                            <option value="">— from a lead (optional) —</option>
+                            {% for l in leads %}<option value="{{ l.id }}">{{ l.name or '' }}{% if l.address %} · {{ l.address }}{% endif %}</option>{% endfor %}
+                        </select>
+                        <input type="text" name="name" placeholder="Project name" class="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                        <input type="text" name="address" placeholder="Jobsite address" class="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                        <textarea name="summary" rows="2" placeholder="Scope summary" class="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"></textarea>
+                        <button type="submit" class="w-full py-3 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition-colors">+ Create</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+{% endblock %}

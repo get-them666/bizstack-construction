@@ -1,0 +1,316 @@
+{% extends "base.html" %}
+{% set co = company() %}
+{% block title %}{{ co.name }} | Licensed General Contractor — Renovations &amp; Repairs in Hampton Roads{% endblock %}
+
+{% block content %}
+<!-- Hero -->
+<section class="relative overflow-hidden bg-gradient-to-br from-slate-900 via-slate-800 to-indigo-900 text-white">
+    <div class="absolute inset-0 opacity-10" style="background-image:radial-gradient(circle at 20% 20%, #6366f1 0, transparent 40%),radial-gradient(circle at 80% 60%, #0ea5e9 0, transparent 40%);"></div>
+    <div class="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-20 lg:py-28 grid grid-cols-1 lg:grid-cols-2 gap-14 items-center">
+        <div>
+            <span class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/10 border border-white/20 text-xs font-semibold tracking-wide uppercase mb-6">
+                🛡️ Licensed · Bonded · Insured General Contractor
+            </span>
+            <h1 class="text-4xl sm:text-5xl lg:text-6xl font-black tracking-tight leading-[1.05]">
+                Whole-home renovations,<br><span class="text-indigo-400">done right</span> the first time.
+            </h1>
+            <p class="mt-6 text-lg text-slate-300 max-w-xl">
+                From full rehabs and additions to drywall, roofing, plumbing, electrical, tile and flooring —
+                Buildstack Construction handles the whole job with one licensed crew, one written scope, and one fixed price.
+            </p>
+            <div class="mt-8 flex flex-wrap gap-4">
+                <a href="/quote" class="inline-flex items-center justify-center px-7 py-4 text-base font-bold text-white bg-indigo-600 hover:bg-indigo-500 rounded-2xl transition-all shadow-lg shadow-indigo-900/40">
+                    Get a Free Estimate →
+                </a>
+                <a href="tel:{{ co.phone_e164 }}" class="inline-flex items-center justify-center px-7 py-4 text-base font-bold text-white bg-white/10 hover:bg-white/20 border border-white/20 rounded-2xl transition-all">
+                    📞 {{ co.phone }}
+                </a>
+            </div>
+            <div class="mt-8 flex flex-wrap gap-x-8 gap-y-3 text-sm text-slate-300">
+                <span class="flex items-center gap-2">✅ Free on-site estimate</span>
+                <span class="flex items-center gap-2">✅ Fixed written pricing</span>
+                <span class="flex items-center gap-2">✅ 24/7 AI call answering</span>
+            </div>
+        </div>
+        <div class="relative">
+            <div class="grid grid-cols-2 gap-4">
+                <div class="rounded-3xl bg-white/5 border border-white/10 p-6 backdrop-blur">
+                    <p class="text-4xl mb-2">🏠</p>
+                    <p class="font-bold text-white">Whole-Home Rehabs</p>
+                    <p class="text-sm text-slate-400 mt-1">Down to the studs, back to move-in ready.</p>
+                </div>
+                <div class="rounded-3xl bg-white/5 border border-white/10 p-6 backdrop-blur mt-8">
+                    <p class="text-4xl mb-2">🔧</p>
+                    <p class="font-bold text-white">Every Trade</p>
+                    <p class="text-sm text-slate-400 mt-1">Plumbing, electrical, roofing, carpentry.</p>
+                </div>
+                <div class="rounded-3xl bg-white/5 border border-white/10 p-6 backdrop-blur">
+                    <p class="text-4xl mb-2">🎨</p>
+                    <p class="font-bold text-white">Finishes</p>
+                    <p class="text-sm text-slate-400 mt-1">Drywall, paint, tile, carpet &amp; flooring.</p>
+                </div>
+                <div class="rounded-3xl bg-white/5 border border-white/10 p-6 backdrop-blur mt-8">
+                    <p class="text-4xl mb-2">🏡</p>
+                    <p class="font-bold text-white">Rental Make-Ready</p>
+                    <p class="text-sm text-slate-400 mt-1">Turn a house into an Airbnb that earns.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Trust bar -->
+<section class="bg-white border-b border-slate-200">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 grid grid-cols-2 md:grid-cols-4 gap-6 text-center">
+        <div><p class="text-2xl font-black text-indigo-600">Licensed</p><p class="text-xs text-slate-500 uppercase tracking-wider mt-1">VA &amp; NC service area</p></div>
+        <div><p class="text-2xl font-black text-indigo-600">Insured</p><p class="text-xs text-slate-500 uppercase tracking-wider mt-1">Liability &amp; workers' comp</p></div>
+        <div><p class="text-2xl font-black text-indigo-600">Fixed price</p><p class="text-xs text-slate-500 uppercase tracking-wider mt-1">No open-ended billing</p></div>
+        <div><p class="text-2xl font-black text-indigo-600">24/7</p><p class="text-xs text-slate-500 uppercase tracking-wider mt-1">Call or text anytime</p></div>
+    </div>
+</section>
+
+<!-- Services -->
+<section id="services" class="py-20 bg-slate-50">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="max-w-3xl">
+            <p class="text-sm font-bold text-indigo-600 uppercase tracking-widest">What we do</p>
+            <h2 class="text-3xl sm:text-4xl font-black tracking-tight mt-2">One crew. Every trade. No juggling contractors.</h2>
+            <p class="mt-4 text-slate-600">Every service below is performed and managed in-house, so your project moves on one schedule with one point of contact.</p>
+        </div>
+        <div class="mt-12 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+            {% set services = [
+                ("🏠", "Whole-Home Renovations", "Full rehabs, additions, and gut renovations managed start to finish."),
+                ("🍳", "Kitchens &amp; Baths", "Cabinets, counters, vanities, waterproofing, and tile done to spec."),
+                ("🧱", "Drywall &amp; Paint", "Hanging, taping, texture matching, and a clean, even finish."),
+                ("🏗️", "Roofing &amp; Siding", "Repairs and replacements, leak fixes, and exterior protection."),
+                ("🚿", "Plumbing", "Rough-in, re-pipes, fixtures, water heaters, and drain work."),
+                ("⚡", "Electrical", "Panels, circuits, lighting, outlets, and code corrections."),
+                ("🪚", "Carpentry &amp; Custom Build", "Framing, trim, built-ins, stairs, doors, and cabinetry."),
+                ("🧩", "Tile, Carpet &amp; Flooring", "Tile, LVP, hardwood, and carpet install and repair."),
+                ("🌳", "Decks &amp; Fences", "New builds, repairs, gates, and weatherproofing.")
+            ] %}
+            {% for icon, title, desc in services %}
+            <div class="bg-white rounded-3xl border border-slate-200 p-6 shadow-sm hover:shadow-xl hover:-translate-y-0.5 transition-all">
+                <div class="w-12 h-12 rounded-2xl bg-indigo-50 flex items-center justify-center text-2xl mb-4">{{ icon }}</div>
+                <h3 class="font-bold text-slate-900">{{ title | safe }}</h3>
+                <p class="text-sm text-slate-600 mt-2">{{ desc }}</p>
+            </div>
+            {% endfor %}
+        </div>
+        <div class="mt-10">
+            <a href="/services" class="inline-flex items-center font-semibold text-indigo-600 hover:text-indigo-700">See full service details &amp; ballpark ranges →</a>
+        </div>
+    </div>
+</section>
+
+<!-- How it works -->
+<section id="how-it-works" class="py-20 bg-white">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="max-w-3xl">
+            <p class="text-sm font-bold text-indigo-600 uppercase tracking-widest">How it works</p>
+            <h2 class="text-3xl sm:text-4xl font-black tracking-tight mt-2">From first call to final walkthrough</h2>
+        </div>
+        <div class="mt-12 grid grid-cols-1 md:grid-cols-5 gap-6">
+            {% set steps = [
+                ("1", "Consult", "Tell us about the project by phone, text, or the form. We ask the right questions."),
+                ("2", "Estimate", "We walk the property and give you a written, fixed-price scope. Free."),
+                ("3", "Deposit &amp; schedule", "A small deposit reserves your slot in the schedule and orders materials."),
+                ("4", "Build", "Our licensed crew does the work, with photo updates along the way."),
+                ("5", "Walkthrough", "We inspect together, punch-list anything outstanding, and hand it back spotless.")
+            ] %}
+            {% for n, title, desc in steps %}
+            <div class="relative">
+                <div class="w-10 h-10 rounded-full bg-indigo-600 text-white font-black flex items-center justify-center">{{ n }}</div>
+                <h3 class="mt-4 font-bold text-slate-900">{{ title | safe }}</h3>
+                <p class="text-sm text-slate-600 mt-2">{{ desc | safe }}</p>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+</section>
+
+<!-- STR callout (sister company synergy) -->
+<section class="py-20 bg-gradient-to-br from-indigo-50 via-white to-slate-50">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
+        <div>
+            <p class="text-sm font-bold text-indigo-600 uppercase tracking-widest">For hosts &amp; investors</p>
+            <h2 class="text-3xl sm:text-4xl font-black tracking-tight mt-2">Buy it, fix it, list it, and let us run the turnovers.</h2>
+            <p class="mt-4 text-slate-600">
+                We renovate short-term rentals to a stay-ready standard — and our sister company,
+                <a href="https://bizstackperks.com" class="text-indigo-600 font-semibold hover:text-indigo-700">Broom Service</a>,
+                cleans, co-hosts, and manages them afterward. One family of companies takes a property from rough
+                to revenue, with the cleaning fees paid by guests at booking.
+            </p>
+            <ul class="mt-6 space-y-3 text-slate-700">
+                <li class="flex gap-3">✅ <span>Renovation and make-ready scoped specifically for rental performance</span></li>
+                <li class="flex gap-3">✅ <span>Turnover cleaning, linen restock, and photo-verified quality control</span></li>
+                <li class="flex gap-3">✅ <span>Digital co-hosting or full-service management, no long-term lock-in</span></li>
+            </ul>
+            <a href="/quote?project=Short-Term%20Rental%20Make-Ready" class="mt-8 inline-flex items-center justify-center px-6 py-3.5 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-2xl transition-all">
+                Scope a rental make-ready →
+            </a>
+        </div>
+        <div class="rounded-3xl bg-white border border-slate-200 shadow-2xl shadow-indigo-100 p-8">
+            <p class="text-sm font-bold text-slate-500 uppercase tracking-wider mb-4">Rough timeline for a rental make-ready</p>
+            <div class="space-y-4">
+                <div class="flex items-center gap-4"><span class="w-16 text-xs font-bold text-indigo-600">Week 1</span><div class="flex-1"><p class="font-semibold text-slate-800">Assessment &amp; scope</p><p class="text-xs text-slate-500">Walkthrough, photos, fixed estimate.</p></div></div>
+                <div class="flex items-center gap-4"><span class="w-16 text-xs font-bold text-indigo-600">Weeks 2–4</span><div class="flex-1"><p class="font-semibold text-slate-800">Renovation</p><p class="text-xs text-slate-500">Repairs, paint, flooring, fixtures.</p></div></div>
+                <div class="flex items-center gap-4"><span class="w-16 text-xs font-bold text-indigo-600">Week 5</span><div class="flex-1"><p class="font-semibold text-slate-800">Furnish &amp; photograph</p><p class="text-xs text-slate-500">Stage, shoot, list.</p></div></div>
+                <div class="flex items-center gap-4"><span class="w-16 text-xs font-bold text-indigo-600">Ongoing</span><div class="flex-1"><p class="font-semibold text-slate-800">Clean &amp; co-host</p><p class="text-xs text-slate-500">Broom Service runs the operations.</p></div></div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Quote form -->
+<section id="quote-form" class="py-20 bg-white">
+    <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="text-center mb-10">
+            <p class="text-sm font-bold text-indigo-600 uppercase tracking-widest">Free estimate</p>
+            <h2 class="text-3xl sm:text-4xl font-black tracking-tight mt-2">Tell us about your project</h2>
+            <p class="mt-4 text-slate-600">We'll call to set up a free on-site walkthrough — no obligation, no pressure.</p>
+        </div>
+        <form id="lead-form" class="bg-slate-50 rounded-3xl border border-slate-200 p-6 sm:p-8 space-y-5">
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-5">
+                <div>
+                    <label class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Full Name *</label>
+                    <input name="name" required placeholder="Jane Smith" class="w-full px-4 py-3 rounded-xl bg-white border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                </div>
+                <div>
+                    <label class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Phone *</label>
+                    <input name="phone" data-phone-format type="tel" required placeholder="(757) 555-0123" class="w-full px-4 py-3 rounded-xl bg-white border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                </div>
+                <div>
+                    <label class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Email</label>
+                    <input name="email" type="email" placeholder="jane@example.com" class="w-full px-4 py-3 rounded-xl bg-white border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                </div>
+                <div>
+                    <label class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Project Type</label>
+                    <select name="project_type" class="w-full px-4 py-3 rounded-xl bg-white border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                        <option value="">Select…</option>
+                        <option>Whole-Home Renovation</option>
+                        <option>Kitchen</option>
+                        <option>Bathroom</option>
+                        <option>Drywall &amp; Paint</option>
+                        <option>Roofing &amp; Siding</option>
+                        <option>Plumbing</option>
+                        <option>Electrical</option>
+                        <option>Carpentry &amp; Trim</option>
+                        <option>Tile, Carpet &amp; Flooring</option>
+                        <option>Deck &amp; Fence</option>
+                        <option>Short-Term Rental Make-Ready</option>
+                        <option>Something else</option>
+                    </select>
+                </div>
+            </div>
+            <div>
+                <label class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Property Address</label>
+                <input name="address" placeholder="123 Main St, Virginia Beach, VA" class="w-full px-4 py-3 rounded-xl bg-white border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+            </div>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-5">
+                <div>
+                    <label class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Budget Range</label>
+                    <select name="budget" class="w-full px-4 py-3 rounded-xl bg-white border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                        <option value="">Not sure yet</option>
+                        <option>Under $10k</option>
+                        <option>$10k–$25k</option>
+                        <option>$25k–$50k</option>
+                        <option>$50k–$100k</option>
+                        <option>$100k+</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Timeline</label>
+                    <select name="timeline" class="w-full px-4 py-3 rounded-xl bg-white border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                        <option value="">Flexible</option>
+                        <option>ASAP</option>
+                        <option>Within 30 days</option>
+                        <option>1–3 months</option>
+                        <option>3–6 months</option>
+                        <option>Just planning</option>
+                    </select>
+                </div>
+            </div>
+            <div>
+                <label class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Project Details</label>
+                <textarea name="description" rows="4" placeholder="What needs to be done? Any photos or links welcome by text." class="w-full px-4 py-3 rounded-xl bg-white border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"></textarea>
+            </div>
+            <div id="lead-result" class="hidden rounded-2xl p-4 text-sm"></div>
+            <button type="submit" class="w-full py-4 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-2xl transition-all uppercase tracking-wider shadow-lg shadow-indigo-100">
+                Request My Free Estimate
+            </button>
+            <p class="text-xs text-center text-slate-500">Prefer to talk? Call or text <a href="tel:{{ co.phone_e164 }}" class="font-semibold text-indigo-600">{{ co.phone }}</a> — our assistant answers 24/7.</p>
+        </form>
+    </div>
+</section>
+
+<!-- FAQ -->
+<section id="faq" class="py-20 bg-slate-50">
+    <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="text-center mb-10">
+            <p class="text-sm font-bold text-indigo-600 uppercase tracking-widest">Questions</p>
+            <h2 class="text-3xl sm:text-4xl font-black tracking-tight mt-2">Frequently asked</h2>
+        </div>
+        <div class="space-y-4">
+            {% set faqs = [
+                ("Are you licensed and insured?", "Yes. We're a licensed, bonded, and insured general contractor, and every trade on your job is covered. Coverage documents are available on request."),
+                ("How much does an estimate cost?", "Nothing. On-site estimates are free and come with a written, fixed-price scope so there are no surprises later."),
+                ("Do you require a deposit?", "A small deposit reserves your place in the schedule and lets us order materials. It's applied to your project total, and you pay it securely by card."),
+                ("Can you handle the whole project, start to finish?", "Yes — that's the point. We self-perform the major trades and manage permitting, subs, and inspections, so you have one point of contact."),
+                ("Do you work on short-term rentals?", "Absolutely. Our sister company Broom Service specializes in Airbnb and Vrbo operations, so we can renovate a property and then clean, co-host, and manage it."),
+                ("What areas do you serve?", "{{ co.service_area }}. If you're nearby and not sure, just ask.")
+            ] %}
+            {% for q, a in faqs %}
+            <details class="group bg-white rounded-2xl border border-slate-200 p-5">
+                <summary class="flex items-center justify-between cursor-pointer font-bold text-slate-900">{{ q }}</summary>
+                <p class="mt-3 text-sm text-slate-600">{{ a | replace('{{ co.service_area }}', co.service_area) }}</p>
+            </details>
+            {% endfor %}
+        </div>
+    </div>
+</section>
+
+<!-- Final CTA -->
+<section class="py-20 bg-indigo-600">
+    <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center text-white">
+        <h2 class="text-3xl sm:text-4xl font-black tracking-tight">Ready to start your project?</h2>
+        <p class="mt-4 text-indigo-100">Get a free, no-obligation estimate from a licensed local crew.</p>
+        <div class="mt-8 flex flex-wrap justify-center gap-4">
+            <a href="/quote" class="inline-flex items-center justify-center px-7 py-4 text-base font-bold text-indigo-700 bg-white hover:bg-indigo-50 rounded-2xl transition-all">Get a Free Quote</a>
+            <a href="tel:{{ co.phone_e164 }}" class="inline-flex items-center justify-center px-7 py-4 text-base font-bold text-white bg-indigo-700 hover:bg-indigo-800 border border-indigo-500 rounded-2xl transition-all">📞 {{ co.phone }}</a>
+        </div>
+    </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const form = document.getElementById('lead-form');
+    if (!form) return;
+    form.addEventListener('submit', async function(e) {
+        e.preventDefault();
+        const box = document.getElementById('lead-result');
+        const data = new FormData(form);
+        data.set('source', 'website');
+        try {
+            const res = await fetch('/submit-lead', { method: 'POST', body: data });
+            const json = await res.json();
+            box.classList.remove('hidden');
+            if (json.status === 'success') {
+                box.className = 'rounded-2xl p-4 text-sm bg-emerald-50 border border-emerald-200 text-emerald-800 font-semibold';
+                box.innerHTML = '✅ Thanks — we got it. Our estimator will call you shortly to schedule your free walkthrough.';
+                form.reset();
+            } else {
+                box.className = 'rounded-2xl p-4 text-sm bg-red-50 border border-red-200 text-red-700 font-semibold';
+                box.textContent = 'Something went wrong. Please call or text us instead.';
+            }
+        } catch (err) {
+            box.classList.remove('hidden');
+            box.className = 'rounded-2xl p-4 text-sm bg-red-50 border border-red-200 text-red-700 font-semibold';
+            box.textContent = 'Network error. Please call or text us instead.';
+        }
+    });
+});
+</script>
+{% endblock %}
