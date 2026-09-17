@@ -17,10 +17,16 @@ Loan facts: startup, FICO low 600s, 25 years in the trade, target payment ~$930/
 
 ## Status: verified 2026 revenue = $32,516.50
 
+> **CORRECTION Sept 17:** the builds were logged backwards. Correct mapping —
+> **120 Old Ironsides Rd = $24,700** full build (done **March** 4–12) and
+> **5509 Sunnywood Dr = $7,200** insurance flood reno (done **May** 6–17).
+> Pitch, invoices, receipts, and photo log are all updated. When the Construction
+> Postgres comes back online, the backlog/project/payment records need the same swap.
+
 | Line | Dates | Amount |
 |---|---|---|
-| Construction — 5509 Sunnywood Dr (insurance flood reno) | Mar 4–12 | $7,200 |
-| Construction — 120 Old Ironsides Rd (garage → 1BR apt full build) | May 6–17 | $24,700 |
+| Construction — 5509 Sunnywood Dr (insurance flood reno) | May 6–17 | $7,200 |
+| Construction — 120 Old Ironsides Rd (garage → 1BR apt full build) | Mar 4–12 | $24,700 |
 | Broom Service — 3 turnovers @ $175 | Sep 3, 6, 11 | $525 |
 | Broom Service — co-host commission 15% ($430 + $180 stays) | Sep 6, 11 | $91.50 |
 

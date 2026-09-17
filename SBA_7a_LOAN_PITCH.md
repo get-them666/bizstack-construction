@@ -40,8 +40,8 @@ No invented figures:
 
 | Line | Date(s) | Amount |
 |---|---|---|
-| Construction — 5509 Sunnywood Dr, insurance flood renovation | Mar 4–12 | **$7,200** |
-| Construction — 120 Old Ironsides Rd, full build (garage → 1BR apt) | May 6–17 | **$24,700** |
+| Construction — 5509 Sunnywood Dr, insurance flood renovation | May 6–17 | **$7,200** |
+| Construction — 120 Old Ironsides Rd, full build (garage → 1BR apt) | Mar 4–12 | **$24,700** |
 | Broom Service — 3 turnovers @ $175 (2× Sunnywood, 1× Old Ironsides) | Sep 3, 6, 11 | **$525** |
 | Broom Service — co-host commission, 15% of stays ($430 + $180) | Sep 6, 11 | **$91.50** |
 

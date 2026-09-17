@@ -6,7 +6,7 @@ microloan package. Cash income with no paper trail can't be verified, so each jo
 
 ---
 
-## Job 1 — Sunnywood (Rebecca Mastic) · $7,200 · Mar 4–12, 2026
+## Job 1 — Sunnywood (Rebecca Mastic) · $7,200 · May 6–17, 2026
 
 | Item | Status | Notes |
 |---|---|---|
@@ -16,7 +16,7 @@ microloan package. Cash income with no paper trail can't be verified, so each jo
 | Homeowner's insurance scope-of-loss paperwork | ☐ | **They hold the policy** — ask Rebecca for a copy of the claim/scope; it corroborates dates & scope |
 | Income on tax return | ☐ | Must be reported on 2026 return to be usable |
 
-## Job 2 — Old Ironsides (Carl Simmons) · $24,700 · May 6–17, 2026
+## Job 2 — Old Ironsides (Carl Simmons) · $24,700 · Mar 4–12, 2026
 
 | Item | Status | Notes |
 |---|---|---|
