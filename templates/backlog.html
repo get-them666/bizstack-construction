@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% set co = company() %}
+{% block title %}Back-log | {{ co.name }} Owner Portal{% endblock %}
+{% block meta %}<meta name="robots" content="noindex, nofollow">{% endblock %}
+
+{% block content %}
+<section class="py-10 bg-slate-50 min-h-[80vh]">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="flex flex-wrap items-end justify-between gap-4 mb-6">
+            <div>
+                <p class="text-sm font-bold text-indigo-600 uppercase tracking-widest">Owner portal · Historical jobs</p>
+                <h1 class="text-3xl font-black tracking-tight text-slate-900">Back-log</h1>
+                <p class="text-sm text-slate-500 mt-1">Record work that already happened, with its real date. It shows up in leads, projects, and payments.</p>
+            </div>
+            <a href="/dashboard" class="px-4 py-2.5 text-sm font-semibold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 rounded-xl transition-colors">← Dashboard</a>
+        </div>
+
+        {% if request.query_params.get('ok') %}
+        <div class="mb-6 rounded-2xl bg-emerald-50 border border-emerald-200 px-5 py-3 text-sm font-semibold text-emerald-700">
+            {% if request.query_params.get('ok') == 'deleted' %}Entry removed.{% else %}Back-logged — the numbers below are updated.{% endif %}
+        </div>
+        {% endif %}
+
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div class="lg:col-span-2">
+                <div class="grid grid-cols-3 gap-4 mb-4">
+                    <div class="bg-white rounded-2xl border border-slate-200 p-4">
+                        <p class="text-xs font-bold text-slate-400 uppercase tracking-wider">Jobs</p>
+                        <p class="text-2xl font-black text-slate-900">{{ totals.jobs }}</p>
+                    </div>
+                    <div class="bg-white rounded-2xl border border-slate-200 p-4">
+                        <p class="text-xs font-bold text-slate-400 uppercase tracking-wider">Pipeline</p>
+                        <p class="text-2xl font-black text-indigo-600">{{ totals.pipeline|money }}</p>
+                    </div>
+                    <div class="bg-white rounded-2xl border border-slate-200 p-4">
+                        <p class="text-xs font-bold text-slate-400 uppercase tracking-wider">Collected</p>
+                        <p class="text-2xl font-black text-emerald-600">{{ collected|money }}</p>
+                    </div>
+                </div>
+
+                {% if entries %}
+                <div class="bg-white rounded-3xl border border-slate-200 overflow-hidden">
+                    <table class="w-full text-sm">
+                        <thead class="bg-slate-50 text-slate-500">
+                            <tr>
+                                <th class="text-left font-semibold px-5 py-3">Date</th>
+                                <th class="text-left font-semibold px-5 py-3">Job</th>
+                                <th class="text-left font-semibold px-5 py-3">Type</th>
+                                <th class="text-right font-semibold px-5 py-3">Estimate</th>
+                                <th class="px-5 py-3"></th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-100">
+                            {% for e in entries %}
+                            <tr>
+                                <td class="px-5 py-3 text-slate-500 whitespace-nowrap">{{ e.created_at.strftime('%b %d, %Y') }}</td>
+                                <td class="px-5 py-3">
+                                    <p class="font-semibold text-slate-800">{{ e.name }}</p>
+                                    <p class="text-xs text-slate-400">{{ e.address or '—' }}</p>
+                                </td>
+                                <td class="px-5 py-3 text-slate-500">{{ e.project_type or '—' }}<br><span class="text-xs text-slate-400">{{ e.status }}</span></td>
+                                <td class="px-5 py-3 text-right whitespace-nowrap font-semibold text-slate-700">
+                                    {% if e.estimate_low_cents or e.estimate_high_cents %}{{ e.estimate_low_cents|money }}–{{ e.estimate_high_cents|money }}{% else %}—{% endif %}
+                                </td>
+                                <td class="px-5 py-3 text-right">
+                                    <form method="POST" action="/api/backlog/{{ e.id }}/delete" onsubmit="return confirm('Remove this back-log entry?')">
+                                        <button type="submit" class="text-xs font-semibold text-red-500 hover:text-red-600">✕</button>
+                                    </form>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="bg-white rounded-3xl border border-slate-200 px-6 py-16 text-center">
+                    <p class="text-4xl mb-3">🗂️</p>
+                    <p class="font-semibold text-slate-700">Nothing back-logged yet</p>
+                    <p class="text-sm text-slate-500 mt-1">Add a job you've already quoted or completed on the right.</p>
+                </div>
+                {% endif %}
+            </div>
+
+            <div>
+                <div class="bg-white rounded-3xl border border-slate-200 p-5">
+                    <p class="text-sm font-bold text-slate-900 mb-3">Back-log a job</p>
+                    <form method="POST" action="/api/backlog" class="space-y-3">
+                        <label class="block text-xs font-semibold text-slate-500">Date it happened
+                            <input type="date" name="entry_date" value="{{ today }}" required class="mt-1 w-full px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                        </label>
+                        <input type="text" name="name" placeholder="Customer name" class="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                        <input type="text" name="phone" placeholder="Phone" class="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                        <input type="email" name="email" placeholder="Email" class="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                        <select name="project_type" class="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                            <option value="">— job type —</option>
+                            {% for t in project_types %}<option value="{{ t }}">{{ t }}</option>{% endfor %}
+                        </select>
+                        <input type="text" name="address" placeholder="Jobsite address" class="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                        <textarea name="description" rows="2" placeholder="Scope / what you did" class="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"></textarea>
+                        <div class="grid grid-cols-2 gap-3">
+                            <input type="number" step="0.01" min="0" name="low_dollars" placeholder="Quote low $" class="px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                            <input type="number" step="0.01" min="0" name="high_dollars" placeholder="Quote high $" class="px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                        </div>
+                        <input type="number" step="0.01" min="0" name="paid_dollars" placeholder="Amount paid $ (optional)" class="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                        <select name="status_val" class="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                            {% for s in statuses %}<option value="{{ s }}" {% if s == 'completed' %}selected{% endif %}>{{ s }}</option>{% endfor %}
+                        </select>
+                        <button type="submit" class="w-full py-3 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition-colors">+ Add to back-log</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+{% endblock %}

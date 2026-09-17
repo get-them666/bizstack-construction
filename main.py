@@ -1653,6 +1653,116 @@ async def project_delete(project_id: int, request: Request, db=Depends(get_db)):
     return RedirectResponse(url="/projects?ok=deleted", status_code=status.HTTP_303_SEE_OTHER)
 
 
+# --- Back-log ---------------------------------------------------------------
+# Record work that already happened (before the app existed) with its real
+# date, so the lead pipeline and payment history reflect reality.
+BACKLOG_PROJECT_STATUS = {"deposit": "planned", "in_progress": "active", "completed": "completed"}
+
+
+def _backlog_when(value: str) -> datetime:
+    try:
+        d = date.fromisoformat((value or "").strip())
+    except ValueError:
+        d = date.today()
+    return datetime(d.year, d.month, d.day, 12, 0, tzinfo=APP_TZ)
+
+
+def _backlog_cents(value: str) -> int:
+    try:
+        return max(0, int(round(float(value) * 100)))
+    except (TypeError, ValueError):
+        return 0
+
+
+@app.get("/backlog", response_class=HTMLResponse)
+async def backlog_page(request: Request, db=Depends(get_db)):
+    require_admin(request)
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT id, name, address, project_type, status, estimate_low_cents, "
+            "estimate_high_cents, created_at FROM leads WHERE source = 'backlog' "
+            "ORDER BY created_at DESC LIMIT 100;"
+        )
+        entries = cur.fetchall()
+        cur.execute(
+            "SELECT COUNT(*) AS jobs, COALESCE(SUM(estimate_high_cents), 0) AS pipeline "
+            "FROM leads WHERE source = 'backlog';"
+        )
+        totals = cur.fetchone()
+        cur.execute(
+            "SELECT COALESCE(SUM(p.amount_cents), 0) AS collected FROM payments p "
+            "JOIN leads l ON l.id = p.lead_id WHERE l.source = 'backlog';"
+        )
+        collected = cur.fetchone()["collected"]
+    return templates.TemplateResponse(
+        request=request, name="backlog.html",
+        context={
+            "entries": entries, "totals": totals, "collected": collected,
+            "statuses": LEAD_STATUSES, "today": date.today().isoformat(),
+            "project_types": INSTANT_PROJECT_TYPES,
+        },
+    )
+
+
+@app.post("/api/backlog")
+async def backlog_create(
+    request: Request,
+    entry_date: str = Form(""),
+    name: str = Form(""),
+    phone: str = Form(""),
+    email: str = Form(""),
+    project_type: str = Form(""),
+    address: str = Form(""),
+    description: str = Form(""),
+    low_dollars: str = Form(""),
+    high_dollars: str = Form(""),
+    status_val: str = Form("completed"),
+    paid_dollars: str = Form(""),
+    db=Depends(get_db),
+):
+    require_admin(request)
+    when = _backlog_when(entry_date)
+    lead_status = status_val if status_val in LEAD_STATUSES else "completed"
+    low_cents, high_cents = _backlog_cents(low_dollars), _backlog_cents(high_dollars)
+    paid_cents = _backlog_cents(paid_dollars)
+    with db.cursor() as cur:
+        cur.execute(
+            "INSERT INTO leads (name, phone, email, project_type, address, description, source, "
+            "status, estimate_low_cents, estimate_high_cents, created_at) "
+            "VALUES (%s,%s,%s,%s,%s,%s,'backlog',%s,%s,%s,%s) RETURNING id;",
+            (name or "Back-logged job", phone or "", email, project_type, address, description,
+             lead_status, low_cents or None, high_cents or None, when),
+        )
+        lead_id = cur.fetchone()["id"]
+        project_status = BACKLOG_PROJECT_STATUS.get(lead_status)
+        if project_status:
+            cur.execute(
+                "INSERT INTO projects (lead_id, name, address, summary, start_date, status, created_at) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s);",
+                (lead_id, f"{project_type or 'Project'} — {name or 'Back-logged job'}", address,
+                 description, when.date(), project_status, when),
+            )
+        if paid_cents > 0:
+            cur.execute(
+                "INSERT INTO payments (lead_id, amount_cents, status, created_at) "
+                "VALUES (%s,%s,'paid',%s);",
+                (lead_id, paid_cents, when),
+            )
+        db.commit()
+    return RedirectResponse(url="/backlog?ok=added", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/api/backlog/{lead_id}/delete")
+async def backlog_delete(lead_id: int, request: Request, db=Depends(get_db)):
+    require_admin(request)
+    with db.cursor() as cur:
+        cur.execute("DELETE FROM payments WHERE lead_id=%s;", (lead_id,))
+        cur.execute("DELETE FROM projects WHERE lead_id=%s;", (lead_id,))
+        cur.execute("DELETE FROM leads WHERE id=%s AND source='backlog';", (lead_id,))
+        db.commit()
+    return RedirectResponse(url="/backlog?ok=deleted", status_code=status.HTTP_303_SEE_OTHER)
+
+
 # --- Crew admin -------------------------------------------------------------
 CREW_ROLES = ["owner", "foreman", "carpenter", "framer", "laborer", "electrician", "plumber", "painter", "finisher", "grunt"]
 CREW_PAY_TYPES = ["hourly", "salary", "1099"]
