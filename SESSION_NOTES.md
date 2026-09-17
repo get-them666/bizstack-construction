@@ -71,13 +71,20 @@ Buildstack Construction `913e36b5-fe1f-4d73-80c5-aa0dd74f47be`.
 5. **`railway tcp-proxy delete <proxy-id> -s Postgres --yes`** — always close it.
 
 ## Open items
-- [ ] **Deploy both apps** so `/backlog` is live.
-- [ ] Collect documentation for the cash construction jobs (invoices, receipts, photos,
-      insurance scope).
-- [ ] Confirm the **$10,000 equity injection** is real and documentable.
+- [x] **Deploy both apps** so `/backlog` is live — deployed Sept 17, 2026 via `railway up`.
+- [x] **Cash-job documentation templates created** (`docs/INVOICE_*.html`, `docs/RECEIPT_*.html`,
+      `docs/PHOTO_LOG.html`, `docs/CHECKLIST.md`) — still need homeowner signatures.
+- [x] **$10,000 equity** — Shaun confirmed he can get a current bank statement (pull & file it).
+- [x] **Outreach emails drafted & ready to send** (`docs/OUTREACH_EMAILS.md`, order
+      SBDC → LISC → VCC → VSBFA). **NOT SENT YET** — send from hello@bizstackperks.com.
+- [ ] **⚠️ Construction Postgres outage (Sept 17):** the "courteous-wisdom" Postgres stopped
+      accepting connections after a Railway auto-deploy at 06:30 EDT. `/backlog`, `/projects`,
+      and all DB routes return 500 (homepage 200 because it's static). Broom Service DB is fine.
+      Fix needs Railway dashboard/support (CLI restart hangs; raw socket probe gets empty reply).
+      The loan numbers are already captured in the pitch docs, so this does NOT block sending outreach.
 - [ ] Optional: add the **deep clean ($275)** — property/date still unconfirmed.
 - [ ] Optional: Shipyard **contract income** details (employer, dates, gross) — ended.
-- [ ] Send outreach in order: **Hampton Roads SBDC → LISC → VCC → VSBFA**.
+- [ ] Send outreach: docs ready — **SBDC first**, then LISC → VCC → VSBFA.
 
 ## Files
 - `SBA_7a_LOAN_PITCH.md` — pitch + verified reality-check + documentation section.
