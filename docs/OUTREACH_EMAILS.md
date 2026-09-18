@@ -5,20 +5,19 @@
 > Attach the one-page pitch PDF on the Day 0 email to lenders.
 > Send emails on the same day across lenders (Day 0), then run texts/emails on the same deadlines.
 
----
-
 ## ⚠️ BEFORE SENDING — get these ready (see `docs/CHECKLIST.md`)
-- [ ] Bank statement showing the $10K equity (current, last 30 days)
-- [ ] One-page pitch exported to PDF (`SBA_7a_LOAN_PITCH.md` → PDF)
+- [ ] Bank statement showing the $10K equity (current, last 30 days) — `~/Documents/statement_equity_FINAL.pdf` ✅ exists
+- [x] One-page pitch exported to PDF (`docs/SBA_7a_LOAN_PITCH.pdf`) — **generated Sept 18, 2026**
 - [ ] Invoices + signed receipts from both cash jobs (if not yet signed, send tomorrow AM — do NOT block the SBDC email on this)
-- [ ] Fill `[First Name]` + `[Lender Name]` fields below
+- [x] Fill `[First Name]` + `[Lender Name]` fields below — **verified Sep 18, 2026**
 
 ---
 
 ## STEP 0 — EMAIL THE SBDC FIRST (do this before anything else)
 
-**To:** sbdc@hrchamber.com  ·  **Cc:** hello@bizstackperks.com
+**To:** sbdc@hrchamber.com · **Williamsburg rep:** jspiers@hrchamber.com (Jolie Spiers, Williamsburg Community Building) · **Cc:** hello@bizstackperks.com
 **Subject:** Free advising request — startup, $50K microloan prep (STR services + construction)
+**Phone:** (757) 664-2592
 
 ```
 Hi Hampton Roads SBDC team,
@@ -58,7 +57,7 @@ bizstackperks.com
 
 ## DAY 0 — EMAIL to LISC HAMPTON ROADS
 
-**To:** [LISC officer direct email — contact form at lisc.org/hampton-roads → Small Business, get officer's email]
+**To:** smallbusiness@lisc.org (LISC small business lending intake) · **Cc:** wmartin@lisc.org (Will Martin, Capital Access & Deployment Officer, LISC Virginia) · **Cc:** hello@bizstackperks.com
 **Subject:** $50K microloan — BizStack (STR construction + cleaning/co-hosting), Hampton Roads
 **Attach:** SBA_7a_LOAN_PITCH.pdf
 
@@ -101,7 +100,7 @@ bizstackperks.com
 
 ## DAY 0 — EMAIL to VIRGINIA COMMUNITY CAPITAL (VCC)
 
-**To:** [VCC officer direct email — contact form at vcc.bank → Lending; Norfolk office]
+**To:** jbarnes@vccva.org (Joey Barnes, Small Business Lending Manager) · **Cc:** hello@bizstackperks.com · Phone (757) 962-0955
 **Subject:** $50K microloan — BizStack (STR construction + cleaning/co-hosting), Hampton Roads
 **Attach:** SBA_7a_LOAN_PITCH.pdf
 
@@ -146,7 +145,7 @@ bizstackperks.com
 ## DAY 0 — EMAIL to VSBFA (Virginia Small Business Financing Authority)
 
 **To:** VSBFA@sbsd.virginia.gov
-**Phone:** (804) 786-1049 — call first, ask for a **Regional Lending Manager**, then email them directly
+**Phone:** (804) 786-1049 — call first, ask for a **Regional Lending Manager** (Linda K. Tackett / Terrance Rogers), then email them directly
 **Subject:** $50K microloan — BizStack (STR construction + cleaning/co-hosting), Hampton Roads
 **Attach:** SBA_7a_LOAN_PITCH.pdf
 
@@ -288,10 +287,15 @@ hello@bizstackperks.com · bizstackperks.com
 
 ---
 
+## SENDING LOG (live)
+- [x] **SENT Sept 18, 2026** — SBDC (Step 0): `sbdc@hrchamber.com` cc `hello@bizstackperks.com`,
+      subject "Free advising request — startup, $50K microloan prep". Verified delivered via
+      mail.privateemail.com (465). **Next:** LISC → VCC → VSBFA Day-0 emails (pitch PDF attached).
+
 ## SENDING ORDER CHECKLIST
-- [ ] Send SBDC email (Step 0) — **today**
-- [ ] Run `pitch_numbers.py` → verify numbers still match, update pitch if needed
-- [ ] Export pitch PDF
+- [x] Send SBDC email (Step 0) — **sent Sept 18, 2026**
+- [x] Run `pitch_numbers.py` → verify numbers still match, update pitch if needed
+- [x] Export pitch PDF (`docs/SBA_7a_LOAN_PITCH.pdf`) — generated Sept 18, 2026
 - [ ] Pull bank statement for $10K equity
 - [ ] Day 0 send all three lender emails (LISC, VCC, VSBFA)
 - [ ] Print/sign invoices + receipts with homeowners, add to package
