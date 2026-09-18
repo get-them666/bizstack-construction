@@ -291,13 +291,18 @@ hello@bizstackperks.com · bizstackperks.com
 - [x] **SENT Sept 18, 2026** — SBDC (Step 0): `sbdc@hrchamber.com` cc `hello@bizstackperks.com`,
       subject "Free advising request — startup, $50K microloan prep". Verified delivered via
       mail.privateemail.com (465). **Next:** LISC → VCC → VSBFA Day-0 emails (pitch PDF attached).
+- [x] **SENT Sept 18, 2026** — **Day 0 batch** (pitch PDF attached):
+      1. LISC → `smallbusiness@lisc.org` cc `wmartin@lisc.org`
+      2. VCC → `jbarnes@vccva.org`
+      3. VSBFA → `VSBFA@sbsd.virginia.gov`
+  **Now on the follow-up cadence:** Day 1 text → Day 3 email 2 → Day 7 text → Day 14 email 3 (see below).
 
 ## SENDING ORDER CHECKLIST
 - [x] Send SBDC email (Step 0) — **sent Sept 18, 2026**
 - [x] Run `pitch_numbers.py` → verify numbers still match, update pitch if needed
 - [x] Export pitch PDF (`docs/SBA_7a_LOAN_PITCH.pdf`) — generated Sept 18, 2026
 - [ ] Pull bank statement for $10K equity
-- [ ] Day 0 send all three lender emails (LISC, VCC, VSBFA)
+- [x] Day 0 send all three lender emails (LISC, VCC, VSBFA) — **sent Sept 18, 2026**
 - [ ] Print/sign invoices + receipts with homeowners, add to package
 - [ ] Collect insurance scope paperwork (Sunnywood)
 - [ ] Same-day response to all replies, same numbers every touch

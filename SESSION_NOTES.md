@@ -27,9 +27,10 @@ app. All routes now return 200 (public + auth pages).
 uvicorn instead of PostgreSQL startup.
 
 ## Next session priorities (Sept 18+)
-1. **Send Day-0 lender emails** — SBDC sent Sept 18. Next: LISC (`smallbusiness@lisc.org`,
-   cc `wmartin@lisc.org`), VCC (`jbarnes@vccva.org`), VSBFA (`VSBFA@sbsd.virginia.gov`),
-   with `docs/SBA_7a_LOAN_PITCH.pdf` attached.
+1. **All outreach SENT Sept 18** — SBDC (sbdc@hrchamber.com), LISC (smallbusiness@lisc.org,
+   cc wmartin@lisc.org), VCC (jbarnes@vccva.org), VSBFA (VSBFA@sbsd.virginia.gov), pitch PDF
+   attached. **Now on the follow-up cadence:** Day 1 text → Day 3 email 2 → Day 7 text →
+   Day 14 email 3 (all drafted in docs/OUTREACH_EMAILS.md).
 2. **SMTP now configured in Railway** (`SMTP_HOST=mail.privateemail.com` 465,
    `SMTP_TLS=ssl`, user hello@bizstackperks.com) — OTP login emails + estimates work now too.
 3. **Payments recorded in DB** — 3 rows: $22,500 (Old Ironsides, 03/19) + $2,200 (cash,
