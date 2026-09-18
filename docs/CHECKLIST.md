@@ -1,8 +1,10 @@
 # BizStack — Loan Documentation Checklist
 
 ## Goal
-Get the $31,900 in cash-paid construction work **countable by a lender** before submitting the
-microloan package. Cash income with no paper trail can't be verified, so each job needs proof.
+Count the $31,900 in construction work with a lender by documenting every dollar.
+**$22,500 already has a bank trail** (03/19/2026 PNC deposit matching the Old Ironsides
+payment); the remaining **$9,400 in cash** ($2,200 Old Ironsides remainder + $7,200 Sunnywood)
+needs paper proof below.
 
 ---
 
@@ -20,9 +22,11 @@ microloan package. Cash income with no paper trail can't be verified, so each jo
 
 | Item | Status | Notes |
 |---|---|---|
-| Invoice `BC-2026-002` marked **"PAID — CASH"** | ☐ | `docs/INVOICE_OLD_IRONSIDES.html` |
+| **Bank trail (have it)** | ✅ | PNC statement 02/26–03/27, page 3 of 5: **$22,500 deposited 03/19/2026** = Old Ironsides payment. Clean PDF: `~/Documents/statement_equity_FINAL.pdf` |
+| Invoice `BC-2026-002` marked **"PAID — CASH"** | ☐ | `docs/INVOICE_OLD_IRONSIDES.html` — covers the $2,200 cash remainder |
 | Signed receipt of payment | ☐ | `docs/RECEIPT_OLD_IRONSIDES.html` |
 | Before/after photos | ☐ | Highlight garage→apartment transformation |
+| Confirm the $2,200 gap | ☐ | What happened to the $2,200 not deposited? (materials paid cash / held) — have a one-line answer |
 | Income on tax return | ☐ | Included with 2026 filing |
 
 ## Broom Service records
@@ -36,7 +40,7 @@ microloan package. Cash income with no paper trail can't be verified, so each jo
 
 | Item | Status | Notes |
 |---|---|---|
-| Current bank statement showing $10,000 | ☐ | **Shaun to pull** — user confirmed getting a statement |
+| Current bank statement showing $10,000 | ✅ | PNC statement pulled — clean PDF: `~/Documents/statement_equity_FINAL.pdf` (03/19 deposit = business revenue; the **$10K owner-equity** still needs the line to prove *your own funds* went into the business) |
 | Proof the $10K is invested in the business | ☐ | Depends how funds were injected — receipt/EIN record or statement note |
 
 ## Tax / identity
@@ -56,7 +60,7 @@ Open each `docs/*.html` in a browser, then **Print → Save as PDF**. Print the 
 for homeowner signatures, then scan or photograph and add to the package as PDFs.
 
 ## Order to wrap up
-1. Get the bank statement for the $10K (Shaun).
+1. Confirm the $2,200 Old Ironsides gap (materials/held cash) — one-line answer ready. ✅ bank trail done.
 2. Print invoices + receipts, get homeowner signatures (Sunnywood → Old Ironsides).
 3. Collect/email insurance scope paperwork from Rebecca Mastic.
 4. Gather photos for both jobs.

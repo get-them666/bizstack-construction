@@ -74,8 +74,10 @@ quotes or booked future work — so the loan still leans on projections for repa
 **What a lender will ask for (get these ready):** proof of the work and payment for both
 construction jobs — invoices marked paid, signed receipts, before/after photos, and the
 homeowner's insurance claim paperwork for Sunnywood (they held the policy; it corroborates
-your scope). **Both jobs were paid in cash, so there's no bank trail** — see the
-documentation section below. Plus cleaning/commission records and tax returns showing the
+your scope). **The March job now has a bank trail: a $22,500 deposit on 03/19/2026
+(PNC statement, period 02/26–03/27, page 3 of 5) matches the Old Ironsides payment.** The
+remaining cash ($2,200 gap on Old Ironsides + all of Sunnywood's $7,200) still needs the
+paper documentation below. Plus cleaning/commission records and tax returns showing the
 Shipyard contract income. Numbers without documentation won't count.
 
 **My recommendation:** you can apply now with a credible file. To strengthen it further
@@ -235,10 +237,16 @@ No invented figures anywhere in the file.
 
 ### Documentation — the real constraint
 
-**Both construction jobs were paid in cash, and the homeowner — not you — held the
-insurance.** That means there is no bank-deposit trail for the $31,900. Cash income is
-legitimate, but a lender cannot count a number it can't verify. To make this revenue
-usable you need, for each job:
+**The March revenue ($22,500 of the $24,700 Old Ironsides job) has a bank trail.** A PNC
+Simple Checking statement for 02/26–03/27/2026 (page 3 of 5, acct ...5216) shows a
+**$22,500 deposit on 03/19/2026**, one week after the job completed (Mar 4–12). PNC printed
+the bank's generic label **"ACH Branch Cash Deposit"** on the line — "ACH" is a bank-app
+formatting artifact, not the transaction type; the deposit itself is on the record. This is
+countable revenue.
+
+**What still needs documentation** (cash-paid, no bank trail): the **$2,200 remainder** of
+Old Ironsides (held cash / expenses — owner to confirm exactly), and **all of Sunnywood's
+$7,200** (May 6–17, 2026). To make cash income usable by a lender, for each cash portion:
 
 - An **invoice** (even if written up now, dated to the job) marked **"Paid — cash"**
 - A **signed receipt or acknowledgment** from the homeowner

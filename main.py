@@ -75,7 +75,7 @@ def company() -> dict:
 
 def _money(value):
     try:
-        return f"${float(value):,.0f}"
+        return f"${float(value or 0) / 100:,.0f}"
     except (TypeError, ValueError):
         return "—"
 
