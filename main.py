@@ -35,6 +35,7 @@ import aiosmtplib
 from email.message import EmailMessage
 
 from ai_agent import BusinessAIAgent
+from loan_outreach import start_outreach_tasks
 from stripe_service import StripeService, default_deposit_cents
 from signalwire_service import SignalWireService
 import property_service
@@ -296,6 +297,14 @@ async def lifecycle(app: FastAPI):
         print("✅ Schema ready.")
     except Exception as e:
         print(f"⚠️ Database init skipped: {e}")
+
+    if not os.getenv("DISABLE_LOAN_OUTREACH"):
+        _outreach_tasks = start_outreach_tasks()
+        try:
+            app.state.outreach_tasks = _outreach_tasks
+        except AttributeError:
+            pass
+
     yield
 
 
