@@ -27,13 +27,15 @@ app. All routes now return 200 (public + auth pages).
 uvicorn instead of PostgreSQL startup.
 
 ## Next session priorities (Sept 18+)
-1. **Send outreach emails** — drafted & ready in `docs/OUTREACH_EMAILS.md` (SBDC → LISC → VCC → VSBFA).
-   Not sent yet; send from hello@bizstackperks.com.
-2. **Record the $22,500 bank deposit + $2,200 cash + Sunnywood $7,200** as payments/deposit_status
-   in DB so lender dashboards & `collected` totals are complete.
-3. **Get business:** site is fully operational — drive traffic (nextdoor, FB marketplace, Google
-   Business Profile, VA/NC permit boards) and route leads into the `/leads` pipeline.
-4. Optional: deep clean ($275) + Shipyard contract income lines in the pitch._
+1. **Send Day-0 lender emails** — SBDC sent Sept 18. Next: LISC (`smallbusiness@lisc.org`,
+   cc `wmartin@lisc.org`), VCC (`jbarnes@vccva.org`), VSBFA (`VSBFA@sbsd.virginia.gov`),
+   with `docs/SBA_7a_LOAN_PITCH.pdf` attached.
+2. **SMTP now configured in Railway** (`SMTP_HOST=mail.privateemail.com` 465,
+   `SMTP_TLS=ssl`, user hello@bizstackperks.com) — OTP login emails + estimates work now too.
+3. **Payments recorded in DB** — 3 rows: $22,500 (Old Ironsides, 03/19) + $2,200 (cash,
+   03/12) + $7,200 (Sunnywood, 05/17) = **$31,900 collected**. `/backlog` dashboard reflects it.
+4. **Drive local lead-gen** now that site + forms are live end-to-end.
+5. Optional: deep clean ($275) + Shipyard contract income lines in the pitch._
 
 ## Objective
 Land a **$50,000 SBA Microloan** for Shaun O'Leary's startup, **BizStack**
