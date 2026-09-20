@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>Buildstack Crew</title>
+    <meta name="description" content="Buildstack Construction Crew — clock in at the job, share location only while on the clock, log hours, and track your pay.">
+    <meta name="theme-color" content="#1d4ed8">
+    <link rel="manifest" href="/manifest.webmanifest">
+    <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Crew">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .safe-top { padding-top: env(safe-area-inset-top); }
+        .safe-bottom { padding-bottom: env(safe-area-inset-bottom); }
+    </style>
+</head>
+<body class="bg-slate-100 text-slate-900 antialiased">
+
+    <div id="app" class="max-w-md mx-auto min-h-screen flex flex-col">
+
+        <!-- Location permission banner -->
+        <div id="geo-banner" class="hidden sticky top-0 z-40 px-4 py-3 bg-amber-50 border-b border-amber-200 text-amber-800 text-sm font-semibold">
+            <div class="flex items-center gap-2">
+                <span>📍</span>
+                <span class="flex-1">Location access is off — the office can't verify you at the job site without it.</span>
+            </div>
+            <button id="geo-enable" type="button"
+                class="mt-2 w-full py-2.5 text-sm font-bold text-white bg-amber-600 hover:bg-amber-700 rounded-xl">
+                Allow Location
+            </button>
+            <p class="mt-2 text-xs text-amber-600 font-medium">Still blocked? Go to your phone's <b>Settings → Privacy → Location Services</b> and turn it on for this app, then reopen it.</p>
+        </div>
+
+        <!-- Login view -->
+        <div id="login-view" class="hidden flex-1 flex flex-col px-6">
+            <div class="safe-top mt-14 mb-6 text-center">
+                <div class="w-16 h-16 mx-auto rounded-2xl bg-blue-700 flex items-center justify-center text-white text-3xl font-bold shadow-lg shadow-blue-200">🛠️</div>
+                <h1 class="mt-4 text-2xl font-extrabold text-slate-900">Buildstack Crew</h1>
+                <p class="mt-1 text-sm text-slate-500">Sign in with the phone number and PIN from your manager.</p>
+            </div>
+            <div id="login-error" class="hidden mb-4 px-4 py-3 rounded-xl bg-red-50 text-red-600 text-sm font-medium border border-red-100"></div>
+            <form id="login-form" class="bg-white rounded-3xl border border-slate-200 shadow-xl shadow-slate-100 p-6 space-y-4">
+                <div>
+                    <label class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">Phone Number</label>
+                    <input id="login-phone" type="tel" required placeholder="+1 (555) 123-4567"
+                        class="w-full px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all">
+                </div>
+                <div>
+                    <label class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">PIN</label>
+                    <input id="login-pin" type="password" required inputmode="numeric" maxlength="6" placeholder="4-6 digit PIN"
+                        class="w-full px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all">
+                </div>
+                <button type="submit" id="login-btn"
+                    class="w-full py-3.5 text-sm font-bold text-white bg-blue-700 hover:bg-blue-800 rounded-xl transition-all shadow-md shadow-blue-100 uppercase tracking-wider">
+                    Sign In
+                </button>
+            </form>
+            <p class="mt-6 mb-10 text-center text-xs text-slate-400">🔒 GPS location is only used when you are clocked in at a job site. Off the clock = not tracked.</p>
+        </div>
+
+        <!-- Home view -->
+        <div id="home-view" class="hidden flex-1 flex-col">
+            <header class="safe-top bg-slate-900 text-white px-6 pt-6 pb-8">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="text-xs font-semibold text-blue-300 uppercase tracking-wider">Buildstack Crew</p>
+                        <h1 class="text-2xl font-extrabold tracking-tight">Hi, <span id="h-name"></span></h1>
+                    </div>
+                    <button id="logout-btn" class="px-4 py-2 text-xs font-bold text-slate-300 bg-slate-800 hover:bg-slate-700 rounded-xl">Log Out</button>
+                </div>
+                <div class="mt-5 bg-white/10 rounded-2xl px-5 py-4 flex items-center justify-between">
+                    <div>
+                        <p class="text-[10px] text-slate-400 uppercase tracking-wider">This Week</p>
+                        <p id="h-hours" class="text-2xl font-extrabold text-emerald-400">0h</p>
+                    </div>
+                    <div class="text-right">
+                        <p class="text-[10px] text-slate-400 uppercase tracking-wider">Last Pay</p>
+                        <p id="h-earned" class="text-2xl font-extrabold text-white">$0</p>
+                    </div>
+                </div>
+            </header>
+
+            <div id="offline-banner" class="hidden bg-amber-500 text-white text-center text-xs font-bold px-4 py-2">OFFLINE — data may be stale</div>
+
+            <main id="home-body" class="flex-1 px-5 pb-24 -mt-4">
+                <div id="clocked-banner" class="hidden bg-red-500 text-white rounded-2xl px-5 py-3 mb-4 shadow-lg shadow-red-200 flex items-center justify-between">
+                    <span class="text-sm font-bold">● On the clock — location live to the office</span>
+                    <button id="banner-stop" class="px-3 py-1.5 text-xs font-bold bg-white text-red-500 rounded-lg">Clock Out</button>
+                </div>
+
+                <section id="tab-clock">
+                    <p id="jobs-title" class="text-sm font-bold text-slate-900 mb-3">My Jobs</p>
+                    <div id="jobs-list" class="space-y-3"></div>
+                </section>
+
+                <section id="tab-hours" class="hidden">
+                    <form id="hours-form" class="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 mb-5 space-y-3">
+                        <p class="text-sm font-bold text-slate-900">Log Hours</p>
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1">Job</label>
+                            <select id="hours-project" required class="w-full px-3 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"></select>
+                        </div>
+                        <div class="grid grid-cols-2 gap-3">
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1">Date</label>
+                                <input id="hours-date" type="date" required class="w-full px-3 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1">Hours</label>
+                                <input id="hours-count" type="number" min="0.25" max="24" step="0.25" required placeholder="8" class="w-full px-3 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            </div>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1">Type</label>
+                            <select id="hours-type" class="w-full px-3 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                                <option value="regular">Regular</option>
+                                <option value="overtime">Overtime</option>
+                            </select>
+                        </div>
+                        <p id="hours-status" class="hidden text-center text-sm font-bold text-emerald-600"></p>
+                        <button type="submit" class="w-full py-3 text-sm font-bold text-white bg-blue-700 hover:bg-blue-800 rounded-xl">Add Hours</button>
+                    </form>
+                    <p class="text-sm font-bold text-slate-900 mb-3">Recent Timesheets</p>
+                    <div id="hours-list" class="space-y-3"></div>
+                </section>
+
+                <section id="tab-pay" class="hidden">
+                    <p id="pay-title" class="text-sm font-bold text-slate-900 mb-3">Pay History</p>
+                    <div id="pay-list" class="space-y-3"></div>
+                </section>
+            </main>
+        </div>
+
+        <nav id="tabbar" class="hidden fixed bottom-0 inset-x-0 z-40 bg-white border-t border-slate-200 safe-bottom flex justify-around">
+            <button id="tabbtn-clock" data-tab="clock" class="flex-1 py-3 text-sm font-bold text-blue-600 border-t-2 border-blue-500">🕐 Clock</button>
+            <button id="tabbtn-hours" data-tab="hours" class="flex-1 py-3 text-sm font-bold text-slate-400 border-t-2 border-transparent">🕒 Hours</button>
+            <button id="tabbtn-pay" data-tab="pay" class="flex-1 py-3 text-sm font-bold text-slate-400 border-t-2 border-transparent">💰 Pay</button>
+        </nav>
+    </div>
+
+    <script>
+        const state = { worker: null, jobs: [], hours: [], pay: [], clocked_in: false, clock_id: null, week_hours: 0, lastEarned: 0, updateTimer: null, sampling: false };
+
+        const $ = id => document.getElementById(id);
+
+        function fmtPhone(value) {
+            let d = String(value || '').replace(/\D/g, '');
+            let prefix = '';
+            if (d.length > 10 && d[0] === '1') { d = d.slice(1); prefix = '+1 '; }
+            if (d.length <= 3) return prefix + d;
+            if (d.length <= 6) return prefix + '(' + d.slice(0, 3) + ') ' + d.slice(3);
+            return prefix + '(' + d.slice(0, 3) + ') ' + d.slice(3, 6) + '-' + d.slice(6, 10);
+        }
+
+        function fmtMoney(cents) { return '$' + ((cents || 0) / 100).toFixed(2); }
+        function fmtDate(iso) {
+            const d = new Date(iso);
+            return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+        }
+
+        function show(view) {
+            $('login-view').classList.toggle('hidden', view !== 'login');
+            $('home-view').classList.toggle('hidden', view !== 'home');
+        }
+
+        async function api(path, opts) {
+            const res = await fetch(path, { credentials: 'same-origin', ...opts });
+            let data = {};
+            try { data = await res.json(); } catch (e) {}
+            return { res, data };
+        }
+
+        function escapeHtml(str) {
+            return String(str ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+        }
+
+        async function loadMe() {
+            const { res, data } = await api('/api/crew/app/me');
+            if (res.status === 401 || data.status !== 'ok') { show('login'); return; }
+            state.worker = data.worker;
+            state.jobs = data.jobs;
+            state.hours = data.hours;
+            state.pay = data.pay;
+            state.week_hours = data.week_hours || 0;
+            state.clocked_in = !!data.open_clock;
+            state.clock_id = (data.open_clock && data.open_clock.id) || null;
+            state.lastEarned = (data.pay && data.pay.length && data.pay[0].gross_cents) || 0;
+            renderHome();
+            checkGeo();
+            show('home');
+        }
+
+        function renderHome() {
+            $('h-name').textContent = state.worker.name;
+            $('h-hours').textContent = state.week_hours + 'h';
+            $('h-earned').textContent = fmtMoney(state.lastEarned);
+            renderJobs();
+            renderHours();
+            renderPay();
+            fillHourProjectSelect();
+            const today = new Date();
+            $('hours-date').value = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' + String(today.getDate()).padStart(2, '0');
+            $('tabbar').classList.remove('hidden');
+            switchTab('clock');
+        }
+
+        function renderJobs() {
+            const list = $('jobs-list');
+            list.innerHTML = '';
+            if (!state.jobs.length) {
+                list.innerHTML = '<p class="text-sm text-slate-400 bg-white rounded-2xl border border-slate-200 p-5">No jobs assigned yet.</p>';
+                $('clocked-banner').classList.add('hidden');
+                return;
+            }
+            state.jobs.forEach(j => {
+                const div = document.createElement('div');
+                div.className = 'bg-white rounded-2xl border border-slate-200 shadow-sm p-4';
+                const isOpen = state.clocked_in && state.clock_id === j.clock_id;
+                const chip = j.status === 'active'
+                    ? '<span class="px-2 py-1 text-xs font-semibold rounded-full bg-emerald-50 text-emerald-600 border border-emerald-100">Active</span>'
+                    : '<span class="px-2 py-1 text-xs font-semibold rounded-full bg-blue-50 text-blue-600 border border-blue-100">Planned</span>';
+                const coords = (j.lat != null && j.lng != null) ? `href="https://www.google.com/maps/dir/?api=1&destination=${j.lat},${j.lng}"` : (j.address ? `href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(j.address)}"` : '');
+                const actions = isOpen
+                    ? `<button class="flex-1 text-center px-3 py-2.5 text-xs font-bold text-white bg-red-500 hover:bg-red-600 rounded-xl" data-act="out" data-id="${j.id}">Clock Out</button>`
+                    : `<button class="flex-1 text-center px-3 py-2.5 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl" data-act="in" data-id="${j.id}">🕐 Clock In</button>`;
+                div.innerHTML = `
+                    <div class="flex items-start justify-between gap-3">
+                        <div>
+                            <p class="text-sm font-bold text-slate-800">${escapeHtml(j.name)}</p>
+                            ${j.address ? '<p class="text-xs text-slate-500 mt-0.5">📍 ' + escapeHtml(j.address) + '</p>' : ''}
+                            ${j.summary ? '<p class="text-xs text-slate-400 mt-0.5">' + escapeHtml(j.summary) + '</p>' : ''}
+                        </div>
+                        ${chip}
+                    </div>
+                    <div class="mt-3 flex items-center gap-2">
+                        ${coords ? `<a ${coords} target="_blank" rel="noopener" class="flex-1 text-center px-3 py-2.5 text-xs font-bold text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-xl">🧭 Directions</a>` : ''}
+                        ${actions}
+                    </div>
+                    ${isOpen ? `<div class="mt-3 p-3 rounded-xl bg-slate-50 border border-slate-100"><p class="text-xs font-bold text-red-500 uppercase tracking-wider">📍 Location sharing active</p><p class="text-xs text-slate-500 mt-0.5">On the clock since ${fmtDate(j.clocked_since)}</p></div>` : ''}
+                `;
+                list.appendChild(div);
+                if (isOpen) $('clocked-banner').classList.remove('hidden');
+            });
+            if (!state.clocked_in) $('clocked-banner').classList.add('hidden');
+        }
+
+        function fillHourProjectSelect() {
+            const sel = $('hours-project');
+            const selected = sel.value;
+            sel.innerHTML = '';
+            state.jobs.forEach(j => {
+                const o = document.createElement('option');
+                o.value = j.id;
+                o.textContent = j.name;
+                sel.appendChild(o);
+            });
+            if (selected) sel.value = selected;
+        }
+
+        function renderHours() {
+            const list = $('hours-list');
+            list.innerHTML = '';
+            if (!state.hours.length) {
+                list.innerHTML = '<p class="text-sm text-slate-400 bg-white rounded-2xl border border-slate-200 p-5">No hours logged yet.</p>';
+                return;
+            }
+            state.hours.forEach(h => {
+                const div = document.createElement('div');
+                div.className = 'bg-white rounded-2xl border border-slate-200 shadow-sm p-4 flex items-center justify-between';
+                div.innerHTML = `
+                    <div>
+                        <p class="text-sm font-bold text-slate-800">${escapeHtml(h.project_name || '—')}</p>
+                        <p class="text-xs text-slate-500 mt-0.5">${fmtDate(h.work_date)} · ${escapeHtml(h.work_type)}${h.status === 'submitted' ? '' : ' · ' + escapeHtml(h.status)}</p>
+                    </div>
+                    <div class="text-right">
+                        <p class="text-lg font-extrabold text-slate-900">${h.hours}h</p>
+                        ${h.status === 'submitted' ? `<button class="text-xs font-bold text-red-500 hover:text-red-700" data-del="${h.id}">Delete</button>` : ''}
+                    </div>
+                `;
+                list.appendChild(div);
+            });
+        }
+
+        function renderPay() {
+            const list = $('pay-list');
+            list.innerHTML = '';
+            if (!state.pay.length) {
+                list.innerHTML = '<p class="text-sm text-slate-400 bg-white rounded-2xl border border-slate-200 p-5">No pay runs yet.</p>';
+                return;
+            }
+            state.pay.forEach(p => {
+                const div = document.createElement('div');
+                div.className = 'bg-white rounded-2xl border border-slate-200 shadow-sm p-4';
+                div.innerHTML = `
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-lg font-extrabold text-slate-900">${fmtMoney(p.gross_cents)}</p>
+                            <p class="text-xs text-slate-500 mt-0.5">${fmtDate(p.period_start)} – ${fmtDate(p.period_end)} · ${p.hours}h</p>
+                        </div>
+                        <span class="px-2 py-1 text-xs font-semibold rounded-full bg-slate-100 text-slate-600 border border-slate-200">${escapeHtml(p.run_status)}</span>
+                    </div>
+                `;
+                list.appendChild(div);
+            });
+        }
+
+        async function clockIn(id) {
+            const btn = document.querySelector(`[data-act="in"]`);
+            if (btn) { btn.disabled = true; btn.textContent = 'Checking location…'; }
+            try {
+                const pos = await new Promise((resolve, reject) =>
+                    navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, timeout: 25000, maximumAge: 5000 }));
+                const c = { latitude: pos.coords.latitude, longitude: pos.coords.longitude, accuracy: pos.coords.accuracy };
+                const { res, data } = await api('/api/crew/app/clock', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: new URLSearchParams({ project_id: id, action: 'in', lat: c.latitude, lng: c.longitude, accuracy: c.accuracy || '' })
+                });
+                if (!res.ok) { alert(data.message || 'Cannot clock in.'); return loadMe(); }
+                await loadMe();
+                startTracking();
+            } catch (e) {
+                if (btn) { btn.disabled = false; btn.textContent = '🕐 Clock In'; }
+                checkGeo();
+                alert('Could not get your location. Tap "Allow Location" at the top, or enable Location in your phone settings.');
+            }
+        }
+
+        async function clockOut(id) {
+            let lat = 0, lng = 0;
+            try {
+                const pos = await new Promise((resolve, reject) =>
+                    navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 }));
+                lat = pos.coords.latitude; lng = pos.coords.longitude;
+            } catch (e) {}
+            stopTracking();
+            const { res } = await api('/api/crew/app/clock', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: new URLSearchParams({ project_id: id || 0, action: 'out', lat, lng })
+            });
+            await loadMe();
+        }
+
+        function startTracking() {
+            if (state.updateTimer) return;
+            if (!navigator.geolocation) return;
+            state.sampling = false;
+            sampleAndSend();
+            state.updateTimer = setInterval(sampleAndSend, 60000);
+        }
+
+        async function sampleAndSend() {
+            if (state.sampling) return;
+            state.sampling = true;
+            try {
+                if (!state.clocked_in) { stopTracking(); return; }
+                try {
+                    const pos = await new Promise((resolve, reject) =>
+                        navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 }));
+                    const c = { latitude: pos.coords.latitude, longitude: pos.coords.longitude, accuracy: pos.coords.accuracy };
+                    await api('/api/crew/app/clock', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                        body: new URLSearchParams({ project_id: 0, action: 'update', lat: c.latitude, lng: c.longitude, accuracy: c.accuracy || '' })
+                    });
+                } catch (e) { checkGeo(); }
+            } finally { state.sampling = false; }
+        }
+
+        function stopTracking() {
+            if (state.updateTimer) { clearInterval(state.updateTimer); state.updateTimer = null; }
+        }
+
+        function stopTrackingIfNone() {
+            if (!state.clocked_in) stopTracking();
+        }
+
+        function showGeo(show) { $('geo-banner').classList.toggle('hidden', !show); }
+
+        function switchTab(name) {
+            ['clock', 'hours', 'pay'].forEach(t => {
+                const panel = $('tab-' + t);
+                if (panel) panel.classList.toggle('hidden', t !== name);
+                const btn = $('tabbtn-' + t);
+                if (btn) {
+                    btn.classList.toggle('text-blue-600', t === name);
+                    btn.classList.toggle('border-blue-500', t === name);
+                    btn.classList.toggle('text-slate-400', t !== name);
+                    btn.classList.toggle('border-transparent', t !== name);
+                }
+            });
+        }
+
+        function probeGeo() {
+            navigator.geolocation.getCurrentPosition(() => showGeo(false), () => showGeo(true), { timeout: 4000 });
+        }
+
+        function checkGeo() {
+            if (!navigator.geolocation) { showGeo(true); return; }
+            if (navigator.permissions && navigator.permissions.query) {
+                navigator.permissions.query({ name: 'geolocation' }).then(p => {
+                    if (p.state === 'denied') showGeo(true);
+                    else showGeo(false);
+                }).catch(() => probeGeo());
+            } else {
+                probeGeo();
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            if ('serviceWorker' in navigator) {
+                navigator.serviceWorker.register('/sw.js', { scope: '/' }).then(() => {
+                    navigator.serviceWorker.getRegistration().then(r => { if (r) r.update().catch(() => {}); });
+                }).catch(() => {});
+            }
+
+            const phoneEl = $('login-phone');
+            if (phoneEl) phoneEl.addEventListener('input', () => { phoneEl.value = fmtPhone(phoneEl.value); });
+
+            $('geo-enable')?.addEventListener('click', () => {
+                navigator.geolocation.getCurrentPosition(() => checkGeo(), () => checkGeo(), { enableHighAccuracy: true, timeout: 12000 });
+            });
+
+            $('login-form').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const err = $('login-error');
+                err.classList.add('hidden');
+                const btn = $('login-btn');
+                btn.disabled = true; btn.textContent = 'Signing in…';
+                const { res, data } = await api('/api/crew/app/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: new URLSearchParams({ phone: $('login-phone').value, pin: $('login-pin').value })
+                });
+                btn.disabled = false; btn.textContent = 'Sign In';
+                if (!res.ok) { err.textContent = data.message || 'Invalid phone or PIN.'; err.classList.remove('hidden'); return; }
+                await loadMe();
+            });
+
+            $('logout-btn').addEventListener('click', async () => {
+                await api('/api/crew/app/logout', { method: 'POST' });
+                show('login');
+            });
+
+            document.addEventListener('click', (e) => {
+                if (e.target.dataset.act === 'in') clockIn(Number(e.target.dataset.id));
+                if (e.target.dataset.act === 'out') clockOut(Number(e.target.dataset.id));
+                if (e.target.dataset.del) deleteHours(e.target.dataset.del);
+            });
+
+            $('banner-stop').addEventListener('click', () => clockOut(state.clock_id));
+
+            document.querySelectorAll('#tabbar [data-tab]').forEach(b => {
+                b.addEventListener('click', () => switchTab(b.dataset.tab));
+            });
+
+            $('hours-form').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const status = $('hours-status');
+                status.classList.add('hidden'); status.style.color = '';
+                const { res, data } = await api('/api/crew/app/hours', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: new URLSearchParams({
+                        project_id: $('hours-project').value,
+                        work_date: $('hours-date').value,
+                        hours: $('hours-count').value,
+                        work_type: $('hours-type').value
+                    })
+                });
+                if (!res.ok) { status.textContent = data.message || 'Could not add hours.'; status.style.color = 'red'; }
+                else { status.textContent = '✅ Hours logged'; }
+                status.classList.remove('hidden');
+                await loadMe();
+            });
+
+            async function deleteHours(id) {
+                if (!confirm('Delete this timesheet?')) return;
+                await api('/api/crew/app/hours/' + id + '/delete', { method: 'POST' });
+                await loadMe();
+            }
+
+            window.addEventListener('online', () => $('offline-banner').classList.add('hidden'));
+            window.addEventListener('offline', () => $('offline-banner').classList.remove('hidden'));
+
+            loadMe();
+        });
+    </script>
+</body>
+</html>

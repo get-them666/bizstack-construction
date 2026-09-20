@@ -3050,6 +3050,227 @@ async def crew_direct_deposit(request: Request, db=Depends(get_db)):
     return RedirectResponse(url=url)
 
 
+# --- Phone app (installable PWA at /app) ------------------------------------------
+# The installable phone app reuses the exact same crew auth, clock, location and
+# payroll backend as the web crew portal (/crew). Logging in here sets the same
+# worker_session cookie, so the app and portal share the session.
+
+_STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+
+
+@app.get("/app", response_class=HTMLResponse)
+async def worker_app_page(request: Request):
+    return templates.TemplateResponse(
+        request=request,
+        name="app.html",
+        context={},
+        headers={"Cache-Control": "no-cache, max-age=0"},
+    )
+
+
+@app.get("/manifest.webmanifest", response_class=Response)
+async def web_manifest():
+    with open(os.path.join(_STATIC_DIR, "manifest.webmanifest"), "r") as fh:
+        content = fh.read()
+    return Response(content=content, media_type="application/manifest+json")
+
+
+@app.get("/sw.js", response_class=Response)
+async def service_worker():
+    with open(os.path.join(_STATIC_DIR, "sw.js"), "r") as fh:
+        content = fh.read()
+    return Response(
+        content=content,
+        media_type="application/javascript",
+        headers={"Cache-Control": "no-store, max-age=0"},
+    )
+
+
+@app.post("/api/crew/app/login")
+async def worker_app_login(phone: str = Form(...), pin: str = Form(...), db=Depends(get_db)):
+    digits = "".join(c for c in (phone or "") if c.isdigit())
+    with db.cursor() as cur:
+        cur.execute("SELECT * FROM crew WHERE REGEXP_REPLACE(phone, '[^0-9]', '', 'g') = %s AND is_active = TRUE;",
+                    (digits,))
+        row = cur.fetchone()
+    if not row or not _verify_pin((pin or "").strip(), row["pin_hash"]):
+        return JSONResponse(status_code=401, content={"status": "error", "message": "Invalid phone or PIN"})
+    token = auth_service.issue_session("worker", row.get("id"), row.get("email") or "", row.get("name") or "")
+    resp = JSONResponse(content={"status": "ok", "name": row["name"]})
+    resp.set_cookie(key=WORKER_COOKIE, value=token, httponly=True, samesite="lax", secure=_secure_cookies())
+    return resp
+
+
+@app.get("/api/crew/app/me")
+async def worker_app_me(request: Request, db=Depends(get_db)):
+    worker = require_worker(request)
+    with db.cursor() as cur:
+        cur.execute("SELECT id, name, phone, role, pay_type, pay_rate, is_active FROM crew WHERE id = %s;",
+                    (worker.get("id"),))
+        crew_row = cur.fetchone()
+        if not crew_row:
+            return JSONResponse(status_code=401, content={"status": "error", "message": "Not logged in"})
+        cur.execute("""
+            SELECT p.id, p.name, p.address, p.summary, p.status,
+                   c.id AS clock_id, c.punch_in_at AS clocked_since
+            FROM project_assignments pa
+            JOIN projects p ON p.id = pa.project_id
+            LEFT JOIN clock_events c ON c.project_id = p.id AND c.crew_id = %s AND c.punch_out_at IS NULL
+            WHERE pa.crew_id = %s AND p.status IN ('planned','active')
+            ORDER BY p.start_date NULLS LAST, p.created_at;
+        """, (worker.get("id"), worker.get("id")))
+        jobs = []
+        for j in cur.fetchall():
+            jobs.append({
+                "id": j["id"], "name": j["name"], "address": j["address"],
+                "summary": j["summary"], "status": j["status"],
+                "clock_id": j["clock_id"], "clocked_since": (j["clocked_since"].isoformat() if j["clocked_since"] else None),
+                "lat": None, "lng": None,
+            })
+        cur.execute("SELECT * FROM clock_events WHERE crew_id = %s AND punch_out_at IS NULL ORDER BY punch_in_at DESC LIMIT 1;",
+                    (worker.get("id"),))
+        open_clock = cur.fetchone()
+        start = date.today() - timedelta(days=date.today().weekday())
+        cur.execute("SELECT COALESCE(SUM(hours),0) AS h FROM timesheets WHERE crew_id = %s AND work_date >= %s;",
+                    (worker.get("id"), start))
+        week_hours = float(cur.fetchone()["h"] or 0)
+        cur.execute("""
+            SELECT t.id, t.project_id, t.work_date, t.hours, t.work_type, t.status, t.notes, p.name AS project_name
+            FROM timesheets t LEFT JOIN projects p ON p.id = t.project_id
+            WHERE t.crew_id = %s ORDER BY t.work_date DESC, t.created_at DESC LIMIT 30;
+        """, (worker.get("id"),))
+        hours_rows = []
+        for h in cur.fetchall():
+            hours_rows.append({
+                "id": h["id"], "project_id": h["project_id"], "project_name": h["project_name"] or "—",
+                "work_date": h["work_date"].isoformat(), "hours": float(h["hours"] or 0),
+                "work_type": h["work_type"], "status": h["status"],
+            })
+        cur.execute("""
+            SELECT pl.hours, pl.overtime_hours, pl.gross_cents, pr.period_start, pr.period_end, pr.status AS run_status
+            FROM payroll_lines pl JOIN payroll_runs pr ON pr.id = pl.run_id
+            WHERE pl.crew_id = %s ORDER BY pr.period_start DESC LIMIT 12;
+        """, (worker.get("id"),))
+        pay_rows = []
+        for p in cur.fetchall():
+            pay_rows.append({
+                "hours": float(p["hours"] or 0),
+                "overtime_hours": float(p["overtime_hours"] or 0),
+                "gross_cents": int(p["gross_cents"] or 0),
+                "period_start": p["period_start"].isoformat(),
+                "period_end": p["period_end"].isoformat(),
+                "run_status": p["run_status"],
+            })
+    return JSONResponse(content={
+        "status": "ok",
+        "worker": {"id": crew_row["id"], "name": crew_row["name"], "phone": crew_row["phone"],
+                   "role": crew_row["role"], "pay_rate": float(crew_row["pay_rate"] or 0)},
+        "jobs": jobs,
+        "week_hours": week_hours,
+        "open_clock": open_clock and {"id": open_clock["id"], "project_id": open_clock["project_id"],
+                                      "punch_in_at": open_clock["punch_in_at"].isoformat()},
+        "hours": hours_rows,
+        "pay": pay_rows,
+    })
+
+
+@app.post("/api/crew/app/clock")
+async def worker_app_clock(request: Request, project_id: int = Form(0), action: str = Form(...),
+                           lat: str = Form(""), lng: str = Form(""), accuracy: str = Form(""), db=Depends(get_db)):
+    worker = require_worker(request)
+    with db.cursor() as cur:
+        cur.execute("SELECT id FROM crew WHERE id = %s AND is_active = TRUE;", (worker.get("id"),))
+        if not cur.fetchone():
+            return JSONResponse(status_code=401, content={"status": "error", "message": "Worker not found"})
+
+    if action == "in":
+        with db.cursor() as cur:
+            cur.execute("SELECT id FROM clock_events WHERE crew_id = %s AND punch_out_at IS NULL;", (worker.get("id"),))
+            if cur.fetchone():
+                return JSONResponse(content={"status": "error", "message": "Already clocked in"})
+            cur.execute(
+                "INSERT INTO clock_events (crew_id, project_id, punch_in_at, punch_in_lat, punch_in_lng) "
+                "VALUES (%s,%s,NOW(),%s,%s) RETURNING id;",
+                (worker.get("id"), project_id or None, lat or None, lng or None),
+            )
+            db.commit()
+        return JSONResponse(content={"status": "ok"})
+
+    with db.cursor() as cur:
+        ev = None
+        if action == "out":
+            cur.execute("SELECT * FROM clock_events WHERE crew_id = %s AND punch_out_at IS NULL ORDER BY punch_in_at DESC LIMIT 1;",
+                        (worker.get("id"),))
+            ev = cur.fetchone()
+            if not ev:
+                return JSONResponse(content={"status": "error", "message": "Not clocked in"})
+            cur.execute("UPDATE clock_events SET punch_out_at = NOW(), punch_out_lat = %s, punch_out_lng = %s WHERE id = %s;",
+                        (lat or None, lng or None, ev["id"]))
+            db.commit()
+            in_dt = ev["punch_in_at"]
+            out_dt = datetime.now(APP_TZ)
+            hours = max(round((out_dt - in_dt).total_seconds() / 3600, 2), 0)
+            cur.execute(
+                "INSERT INTO timesheets (crew_id, project_id, work_date, start_time, end_time, hours, work_type, source, status) "
+                "VALUES (%s,%s,%s,%s,%s,%s,'regular','clock','submitted');",
+                (worker.get("id"), ev["project_id"], in_dt.date(), in_dt.strftime("%H:%M"),
+                 out_dt.strftime("%H:%M"), hours),
+            )
+            db.commit()
+        elif action == "update":
+            cur.execute("SELECT * FROM clock_events WHERE crew_id = %s AND punch_out_at IS NULL ORDER BY punch_in_at DESC LIMIT 1;",
+                        (worker.get("id"),))
+            ev = cur.fetchone()
+            if ev:
+                cur.execute("UPDATE clock_events SET punch_in_lat = %s, punch_in_lng = %s WHERE id = %s;",
+                            (lat or None, lng or None, ev["id"]))
+                db.commit()
+        else:
+            return JSONResponse(status_code=400, content={"status": "error", "message": "Unknown action"})
+    return JSONResponse(content={"status": "ok"})
+
+
+@app.post("/api/crew/app/hours")
+async def worker_app_hours(request: Request, project_id: int = Form(0), work_date: str = Form(""),
+                           hours: str = Form(""), work_type: str = Form("regular"), db=Depends(get_db)):
+    worker = require_worker(request)
+    try:
+        hrs = float(hours)
+    except (TypeError, ValueError):
+        return JSONResponse(status_code=400, content={"status": "error", "message": "Invalid hours"})
+    if hrs <= 0 or hrs > 24:
+        return JSONResponse(status_code=400, content={"status": "error", "message": "Hours must be 0-24"})
+    wd = work_date or date.today().isoformat()
+    with db.cursor() as cur:
+        cur.execute(
+            "INSERT INTO timesheets (crew_id, project_id, work_date, hours, work_type, source, status) "
+            "VALUES (%s,%s,%s,%s,%s,'manual','submitted');",
+            (worker.get("id"), project_id or None, wd, hrs, work_type),
+        )
+        db.commit()
+    return JSONResponse(content={"status": "ok"})
+
+
+@app.post("/api/crew/app/hours/{sheet_id}/delete")
+async def worker_app_hours_delete(sheet_id: int, request: Request, db=Depends(get_db)):
+    worker = require_worker(request)
+    with db.cursor() as cur:
+        cur.execute("SELECT id FROM timesheets WHERE id = %s AND crew_id = %s AND status = 'submitted';",
+                    (sheet_id, worker.get("id")))
+        if cur.fetchone():
+            cur.execute("DELETE FROM timesheets WHERE id = %s;", (sheet_id,))
+            db.commit()
+            return JSONResponse(content={"status": "ok"})
+    return JSONResponse(status_code=404, content={"status": "error", "message": "Not found"})
+
+
+@app.post("/api/crew/app/logout")
+async def worker_app_logout():
+    resp = JSONResponse(content={"status": "ok"})
+    resp.delete_cookie(WORKER_COOKIE)
+    return resp
+
+
 # --- Payroll ----------------------------------------------------------------
 def _default_pay_period():
     end = date.today()

@@ -1,13 +1,13 @@
 {
-  "name": "Broom Crew",
+  "name": "Buildstack Crew",
   "short_name": "Crew",
-  "description": "Clock in, share your location at the job site, and track your paychecks.",
+  "description": "Clock in, share your location at the job site, log hours, and track your pay.",
   "start_url": "/app",
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait",
   "background_color": "#0f172a",
-  "theme_color": "#4f46e5",
+  "theme_color": "#1d4ed8",
   "lang": "en",
   "icons": [
     {
