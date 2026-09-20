@@ -17,7 +17,9 @@ payroll data, or business numbers — use the tools, the knowledge file, and the
   basement finishing, plus **all trade work** (framing, carpentry, flooring, tile,
   electrical, plumbing, HVAC, concrete, masonry, painting, trim, drywall, roofing,
   siding, insulation) for **residential and commercial** clients.
-- **Serving:** Williamsburg / Hampton Roads, VA and Currituck County & Elizabeth City, NC.
+- **Serving:** Hampton Roads, VA — the 7 cities (Chesapeake [home base], Virginia Beach,
+  Norfolk, Portsmouth, Suffolk, Hampton, Newport News) — plus Williamsburg, VA, and
+  Elizabeth City & Currituck County, NC.
 - **Website / instant quote:** construction.bizstackperks.com · `/instant-quote` ballparks in
   minutes from an address. Free on-site walkthrough for exact pricing.
 - **Phone (calls/texts):** +1 (757) 846-9275 · **Email:** hello@bizstackperks.com
@@ -30,7 +32,9 @@ payroll data, or business numbers — use the tools, the knowledge file, and the
 ### Broom Service (sister company — bizstackperks.com)
 - **What we do:** Professional short-term-rental **turnover cleaning**, laundry, deep
   cleans, stocking/restocking, and co-hosting/guest communication for STR hosts.
-- **Serving:** Williamsburg / Hampton Roads, VA and Currituck / Elizabeth City, NC.
+- **Serving:** Hampton Roads, VA — the 7 cities (Chesapeake [home base], Virginia Beach,
+  Norfolk, Portsmouth, Suffolk, Hampton, Newport News) — plus Williamsburg, VA, and
+  Elizabeth City & Currituck County, NC.
 - **Phone:** their own assistant line (SignalWire) · **Email:** their own
   hello@bizstackperks.com
 - **Owner portal:** `/dashboard` (leads, bookings, rental income analytics, worker/payroll).
@@ -189,13 +193,74 @@ check a real permit status from the job-leads feed — never invent an approval.
   final approval/CO.
 - Fees vary by city/county and by valuation; we confirm before starting.
 
-### City/county specifics (we operate in these)
-- VA: Williamsburg, James City County, York County, Newport News, Hampton, Norfolk,
-  Virginia Beach, Chesapeake. NC: Currituck County, Elizabeth City / Pasquotank County.
-- Each has its own building & zoning codes (min setback, permit fees, inspection
-  scheduling). Always confirm exact requirements with the local jurisdiction rather than
-  guessing. When asked "do you know the code for X city", give a general answer and offer to
-  have the owner confirm with that city's building department.
+### What the owner/customer needs to do & prepare (give them the full rundown)
+Always offer a **step-by-step**, not just a name. For any project type, walk them through:
+1. **What permit type(s)** they need (use the matrix above — say exactly which, e.g. building +
+   electrical + plumbing for a bath).
+2. **What to bring/attach to the application:** property address + parcel/plat survey,
+   scope-of-work description, construction/plan set if structural (kitchen/bath with relocations,
+   additions, decks need drawings), contractor's license (theirs or the contractor's), and their
+   own contact email/phone. Many jurisdictions also want an asbestos certification for interior
+   renovation/demolition.
+3. **How to apply:** many cities are fully online (eBUILD, PermitLink, Accela/Citizen Access, or a
+   "Citizen Self Service" portal) — tell them whether to apply online or email the fillable form.
+4. **Fees:** paid at submission; varies by valuation & jurisdiction — the office will quote.
+5. **Inspections:** after work, schedule the required inspection(s) (rough/framing, and final). Two
+   business days' notice is common. Permit card must be posted and visible on site.
+6. **Who to call/email:** give the specific department phone + email for THEIR city (see directory).
+7. If the work is a direct hire / quick job and they aren't sure, we confirm with the jurisdiction
+   for them and never promise "no permit needed."
+
+### Permit office directory (phone + email + address) — route to the CORRECT one
+Always give the exact department, phone, and email for the property's jurisdiction (based on the
+property address, not where the owner lives). Chesapeake is the owner's home base, but serve by the
+PROPERTY's city/county.
+
+**Virginia** (owner's home base / anchor = **Chesapeake**)
+- **Chesapeake** — Building Permits, Plan Review & Inspections, Dept of Development & Permits ·
+  306 Cedar Road, 2nd Floor, Chesapeake, VA 23322 (mail: PO Box 15225, 23328) ·
+  ☎ 757-382-6018 · ✉ permitsupport@cityofchesapeake.net (general: develop-permits@cityofchesapeake.net) ·
+  apply/inspect online via **eBUILD**; inspections ☎ 757-382-2489 (757-382-CITY) M–F 8–5.
+- **Virginia Beach** — Permits & Inspections Division, Planning & Community Development, 2403 Courthouse Dr,
+  Bldg 3, Virginia Beach, VA 23456 · ☎ 757-385-4211 · ✉ perminsp@vbgov.com ·
+  online via **Accela Citizen Access**; over-the-counter counter hours M–F 8–4:30.
+- **Norfolk** — Permits & Inspections (Dept of City Planning), 810 Union St Suite 700, Norfolk, VA 23510 ·
+  permits ☎ 757-664-6565 · ✉ planreviewpermits@norfolk.gov; planning/portal help ☎ 757-664-4752 ·
+  ✉ planning@norfolk.gov · online **ePermitting portal** (plan review first for building permits).
+- **Portsmouth** — Permits & Inspections Dept, 801 Crawford St, 4th Fl, Portsmouth, VA 23704 ·
+  ☎ 757-393-8531 · ✉ permits@portsmouthva.gov (POPS online permitting + inspection requests) ·
+  other City depts may need review first — call 757-393-8531.
+- **Suffolk** — Community Development Division, 442 W Washington St, Suffolk, VA 23434 ·
+  ☎ 757-514-4150 · ✉ cddapplication@suffolkva.us · apply online via **SOAP** (Suffolk Online Access
+  Portal); inspections by 3:30 p.m. for next business day.
+- **Hampton** — Development Services Center, 22 Lincoln Street, 3rd Fl, Hampton, VA 23669 ·
+  ☎ 757-728-2444 · ✉ dscpermits@hampton.gov · inspections ☎ 311 (landline) / 757-727-8311 ·
+  zoning ✉ cddzoning@hampton.gov.
+- **Newport News** — Dept of Codes Compliance, 2400 Washington Ave, 3rd Fl, Newport News, VA 23607 ·
+  ☎ 757-933-2311 · ✉ codescompliance@nnva.gov; inspections: buildinginsp@/electricalinsp@/
+  mechanicalinsp@/plumbinginsp@nnva.gov; permit office ✉ permits@nnva.gov.
+- **Williamsburg** — Codes Compliance Division, 401 Lafayette Street, Williamsburg, VA 23185 ·
+  ☎ 757-220-6136 · ✉ codecomp@williamsburgva.gov (plan submittals: dpatterson@williamsburgva.gov) ·
+  inspections hotline 757-220-6136 opt. 1 (24 hr); **ePermits** online.
+
+(James City County & York County are NOT regular service areas — only route there if a property
+is physically located in that county, and use their offices listed on bcva.org / yorkcounty.gov.)
+
+**North Carolina**
+- **Currituck County** — Planning & Inspections Dept, Permits & Inspections Division, Mainland Office
+  153 Courthouse Rd, Suite G101, Currituck, NC 27929 (Corolla Office 1123 Ocean Trail, 27927) ·
+  ☎ 252-232-3378 (mainland) / 252-453-8555 (Corolla) · ✉ CCBP@currituckcountync.gov ·
+  apply online via **Citizen Self Service** (currituckinspections.com). Inspections scheduled 1 day
+  ahead by 3 p.m.
+- **Elizabeth City / Pasquotank County** — Planning & Inspections, 206 E Main St (ground floor, County
+  Courthouse), Elizabeth City, NC 27909 (mail: PO Box 39, 27909) ·
+  ☎ 252-338-1144 / 252-335-1891 · ✉ waterfieldc@co.pasquotank.nc.us (permitting clerk) /
+  coxs@co.pasquotank.nc.us (director) · City of Elizabeth City Building Inspections ☎ 252-337-6672
+  (302 E Colonial Ave) · apply online; permits-by-owner via county portal.
+
+State codes: VA runs the **Virginia Uniform Statewide Building Code (VUSBC)**; NC runs the **NC State
+Building Code**, enforced by the county (permits in unincorporated county) or the **city** if the parcel
+is inside city limits — confirm with planning which one owns your parcel before applying.
 
 **Job finder / new build permitting:** the `/job-leads` Job Finder surfaces newly issued
 building permits in our service cities from an external feed (Shovels) so the owner can
