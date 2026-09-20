@@ -63,7 +63,7 @@ def company() -> dict:
         "name": os.getenv("COMPANY_NAME", "Buildstack Construction Co."),
         "phone": os.getenv("COMPANY_PHONE", "+1 (757) 846-9275"),
         "phone_e164": os.getenv("SIGNALWIRE_PHONE", "+17578469275"),
-        "email": os.getenv("COMPANY_EMAIL", "hello@buildstackconstruction.com"),
+        "email": os.getenv("COMPANY_EMAIL", "hello@bizstackperks.com"),
         "domain": os.getenv("COMPANY_DOMAIN", "buildstackconstruction.com"),
         "license": os.getenv("CONTRACTOR_LICENSE", ""),
         "service_area": os.getenv(
@@ -298,7 +298,8 @@ async def lifecycle(app: FastAPI):
     except Exception as e:
         print(f"⚠️ Database init skipped: {e}")
 
-    if not os.getenv("DISABLE_LOAN_OUTREACH"):
+    disable = (os.getenv("DISABLE_LOAN_OUTREACH", "") or "").strip().lower()
+    if disable not in ("1", "true", "yes"):
         _outreach_tasks = start_outreach_tasks()
         try:
             app.state.outreach_tasks = _outreach_tasks

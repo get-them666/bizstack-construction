@@ -1,3 +1,20 @@
+"""Buildstack Construction — AI business agent (public assistant + owner copilot).
+
+One class, two personalities:
+
+- ``subset="guest"``    -> public SMS + voice assistant (safe tools only)
+- ``subset="copilot"``  -> the owner's private operator copilot (full toolkit:
+  leads pipeline, permits & city codes, crew, timesheets, payroll + direct deposit,
+  accounting, materials estimate, sister-company Broom Service summary, email/SMS,
+  site health check, training-deck + OSHA-10 quiz generator, sister business summary).
+
+Both companies run on this same agent: **Buildstack Construction Co.** (this site,
+bizstackconstruction.com) and its sister company **Broom Service** (bizstackperks.com,
+short-term-rental turnover cleaning + co-hosting). Same owner, two websites, one
+copilot brain. When a caller is clearly a Broom Service customer, hand them off; when
+the owner asks about the business overall, summarize BOTH.
+"""
+
 import json
 import os
 from datetime import datetime
@@ -13,9 +30,11 @@ class BusinessAIAgent:
     - ``subset="guest"``   -> the public SMS/voice assistant (records leads,
       answers questions from the knowledge base).
     - ``subset="copilot"`` -> the owner's private operator chat with the full
-      toolkit (leads pipeline, status changes, stats, SMS).
+      toolkit (leads pipeline, status changes, payroll, crew, permits, materials,
+      accounting, sister company, email, health check, training).
 
-    Both use the same knowledge base, but only the owner can reach the copilot.
+    Both use the same knowledge base (bot_knowledge.md), which covers BOTH companies
+    (Buildstack Construction + Broom Service). Only the owner can reach the copilot.
     """
 
     def __init__(
@@ -59,9 +78,14 @@ class BusinessAIAgent:
             identity = (
                 "You are the Buildstack Construction OPERATOR COPILOT for the owner.\n"
                 "You act with full authority over the owner's business database. You can "
-                "review and update the lead pipeline, summarize business performance, and "
-                "send SMS. Reads are free; before making any database CHANGE, restate the "
-                "change in one short line and confirm with the owner first."
+                "review and update the lead pipeline, summarize business performance, run "
+                "payroll + direct deposit, look up permits & city codes, estimate materials, "
+                "review accounting, and summarize the sister company (Broom Service).\n"
+                "Rule: READs are free. Before any database CHANGE, restate the change in "
+                "one short line and confirm with the owner first.\n"
+                "You also know about Broom Service (bizstackperks.com) — the sister "
+                "short-term-rental turnover-cleaning company. Use sister_business_summary "
+                "to report on it. Never expose tenant or guest data to the public assistant."
             )
         else:
             identity = (
@@ -77,38 +101,26 @@ class BusinessAIAgent:
 
         return f"""
 {identity}
-Current time: {now}.
-Answer strictly from the knowledge base below. Never invent prices, availability,
-policies, schedules, or URLs. For exact project pricing, always offer a free on-site
-estimate rather than quoting a final number.
 
-HOW TO SOUND LIKE A REAL HUMAN (non-negotiables):
-- Write like a friendly, sharp human assistant texts: contractions, short punchy
-  sentences, natural rhythm. Never robotic, canned, or scripted.
-- Open naturally based on context: a quick "hey", a warm "Got it —", or a friendly
-  confirmation. No "Greetings!", no "As an AI".
-- One thought per text; keep replies short — the person is reading on a phone.
-- Be warm and a little personality-driven, but truthful. If you don't know, say so
-  plainly ("Let me have the team confirm that for you.").
-- When capturing a project, confirm it back simply and tell them exactly what happens
-  next ("Got it — I'll have our estimator reach out today to set a time for a free
-  walkthrough").
+Today's date/time: {now}
 
-KNOWLEDGE BASE:
+## KNOWLEDGE BASE (both companies — Buildstack Construction + Broom Service)
+Answer strictly from the knowledge below. Never invent prices, availability, policies,
+schedules, or URLs. For exact project pricing, always offer a free on-site estimate
+rather than quoting a final number. If the person is a Broom Service customer, hand
+them off to the sister company's process and say you'll connect them.
+
 {knowledge}
 
-TOOL USAGE RULES:
-- Use register_lead as soon as you have a name and phone number plus any project
-  details (type, address, budget, timeline). Ask for the missing pieces one at a time.
-- Use lookup_leads when someone asks about a previous request.
-- Use get_business_summary only when the owner explicitly asks how the business is doing.
-- Never promise a specific start date or final price. Offer the free on-site estimate.
-- If a tool returns an error, respond helpfully and tell them the team will follow up.
+## Tool rules
+Use tools to take action. register a lead right away when you have name + phone. Use
+lookup_leads for repeat contact. Never expose internal database rows to the public
+assistant. For the owner copilot, use the payroll/crew/materials/permit/accounting/sister
+tools with the owner's explicit permission before destructive changes.
 """
 
-    # --- Tool schemas -----------------------------------------------------
-    @staticmethod
-    def _props(names_types: dict, required: list, description: str) -> dict:
+    # --- Tool schema helpers ------------------------------------------------
+    def _props(self, names_types: dict, required: list, description: str) -> dict:
         return {
             "type": "object",
             "properties": {k: {"type": t} for k, t in names_types.items()},
@@ -116,6 +128,7 @@ TOOL USAGE RULES:
             "description": description,
         }
 
+    # --- Tool lists --------------------------------------------------------
     def _safe_tools(self) -> list:
         return [
             {
@@ -140,7 +153,7 @@ TOOL USAGE RULES:
                         ["name", "phone"],
                         "project_type examples: Whole-Home Renovation, Kitchen, Bath, "
                         "Drywall, Roofing, Plumbing, Electrical, Carpentry, Tile, "
-                        "Flooring, Deck, Fence, STR Turnover Make-Ready.",
+                        "Flooring, Deck, Fence, STR Make-Ready.",
                     ),
                 },
             },
@@ -209,13 +222,155 @@ TOOL USAGE RULES:
                     ),
                 },
             },
+            {
+                "type": "function",
+                "function": {
+                    "name": "send_email_message",
+                    "description": "Send a professional email message to any address.",
+                    "parameters": self._props(
+                        {"to": "string", "subject": "string", "body": "string"},
+                        ["to", "subject", "body"],
+                        "E.g. estimate follow-up, thank-you, or contract details.",
+                    ),
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "lookup_permits",
+                    "description": "Look up a permit by address/parcel, pull city + county permit info from the job-leads / permit record, or search which cities issue new permits (Shovels feed).",
+                    "parameters": self._props(
+                        {"city": "string", "address": "string"},
+                        [],
+                        "Optional city filter (e.g. Williamsburg, Newport News, Elizabeth City) or address for an exact permit lookup.",
+                    ),
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "list_crew",
+                    "description": "List crew members (name, role, pay type/rate, active status, direct-deposit / bank status).",
+                    "parameters": self._props({}, [], ""),
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "lookup_crew_timesheets",
+                    "description": "Look up timesheets for a crew member (hours, status) or a project.",
+                    "parameters": self._props(
+                        {"crew_id": "integer", "project_id": "integer", "status": "string"},
+                        [],
+                        "Optional filters: crew_id, project_id, or status (submitted/approved/paid).",
+                    ),
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_payroll_summary",
+                    "description": "Payroll summary for the current open run: crew, hours/overtime, gross, and paid-vs-pending status (direct deposit via Stripe Connect).",
+                    "parameters": self._props({}, [], ""),
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "run_payroll",
+                    "description": "Run payroll now: finalize the open run and pay all approved lines via Stripe direct deposit.",
+                    "parameters": self._props({}, [], ""),
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_accounting_summary",
+                    "description": "Accounting summary: collected deposits, project payments, outstanding / unpaid, and payroll paid total.",
+                    "parameters": self._props({}, [], ""),
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "estimate_materials",
+                    "description": "Estimate material quantities + price book (or live API) for a project type and square footage.",
+                    "parameters": self._props(
+                        {
+                            "project_type": "string",
+                            "sqft": "number",
+                            "include": "array",
+                        },
+                        ["project_type", "sqft"],
+                        "project_type: whole-home, kitchen, bath, roofing, drywall, deck/fence, or handyman. include: optional sku keys (e.g. copper_wire_per_lb, drywall_sheet_1/2).",
+                    ),
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_material_price",
+                    "description": "Look up a single material price (cents → dollars) from the price book or live API.",
+                    "parameters": self._props(
+                        {"sku": "string"}, ["sku"], "Sku key, e.g. copper_wire_per_lb."
+                    ),
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "sister_business_summary",
+                    "description": "Summary report for the sister company (Broom Service — bizstackperks.com STR turnover cleaning): jobs/leads, revenue, crew, payroll, bank status.",
+                    "parameters": self._props({}, [], ""),
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "send_sms_message",
+                    "description": "Send an outbound SMS text message to a phone number.",
+                    "parameters": self._props(
+                        {"to": "string", "body": "string"}, ["to", "body"], "E.164 phone."
+                    ),
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "run_site_health_check",
+                    "description": "Run a health check across both websites (public pages, logins, APIs, Stripe, email/SMS services).",
+                    "parameters": self._props({}, [], ""),
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "generate_training_deck",
+                    "description": "Generate an OSHA-10 / orientation / safety / HR / sexual-harassment / trades-knowledge training deck (worker on-boarding) as a PowerPoint and save it.",
+                    "parameters": self._props(
+                        {"kind": "string"}, ["kind"], "kind: worker."
+                    ),
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "grade_training_quiz",
+                    "description": "Grade a worker's OSHA-10 / orientation quiz; returns pass/fail, score, and missed topics for review.",
+                    "parameters": self._props(
+                        {"crew_id": "integer", "answers": "array"},
+                        ["crew_id", "answers"],
+                        "answers: list of {question_id, answer} dicts. Topics include tape-measure reading, simple math, basic electrical, framing/drywall/roofing/tile/plumbing basics.",
+                    ),
+                },
+            },
         ]
         return tools
 
     def _tools(self) -> list:
         return self._full_tools() if self._subset == "copilot" else self._safe_tools()
 
-    # --- Tool exec --------------------------------------------------------
+    # --- Tool execution ----------------------------------------------------
     def _execute_tool(self, name: str, arguments: str) -> str:
         handler = self._tool_handlers.get(name)
         if handler is None:
@@ -232,7 +387,7 @@ TOOL USAGE RULES:
             print(f"⚠️ Tool {name} failed: {e}")
             return json.dumps({"ok": False, "error": str(e)})
 
-    # --- Conversation loop ------------------------------------------------
+    # --- Conversation loop -------------------------------------------------
     def process_inbound_text(self, context_stream: str) -> str:
         """Handle an inbound SMS/voice message end-to-end (with tool calling if wired)."""
         fallback = "Message received. Our team will follow up with you shortly."

@@ -8,3 +8,10 @@ __pycache__/
 .env
 .env.*
 !.env.example
+
+# --- agent harness-local (do not ship / do not deploy) ---
+.agents/
+.claude/
+opencode.json
+skills-lock.json
+.opencode/

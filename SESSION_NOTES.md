@@ -1,7 +1,42 @@
 # BizStack x SBA Microloan — Session Notes
 
 _Saved Sept 16, 2026. Resume file — read this first next session._
-_Updated Sept 18, 2026 — Construction Postgres FIXED + app fully operational._
+_Updated Sept 19, 2026 — Loan outreach scheduler LIVE end-to-end._
+
+## 🚀 Loan outreach automation — LIVE (Sept 19, 2026)
+
+**Day 0 emails were already sent Sept 18** (SBDC, LISC, VCC, VSBFA with pitch PDF).
+**Day 1 follow-ups SENT this morning to all three lenders.** The scheduler now runs
+automatically on Railway and fires the cadence with no manual steps.
+
+**What was broken and fixed:**
+- **Scheduler never started in production.** `DISABLE_LOAN_OUTREACH` was set to the
+  string `"false"`, which is truthy in Python — so `main.py` always skipped
+  `start_outreach_tasks()`. Guard now only disables on `"1"/"true"/"yes"`.
+- **Day 1 / Day 7 "text" touches were silently dropped** — every lender was configured
+  email-only, and the cadence loop `continue`d past text-kind touches. Now text touches
+  fall back to email (and would SMS if a lender phone + SignalWire sender were set).
+- **SMTP is firewall-blocked inside Railway.** Railway's egress blocks ALL outbound
+  SMTP ports (verified: 25/465/587/2525 timeout for privateemail, SendGrid, AWS SES,
+  Brevo, Mailgun, Mailjet, Postmark). HTTPS (443) and IMAPS (993) are open. So sending
+  moved to the **Resend HTTPS API** (`RESEND_API_KEY` set on the service; domain
+  `bizstackperks.com` verified in Resend). IMAP inbox polling for lender replies works
+  over 993.
+- **Resend proxy detail:** requests MUST include a `User-Agent` header or Resend's
+  Cloudflare returns `403 error code: 1010`.
+
+**Cadence schedule (from campaign start `loan_campaign_start = 2026-09-18`):**
+- Day 1 (text nudge, sent as email) — **SENT Sept 19** to LISC, VCC, VSBFA
+- Day 3 (email 2) — due **Sept 21**
+- Day 7 (text check-in) — due **Sept 25**
+- Day 14 (email 3, close loop) — due **Oct 2**, then stop; revisit in 60 days
+
+Status is tracked in the construction DB: `outreach_touches` (cadence log) and
+`outreach_replies` (AI auto-replies to lender emails). Failed touches are retried on the
+next hourly pass.
+
+**Also added:** `opencode.json` with the Resend MCP server (`https://mcp.resend.com/mcp`)
+so future sessions can read/send mail via opencode directly.
 
 ## ⚠️ Construction Postgres — FIXED (Sept 18, 2026)
 
@@ -26,13 +61,14 @@ app. All routes now return 200 (public + auth pages).
 (Sept 17). If Postgres ever looks "Online" but DB routes 500 again, check `railway logs` for
 uvicorn instead of PostgreSQL startup.
 
-## Next session priorities (Sept 18+)
-1. **All outreach SENT Sept 18** — SBDC (sbdc@hrchamber.com), LISC (smallbusiness@lisc.org,
-   cc wmartin@lisc.org), VCC (jbarnes@vccva.org), VSBFA (VSBFA@sbsd.virginia.gov), pitch PDF
-   attached. **Now on the follow-up cadence:** Day 1 text → Day 3 email 2 → Day 7 text →
-   Day 14 email 3 (all drafted in docs/OUTREACH_EMAILS.md).
-2. **SMTP now configured in Railway** (`SMTP_HOST=mail.privateemail.com` 465,
-   `SMTP_TLS=ssl`, user hello@bizstackperks.com) — OTP login emails + estimates work now too.
+## Next session priorities (Sept 19+)
+1. **Follow-up cadence is now AUTOMATED and live on Railway** — no manual sending.
+   Day 1 sent Sept 19; Day 3 fires Sept 21, Day 7 Sept 25, Day 14 Oct 2. Watch
+   `outreach_touches`/`outreach_replies`; the AI reply poller answers lender emails over
+   IMAP 993.
+2. **Packages pending lender replies:** invoices + signed receipts (cash jobs), insurance
+   scope paperwork (Sunnywood), bank statement for the $10K equity. Have these ready to
+   send same-day when Resend replies/requests docs.
 3. **Payments recorded in DB** — 3 rows: $22,500 (Old Ironsides, 03/19) + $2,200 (cash,
    03/12) + $7,200 (Sunnywood, 05/17) = **$31,900 collected**. `/backlog` dashboard reflects it.
 4. **Drive local lead-gen** now that site + forms are live end-to-end.
@@ -123,16 +159,15 @@ Buildstack Construction `913e36b5-fe1f-4d73-80c5-aa0dd74f47be`.
 - [x] **Cash-job documentation templates created** (`docs/INVOICE_*.html`, `docs/RECEIPT_*.html`,
       `docs/PHOTO_LOG.html`, `docs/CHECKLIST.md`) — still need homeowner signatures.
 - [x] **$10,000 equity** — Shaun confirmed he can get a current bank statement (pull & file it).
-- [x] **Outreach emails drafted & ready to send** (`docs/OUTREACH_EMAILS.md`, order
-      SBDC → LISC → VCC → VSBFA). **NOT SENT YET** — send from hello@bizstackperks.com.
+- [x] **Outreach emails sent — SBDC + LISC + VCC + VSBFA on Sept 18**, pitch PDF attached.
+- [x] **Follow-up cadence automated on Railway** — Day 1 sent Sept 19; Day 3/7/14 auto-fire
+      (scheduler in `loan_outreach.py`, sends via Resend HTTPS API, replies polled over IMAP).
 - [x] **⚠️ Construction Postgres outage (Sept 17)** — **FIXED Sept 18** (see top of file). Cause:
       auto-deploy rebuilt Postgres service from the app's Dockerfile (uvicorn on 5432, not
       postgres). Fix: `railway redeploy -s Postgres --from-source -y` + `railway up
       -s friendly-appreciation`. All DB routes verified 200; data intact; dates re-swapped.
-- [ ] **Record payments in DB**: $22,500 (PNC 03/19), $2,200 Old Ironsides remainder, $7,200
-      Sunnywood cash — so `/backlog` collected + lender dashboards are complete.
-- [ ] **Get business / send outreach:** docs ready — **SBDC first**, then LISC → VCC → VSBFA;
-      then local lead-gen (Nextdoor, FB Marketplace, Google Business Profile).
+- [ ] **Get business / respond to lenders** — docs ready same-day; then local lead-gen
+      (Nextdoor, FB Marketplace, Google Business Profile).
 - [ ] Optional: add the **deep clean ($275)** — property/date still unconfirmed.
 - [ ] Optional: Shipyard **contract income** details (employer, dates, gross) — ended.
 
