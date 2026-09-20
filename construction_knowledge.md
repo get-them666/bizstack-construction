@@ -140,26 +140,68 @@ booking, `/hosts` onboarding. Owner: `/dashboard`, bookings/leads, rentals/analy
 
 ---
 
-## 7. Permits & city codes (construction)
+## 7. Permits & city codes (construction) — the full permit matrix
 
-- We're a **licensed contractor**; we pull required permits and schedule inspections with
-  the local building department before work. **Never promise no permit is needed** — that's
-  a code/policy question per jurisdiction.
-- Permits matter for structural, electrical, plumbing, mechanical, roofing (in many
-  localities), additions, and decks/fences. Rule of thumb: if it changes structure or
-  systems, it needs a permit + inspection. Ask the city/county for specifics.
-- Use `lookup_permits` / the owner's permit list to check project permit status — never
-  invent an approval.
-- City codes: each city has its own building & zoning codes (min setback, permit fees,
-  inspection scheduling). We operate across Williamsburg, Hampton Roads, Currituck,
-  Elizabeth City — always confirm code details with the local jurisdiction rather than
-  guessing. When asked "do you know the code for X city", give a general answer and offer
-  to have the owner confirm with that city's building department.
+We're a **licensed contractor**; we pull required permits and schedule inspections with
+the local building department before work. **Never promise no permit is needed** — that's
+a code/policy question per jurisdiction. Rule of thumb: if it changes the structure,
+footprint, or a building system (electrical / plumbing / mechanical / gas), it needs a
+permit + inspection. Cosmetic-only swaps (paint, flooring in place, trim, cabinet door
+replacements) usually do NOT, but still verify per city/county. Use `lookup_permits` to
+check a real permit status from the job-leads feed — never invent an approval.
+
+### Permit needed by project/type (general guideline — confirm with the local jurisdiction)
+
+| Work type | Permit(s) typically required | Notes |
+|---|---|---|
+| Whole-home renovation / remodel | Building + electrical + plumbing (+ mechanical if HVAC touched) | Full rough-in: plumbing, electrical, framing inspections + final |
+| Additions (rooms, sq ft added) | Building + electrical + plumbing (+ zoning: setback/site plan, sometimes variance) | Footprint change → also requires zoning review |
+| Kitchen remodel | Electrical (circuits/GFCI) + plumbing (if moving/rearranging fixtures) | Cabinet/backsplash-only = usually no permit |
+| Bathroom remodel | Plumbing + electrical + (building if structural) | New/relocated fixtures = plumbing permit; mechanical vent if added |
+| Drywall/paint only | None usually | Paint, skim coat = cosmetic |
+| Roofing | Varies — many localities **require** a roofing permit; some don't for re-roof over 1 layer | Tear-off + structural deck repairs = building |
+| Siding/exterior cladding | Varies by locality (often no separate permit if same envelope) | Confirm; some require building when removing sheathing |
+| Deck & fence | Building (decks); fence permit by height/location in many cities | Setback + height limits; building permit for decks tied to structure |
+| Basement finishing | Building + electrical (+ plumbing if bath/bar added) | Egress window requirements in many codes |
+| New windows/doors | Building if changing rough opening | Same-size replacement usually no permit |
+| Door/window glass only | None typically | — |
+| Shed / detached building | Building permit over size threshold (often >120 sq ft) + zoning setback | Utility/electrical if run to it |
+| Garage / carport | Building + electrical + zoning | Footprint + foundations |
+| Foundation / underpinning / footings | Building — required | Structural |
+| Retaining wall | Building / zoning based on height (commonly >4 ft needs engineered design) | Verify per city |
+| Structural beam/wall removal | Building (structural permit + often engineer's stamp) | NEVER do without permit |
+| Electrical | Electrical permit (any new/relocated/major circuits, panel, service) | Receptacle swap in place = usually no; new outlets = yes |
+| Plumbing | Plumbing permit (new runs, relocation, water heater, gas piping) | Fix-a-leak/repair same line = usually no |
+| Water heater replacement | Mechanical/plumbing permit in many localities (gas needs mechanical) | Confirm — common stickler |
+| HVAC / furnace / AC replacement | Mechanical permit (many municipalities, especially gas) | New duct routing often requires |
+| Solar panels | Building + electrical (+ AHJ-specific) | — |
+| Pools / hot tubs / spas | Building + electrical + (fence/barrier safety) | Enclosures + bonding inspections |
+| Demolition | Demo permit (separate from building in some cities) | Asbestos/lead abatement requirements |
+| Driveway / walkway concrete | Varies — zoning/permit by impervious surface in some cities | Confirm |
+| Fence over height (e.g. 6–8 ft) | Permit + setback where required | Corner lots have extra rules |
+| Commercial / tenant buildout | Building + trade permits + **sprinkler/fire** review by fire marshal | Much stricter; occupancy permits |
+| New construction (house) | Building + electrical + plumbing + mechanical + grading/stormwater | Job-finder feed surfaces these |
+
+### Inspections & process
+- Permits come with **scheduled inspections** — commonly rough (plumbing/electrical/framing),
+  insulation, and final. We coordinate them for the owner.
+- Typical steps: apply → pay fee → **post the permit card visibly** → work → inspection(s) →
+  final approval/CO.
+- Fees vary by city/county and by valuation; we confirm before starting.
+
+### City/county specifics (we operate in these)
+- VA: Williamsburg, James City County, York County, Newport News, Hampton, Norfolk,
+  Virginia Beach, Chesapeake. NC: Currituck County, Elizabeth City / Pasquotank County.
+- Each has its own building & zoning codes (min setback, permit fees, inspection
+  scheduling). Always confirm exact requirements with the local jurisdiction rather than
+  guessing. When asked "do you know the code for X city", give a general answer and offer to
+  have the owner confirm with that city's building department.
 
 **Job finder / new build permitting:** the `/job-leads` Job Finder surfaces newly issued
 building permits in our service cities from an external feed (Shovels) so the owner can
-pursue new-construction leads. If someone asks about a specific permit or code, be
-conservative and route to the building department.
+pursue new-construction leads. Use `lookup_permits` for a specific permit/address/city. If
+someone asks about a specific permit or code, be conservative and route to the building
+department — but always give the general "what's usually needed" guidance above first.
 
 ---
 
