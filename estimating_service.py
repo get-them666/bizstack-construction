@@ -78,16 +78,28 @@ MODELS = {
 PROJECT_MODEL_MAP = {
     "whole-home": "whole-home",
     "Whole-Home Renovation": "whole-home",
+    "Whole-home renovation": "whole-home",
+    "Additions": "whole-home",
+    "Garage / ADU": "whole-home",
+    "Foundation / structural": "whole-home",
     "Interior Refresh": "refresh",
+    "Flooring": "refresh",
+    "Painting": "refresh",
     "Drywall & Paint": "drywall",
     "drywall": "drywall",
     "Roofing & Siding": "roof",
+    "Roofing": "roof",
+    "Roof": "roof",
     "roof": "roof",
+    "Siding / windows": "roof",
     "Kitchen": "kitchen",
+    "Kitchen remodel": "kitchen",
     "kitchen": "kitchen",
     "Bathroom": "bath",
+    "Bathroom remodel": "bath",
     "bathroom": "bath",
     "Deck & Fence": "fence",
+    "Deck / porch": "fence",
     "deck": "fence",
     "Short-Term Rental Make-Ready": "refresh",
 }
@@ -182,3 +194,27 @@ def estimate(project_type: str, property_data: dict | None = None, manual_sqft: 
             "walkthrough and a written, fixed-price scope."
         ),
     }
+
+
+DEFAULT_QUOTE_SQFT = 1750.0
+
+
+def auto_quote(project_type: str, sqft: float | None = None):
+    """Quick ballpark range for auto-replies (no property lookup).
+
+    Fixed-price models (kitchen, bath, deck/fence) quote directly. Per-sqft models
+    assume a typical ~1,750 sq ft home when square footage isn't known, so a lead
+    always gets an answer, clearly labeled as an assumption."""
+    try:
+        sqft = max(float(sqft or 0), 0.0)
+    except (TypeError, ValueError):
+        sqft = 0.0
+    assumed = sqft <= 0 and project_model(project_type) in ("whole-home", "refresh", "drywall", "roof")
+    if sqft <= 0:
+        sqft = DEFAULT_QUOTE_SQFT
+    est = estimate(project_type, None, sqft)
+    if est is None:
+        return None
+    est["assumed_sqft"] = assumed
+    est["kind"] = (MODELS.get(est.get("model_key") or "", MODELS["whole-home"]) or {}).get("kind", "fixed")
+    return est

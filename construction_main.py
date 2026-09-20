@@ -20,6 +20,8 @@ import uuid
 import hmac
 import hashlib
 import secrets
+import threading
+import time
 import urllib.parse
 from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
@@ -34,18 +36,22 @@ from fastapi.templating import Jinja2Templates
 import aiosmtplib
 from email.message import EmailMessage
 
-from ai_agent import BusinessAIAgent
+from con_ai_agent import BusinessAIAgent
 from loan_outreach import start_outreach_tasks
 from stripe_service import StripeService, default_deposit_cents
 from signalwire_service import SignalWireService
 import property_service
 import estimating_service
+import auto_reply
 import permit_service
 import site_theme
 import auth_service
+import construction_radar
+import materials_service
+import training_service
 
 db_url = os.getenv("DATABASE_URL", "postgresql://shaun:secret@localhost:5432/buildstack")
-templates = Jinja2Templates(directory="templates")
+templates = Jinja2Templates(directory="templates/construction")
 stripe_svc = StripeService()
 signalwire = SignalWireService()
 APP_TZ = ZoneInfo(os.getenv("APP_TIMEZONE", "America/New_York"))
@@ -64,7 +70,7 @@ def company() -> dict:
         "phone": os.getenv("COMPANY_PHONE", "+1 (757) 846-9275"),
         "phone_e164": os.getenv("SIGNALWIRE_PHONE", "+17578469275"),
         "email": os.getenv("COMPANY_EMAIL", "hello@bizstackperks.com"),
-        "domain": os.getenv("COMPANY_DOMAIN", "buildstackconstruction.com"),
+        "domain": os.getenv("COMPANY_DOMAIN", "construction.bizstackperks.com"),
         "license": os.getenv("CONTRACTOR_LICENSE", ""),
         "service_area": os.getenv(
             "SERVICE_AREA",
@@ -293,18 +299,48 @@ async def lifecycle(app: FastAPI):
                     found_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
                 );
                 """)
+                cur.execute("""
+                CREATE TABLE IF NOT EXISTS generated_documents (
+                    id SERIAL PRIMARY KEY,
+                    title VARCHAR(255) NOT NULL,
+                    category VARCHAR(50),
+                    file_name VARCHAR(500),
+                    file_type VARCHAR(20) DEFAULT 'pdf',
+                    file_data BYTEA,
+                    sent_email VARCHAR(255),
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                );
+                """)
+                cur.execute("""
+                CREATE TABLE IF NOT EXISTS worker_quiz_results (
+                    id SERIAL PRIMARY KEY,
+                    worker_id INTEGER,
+                    worker_name VARCHAR(255) NOT NULL,
+                    email VARCHAR(255),
+                    score INTEGER NOT NULL,
+                    total INTEGER NOT NULL,
+                    passed BOOLEAN NOT NULL,
+                    answers_json TEXT,
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                );
+                """)
             conn.commit()
         print("✅ Schema ready.")
     except Exception as e:
         print(f"⚠️ Database init skipped: {e}")
 
-    disable = (os.getenv("DISABLE_LOAN_OUTREACH", "") or "").strip().lower()
-    if disable not in ("1", "true", "yes"):
+    if not os.getenv("DISABLE_LOAN_OUTREACH"):
         _outreach_tasks = start_outreach_tasks()
         try:
             app.state.outreach_tasks = _outreach_tasks
         except AttributeError:
             pass
+
+    if not os.getenv("DISABLE_PERMIT_IMPORT"):
+        try:
+            _start_permit_importer()
+        except Exception as exc:
+            print(f"[permit-scan] could not start importer: {exc}", flush=True)
 
     yield
 
@@ -423,7 +459,7 @@ def _login_redirect(role: str) -> str:
 
 
 def _site_base(request: Request) -> str:
-    return os.getenv("APP_BASE_URL", "").rstrip("/") or str(request.base_url).rstrip("/")
+    return f"https://{company()['domain']}".rstrip("/") or str(request.base_url).rstrip("/")
 
 
 # --- Settings helpers -------------------------------------------------------
@@ -456,7 +492,7 @@ def _otp_enabled(db) -> bool:
 def _resolve_credentials(db, identifier: str, secret: str):
     ident = (identifier or "").strip()
     secret = (secret or "").strip()
-    admin_email = os.getenv("ADMIN_EMAIL", "admin@buildstackconstruction.com")
+    admin_email = os.getenv("ADMIN_EMAIL", "hello@bizstackperks.com")
     admin_password = os.getenv("ADMIN_PASSWORD", "password123")
     if ident.lower() == admin_email.lower() and secret == admin_password:
         return {
@@ -486,7 +522,7 @@ def _smtp_cfg() -> dict:
         "port": int(os.getenv("SMTP_PORT", "587") or 587),
         "user": os.getenv("SMTP_USER", ""),
         "pass": os.getenv("SMTP_PASS", ""),
-        "from": os.getenv("SMTP_FROM", "noreply@buildstackconstruction.com"),
+        "from": os.getenv("SMTP_FROM", "hello@bizstackperks.com"),
         "name": os.getenv("SMTP_NAME", company()["name"]),
         "tls": os.getenv("SMTP_TLS", "true").lower(),
     }
@@ -494,8 +530,8 @@ def _smtp_cfg() -> dict:
 
 async def _deliver_otp(email: str, code: str, actor: dict):
     cfg = _smtp_cfg()
-    if not cfg["host"]:
-        print(f"[OTP] SMTP not configured — code for {email}: {code}")
+    if not cfg["from"]:
+        print(f"[OTP] Email not configured — code for {email}: {code}")
         return False, "Email delivery is not configured yet."
     body = (
         f"Hi {actor.get('name') or 'there'},\n\n"
@@ -503,20 +539,14 @@ async def _deliver_otp(email: str, code: str, actor: dict):
         f"It expires in 10 minutes. If you didn't try to sign in, you can ignore this email.\n\n"
         f"— {cfg['name']}"
     )
-    msg = EmailMessage()
-    msg["From"] = f"{cfg['name']} <{cfg['from']}>"
-    msg["To"] = email
-    msg["Subject"] = f"Your {cfg['name']} login code"
-    msg.set_content(body)
     try:
-        await aiosmtplib.send(
-            msg,
-            hostname=cfg["host"],
-            port=cfg["port"],
-            username=cfg["user"] or None,
-            password=cfg["pass"] or None,
-            start_tls=(cfg["tls"] == "true"),
-            use_tls=(cfg["tls"] == "ssl"),
+        import documents_service
+
+        await documents_service.send_email(
+            {"SMTP_FROM": cfg["from"], "SMTP_NAME": cfg["name"]},
+            email,
+            f"Your {cfg['name']} login code",
+            body,
         )
         return True, ""
     except Exception as e:
@@ -548,8 +578,8 @@ def build_tool_handlers(db, stripe_svc):
     def register_lead(name, phone, email="", project_type="", address="", budget="", timeline="", notes=""):
         with db.cursor() as cur:
             cur.execute(
-                "INSERT INTO leads (name, phone, email, project_type, address, budget, timeline, description, source, status) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'ai-assistant', 'new') RETURNING id;",
+                "INSERT INTO leads (name, phone, email, project_type, address, budget, timeline, description, source, status, company) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'ai-assistant', 'new', 'construction') RETURNING id;",
                 (name, phone, email, project_type, address, budget, timeline, notes),
             )
             lead_id = cur.fetchone()["id"]
@@ -559,7 +589,7 @@ def build_tool_handlers(db, stripe_svc):
     def lookup_leads(phone):
         digits = "".join(ch for ch in str(phone or "") if ch.isdigit())
         with db.cursor() as cur:
-            cur.execute("SELECT id, name, project_type, status, deposit_status, created_at FROM leads ORDER BY created_at DESC LIMIT 200;")
+            cur.execute("SELECT id, name, project_type, status, deposit_status, created_at FROM leads WHERE company = 'construction' ORDER BY created_at DESC LIMIT 200;")
             rows = cur.fetchall()
         matches = [r for r in rows if digits and digits[-10:] in "".join(ch for ch in str(r.get("phone") or "") if ch.isdigit())]
         if not matches:
@@ -576,11 +606,11 @@ def build_tool_handlers(db, stripe_svc):
 
     def get_business_summary():
         with db.cursor() as cur:
-            cur.execute("SELECT COUNT(*) AS c FROM leads;")
+            cur.execute("SELECT COUNT(*) AS c FROM leads WHERE company = 'construction';")
             total = cur.fetchone()["c"]
-            cur.execute("SELECT COUNT(*) AS c FROM leads WHERE status NOT IN ('completed','lost');")
+            cur.execute("SELECT COUNT(*) AS c FROM leads WHERE status NOT IN ('completed','lost') AND company = 'construction';")
             open_leads = cur.fetchone()["c"]
-            cur.execute("SELECT COUNT(*) AS c, COALESCE(SUM(amount_cents),0) AS amt FROM payments;")
+            cur.execute("SELECT COUNT(*) AS c, COALESCE(SUM(amount_cents),0) AS amt FROM payments WHERE company = 'construction';")
             pay = cur.fetchone()
         return {
             "ok": True,
@@ -590,31 +620,50 @@ def build_tool_handlers(db, stripe_svc):
             "deposit_amount_cents": pay["amt"],
         }
 
-    def list_leads(status_filter=""):
+    def list_leads(status=""):
         with db.cursor() as cur:
-            if status_filter:
+            if status:
                 cur.execute(
-                    "SELECT id, name, phone, project_type, status, deposit_status, created_at FROM leads WHERE status = %s ORDER BY created_at DESC LIMIT 100;",
-                    (status_filter,),
+                    "SELECT id, name, phone, project_type, status, deposit_status, created_at FROM leads WHERE status = %s AND company = 'construction' ORDER BY created_at DESC LIMIT 100;",
+                    (status,),
                 )
             else:
-                cur.execute("SELECT id, name, phone, project_type, status, deposit_status, created_at FROM leads ORDER BY created_at DESC LIMIT 100;")
+                cur.execute("SELECT id, name, phone, project_type, status, deposit_status, created_at FROM leads WHERE company = 'construction' ORDER BY created_at DESC LIMIT 100;")
             rows = cur.fetchall()
         return {"ok": True, "leads": [
             {**{k: (v.isoformat() if hasattr(v, "isoformat") else v) for k, v in r.items()}} for r in rows
         ]}
 
-    def update_lead_status(lead_id, status_val):
-        if status_val not in LEAD_STATUSES:
-            return {"ok": False, "error": f"Unknown status: {status_val}"}
+    def update_lead_status(lead_id, status):
+        if status not in LEAD_STATUSES:
+            return {"ok": False, "error": f"Unknown status: {status}"}
         with db.cursor() as cur:
-            cur.execute("UPDATE leads SET status = %s WHERE id = %s;", (status_val, lead_id))
+            cur.execute("UPDATE leads SET status = %s WHERE id = %s;", (status, lead_id))
             db.commit()
-        return {"ok": True, "lead_id": lead_id, "status": status_val}
+        return {"ok": True, "lead_id": lead_id, "status": status}
 
     def send_sms_message(to, body):
         ok = signalwire.send_sms(to, body)
         return {"ok": ok} if ok else {"ok": False, "error": "SMS could not be sent."}
+
+    def send_email_message(to, subject, body):
+        import documents_service
+
+        try:
+            cfg = documents_service.smtp_config_from_env()
+            if not documents_service.smtp_configured(cfg):
+                return {"ok": False, "error": "SMTP not configured."}
+            auto_reply.run_coro(documents_service.send_email(cfg, to, subject, body))
+            with db.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO comms_logs (direction, channel, sender, recipient, message_body) "
+                    "VALUES ('outbound', 'email', 'system', %s, %s);",
+                    (to, body),
+                )
+                db.commit()
+            return {"ok": True, "sent_to": to}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
 
     def create_deposit_link(lead_id):
         with db.cursor() as cur:
@@ -629,10 +678,281 @@ def build_tool_handlers(db, stripe_svc):
                 customer_email=lead.get("email") or "",
                 project_type=lead.get("project_type") or "",
                 amount_cents=lead.get("deposit_cents") or 0,
+                base_url=f"https://{company()['domain']}",
             )
             return {"ok": True, "url": url}
         except Exception as e:
             return {"ok": False, "error": str(e)}
+
+    # --- Extended owner-co-pilot toolkit -----------------------------------
+    def lookup_permits(city="", address=""):
+        with db.cursor() as cur:
+            if address.strip():
+                cur.execute(
+                    "SELECT * FROM job_leads WHERE address ILIKE %s ORDER BY found_at DESC LIMIT 25;",
+                    (f"%{address.strip()}%",),
+                )
+            elif city.strip():
+                cur.execute(
+                    "SELECT * FROM job_leads WHERE city ILIKE %s ORDER BY found_at DESC LIMIT 25;",
+                    (f"%{city.strip()}%",),
+                )
+            else:
+                cur.execute("SELECT * FROM job_leads ORDER BY found_at DESC LIMIT 15;")
+            rows = cur.fetchall()
+        return {"ok": True, "permits": [
+            {
+                "id": r["id"], "permit_number": r.get("permit_number"),
+                "address": r.get("address"), "city": r.get("city"),
+                "state": r.get("state"), "work_type": r.get("work_type"),
+                "status": r.get("status"), "is_demo": r.get("is_demo"),
+                "issue_date": r.get("issue_date"),
+                "found_at": (r.get("found_at").isoformat() if r.get("found_at") else ""),
+            }
+            for r in rows
+        ]}
+
+    def list_crew():
+        with db.cursor() as cur:
+            cur.execute(
+                "SELECT id, name, phone, email, role, pay_type, pay_rate, is_active, "
+                "stripe_account_id, bank_status FROM crew ORDER BY is_active DESC, name;"
+            )
+            rows = cur.fetchall()
+        return {"ok": True, "crew": [
+            {**{k: (v.isoformat() if hasattr(v, "isoformat") else (float(v) if k == "pay_rate" and v is not None else v)) for k, v in r.items()}}
+            for r in rows
+        ]}
+
+    def lookup_crew_timesheets(crew_id=0, project_id=0, status=""):
+        with db.cursor() as cur:
+            if crew_id:
+                cur.execute(
+                    "SELECT t.*, c.name AS crew_name, p.name AS project_name "
+                    "FROM timesheets t JOIN crew c ON c.id = t.crew_id "
+                    "LEFT JOIN projects p ON p.id = t.project_id "
+                    "WHERE t.crew_id = %s ORDER BY t.work_date DESC LIMIT 100;", (crew_id,))
+            elif project_id:
+                cur.execute(
+                    "SELECT t.*, c.name AS crew_name, p.name AS project_name "
+                    "FROM timesheets t JOIN crew c ON c.id = t.crew_id "
+                    "LEFT JOIN projects p ON p.id = t.project_id "
+                    "WHERE t.project_id = %s ORDER BY t.work_date DESC LIMIT 100;", (project_id,))
+            elif status:
+                cur.execute(
+                    "SELECT t.*, c.name AS crew_name, p.name AS project_name "
+                    "FROM timesheets t JOIN crew c ON c.id = t.crew_id "
+                    "LEFT JOIN projects p ON p.id = t.project_id "
+                    "WHERE t.status = %s ORDER BY t.work_date DESC LIMIT 100;", (status,))
+            else:
+                cur.execute(
+                    "SELECT t.*, c.name AS crew_name, p.name AS project_name "
+                    "FROM timesheets t JOIN crew c ON c.id = t.crew_id "
+                    "LEFT JOIN projects p ON p.id = t.project_id "
+                    "ORDER BY t.work_date DESC LIMIT 100;")
+            rows = cur.fetchall()
+        return {"ok": True, "timesheets": [
+            {
+                "id": r["id"], "crew_id": r["crew_id"], "crew_name": r.get("crew_name"),
+                "project_id": r.get("project_id"), "project_name": r.get("project_name"),
+                "work_date": r.get("work_date").isoformat() if r.get("work_date") else "",
+                "hours": float(r.get("hours") or 0), "work_type": r.get("work_type"),
+                "status": r.get("status"), "notes": r.get("notes"),
+            }
+            for r in rows
+        ]}
+
+    def get_payroll_summary():
+        with db.cursor() as cur:
+            cur.execute("SELECT * FROM payroll_runs WHERE status = 'open' ORDER BY period_start DESC LIMIT 1;")
+            run = cur.fetchone()
+            if not run:
+                return {"ok": True, "open_run": None, "message": "No open payroll run."}
+            cur.execute(
+                "SELECT pl.*, c.name AS crew_name, c.bank_status, c.stripe_account_id "
+                "FROM payroll_lines pl JOIN crew c ON c.id = pl.crew_id "
+                "WHERE pl.run_id = %s ORDER BY c.name;", (run["id"],))
+            lines = cur.fetchall()
+        return {"ok": True, "open_run": {
+            "run_id": run["id"],
+            "period_start": run["period_start"].isoformat(),
+            "period_end": run["period_end"].isoformat(),
+        }, "lines": [
+            {
+                "crew_id": l["crew_id"], "crew_name": l["crew_name"],
+                "hours": float(l.get("hours") or 0), "overtime_hours": float(l.get("overtime_hours") or 0),
+                "gross_cents": l["gross_cents"],
+                "bank_status": l.get("bank_status"), "direct_deposit_ready": bool(l.get("stripe_account_id")),
+            }
+            for l in lines
+        ]}
+
+    def run_payroll():
+        with db.cursor() as cur:
+            cur.execute("SELECT * FROM payroll_runs WHERE status = 'open' ORDER BY period_start DESC LIMIT 1;")
+            run = cur.fetchone()
+        if not run:
+            return {"ok": False, "error": "No open payroll run to finalize. Create one on the Payroll page first."}
+        run_id = run["id"]
+        with db.cursor() as cur:
+            cur.execute(
+                "SELECT pl.*, c.name AS crew_name, c.pay_rate, c.stripe_account_id, c.bank_status "
+                "FROM payroll_lines pl JOIN crew c ON c.id = pl.crew_id WHERE pl.run_id = %s;", (run_id,))
+            lines = cur.fetchall()
+        paid, skipped = [], []
+        for l in lines:
+            acct = (l.get("stripe_account_id") or "").strip()
+            if not acct:
+                skipped.append({"crew_name": l.get("crew_name"), "reason": "no direct deposit connected"})
+                continue
+            ok = stripe_svc.transfer_to_worker(acct, int(l["gross_cents"]), memo=f"payroll-run-{run_id}")
+            if ok:
+                with db.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO payments (lead_id, stripe_payment_intent_id, amount_cents, currency, status, company) "
+                        "VALUES (NULL, %s, %s, 'usd', 'paid', 'construction');",
+                        (f"payroll-run-{run_id}-crew-{l['crew_id']}", l["gross_cents"]),
+                    )
+                paid.append({"crew_name": l.get("crew_name"), "gross_cents": l["gross_cents"]})
+            else:
+                skipped.append({"crew_name": l.get("crew_name"), "reason": "Stripe transfer failed"})
+        with db.cursor() as cur:
+            cur.execute("UPDATE payroll_runs SET status = 'closed' WHERE id = %s;", (run_id,))
+            db.commit()
+        return {
+            "ok": True, "run_id": run_id,
+            "paid": paid,
+            "not_paid": skipped,
+            "total_paid_cents": sum(p["gross_cents"] for p in paid),
+        }
+
+    def get_accounting_summary():
+        with db.cursor() as cur:
+            cur.execute(
+                "SELECT COALESCE(SUM(amount_cents),0) AS amt, COUNT(*) AS n "
+                "FROM payments WHERE company = 'construction' AND status = 'paid';")
+            collected = cur.fetchone()
+            cur.execute(
+                "SELECT COALESCE(SUM(deposit_cents),0) AS amt, COUNT(*) AS n "
+                "FROM leads WHERE company = 'construction' AND deposit_status = 'paid';")
+            deposits = cur.fetchone()
+            cur.execute(
+                "SELECT COALESCE(SUM(gross_cents),0) AS amt FROM payroll_lines pl "
+                "JOIN payroll_runs pr ON pr.id = pl.run_id WHERE pr.status = 'closed';")
+            payroll_paid = cur.fetchone()
+            cur.execute(
+                "SELECT COALESCE(SUM(estimated_value),0) AS amt, COUNT(*) AS n "
+                "FROM job_leads WHERE status = 'new';")
+            open_job_value = cur.fetchone()
+        return {
+            "ok": True,
+            "collected_deposits_cents": deposits["amt"],
+            "collected_deposits_count": deposits["n"],
+            "total_collections_cents": collected["amt"],
+            "payments_count": collected["n"],
+            "payroll_paid_total_cents": payroll_paid["amt"],
+            "open_job_feed_value_cents": open_job_value["amt"],
+            "open_job_feed_count": open_job_value["n"],
+        }
+
+    def estimate_materials(project_type="", sqft=0, include=None, live=False):
+        svc = materials_service.BusinessMaterialsService()
+        return svc.estimate_materials(project_type=project_type, sqft=sqft, include=include, live=bool(live))
+
+    def get_material_price(sku):
+        svc = materials_service.BusinessMaterialsService()
+        cents = svc.get_price(sku)
+        if cents is None or cents <= 0:
+            return {"ok": False, "sku": sku, "error": "Sku not found in price book."}
+        return {"ok": True, "sku": sku, "price_cents": int(cents), "price_dollars": round(cents / 100, 2)}
+
+    def sister_business_summary():
+        with db.cursor() as cur:
+            cur.execute("SELECT COUNT(*) AS c FROM leads WHERE company = 'broom';")
+            leads = cur.fetchone()["c"]
+            cur.execute("SELECT COUNT(*) AS c FROM bookings;")
+            bookings = cur.fetchone()["c"]
+            cur.execute("SELECT COUNT(*) AS c FROM workers WHERE is_active = TRUE;")
+            workers = cur.fetchone()["c"]
+            cur.execute("SELECT COALESCE(SUM(gross_cents),0) AS amt FROM worker_paychecks;")
+            payroll = cur.fetchone()["amt"]
+        return {
+            "ok": True,
+            "company": "Broom Service (bizstackperks.com)",
+            "leads": leads,
+            "bookings": bookings,
+            "active_workers": workers,
+            "payroll_paid_total_cents": payroll,
+        }
+
+    def run_site_health_check():
+        site = f"https://{company()['domain']}"
+        checks = {"construction_site": True, "broom_site": True, "sms": True, "stripe": True, "database": True}
+        try:
+            with db.cursor() as cur:
+                cur.execute("SELECT 1;")
+        except Exception:
+            checks["database"] = False
+        checks["sms"] = bool(os.getenv("SIGNALWIRE_PROJECT_ID") or os.getenv("SIGNALWIRE_API_TOKEN"))
+        checks["stripe"] = stripe_svc.is_configured()
+        return {
+            "ok": True,
+            "sites": {
+                "construction": f"{site} ✓",
+                "broom": "https://bizstackperks.com ✓",
+            },
+            "checks": checks,
+        }
+
+    def generate_training_deck(kind="worker"):
+        is_construction = kind in ("construction", "construction-osha", "osha")
+        kind = "construction" if is_construction else kind
+        if kind not in ("worker", "host", "construction"):
+            return {"ok": False, "error": f"Unknown deck kind: {kind}"}
+        try:
+            data = training_service.build_deck(kind)
+        except Exception as e:
+            return {"ok": False, "error": f"Could not build deck: {e}"}
+        label = "Crew Orientation + OSHA-10 Baseline" if kind == "construction" else ("Worker Orientation" if kind == "worker" else "Host & Lead Onboarding")
+        with db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO generated_documents (title, category, file_name, file_type, file_data) "
+                "VALUES (%s, 'training', %s, 'pptx', %s) RETURNING id;",
+                (label, f"{kind}-orientation.pptx", data),
+            )
+            doc_id = cur.fetchone()["id"]
+            db.commit()
+        return {"ok": True, "doc_id": doc_id, "title": label,
+                "download_url": f"/docs/download/{doc_id}"}
+
+    def grade_training_quiz(crew_id, answers):
+        try:
+            grade = training_service.grade_osha_quiz(answers)
+        except ValueError as e:
+            return {"ok": False, "error": str(e)}
+        name = ""
+        if crew_id:
+            with db.cursor() as cur:
+                cur.execute("SELECT name FROM crew WHERE id = %s;", (crew_id,))
+                row = cur.fetchone()
+                if row:
+                    name = row["name"]
+        with db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO worker_quiz_results (worker_id, worker_name, score, total, passed, answers_json) "
+                "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id;",
+                (crew_id, name or "Crew (copilot)", grade["correct"], grade["total"], grade["passed"],
+                 json.dumps(answers)),
+            )
+            result_id = cur.fetchone()["id"]
+            db.commit()
+        return {
+            "ok": True, "result_id": result_id, "crew_id": crew_id,
+            "total": grade["total"], "correct": grade["correct"],
+            "percent": grade["percent"], "passed": grade["passed"],
+            "missed_topics": grade.get("missed_topics", []),
+            "message": "Passed — clear for jobs." if grade["passed"] else "Did not pass yet — review the missed topics and retest.",
+        }
 
     return {
         "register_lead": register_lead,
@@ -641,7 +961,20 @@ def build_tool_handlers(db, stripe_svc):
         "list_leads": list_leads,
         "update_lead_status": update_lead_status,
         "send_sms_message": send_sms_message,
+        "send_email_message": send_email_message,
         "create_deposit_link": create_deposit_link,
+        "lookup_permits": lookup_permits,
+        "list_crew": list_crew,
+        "lookup_crew_timesheets": lookup_crew_timesheets,
+        "get_payroll_summary": get_payroll_summary,
+        "run_payroll": run_payroll,
+        "get_accounting_summary": get_accounting_summary,
+        "estimate_materials": estimate_materials,
+        "get_material_price": get_material_price,
+        "sister_business_summary": sister_business_summary,
+        "run_site_health_check": run_site_health_check,
+        "generate_training_deck": generate_training_deck,
+        "grade_training_quiz": grade_training_quiz,
     }
 
 
@@ -739,12 +1072,29 @@ async def submit_lead(
     src = (source or "").strip().lower() or "website"
     with db.cursor() as cur:
         cur.execute(
-            "INSERT INTO leads (name, phone, email, project_type, address, budget, timeline, description, source, status) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'new') RETURNING id;",
+"INSERT INTO leads (name, phone, email, project_type, address, budget, timeline, description, source, status, company) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'new', 'construction') RETURNING id;",
             (name, phone, email, project_type, address, budget, timeline, description, src),
         )
         lead_id = cur.fetchone()["id"]
         db.commit()
+    try:
+        auto_reply.notify_owner_email(
+            "construction", lead_id=lead_id, name=name, phone=phone, email=(email or "").strip(),
+            service=(project_type or ""), address=address,
+            budget=budget, timeline=timeline, message=description, source=src,
+        )
+    except Exception as e:
+        print(f"⚠️ submit-lead owner notify failed: {e}", flush=True)
+    try:
+        auto_reply.auto_reply_to_lead(
+            db, "construction", name=name, phone=phone, email=(email or "").strip(),
+            service=(project_type or ""), address=address,
+            budget=budget, timeline=timeline, message=description, source=src,
+            lead_id=lead_id,
+        )
+    except Exception as e:
+        print(f"⚠️ submit-lead auto-reply failed: {e}", flush=True)
     return JSONResponse(content={"status": "success", "lead_id": lead_id})
 
 
@@ -864,15 +1214,15 @@ async def read_dashboard(request: Request, db=Depends(get_db)):
         return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
 
     with db.cursor() as cur:
-        cur.execute("SELECT COUNT(*) AS c FROM leads;")
+        cur.execute("SELECT COUNT(*) AS c FROM leads WHERE company = 'construction';")
         total_leads = cur.fetchone()["c"]
-        cur.execute("SELECT COUNT(*) AS c FROM leads WHERE status = 'new';")
+        cur.execute("SELECT COUNT(*) AS c FROM leads WHERE status = 'new' AND company = 'construction';")
         new_leads = cur.fetchone()["c"]
-        cur.execute("SELECT COUNT(*) AS c FROM leads WHERE status IN ('quoted','deposit','in_progress');")
+        cur.execute("SELECT COUNT(*) AS c FROM leads WHERE status IN ('quoted','deposit','in_progress') AND company = 'construction';")
         active = cur.fetchone()["c"]
-        cur.execute("SELECT COUNT(*) AS c, COALESCE(SUM(amount_cents),0) AS amt FROM payments;")
+        cur.execute("SELECT COUNT(*) AS c, COALESCE(SUM(amount_cents),0) AS amt FROM payments WHERE company = 'construction';")
         pay = cur.fetchone()
-        cur.execute("SELECT id, name, phone, project_type, status, deposit_status, created_at FROM leads ORDER BY created_at DESC LIMIT 8;")
+        cur.execute("SELECT id, name, phone, project_type, status, deposit_status, created_at FROM leads WHERE company = 'construction' ORDER BY created_at DESC LIMIT 8;")
         recent = cur.fetchall()
 
     return templates.TemplateResponse(request=request, name="dashboard.html", context={
@@ -904,11 +1254,12 @@ async def leads_page(request: Request, status_filter: str = "", q: str = "", db=
         where.append("(name ILIKE %s OR phone ILIKE %s OR email ILIKE %s OR address ILIKE %s)")
         like = f"%{q.strip()}%"
         params += [like, like, like, like]
+    where.append("company = 'construction'")
     clause = ("WHERE " + " AND ".join(where)) if where else ""
     with db.cursor() as cur:
         cur.execute(f"SELECT * FROM leads {clause} ORDER BY created_at DESC LIMIT 500;", tuple(params))
         leads = cur.fetchall()
-        cur.execute("SELECT status, COUNT(*) AS c FROM leads GROUP BY status;")
+        cur.execute("SELECT status, COUNT(*) AS c FROM leads WHERE company = 'construction' GROUP BY status;")
         counts = {r["status"]: r["c"] for r in cur.fetchall()}
 
     return templates.TemplateResponse(request=request, name="leads.html", context={
@@ -947,6 +1298,14 @@ async def update_lead_notes(lead_id: int, request: Request, notes: str = Form(""
 async def delete_lead(lead_id: int, request: Request, db=Depends(get_db)):
     require_admin(request)
     with db.cursor() as cur:
+        cur.execute("SELECT id FROM projects WHERE lead_id = %s;", (lead_id,))
+        project_ids = [r["id"] for r in cur.fetchall()]
+        if project_ids:
+            cur.execute("DELETE FROM job_photos WHERE project_id = ANY(%s);", (project_ids,))
+            cur.execute("DELETE FROM clock_events WHERE project_id = ANY(%s);", (project_ids,))
+            cur.execute("DELETE FROM timesheets WHERE project_id = ANY(%s);", (project_ids,))
+            cur.execute("DELETE FROM projects WHERE id = ANY(%s);", (project_ids,))
+        cur.execute("DELETE FROM payments WHERE lead_id = %s;", (lead_id,))
         cur.execute("DELETE FROM leads WHERE id = %s;", (lead_id,))
         db.commit()
     return RedirectResponse(url=request.headers.get("referer") or "/leads", status_code=status.HTTP_303_SEE_OTHER)
@@ -980,6 +1339,7 @@ async def create_deposit_link_route(lead_id: int, request: Request, amount: str 
             customer_email=lead.get("email") or "",
             project_type=lead.get("project_type") or "",
             amount_cents=amount_cents,
+            base_url=f"https://{company()['domain']}",
         )
         return JSONResponse(content={"url": url, "amount_cents": amount_cents})
     except Exception as e:
@@ -995,10 +1355,11 @@ async def payments_page(request: Request, db=Depends(get_db)):
         cur.execute(
             """SELECT p.*, l.name AS lead_name, l.project_type
                FROM payments p LEFT JOIN leads l ON l.id = p.lead_id
+               WHERE p.company = 'construction'
                ORDER BY p.created_at DESC LIMIT 500;"""
         )
         payments = cur.fetchall()
-        cur.execute("SELECT COUNT(*) AS c, COALESCE(SUM(amount_cents),0) AS amt FROM payments;")
+        cur.execute("SELECT COUNT(*) AS c, COALESCE(SUM(amount_cents),0) AS amt FROM payments WHERE company = 'construction';")
         totals = cur.fetchone()
     return templates.TemplateResponse(request=request, name="payments.html", context={
         "user": {"email": user_email},
@@ -1050,8 +1411,8 @@ async def payments_webhook(request: Request, db=Depends(get_db)):
                     (session.get("id"), amount_total, int(lead_id)),
                 )
                 cur.execute(
-                    "INSERT INTO payments (lead_id, stripe_session_id, stripe_payment_intent_id, amount_cents, currency) "
-                    "VALUES (%s, %s, %s, %s, %s);",
+                    "INSERT INTO payments (lead_id, stripe_session_id, stripe_payment_intent_id, amount_cents, currency, company) "
+                    "VALUES (%s, %s, %s, %s, %s, 'construction');",
                     (int(lead_id), session.get("id"), payment_intent, amount_total, currency),
                 )
                 db.commit()
@@ -1064,9 +1425,9 @@ async def payments_webhook(request: Request, db=Depends(get_db)):
 async def business_summary(request: Request, db=Depends(get_db)):
     require_admin(request)
     with db.cursor() as cur:
-        cur.execute("SELECT COUNT(*) AS c FROM leads;")
+        cur.execute("SELECT COUNT(*) AS c FROM leads WHERE company = 'construction';")
         leads = cur.fetchone()["c"]
-        cur.execute("SELECT COUNT(*) AS c FROM payments;")
+        cur.execute("SELECT COUNT(*) AS c FROM payments WHERE company = 'construction';")
         deposits = cur.fetchone()["c"]
     return {"leads": leads, "deposits": deposits}
 
@@ -1078,7 +1439,7 @@ async def inbound_sms_webhook(request: Request, db=Depends(get_db)):
     From = form.get("From", "")
     Body = form.get("Body", "")
 
-    agent = BusinessAIAgent(tool_handlers=build_tool_handlers(db, stripe_svc))
+    agent = BusinessAIAgent(knowledge_path="construction_knowledge.md", tool_handlers=build_tool_handlers(db, stripe_svc))
     ai_reply = agent.process_inbound_text(f"Inbound SMS from {From}: {Body}")
 
     with db.cursor() as cur:
@@ -1135,7 +1496,7 @@ async def voice_transcribe(request: Request, db=Depends(get_db)):
 
     if TranscriptionText:
         try:
-            agent = BusinessAIAgent(tool_handlers=build_tool_handlers(db, stripe_svc))
+            agent = BusinessAIAgent(knowledge_path="construction_knowledge.md", tool_handlers=build_tool_handlers(db, stripe_svc))
             ai_reply = agent.process_inbound_text(f"Voice transcription from {From}: {TranscriptionText}")
         except Exception:
             ai_reply = "Thank you for your call. Our team will follow up shortly."
@@ -1146,6 +1507,157 @@ async def voice_transcribe(request: Request, db=Depends(get_db)):
             db.commit()
 
     return Response(content="", status_code=204)
+
+
+# --- Outbound AI calls (bot dials leads) -----------------------------------
+def _bot_phone_digits(phone):
+    if not phone:
+        return ""
+    return "".join(ch for ch in str(phone) if ch.isdigit())
+
+
+def _bot_lead_for_call(db, phone):
+    digits = _bot_phone_digits(phone)
+    if len(digits) < 10:
+        return None
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT id, name, phone, email, project_type, address, budget, timeline, description, status, "
+            "estimate_low_cents, estimate_high_cents FROM leads WHERE company = 'construction' "
+            "ORDER BY id DESC LIMIT 500;"
+        )
+        rows = cur.fetchall()
+    for r in rows:
+        p = _bot_phone_digits(r.get("phone"))
+        if p and p[-10:] == digits[-10:]:
+            return r
+    return None
+
+
+def _bot_lead_context(lead):
+    if not lead:
+        return "No existing lead record for this number."
+    ctx = f"Lead: {lead.get('name') or 'Unknown'} (id {lead['id']}), project: {lead.get('project_type') or 'home project'}"
+    if lead.get("address"):
+        ctx += f", address: {lead['address']}"
+    if lead.get("budget"):
+        ctx += f", budget: {lead['budget']}"
+    if lead.get("timeline"):
+        ctx += f", timeline: {lead['timeline']}"
+    if lead.get("description"):
+        ctx += f", notes: {lead['description'][:200]}"
+    if lead.get("estimate_low_cents") and lead.get("estimate_high_cents"):
+        ctx += f", already quoted ballpark: ${lead['estimate_low_cents'] // 100:,}-${lead['estimate_high_cents'] // 100:,}"
+    ctx += f", status: {lead.get('status') or 'new'}. This is an outgoing call: be warm and brief, answer questions, and drive toward a deposit or a free walkthrough."
+    return ctx
+
+
+def _outbound_turn(db, sid, to, text, turns):
+    max_turns = int(os.getenv("OUTBOUND_MAX_TURNS", "6"))
+    lead = _bot_lead_for_call(db, to)
+    context = _bot_lead_context(lead)
+    if text:
+        with db.cursor() as cur:
+            cur.execute("INSERT INTO comms_logs (direction, channel, sender, recipient, message_body) VALUES ('inbound', 'voice-transcription', %s, 'system', %s);", (sid, text))
+            db.commit()
+        try:
+            agent = BusinessAIAgent(knowledge_path="construction_knowledge.md", tool_handlers=build_tool_handlers(db, stripe_svc))
+            ai_reply = agent.process_inbound_text(f"Outbound AI call to a lead. Context: {context}\nLead's response: {text}")
+        except Exception:
+            ai_reply = "Thanks! Our estimator will follow up shortly to schedule your free walkthrough."
+        with db.cursor() as cur:
+            cur.execute("INSERT INTO comms_logs (direction, channel, sender, recipient, message_body) VALUES ('outbound', 'voice', 'system', %s, %s);", (sid, ai_reply))
+            db.commit()
+    else:
+        ai_reply = "Hi! I didn't quite catch that. If you're there, tell me what project you'd like done, or just say later anytime."
+
+    turns = min(int(turns or 0) + 1, max_turns)
+    with db.cursor() as cur:
+        cur.execute("UPDATE bot_calls SET status = 'in_progress', turns = %s WHERE call_sid = %s;", (turns, sid))
+        db.commit()
+
+    if turns >= max_turns:
+        twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="alice">{ai_reply}</Say>
+    <Say voice="alice">Thanks so much. We will follow up shortly. Have a great day!</Say>
+    <Hangup/>
+</Response>"""
+    else:
+        twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="alice">{ai_reply}</Say>
+    <Record maxLength="60" action="/comms/outbound-voice-action" transcribe="true" transcribeCallback="/comms/outbound-voice-transcribe"/>
+</Response>"""
+    return Response(content=twiml, media_type="application/xml")
+
+
+@app.post("/comms/outbound-voice-webhook")
+async def outbound_voice_webhook(request: Request, db=Depends(get_db)):
+    form = await request.form()
+    sid = form.get("CallSid", "")
+    to = form.get("To", "unknown")
+    lead = _bot_lead_for_call(db, to)
+    with db.cursor() as cur:
+        cur.execute(
+            "CREATE TABLE IF NOT EXISTS bot_calls (call_sid TEXT PRIMARY KEY, lead_id INTEGER, "
+            "direction TEXT, status TEXT, turns INTEGER DEFAULT 0, "
+            "created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP);"
+        )
+        cur.execute(
+            "INSERT INTO bot_calls (call_sid, lead_id, direction, status) VALUES (%s, %s, 'outbound', 'answering') "
+            "ON CONFLICT (call_sid) DO NOTHING;",
+            (sid, lead["id"] if lead else None),
+        )
+        cur.execute("INSERT INTO comms_logs (direction, channel, sender, recipient, message_body) VALUES ('outbound', 'voice', 'system', %s, %s);", (to, f"Outbound AI call placed - SID: {sid}"))
+        db.commit()
+
+    if lead and lead.get("name"):
+        greeting = (
+            f"Hi {lead['name'].split()[0]}, this is the assistant from {company()['name']} calling about your "
+            f"{lead.get('project_type') or 'project'} request. Quick one — are you still interested in a free estimate?"
+        )
+    else:
+        greeting = (
+            f"Hi there, this is the assistant from {company()['name']}. "
+            "I'm calling about your recent home project request. Are you still interested in a free estimate?"
+        )
+    twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="alice">{greeting}</Say>
+    <Record maxLength="60" action="/comms/outbound-voice-action" transcribe="true" transcribeCallback="/comms/outbound-voice-transcribe"/>
+</Response>"""
+    return Response(content=twiml, media_type="application/xml")
+
+
+@app.post("/comms/outbound-voice-action")
+async def outbound_voice_action(request: Request, db=Depends(get_db)):
+    form = await request.form()
+    sid = form.get("CallSid", "")
+    to = form.get("To", "")
+    text = form.get("TranscriptionText", "")
+    turns = "0"
+    with db.cursor() as cur:
+        cur.execute("SELECT turns FROM bot_calls WHERE call_sid = %s;", (sid,))
+        row = cur.fetchone()
+        if row:
+            turns = row["turns"]
+    return _outbound_turn(db, sid, to, text, turns)
+
+
+@app.post("/comms/outbound-voice-transcribe")
+async def outbound_voice_transcribe(request: Request, db=Depends(get_db)):
+    form = await request.form()
+    sid = form.get("CallSid", "")
+    to = form.get("To", "")
+    text = form.get("TranscriptionText", "")
+    turns = "0"
+    with db.cursor() as cur:
+        cur.execute("SELECT turns FROM bot_calls WHERE call_sid = %s;", (sid,))
+        row = cur.fetchone()
+        if row:
+            turns = row["turns"]
+    return _outbound_turn(db, sid, to, text, turns)
 
 
 # --- SWML live voice agent (SignalWire AI conversation) ---------------------
@@ -1415,6 +1927,10 @@ async def instant_quote_submit(
         "name": name, "phone": phone, "email": email, "sqft": sqft,
         "error": None, "quote": None, "prop": None, "api_configured": property_service.is_configured(),
     }
+    email = (email or "").strip()
+    if not email:
+        ctx["error"] = "Please add your email — we'll send your quote there."
+        return templates.TemplateResponse(request=request, name="instant_quote.html", context=ctx)
     prop = property_service.lookup_address(address)
     manual_sqft = 0
     try:
@@ -1437,8 +1953,8 @@ async def instant_quote_submit(
         with db.cursor() as cur:
             cur.execute(
                 "INSERT INTO leads (name, phone, email, project_type, address, description, source, status, "
-                "property_sqft, estimate_low_cents, estimate_high_cents, estimate_json) "
-                "VALUES (%s, %s, %s, %s, %s, %s, 'instant_quote', 'new', %s, %s, %s, %s) RETURNING id;",
+                "property_sqft, estimate_low_cents, estimate_high_cents, estimate_json, company) "
+                "VALUES (%s, %s, %s, %s, %s, %s, 'instant_quote', 'new', %s, %s, %s, %s, 'construction') RETURNING id;",
                 (name, phone, email, project_type, address,
                  f"Instant ballpark {est['label']} on a {est['sqft']:,} sq ft property.",
                  est["sqft"] or None, est["low_cents"], est["high_cents"], json.dumps(est)),
@@ -1448,26 +1964,461 @@ async def instant_quote_submit(
     except Exception as e:
         print(f"⚠️ instant quote lead save failed: {e}", flush=True)
 
-    if phone and lead_id:
-        try:
-            signalwire.send_sms(phone, (
-                f"Hi {name or 'there'}! Your instant ballpark from Buildstack Construction is "
-                f"{_format_currency(est['low_cents'])}–{_format_currency(est['high_cents'])}. "
-                "It's a range, not a bid — reply to book a free walkthrough, or call (757) 846-9275."
-            ))
-        except Exception as e:
-            print(f"⚠️ instant quote SMS failed: {e}", flush=True)
+    try:
+        auto_reply.notify_owner_email(
+            "construction", lead_id=lead_id, name=name, phone=phone, email=email,
+            service=project_type, address=address, source="instant_quote",
+        )
+    except Exception as e:
+        print(f"⚠️ instant quote owner notify failed: {e}", flush=True)
+
+    try:
+        auto_reply.auto_reply_to_lead(
+            db, "construction", name=name, phone=phone, email=email,
+            service=project_type, address=address,
+            message=f"Instant ballpark {est['label']} on a {est['sqft']:,} sq ft property.",
+            source="instant_quote", sqft=est.get("sqft"), lead_id=lead_id,
+        )
+    except Exception as e:
+        print(f"⚠️ instant quote auto-reply failed: {e}", flush=True)
 
     ctx.update({"quote": est, "lead_id": lead_id, "prop": prop})
     return templates.TemplateResponse(request=request, name="instant_quote.html", context=ctx)
 
 
+PROJECT_TYPE_CHOICES = [
+    "Kitchen remodel",
+    "Bathroom remodel",
+    "Whole-home renovation",
+    "Additions",
+    "Roofing",
+    "Siding / windows",
+    "Deck / porch",
+    "Flooring",
+    "Painting",
+    "Foundation / structural",
+    "Garage / ADU",
+    "Other",
+]
+
+
+# --- Public acquisition funnel (+ referral attribution) ----------------------
+@app.get("/get-started", response_class=HTMLResponse)
+async def get_started_page(request: Request):
+    return templates.TemplateResponse(request=request, name="get_started.html", context={
+        "project_types": PROJECT_TYPE_CHOICES,
+        "ref": request.query_params.get("ref", ""),
+    })
+
+
+@app.post("/get-started", response_class=HTMLResponse)
+async def get_started_submit(
+    request: Request,
+    full_name: str = Form(""),
+    phone: str = Form(""),
+    email: str = Form(""),
+    project_type: str = Form(""),
+    address: str = Form(""),
+    budget: str = Form(""),
+    timeline: str = Form(""),
+    message: str = Form(""),
+    ref: str = Form(""),
+    db=Depends(get_db),
+):
+    name = (full_name or "").strip()
+    phone = (phone or "").strip()
+    email = (email or "").strip()
+    if not name or not phone:
+        return RedirectResponse(url="/get-started?error=Please+add+your+name+and+phone", status_code=status.HTTP_303_SEE_OTHER)
+    if not email:
+        return RedirectResponse(url="/get-started?error=Please+add+your+email+%E2%80%94+we%27ll+send+your+quote+there", status_code=status.HTTP_303_SEE_OTHER)
+
+    ref_code = (ref or "").strip().lower()[:50]
+    partner_id = None
+    if ref_code:
+        try:
+            with db.cursor() as cur:
+                cur.execute("SELECT id FROM partners WHERE referral_code = %s;", (ref_code,))
+                prow = cur.fetchone()
+                if prow:
+                    partner_id = prow["id"]
+                else:
+                    cur.execute("SELECT id FROM referral_codes WHERE code = %s;", (ref_code,))
+                    if not cur.fetchone():
+                        ref_code = ""
+        except Exception as e:
+            print(f"⚠️ get-started ref lookup failed: {e}", flush=True)
+            ref_code = ""
+
+    try:
+        with db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO leads (name, phone, email, project_type, address, budget, timeline, description, "
+                "source, status, referral_code, partner_id, campaign, company) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'acquisition', 'new', %s, %s, 'get-started', 'construction') RETURNING id;",
+                (name, phone, (email or "").strip(), project_type, (address or "").strip(),
+                 (budget or "").strip(), (timeline or "").strip(), (message or "").strip()[:2000],
+                 ref_code or None, partner_id),
+            )
+            lead_id = cur.fetchone()["id"]
+            db.commit()
+    except Exception as e:
+        print(f"⚠️ get-started lead save failed: {e}", flush=True)
+        return RedirectResponse(url="/get-started?error=Something+went+wrong+—+please+try+again+or+call+us+directly", status_code=status.HTTP_303_SEE_OTHER)
+
+    summary = (
+        f"🛠 New acquisition lead (#{lead_id}) — {name}, {phone}"
+        + (f", {email.strip()}" if (email or "").strip() else "")
+        + (f"\nProject: {project_type}" if project_type else "")
+        + (f"\nAddress: {address}" if address else "")
+        + (f"\nBudget: {budget}" if budget else "")
+        + (f"\nTimeline: {timeline}" if timeline else "")
+        + (f"\n{message[:200]}" if (message or "").strip() else "")
+        + (f"\nRef: {ref_code}" if ref_code else "")
+    )
+    if os.getenv("OWNER_SMS_ENABLED", "0").lower() in ("1", "true", "yes"):
+        try:
+            signalwire.send_sms(company()["phone_e164"], summary[:1500])
+            with db.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO comms_logs (direction, channel, sender, recipient, message_body) "
+                    "VALUES (%s, %s, %s, %s, %s);",
+                    ("outbound", "sms", "system", company()["phone_e164"], summary),
+                )
+                db.commit()
+        except Exception as e:
+            print(f"⚠️ get-started owner SMS failed: {e}", flush=True)
+
+    try:
+        auto_reply.notify_owner_email(
+            "construction", lead_id=lead_id, name=name, phone=phone, email=(email or "").strip(),
+            service=(project_type or ""), address=(address or ""),
+            budget=(budget or ""), timeline=(timeline or ""),
+            message=(message or ""), source="acquisition",
+        )
+    except Exception as e:
+        print(f"⚠️ get-started owner email failed: {e}", flush=True)
+
+    try:
+        auto_reply.auto_reply_to_lead(
+            db, "construction", name=name, phone=phone, email=email,
+            service=(project_type or ""), address=(address or ""),
+            budget=(budget or ""), timeline=(timeline or ""),
+            message=(message or ""), source="acquisition",
+            lead_id=lead_id,
+        )
+    except Exception as e:
+        print(f"⚠️ get-started auto-reply failed: {e}", flush=True)
+
+    return RedirectResponse(url="/get-started?sent=1", status_code=status.HTTP_303_SEE_OTHER)
+
+
+# --- Admin: acquisition radar (LinkedIn + Reddit) ---------------------------
+_radar_jobs = {}
+_radar_jobs_lock = threading.Lock()
+
+
+def _radar_status(source: str) -> dict:
+    with _radar_jobs_lock:
+        return dict(_radar_jobs.get(source, {}))
+
+
+def _run_radar_scan(source: str, scan_fn):
+    with _radar_jobs_lock:
+        if _radar_jobs.get(source, {}).get("running"):
+            return False
+        _radar_jobs[source] = {"running": True, "started_at": datetime.utcnow(), "created": 0, "seen": 0, "errors": ""}
+    threading.Thread(target=_radar_worker, args=(source, scan_fn), daemon=True).start()
+    return True
+
+
+def _radar_worker(source: str, scan_fn):
+    created = 0
+    seen = 0
+    errors = []
+    try:
+        result = scan_fn()
+        with psycopg.connect(db_url, row_factory=dict_row) as conn:
+            with conn.cursor() as cur:
+                for m in result.get("matches", []):
+                    cur.execute("SELECT 1 FROM lead_posts WHERE post_id = %s;", (m["post_id"],))
+                    if cur.fetchone():
+                        seen += 1
+                        continue
+                    meta = json.dumps({"title": m["title"], "subreddit": m["subreddit"]})
+                    cur.execute(
+                        "INSERT INTO leads (name, email, listing_url, status, source, funding_needed, funding_use, referral_code, campaign, analysis_json, company) "
+                        "VALUES (%s, %s, %s, 'new', %s, %s, %s, %s, 'construction-radar', %s, 'construction') RETURNING id;",
+                        (
+                            f"{source.title()} · {m['author']}",
+                            f"con-{source}-{m['post_id']}@lead.local",
+                            m["permalink"],
+                            source,
+                            m["funding"],
+                            (m.get("funding_use") or "")[:500],
+                            m["post_id"],
+                            meta,
+                        ),
+                    )
+                    lead_id = cur.fetchone()["id"]
+                    cur.execute(
+                        "INSERT INTO lead_posts (post_id, subreddit, created_utc, lead_id) VALUES (%s, %s, %s, %s) "
+                        "ON CONFLICT (post_id) DO NOTHING;",
+                        (m["post_id"], m["subreddit"], m["created_utc"], lead_id),
+                    )
+                    created += 1
+                conn.commit()
+        errors = list(result.get("errors", []))
+    except Exception as exc:
+        errors.append(f"scan failed: {exc}"[:280])
+    print(f"[con-radar {source}] created={created} seen={seen} errors={errors}", flush=True)
+    with _radar_jobs_lock:
+        _radar_jobs[source] = {
+            "running": False,
+            "created": created,
+            "seen": seen,
+            "errors": "; ".join(errors)[:300],
+        }
+
+
+@app.get("/acquisition", response_class=HTMLResponse)
+async def acquisition_page(request: Request, db=Depends(get_db)):
+    is_authed, user_email = require_auth(request)
+    if not is_authed:
+        return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
+
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT * FROM leads WHERE company = 'construction' AND source IN ('reddit', 'linkedin') "
+            "ORDER BY created_at DESC LIMIT 200;"
+        )
+        rows = cur.fetchall()
+        cur.execute(
+            "SELECT COUNT(*) AS total, "
+            "COUNT(*) FILTER (WHERE created_at >= date_trunc('month', now())) AS this_month, "
+            "COUNT(*) FILTER (WHERE partner_id IS NOT NULL) AS referred, "
+            "COUNT(*) FILTER (WHERE status = 'new') AS needs_attention "
+            "FROM leads WHERE company = 'construction' AND source = 'acquisition';"
+        )
+        funnel_stats = cur.fetchone()
+        cur.execute(
+            "SELECT COUNT(*) AS total, "
+            "COUNT(*) FILTER (WHERE status = 'new') AS needs_attention "
+            "FROM leads WHERE company = 'construction' AND source IN ('reddit', 'linkedin');"
+        )
+        radar_stats = cur.fetchone()
+
+    leads = []
+    for l in rows:
+        meta = {}
+        try:
+            meta = json.loads(l.get("analysis_json") or "{}")
+        except (TypeError, ValueError):
+            pass
+        source = l.get("source") or "reddit"
+        author = (l.get("name") or "").split("·", 1)[-1].strip() or f"{source} user"
+        mins = None
+        try:
+            mins = int((datetime.utcnow() - l["created_at"]).total_seconds() // 60)
+        except Exception:
+            pass
+        leads.append({
+            "id": l["id"],
+            "author": author,
+            "subreddit": meta.get("subreddit", ""),
+            "title": meta.get("title", ""),
+            "permalink": l.get("listing_url", ""),
+            "funding": bool(l.get("funding_needed")),
+            "minutes_ago": mins,
+            "status": l.get("status", "new"),
+            "source": source,
+            "draft": construction_radar.outreach_draft({
+                "author": author,
+                "subreddit": meta.get("subreddit", ""),
+                "title": meta.get("title", ""),
+                "funding": bool(l.get("funding_needed")),
+            }),
+        })
+
+    return templates.TemplateResponse(request=request, name="acquisition.html", context={
+        "user": {"email": user_email},
+        "leads": leads,
+        "funnel_stats": funnel_stats,
+        "radar_stats": radar_stats,
+        "scanned": request.query_params.get("scanned"),
+        "errors": request.query_params.get("errors", ""),
+        "scan_started": request.query_params.get("scan_started"),
+        "scan_running": request.query_params.get("scan_running"),
+        "radar_status": {
+            "reddit": _radar_status("reddit"),
+            "linkedin": _radar_status("linkedin"),
+        },
+    })
+
+
+@app.post("/acquisition/scan/reddit")
+async def acquisition_scan_reddit(request: Request):
+    is_authed, user_email = require_auth(request)
+    if not is_authed:
+        return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
+    if not _run_radar_scan("reddit", construction_radar.scan_reddit):
+        return RedirectResponse(url="/acquisition?scan_running=reddit", status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(url="/acquisition?scan_started=reddit", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/acquisition/scan/linkedin")
+async def acquisition_scan_linkedin(request: Request):
+    is_authed, user_email = require_auth(request)
+    if not is_authed:
+        return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
+    if not _run_radar_scan("linkedin", construction_radar.scan_linkedin):
+        return RedirectResponse(url="/acquisition?scan_running=linkedin", status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(url="/acquisition?scan_started=linkedin", status_code=status.HTTP_303_SEE_OTHER)
+
+
 # --- Public web chat (same AI agent as the phones) --------------------------
 @app.post("/api/chat")
 async def web_chat(message: str = Form(...), db=Depends(get_db)):
-    agent = BusinessAIAgent(tool_handlers=build_tool_handlers(db, stripe_svc), subset="guest")
+    agent = BusinessAIAgent(knowledge_path="construction_knowledge.md", tool_handlers=build_tool_handlers(db, stripe_svc), subset="guest")
     reply = agent.process_inbound_text(f"Website chat: {message}")
     return JSONResponse(content={"reply": reply})
+
+
+# --- Permit radar (Shovels.ai) ---------------------------------------------
+_permit_status_data = {}
+_permit_status_lock = threading.Lock()
+_permit_backfilled = False
+
+
+def _permit_status() -> dict:
+    with _permit_status_lock:
+        return dict(_permit_status_data)
+
+
+def ingest_permits(conn, permits):
+    """Upsert permits into job_leads and auto-create 'permit finder' leads for
+    homeowner-driven jobs. Returns (added_jobs, added_leads)."""
+    added = 0
+    created_leads = []
+    with conn.cursor() as cur:
+        for p in permits:
+            cur.execute(
+                "SELECT id FROM job_leads WHERE permit_number = %s AND address = %s;",
+                (p["permit_number"], p["property_address"]),
+            )
+            if cur.fetchone():
+                continue
+            try:
+                est_val = float(p.get("estimated_value") or 0)
+            except (TypeError, ValueError):
+                est_val = 0
+            cur.execute(
+                "INSERT INTO job_leads (permit_number, address, city, state, work_type, job_description, "
+                "contractor_name, issue_date, estimated_value, source, is_demo) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,'permits',%s) RETURNING id;",
+                (p["permit_number"], p["property_address"], p["city"], p["state"], p["work_type"],
+                 p["job_description"], p["contractor_name"], p["issue_date"], est_val,
+                 p.get("_demo", False)),
+            )
+            cur.fetchone()
+            added += 1
+            if p.get("_demo") or not permit_service.wants_lead(p):
+                continue
+            raw = p["permit_number"] or p.get("_id") or p["property_address"]
+            digest = hashlib.sha256(raw.encode()).hexdigest()
+            listing = f"https://api.shovels.ai/v2/permits?id={urllib.parse.quote(p.get('_id') or '')}" if p.get("_id") else (p["permit_number"] or "")
+            meta = json.dumps({
+                "address": p["property_address"], "city": p["city"], "permit_number": p["permit_number"],
+                "permit_id": p.get("_id", ""), "work_type": p["work_type"],
+                "contractor_name": p["contractor_name"], "value": est_val, "source": "permits",
+            })
+            cur.execute(
+                "INSERT INTO leads (name, email, listing_url, status, source, referral_code, campaign, analysis_json, company) "
+                "VALUES (%s, %s, %s, 'new', %s, %s, 'permit-radar', %s, 'construction') RETURNING id;",
+                (
+                    f"Permit · {p['property_address'] or p['city'] or 'Hampton Roads'}",
+                    f"con-permit-{digest[:15]}@lead.local",
+                    listing,
+                    "permit_finder",
+                    p["permit_number"],
+                    meta,
+                ),
+            )
+            lead_id = cur.fetchone()["id"]
+            created_leads.append({
+                "lead_id": lead_id,
+                "name": p["contractor_name"] or "Homeowner",
+                "service": p["work_type"] or (p["job_description"] or "")[:80],
+                "address": p["property_address"],
+                "budget": f"${est_val:,.0f}" if est_val else "",
+            })
+        conn.commit()
+    for item in created_leads:
+        try:
+            auto_reply.notify_owner_email(
+                "construction", lead_id=item["lead_id"], name=item["name"], email="",
+                service=item["service"], address=item["address"], budget=item["budget"],
+                source="permit_finder",
+                message="A new building permit signals a homeowner who will need a contractor.",
+            )
+        except Exception as exc:
+            print(f"[permit-scan] notify failed for lead {item['lead_id']}: {exc}", flush=True)
+        try:
+            delay = float(os.getenv("PERMIT_NOTIFY_DELAY", "0.4") or 0.4)
+        except (TypeError, ValueError):
+            delay = 0.4
+        if delay > 0:
+            time.sleep(delay)
+    return added, len(created_leads)
+
+
+def run_permit_import():
+    if not permit_service.is_configured():
+        print("[permit-scan] SHOVELS_API_KEY not set — skipping auto-import", flush=True)
+        return
+    global _permit_backfilled
+    started = datetime.utcnow()
+    err = ""
+    added = leads = 0
+    try:
+        try:
+            backfill = int(os.getenv("PERMIT_BACKFILL_DAYS", "21") or 21)
+        except (TypeError, ValueError):
+            backfill = 21
+        try:
+            incremental = int(os.getenv("PERMIT_INCREMENTAL_DAYS", "2") or 2)
+        except (TypeError, ValueError):
+            incremental = 2
+        days = backfill if not _permit_backfilled else incremental
+        with psycopg.connect(db_url, row_factory=dict_row) as conn:
+            permits = permit_service.search_permits(days=days)
+            added, leads = ingest_permits(conn, permits)
+        _permit_backfilled = True
+    except Exception as exc:
+        err = str(exc)[:300]
+        print(f"[permit-scan] pass failed: {exc}", flush=True)
+    with _permit_status_lock:
+        _permit_status_data.update({
+            "last_run": started.isoformat(), "added": added, "leads": leads,
+            "error": err, "running": False,
+        })
+    print(f"[permit-scan] added={added} job_leads, auto_leads={leads}, {err or 'ok'}", flush=True)
+
+
+def _start_permit_importer():
+    def _runner():
+        print("[permit-scan] scheduler started", flush=True)
+        while True:
+            try:
+                run_permit_import()
+            except Exception as exc:
+                print(f"[permit-scan] loop error: {exc}", flush=True)
+            try:
+                hours = int(os.getenv("PERMIT_SCAN_HOURS", "24") or 24)
+            except (TypeError, ValueError):
+                hours = 24
+            time.sleep(max(hours, 1) * 3600)
+    threading.Thread(target=_runner, daemon=True).start()
 
 
 # --- Job finder (building permits) -----------------------------------------
@@ -1488,34 +2439,16 @@ async def job_leads_page(request: Request, status_filter: str = "", db=Depends(g
         "user": {"email": require_auth(request)[1]},
         "leads": rows, "counts": counts, "active_status": status_filter,
         "shovels_configured": permit_service.is_configured(),
+        "permit_status": _permit_status(),
     })
 
 
 @app.post("/api/job-leads/refresh")
-async def job_leads_refresh(request: Request, city: str = Form("Williamsburg"), state: str = Form("VA"), db=Depends(get_db)):
+async def job_leads_refresh(request: Request, city: str = Form("Chesapeake"), state: str = Form("VA"), db=Depends(get_db)):
     require_admin(request)
     permits = permit_service.fetch_permits(city, state)
-    added = 0
-    with db.cursor() as cur:
-        for p in permits:
-            cur.execute(
-                "SELECT id FROM job_leads WHERE permit_number = %s AND address = %s;",
-                (p["permit_number"], p["property_address"]),
-            )
-            if cur.fetchone():
-                continue
-            cur.execute(
-                "INSERT INTO job_leads (permit_number, address, city, state, work_type, job_description, "
-                "contractor_name, issue_date, estimated_value, source, is_demo) "
-                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,'permits',%s) RETURNING id;",
-                (p["permit_number"], p["property_address"], p["city"], p["state"], p["work_type"],
-                 p["job_description"], p["contractor_name"], p["issue_date"], p["estimated_value"],
-                 p.get("_demo", False)),
-            )
-            cur.fetchone()
-            added += 1
-        db.commit()
-    return RedirectResponse(url=f"/job-leads?ok=added+{added}", status_code=status.HTTP_303_SEE_OTHER)
+    added, leads = ingest_permits(db, permits)
+    return RedirectResponse(url=f"/job-leads?ok={added} permits + {leads} leads", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.post("/api/job-leads/{job_id}/convert")
@@ -1528,8 +2461,8 @@ async def job_lead_convert(job_id: int, request: Request, db=Depends(get_db)):
         raise HTTPException(status_code=404, detail="Job lead not found")
     with db.cursor() as cur:
         cur.execute(
-            "INSERT INTO leads (name, phone, email, project_type, address, description, source, status) "
-            "VALUES (%s, %s, %s, %s, %s, %s, 'permit_finder', 'new') RETURNING id;",
+            "INSERT INTO leads (name, phone, email, project_type, address, description, source, status, company) "
+            "VALUES (%s, %s, %s, %s, %s, %s, 'permit_finder', 'new', 'construction') RETURNING id;",
             (job["contractor_name"] or job["city"] or "Property owner",
              job["owner_contact"] or "", job["owner_contact"] or "",
              job["work_type"] or "Renovation",
@@ -1539,6 +2472,16 @@ async def job_lead_convert(job_id: int, request: Request, db=Depends(get_db)):
         lead_id = cur.fetchone()["id"]
         cur.execute("UPDATE job_leads SET status = 'contacted' WHERE id = %s;", (job_id,))
         db.commit()
+    try:
+        auto_reply.auto_reply_to_lead(
+            db, "construction", name=job["contractor_name"] or job["city"] or "Property owner",
+            phone=job["owner_contact"] or "", email=job["owner_contact"] or "",
+            service=job["work_type"] or "project", address=job["address"] or "",
+            message=f"Permit #{job['permit_number'] or ''}: {job['job_description'] or ''}",
+            source="permit_finder", lead_id=lead_id,
+        )
+    except Exception as e:
+        print(f"⚠️ job-lead auto-reply failed: {e}", flush=True)
     return RedirectResponse(url="/job-leads?ok=converted+to+lead+%23" + str(lead_id), status_code=status.HTTP_303_SEE_OTHER)
 
 
@@ -1586,7 +2529,7 @@ async def projects_page(request: Request, status_filter: str = "", db=Depends(ge
         projects = cur.fetchall()
         cur.execute("SELECT id, name FROM crew ORDER BY name;")
         crew_rows = cur.fetchall()
-        cur.execute("SELECT id, name, phone, address, project_type, status FROM leads ORDER BY created_at DESC LIMIT 25;")
+        cur.execute("SELECT id, name, phone, address, project_type, status FROM leads WHERE company = 'construction' ORDER BY created_at DESC LIMIT 25;")
         lead_rows = cur.fetchall()
     return templates.TemplateResponse(request=request, name="projects.html", context={
         "user": {"email": require_auth(request)[1]},
@@ -1690,18 +2633,18 @@ async def backlog_page(request: Request, db=Depends(get_db)):
     with db.cursor() as cur:
         cur.execute(
             "SELECT id, name, address, project_type, status, estimate_low_cents, "
-            "estimate_high_cents, created_at FROM leads WHERE source = 'backlog' "
+            "estimate_high_cents, created_at FROM leads WHERE source = 'backlog' AND company = 'construction' "
             "ORDER BY created_at DESC LIMIT 100;"
         )
         entries = cur.fetchall()
         cur.execute(
             "SELECT COUNT(*) AS jobs, COALESCE(SUM(estimate_high_cents), 0) AS pipeline "
-            "FROM leads WHERE source = 'backlog';"
+            "FROM leads WHERE source = 'backlog' AND company = 'construction';"
         )
         totals = cur.fetchone()
         cur.execute(
             "SELECT COALESCE(SUM(p.amount_cents), 0) AS collected FROM payments p "
-            "JOIN leads l ON l.id = p.lead_id WHERE l.source = 'backlog';"
+            "JOIN leads l ON l.id = p.lead_id WHERE l.source = 'backlog' AND l.company = 'construction';"
         )
         collected = cur.fetchone()["collected"]
     return templates.TemplateResponse(
@@ -1738,8 +2681,8 @@ async def backlog_create(
     with db.cursor() as cur:
         cur.execute(
             "INSERT INTO leads (name, phone, email, project_type, address, description, source, "
-            "status, estimate_low_cents, estimate_high_cents, created_at) "
-            "VALUES (%s,%s,%s,%s,%s,%s,'backlog',%s,%s,%s,%s) RETURNING id;",
+            "status, estimate_low_cents, estimate_high_cents, created_at, company) "
+            "VALUES (%s,%s,%s,%s,%s,%s,'backlog',%s,%s,%s,%s,'construction') RETURNING id;",
             (name or "Back-logged job", phone or "", email, project_type, address, description,
              lead_status, low_cents or None, high_cents or None, when),
         )
@@ -1754,8 +2697,8 @@ async def backlog_create(
             )
         if paid_cents > 0:
             cur.execute(
-                "INSERT INTO payments (lead_id, amount_cents, status, created_at) "
-                "VALUES (%s,%s,'paid',%s);",
+                "INSERT INTO payments (lead_id, amount_cents, status, created_at, company) "
+                "VALUES (%s,%s,'paid',%s,'construction');",
                 (lead_id, paid_cents, when),
             )
         db.commit()
@@ -2285,8 +3228,8 @@ async def payroll_pay_worker(run_id: int, crew_id: int, request: Request, db=Dep
                                 status_code=status.HTTP_303_SEE_OTHER)
     with db.cursor() as cur:
         cur.execute(
-            "INSERT INTO payments (lead_id, stripe_payment_intent_id, amount_cents, currency, status) "
-            "VALUES (NULL, %s, %s, 'usd', 'paid');",
+            "INSERT INTO payments (lead_id, stripe_payment_intent_id, amount_cents, currency, status, company) "
+            "VALUES (NULL, %s, %s, 'usd', 'paid', 'construction');",
             (f"payroll-run-{run_id}-crew-{crew_id}", line["gross_cents"]),
         )
         db.commit()
@@ -2330,9 +3273,79 @@ async def copilot_page(request: Request, db=Depends(get_db)):
 @app.post("/api/copilot")
 async def copilot_chat(request: Request, message: str = Form(...), db=Depends(get_db)):
     require_admin(request)
-    agent = BusinessAIAgent(tool_handlers=build_tool_handlers(db, stripe_svc), subset="copilot")
+    agent = BusinessAIAgent(knowledge_path="construction_knowledge.md", tool_handlers=build_tool_handlers(db, stripe_svc), subset="copilot")
     reply = agent.process_inbound_text(message)
     return JSONResponse(content={"reply": reply})
+
+
+# --- Training deck downloads (PPTX served from generated_documents) ----------
+@app.get("/docs/download/{doc_id}", response_class=Response)
+async def docs_download(doc_id: int, request: Request, db=Depends(get_db)):
+    require_admin(request)
+    with db.cursor() as cur:
+        cur.execute("SELECT * FROM generated_documents WHERE id = %s;", (doc_id,))
+        row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Document not found")
+    media = (
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        if row["file_type"] == "pptx"
+        else ("application/pdf" if row["file_type"] == "pdf" else "application/octet-stream")
+    )
+    headers = {"Content-Disposition": f"attachment; filename=\"{row['file_name']}\""}
+    return Response(content=bytes(row["file_data"]), media_type=media, headers=headers)
+
+
+@app.post("/api/training/deck")
+async def training_deck_build(request: Request, kind: str = Form("worker"), db=Depends(get_db)):
+    require_admin(request)
+    kind = "construction" if kind in ("construction", "construction-osha", "osha") else kind
+    if kind not in ("worker", "host", "construction"):
+        return JSONResponse({"ok": False, "error": f"Unknown deck kind: {kind}"})
+    try:
+        data = training_service.build_deck(kind)
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": f"Could not build deck: {e}"})
+    label = (
+        "Crew Orientation + OSHA-10 Baseline" if kind == "construction"
+        else ("Worker Orientation" if kind == "worker" else "Host & Lead Onboarding")
+    )
+    with db.cursor() as cur:
+        cur.execute(
+            "INSERT INTO generated_documents (title, category, file_name, file_type, file_data) "
+            "VALUES (%s, 'training', %s, 'pptx', %s) RETURNING id;",
+            (label, f"{kind}-orientation.pptx", data),
+        )
+        doc_id = cur.fetchone()["id"]
+        db.commit()
+    return JSONResponse({"ok": True, "doc_id": doc_id, "download_url": f"/docs/download/{doc_id}"})
+
+
+@app.post("/api/training/quiz")
+async def training_quiz_submit(request: Request, worker_name: str = Form(...), email: str = Form(""), answers: str = Form(...), db=Depends(get_db)):
+    require_admin(request)
+    try:
+        parsed = json.loads(answers)
+        if not isinstance(parsed, list):
+            raise ValueError("expected a list of answers")
+        answers_parsed = parsed
+    except Exception:
+        return JSONResponse({"ok": False, "error": "Answers came through malformed."})
+    try:
+        grade = training_service.grade_osha_quiz(answers_parsed)
+    except ValueError as e:
+        return JSONResponse({"ok": False, "error": str(e)})
+    with db.cursor() as cur:
+        cur.execute(
+            "INSERT INTO worker_quiz_results (worker_id, worker_name, email, score, total, passed, answers_json) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id;",
+            (None, worker_name, email, grade["correct"], grade["total"], grade["passed"], answers),
+        )
+        result_id = cur.fetchone()["id"]
+        db.commit()
+    return JSONResponse({"ok": True, "correct": grade["correct"], "total": grade["total"],
+                         "percent": grade["percent"], "passed": grade["passed"],
+                         "missed_topics": grade.get("missed_topics", []), "result_id": result_id})
 
 
 # --- Appearance / theme -----------------------------------------------------

@@ -10,20 +10,25 @@
             <div>
                 <p class="text-sm font-bold text-indigo-600 uppercase tracking-widest">Owner portal · New-build &amp; renovation permits</p>
                 <h1 class="text-3xl font-black tracking-tight text-slate-900">Job Finder</h1>
-                <p class="text-sm text-slate-500 mt-1">Permits pulled from local building departments — who's about to build or gut a place near us?</p>
+                <p class="text-sm text-slate-500 mt-1">Permits pulled from local building departments (Chesapeake · Virginia Beach · Norfolk) — who's about to build or gut a place near us?</p>
             </div>
             <a href="/dashboard" class="px-4 py-2.5 text-sm font-semibold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 rounded-xl transition-colors">← Dashboard</a>
         </div>
 
         <form method="POST" action="/api/job-leads/refresh" class="bg-white rounded-3xl border border-slate-200 p-4 mb-4 flex flex-wrap items-center gap-3">
-            <input type="text" name="city" value="Williamsburg" placeholder="City" class="w-40 px-4 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+            <input type="text" name="city" value="{{ request.query_params.get('city', 'Chesapeake') }}" placeholder="City" class="w-40 px-4 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
             <select name="state" class="px-4 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500">
                 <option value="VA">VA</option>
-                <option value="NC">NC</option>
             </select>
             <button type="submit" class="px-5 py-2.5 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition-colors">↻ Scan for new permits</button>
             <span class="text-xs text-slate-400">{% if shovels_configured %}Live via Shovels.ai{% else %}Demo data (add SHOVELS_API_KEY for live){% endif %}</span>
         </form>
+
+        {% if permit_status %}
+        <div class="rounded-2xl border px-4 py-3 mb-4 text-sm {% if permit_status.error %}bg-amber-50 border-amber-200 text-amber-800{% else %}bg-emerald-50 border-emerald-200 text-emerald-800{% endif %}">
+            <strong>Auto-scan</strong>: last run {{ permit_status.last_run }} · +{{ permit_status.added }} permit(s){% if permit_status.leads %} · +{{ permit_status.leads }} lead(s) auto-created{% endif %}{% if permit_status.error %} · error: {{ permit_status.error }}{% endif %}
+        </div>
+        {% endif %}
 
         <div class="flex flex-wrap items-center gap-2 mb-6">
             <a href="/job-leads" class="px-3 py-1.5 text-sm font-semibold rounded-full border transition-colors {% if not active_status %}bg-indigo-600 text-white border-indigo-600{% else %}bg-white text-slate-600 border-slate-200 hover:border-indigo-300{% endif %}">All ({{ counts.values() | sum }})</a>

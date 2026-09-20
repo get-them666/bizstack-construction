@@ -3,7 +3,7 @@
   "build": {
     "builder": "RAILPACK",
     "watchPatterns": [
-      "~/bizstack-construction/main.py"
+      "~/bizstack-construction/construction_main.py"
     ],
     "buildEnvironment": "V3"
   },

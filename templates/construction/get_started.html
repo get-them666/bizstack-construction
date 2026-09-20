@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% set co = company() %}
+{% block title %}Get Started | {{ co.name }}{% endblock %}
+{% block meta %}<meta name="description" content="Tell us about your renovation, addition, or repair and get started with {{ co.name }} in minutes. Free estimates, financing available."><meta name="robots" content="index, follow">{% endblock %}
+{% block content %}
+<section class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-16">
+    <div class="text-center mb-12">
+        <span class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-50 text-indigo-700 text-xs font-semibold border border-indigo-100">Licensed &amp; insured · Free estimates · Financing available</span>
+        <h1 class="mt-4 text-4xl sm:text-5xl font-extrabold tracking-tight text-slate-900">Let's build. Tell us what you need done.</h1>
+        <p class="mt-4 text-lg text-slate-600 max-w-2xl mx-auto">Answer a few quick questions and <span class="font-semibold text-slate-900">{{ co.name }}</span> will call you back — usually the same day — with timelines and a free estimate.</p>
+    </div>
+
+    <div class="max-w-2xl mx-auto mb-10 grid grid-cols-1 sm:grid-cols-3 gap-4 text-center">
+        <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <p class="text-2xl">⚡</p>
+            <p class="mt-1 text-sm font-semibold text-slate-900">Same-day response</p>
+        </div>
+        <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <p class="text-2xl">💰</p>
+            <p class="mt-1 text-sm font-semibold text-slate-900">Free estimate</p>
+        </div>
+        <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <p class="text-2xl">🔧</p>
+            <p class="mt-1 text-sm font-semibold text-slate-900">Financing options</p>
+        </div>
+    </div>
+
+    {% if request.query_params.get("sent") %}
+    <div class="max-w-2xl mx-auto rounded-2xl border border-emerald-200 bg-emerald-50 p-6 text-center mb-8">
+        <p class="text-lg font-bold text-emerald-800">Request received!</p>
+        <p class="mt-1 text-emerald-700">We'll reach out within one business day. Urgent?</p>
+        <a href="tel:{{ co.phone_e164 }}" class="mt-2 inline-block text-sm font-semibold text-indigo-600 hover:text-indigo-700">Call or text {{ co.phone }}</a>
+    </div>
+    {% elif request.query_params.get("error") %}
+    <div class="max-w-2xl mx-auto rounded-2xl border border-rose-200 bg-rose-50 p-6 text-center mb-8">
+        <p class="text-lg font-bold text-rose-800">{{ request.query_params.get("error") }}</p>
+        <p class="mt-1 text-rose-700">Please fix the issue and try again.</p>
+    </div>
+    {% endif %}
+
+    <form method="post" action="/get-started" class="max-w-2xl mx-auto bg-white rounded-3xl border border-slate-200 p-6 sm:p-8 shadow-sm space-y-6">
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-5">
+            <div>
+                <label for="full_name" class="block text-sm font-semibold text-slate-700 mb-1.5">Full name *</label>
+                <input id="full_name" name="full_name" type="text" required value="{{ request.query_params.get('full_name','') }}"
+                       class="w-full px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+            </div>
+            <div>
+                <label for="phone" class="block text-sm font-semibold text-slate-700 mb-1.5">Phone *</label>
+                <input id="phone" name="phone" type="tel" data-phone-format required value="{{ request.query_params.get('phone','') }}"
+                       class="w-full px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+            </div>
+            <div>
+                <label for="email" class="block text-sm font-semibold text-slate-700 mb-1.5">Email *</label>
+                <input id="email" name="email" type="email" required value="{{ request.query_params.get('email','') }}"
+                       class="w-full px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+            </div>
+            <div>
+                <label for="project_type" class="block text-sm font-semibold text-slate-700 mb-1.5">What's the project? *</label>
+                <select id="project_type" name="project_type" required class="w-full px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                    <option value="">Select…</option>
+                    {% for t in project_types %}<option value="{{ t }}">{{ t }}</option>{% endfor %}
+                </select>
+            </div>
+            <div>
+                <label for="address" class="block text-sm font-semibold text-slate-700 mb-1.5">Project address</label>
+                <input id="address" name="address" type="text" value="{{ request.query_params.get('address','') }}" placeholder="Street, city, zip"
+                       class="w-full px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+            </div>
+            <div>
+                <label for="budget" class="block text-sm font-semibold text-slate-700 mb-1.5">Estimated budget</label>
+                <select id="budget" name="budget" class="w-full px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                    <option value="">Select…</option>
+                    <option>Under $5,000</option>
+                    <option>$5,000 – $15,000</option>
+                    <option>$15,000 – $50,000</option>
+                    <option>$50,000 – $150,000</option>
+                    <option>$150,000+</option>
+                    <option>Not sure yet</option>
+                </select>
+            </div>
+        </div>
+        <div>
+            <label for="timeline" class="block text-sm font-semibold text-slate-700 mb-1.5">When do you want to start?</label>
+            <select id="timeline" name="timeline" class="w-full px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                <option value="">Select…</option>
+                <option>As soon as possible</option>
+                <option>Within a month</option>
+                <option>Within 3 months</option>
+                <option>Just researching</option>
+            </select>
+        </div>
+        <div>
+            <label for="message" class="block text-sm font-semibold text-slate-700 mb-1.5">Describe your project</label>
+            <textarea id="message" name="message" rows="4" placeholder="What needs to be done, when, and anything we should know about the space?" class="w-full px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">{{ request.query_params.get('message','') }}</textarea>
+        </div>
+        <input type="hidden" name="ref" value="{{ ref }}">
+        <button type="submit" class="w-full inline-flex items-center justify-center px-6 py-4 text-base font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition-all shadow-sm shadow-indigo-200">Request my free estimate</button>
+        <p class="text-xs text-slate-400 text-center">No obligation, no spam. We only reach out to talk about your project.</p>
+    </form>
+
+    <div class="max-w-2xl mx-auto mt-12 rounded-3xl border border-indigo-100 bg-indigo-50 p-6 sm:p-8 text-center">
+        <p class="text-2xl">🤝</p>
+        <h2 class="mt-2 text-xl font-extrabold text-slate-900">Know someone getting work done?</h2>
+        <p class="mt-2 text-sm text-slate-600 max-w-lg mx-auto">Refer an owner or contractor in our area and we'll take care of the rest. Ask our team for your personal referral link and earn a reward on every project that books.</p>
+        <p class="mt-4 text-sm font-semibold text-slate-900"><a href="tel:{{ co.phone_e164 }}" class="text-indigo-600 hover:text-indigo-700">Call or text {{ co.phone }}</a> for your referral link, or enter a referral code below.</p>
+    </div>
+</section>
+{% endblock %}

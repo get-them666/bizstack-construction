@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+{% set co = company() %}
+{% block title %}Lead Acquisition | {{ co.name }}{% endblock %}
+{% block content %}
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
+    <div class="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-8">
+        <div>
+            <h1 class="text-3xl font-extrabold tracking-tight text-slate-900">Lead Acquisition</h1>
+            <p class="mt-1 text-slate-600 text-sm">Scan <span class="font-semibold text-slate-800">Reddit</span> and <span class="font-semibold text-slate-800">LinkedIn</span> for homeowners &amp; investors looking for construction work nearby — then reply with a ready-made outreach message.</p>
+        </div>
+        <div class="flex gap-2 shrink-0">
+            <form method="post" action="/acquisition/scan/reddit">
+                <button type="submit" class="inline-flex items-center justify-center px-4 py-2.5 text-sm font-semibold text-white bg-orange-600 hover:bg-orange-700 rounded-xl transition-all shadow-sm shadow-orange-200">Scan Reddit</button>
+            </form>
+            <form method="post" action="/acquisition/scan/linkedin">
+                <button type="submit" class="inline-flex items-center justify-center px-4 py-2.5 text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-xl transition-all shadow-sm shadow-blue-200">Scan LinkedIn</button>
+            </form>
+            <a href="/get-started" target="_blank" class="inline-flex items-center justify-center px-4 py-2.5 text-sm font-semibold text-slate-700 bg-white border border-slate-200 rounded-xl transition-all shadow-sm">Funnel</a>
+        </div>
+    </div>
+
+    {% if request.query_params.get("scanned") %}<div class="rounded-2xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-800 mb-6">✅ {{ scanned }} new lead{{ '' if scanned == '1' else 's' }} found.</div>{% endif %}
+    {% if scan_started %}<div class="rounded-2xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-800 mb-6">🔍 {{ scan_started }} scan started in the background — check back in a minute or two.</div>{% endif %}
+    {% if scan_running %}<div class="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800 mb-6">⏳ A {{ scan_running }} scan is already running. Wait for it to finish before scanning again.</div>{% endif %}
+    {% if errors %}<div class="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800 mb-6">⚠️ {{ errors }}</div>{% endif %}
+
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+        <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <p class="text-xs font-semibold uppercase tracking-wider text-slate-500">Radar leads</p>
+            <p class="mt-1 text-3xl font-extrabold text-slate-900">{{ radar_stats['total'] }}<span class="ml-1 text-sm font-bold text-amber-600 align-middle">({{ radar_stats['needs_attention'] }} new)</span></p>
+        </div>
+        <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <p class="text-xs font-semibold uppercase tracking-wider text-slate-500">Funnel leads</p>
+            <p class="mt-1 text-3xl font-extrabold text-slate-900">{{ funnel_stats['total'] }}</p>
+        </div>
+        <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <p class="text-xs font-semibold uppercase tracking-wider text-slate-500">Funnel referrals</p>
+            <p class="mt-1 text-3xl font-extrabold text-emerald-600">{{ funnel_stats['referred'] }}</p>
+        </div>
+        <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <p class="text-xs font-semibold uppercase tracking-wider text-slate-500">Last scan</p>
+            <p class="mt-1 text-sm font-bold text-slate-700">
+                {% for s in ['reddit', 'linkedin'] %}{% set st = radar_status.get(s, {}) %}
+                <span class="inline-flex items-center gap-1 mr-2"><span class="w-1.5 h-1.5 rounded-full {% if st.get('running') %}bg-amber-500 animate-pulse{% else %}bg-emerald-500{% endif %}"></span>{{ s|capitalize }}: {{ st.get('created', 0) }} new</span>{% endfor %}
+            </p>
+            {% for s in ['reddit', 'linkedin'] %}{% set st = radar_status.get(s, {}) %}{% if st.get('errors') %}<p class="mt-2 text-xs text-rose-600 max-w-md">{{ s }}: {{ st['errors'][:200] }}</p>{% endif %}{% endfor %}
+        </div>
+    </div>
+
+    <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-x-auto">
+        {% if leads %}
+        <table class="min-w-full divide-y divide-slate-200 text-sm">
+            <thead class="bg-slate-50">
+                <tr class="text-left text-xs font-semibold uppercase tracking-wider text-slate-500">
+                    <th class="px-5 py-3">Found</th>
+                    <th class="px-5 py-3">Source</th>
+                    <th class="px-5 py-3">Post / Author</th>
+                    <th class="px-5 py-3">Status</th>
+                    <th class="px-5 py-3">Outreach draft</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100">
+                {% for lead in leads %}
+                <tr>
+                    <td class="px-5 py-3 whitespace-nowrap text-slate-500">
+                        {% if lead['minutes_ago'] is not none %}{{ lead['minutes_ago'] }}m ago{% else %}—{% endif %}
+                    </td>
+                    <td class="px-5 py-3">
+                        {% if lead['source'] == 'linkedin' %}
+                        <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-50 border border-blue-100 text-xs font-bold text-blue-700">in</span>
+                        {% else %}
+                        <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-orange-50 border border-orange-100 text-xs font-bold text-orange-700">r/{{ lead['subreddit'] }}</span>
+                        {% endif %}
+                        {% if lead['funding'] %}<span class="inline-flex items-center px-2 py-0.5 rounded-full bg-emerald-50 border border-emerald-100 text-xs font-bold text-emerald-700">💰 financing</span>{% endif %}
+                    </td>
+                    <td class="px-5 py-3 max-w-md">
+                        <p class="font-semibold text-slate-900 leading-snug">{{ lead['title'][:140] }}</p>
+                        <p class="text-xs text-slate-500">{{ lead['author'] }}</p>
+                        <a href="{{ lead['permalink'] }}" target="_blank" rel="noopener" class="mt-1 inline-block text-xs font-semibold text-indigo-600 hover:text-indigo-700">Open post →</a>
+                    </td>
+                    <td class="px-5 py-3 whitespace-nowrap">
+                        <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold
+                            {% if lead['status'] == 'new' %}bg-amber-50 text-amber-700 border border-amber-100
+                            {% elif lead['status'] == 'contacted' %}bg-blue-50 text-blue-700 border border-blue-100
+                            {% elif lead['status'] == 'converted' %}bg-emerald-50 text-emerald-700 border border-emerald-100
+                            {% else %}bg-slate-100 text-slate-600{% endif %}">{{ lead['status'] }}</span>
+                    </td>
+                    <td class="px-5 py-3">
+                        <p class="text-xs text-slate-600 leading-relaxed max-w-md whitespace-pre-wrap">{{ lead['draft'][:220] }}</p>
+                        <form method="post" action="/api/leads/{{ lead['id'] }}/status" class="mt-2 inline">
+                            <select name="status_val" onchange="this.form.submit()" class="text-xs font-semibold rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5">
+                                {% for s in ['new', 'contacted', 'converted', 'closed'] %}
+                                <option value="{{ s }}" {% if lead['status'] == s %}selected{% endif %}>{{ s }}</option>
+                                {% endfor %}
+                            </select>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <div class="p-10 text-center text-slate-500">
+            <p class="text-4xl">📡</p>
+            <p class="mt-2 font-semibold text-slate-700">No radar leads yet</p>
+            <p class="mt-1 text-sm">Hit <span class="font-semibold">Scan Reddit</span> or <span class="font-semibold">Scan LinkedIn</span> above to start pulling nearby construction demand.</p>
+            <p class="mt-1 text-xs text-slate-400">We listen for keywords like renovations, roofs, additions, and contractor requests, then import only new matches.</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

@@ -44,8 +44,8 @@
                     <input type="tel" name="phone" value="{{ phone or '' }}" data-phone-format class="w-full px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
                 </div>
                 <div>
-                    <label class="block text-sm font-semibold text-slate-700 mb-1.5">Email <span class="font-normal text-slate-400">(optional)</span></label>
-                    <input type="email" name="email" value="{{ email or '' }}" class="w-full px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                    <label class="block text-sm font-semibold text-slate-700 mb-1.5">Email *</label>
+                    <input type="email" name="email" required value="{{ email or '' }}" class="w-full px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
                 </div>
                 <div class="md:col-span-2 mt-2">
                     <button type="submit" class="w-full py-4 text-base font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-2xl shadow-lg shadow-indigo-200 transition-colors">Get My Ballpark →</button>

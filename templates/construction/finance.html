@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% set co = company() %}
+{% block title %}Financing | {{ co.name }}{% endblock %}
+{% block meta %}<meta name="description" content="Apply for financing for your home renovation, addition, or repair with {{ co.name }}. No obligation — we connect you with options and an estimator."><meta name="robots" content="index, follow">{% endblock %}
+{% block content %}
+<section class="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-16">
+    <div class="text-center mb-12">
+        <span class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-50 text-indigo-700 text-xs font-semibold border border-indigo-100">Project financing available</span>
+        <h1 class="mt-4 text-4xl sm:text-5xl font-extrabold tracking-tight text-slate-900">Apply for Financing</h1>
+        <p class="mt-4 text-lg text-slate-600 max-w-xl mx-auto">Don't let budget hold up your project. Tell us what you need done, and we'll help you find financing so you can start right away.</p>
+    </div>
+
+    {% if request.query_params.get("sent") %}
+    <div class="rounded-2xl border border-emerald-200 bg-emerald-50 p-6 text-center mb-8">
+        <p class="text-lg font-bold text-emerald-800">Application received!</p>
+        <p class="mt-1 text-emerald-700">An estimator and financing team will reach out within one business day. Urgent?</p>
+        <a href="tel:{{ co.phone_e164 }}" class="mt-2 inline-block text-sm font-semibold text-indigo-600 hover:text-indigo-700">Call or text {{ co.phone }}</a>
+    </div>
+    {% elif request.query_params.get("error") %}
+    <div class="rounded-2xl border border-rose-200 bg-rose-50 p-6 text-center mb-8">
+        <p class="text-lg font-bold text-rose-800">{{ request.query_params.get("error") }}</p>
+        <p class="mt-1 text-rose-700">Please fix the issue and try again.</p>
+    </div>
+    {% endif %}
+
+    <form method="post" action="/finance" class="bg-white rounded-3xl border border-slate-200 p-6 sm:p-8 shadow-sm space-y-6">
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-5">
+            <div>
+                <label for="full_name" class="block text-sm font-semibold text-slate-700 mb-1.5">Full name *</label>
+                <input id="full_name" name="full_name" type="text" required value="{{ request.query_params.get('full_name','') }}"
+                       class="w-full px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+            </div>
+            <div>
+                <label for="phone" class="block text-sm font-semibold text-slate-700 mb-1.5">Phone *</label>
+                <input id="phone" name="phone" type="tel" data-phone-format required value="{{ request.query_params.get('phone','') }}"
+                       class="w-full px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+            </div>
+            <div>
+                <label for="email" class="block text-sm font-semibold text-slate-700 mb-1.5">Email</label>
+                <input id="email" name="email" type="email" value="{{ request.query_params.get('email','') }}"
+                       class="w-full px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+            </div>
+            <div>
+                <label for="project_type" class="block text-sm font-semibold text-slate-700 mb-1.5">Project type *</label>
+                <input id="project_type" name="project_type" type="text" required value="{{ request.query_params.get('project_type','') }}" placeholder="Kitchen, bathroom, roofing…"
+                       class="w-full px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+            </div>
+            <div>
+                <label for="address" class="block text-sm font-semibold text-slate-700 mb-1.5">Project address</label>
+                <input id="address" name="address" type="text" value="{{ request.query_params.get('address','') }}"
+                       class="w-full px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+            </div>
+            <div>
+                <label for="amount_needed" class="block text-sm font-semibold text-slate-700 mb-1.5">Estimated budget ($)</label>
+                <input id="amount_needed" name="amount_needed" type="number" min="0" step="0.01" value="{{ request.query_params.get('amount_needed','') }}"
+                       class="w-full px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+            </div>
+        </div>
+        <div>
+            <label for="when_start" class="block text-sm font-semibold text-slate-700 mb-1.5">When do you want to start?</label>
+            <select id="when_start" name="when_start" class="w-full px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                <option value="">Select…</option>
+                <option>As soon as possible</option>
+                <option>Within a month</option>
+                <option>Within 3 months</option>
+                <option>Just researching</option>
+            </select>
+        </div>
+        <div>
+            <label for="message" class="block text-sm font-semibold text-slate-700 mb-1.5">Describe your project</label>
+            <textarea id="message" name="message" rows="4" placeholder="What are you looking to get done, and how would financing help?" class="w-full px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">{{ request.query_params.get('message','') }}</textarea>
+        </div>
+        <button type="submit" class="w-full inline-flex items-center justify-center px-6 py-4 text-base font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition-all shadow-sm shadow-indigo-200">Submit financing application</button>
+        <p class="text-xs text-slate-400 text-center">No obligation. Applying does not affect your credit, and we'll only reach out to discuss options.</p>
+    </form>
+</section>
+{% endblock %}

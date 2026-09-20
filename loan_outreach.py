@@ -33,8 +33,8 @@ SMTP_USE_TLS = os.getenv("SMTP_TLS", "ssl").lower() == "ssl"
 
 IMAP_HOST = os.getenv("IMAP_HOST", "mail.privateemail.com")
 IMAP_PORT = int(os.getenv("IMAP_PORT", "993") or 993)
-IMAP_USER = os.getenv("IMAP_USER", SMTP_USER)
-IMAP_PASS = os.getenv("IMAP_PASS", SMTP_PASS)
+IMAP_USER = os.getenv("IMAP_USERNAME", os.getenv("IMAP_USER", SMTP_USER))
+IMAP_PASS = os.getenv("IMAP_PASSWORD", os.getenv("IMAP_PASS", SMTP_PASS))
 
 CHANNEL_EMAIL = "email"
 CHANNEL_TEXT = "text"
@@ -43,28 +43,22 @@ CHANNEL_TEXT = "text"
 LENDERS = [
     {
         "name": "LISC",
-        "first_name": "",
         "to": "smallbusiness@lisc.org",
         "cc": "wmartin@lisc.org",
-        "phone": "",
         "domain": "lisc.org",
         "channels": [CHANNEL_EMAIL],
     },
     {
         "name": "VCC",
-        "first_name": "Joey",
         "to": "jbarnes@vccva.org",
         "cc": "",
-        "phone": "",
         "domain": "vccva.org",
         "channels": [CHANNEL_EMAIL],
     },
     {
         "name": "VSBFA",
-        "first_name": "",
         "to": "VSBFA@sbsd.virginia.gov",
         "cc": "",
-        "phone": "",
         "domain": "virginia.gov",
         "channels": [CHANNEL_EMAIL],
     },
@@ -172,65 +166,6 @@ def _ensure_schema(conn) -> None:
     conn.commit()
 
 
-RESEND_API_KEY = os.getenv("RESEND_API_KEY", "")
-
-
-def _send_via_resend(to: str, cc: str, subject: str, body: str) -> bool:
-    """Send via the Resend HTTPS API. Railway's egress firewall blocks outbound
-    SMTP ports, but HTTPS (443) is open — this is the reliable path."""
-    if not RESEND_API_KEY:
-        return False
-    import json
-    import urllib.error
-    import urllib.request
-
-    payload = {
-        "from": f"{FROM_NAME} <{FROM_ADDR}>",
-        "to": [to],
-        "subject": subject,
-        "text": body,
-    }
-    if cc:
-        payload["cc"] = [cc]
-    req = urllib.request.Request(
-        "https://api.resend.com/emails",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {RESEND_API_KEY}",
-            "Content-Type": "application/json",
-            "User-Agent": "buildstack-construction/1.0",
-        },
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            if 200 <= resp.status < 300:
-                return True
-            print(f"[outreach] Resend HTTP {resp.status}")
-            return False
-    except urllib.error.HTTPError as e:
-        print(f"[outreach] Resend HTTP {e.code}: {e.read()[:300]}")
-        return False
-    except Exception as e:
-        print(f"[outreach] Resend send failure: {e}")
-        return False
-
-
-def _smtp_send_once(msg, use_tls: bool) -> None:
-    if use_tls:
-        ctx = ssl.create_default_context()
-        with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, context=ctx, timeout=20) as s:
-            s.login(SMTP_USER, SMTP_PASS)
-            s.send_message(msg)
-    else:
-        with smtplib.SMTP(SMTP_HOST, 587, timeout=20) as s:
-            s.ehlo()
-            s.starttls()
-            s.ehlo()
-            s.login(SMTP_USER, SMTP_PASS)
-            s.send_message(msg)
-
-
 async def send_email(to: str, cc: str, subject: str, body: str, run_in_thread: bool = True) -> bool:
     msg = EmailMessage()
     msg["From"] = f"{FROM_NAME} <{FROM_ADDR}>"
@@ -242,55 +177,25 @@ async def send_email(to: str, cc: str, subject: str, body: str, run_in_thread: b
     msg.set_content(body)
 
     def _send() -> bool:
-        if _send_via_resend(to, cc, subject, body):
-            return True
         try:
-            _smtp_send_once(msg, SMTP_USE_TLS)
+            if SMTP_USE_TLS:
+                ctx = ssl.create_default_context()
+                with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, context=ctx, timeout=60) as s:
+                    s.login(SMTP_USER, SMTP_PASS)
+                    s.send_message(msg)
+            else:
+                with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=60) as s:
+                    s.starttls()
+                    s.login(SMTP_USER, SMTP_PASS)
+                    s.send_message(msg)
             return True
         except Exception as e:
-            print(f"[outreach] SMTP send attempt 1 failed ({SMTP_PORT} {'ssl' if SMTP_USE_TLS else 'starttls'}): {e}")
-        try:
-            _smtp_send_once(msg, not SMTP_USE_TLS)
-            return True
-        except Exception as e2:
-            print(f"[outreach] SMTP send failure: {e2}")
+            print(f"[outreach] SMTP send failure: {e}")
             return False
 
     if run_in_thread:
         return await asyncio.to_thread(_send)
     return _send()
-
-
-def _probe_network() -> None:
-    import socket
-
-    socket.setdefaulttimeout(5)
-    for host, port in [
-        (SMTP_HOST, 25),
-        (SMTP_HOST, 465),
-        (SMTP_HOST, 587),
-        (SMTP_HOST, 993),
-        ("smtp.sendgrid.net", 587),
-        ("smtp.sendgrid.net", 2525),
-        ("email-smtp.us-east-1.amazonaws.com", 587),
-        ("email-smtp.us-east-1.amazonaws.com", 465),
-        ("smtp-relay.brevo.com", 587),
-        ("smtp.mailgun.org", 587),
-        ("in-v3.mailjet.com", 587),
-        ("smtp.zeptomail.net", 587),
-        ("smtp.postmarkapp.com", 587),
-        ("resend.com", 443),
-        ("postgres.railway.internal", 5432),
-    ]:
-        try:
-            ip = socket.gethostbyname(host)
-            s = socket.socket()
-            s.settimeout(5)
-            s.connect((ip, port))
-            s.close()
-            print(f"[outreach] probe OK {host}:{port} -> {ip}")
-        except Exception as e:
-            print(f"[outreach] probe FAIL {host}:{port}: {type(e).__name__}: {e}")
 
 
 def _campaign_start(conn) -> _dt.date:
@@ -310,26 +215,6 @@ def _campaign_start(conn) -> _dt.date:
         )
     conn.commit()
     return today
-
-
-def _sms_sender():
-    from signalwire_service import SignalWireService
-
-    return SignalWireService()
-
-
-async def _send_touch(lender: dict, kind: str, body: str, subject: str) -> bool:
-    """Send a cadence touch. Text touches go over SMS when a mobile number and
-    a SignalWire sender are configured; otherwise they fall back to email so the
-    Day 1 / Day 7 nudges are never dropped."""
-    if kind == CHANNEL_TEXT and lender.get("phone"):
-        try:
-            sw = _sms_sender()
-            if sw.is_configured():
-                return await asyncio.to_thread(sw.send_sms, lender["phone"], body)
-        except Exception as e:
-            print(f"[outreach] SMS path unavailable ({e}); falling back to email")
-    return await send_email(lender["to"], lender.get("cc", ""), subject, body)
 
 
 async def _run_cadence(conn) -> None:
@@ -355,12 +240,14 @@ async def _run_cadence(conn) -> None:
             spec = _day_body(day)
             if not spec:
                 continue
+            if spec["kind"] not in lender["channels"]:
+                continue
 
-            body = spec["body"].replace("[First Name]", lender.get("first_name") or "there")
+            body = spec["body"].replace("[First Name]", "there")
             body = body.replace("[Lender Name]", lender["name"])
             subject = spec["subject"]
 
-            ok = await _send_touch(lender, spec["kind"], body, subject)
+            ok = await send_email(lender["to"], lender["cc"], subject, body)
 
             with conn.cursor() as cur:
                 if row:
@@ -569,7 +456,4 @@ async def _reply_loop() -> None:
 
 
 def start_outreach_tasks() -> list:
-    import threading
-
-    threading.Thread(target=_probe_network, daemon=True).start()
     return [asyncio.create_task(_outreach_loop()), asyncio.create_task(_reply_loop())]

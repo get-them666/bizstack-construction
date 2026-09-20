@@ -4,7 +4,7 @@ from signalwire.rest.client import RestClient
 
 
 class SignalWireService:
-    """Outbound voice/SMS helper for the Buildstack Construction AI assistant."""
+    """Outbound voice/SMS helper for the Broom Service AI guest assistant."""
 
     def __init__(self):
         self.project_id = os.getenv("SIGNALWIRE_PROJECT_ID", "")
@@ -16,10 +16,15 @@ class SignalWireService:
     @property
     def client(self):
         if self._client is None:
+            host = (self.space_url or "").strip()
+            if host.startswith("http://"):
+                host = host[7:]
+            elif host.startswith("https://"):
+                host = host[8:]
             self._client = RestClient(
                 project=self.project_id,
                 token=self.api_token,
-                host=f"https://{self.space_url}",
+                host=host,
             )
         return self._client
 
@@ -32,7 +37,7 @@ class SignalWireService:
         )
 
     def send_sms(self, to: str, body: str) -> bool:
-        """Send an outbound SMS to a contact via SignalWire."""
+        """Send an outbound SMS to a guest via SignalWire."""
         if not self.is_configured() or not to or not body:
             return False
         try:
@@ -46,8 +51,31 @@ class SignalWireService:
             print(f"❌ SignalWire SMS send failure: {e}")
             return False
 
+    def send_link_sms(self, to: str, entry_link: str) -> bool:
+        """Send a secure digital entry link mid-call."""
+        body = (
+            "Hi! Here is your secure entry link for your stay: "
+            f"{entry_link}. Your host (Broom Service) wishes you a great stay!"
+        )
+        return self.send_sms(to, body)
+
+    def create_outbound_call(self, to: str, twiml_url: str) -> str:
+        """Place an outbound AI call to a lead; returns the SignalWire CallSid."""
+        if not self.is_configured() or not to or not twiml_url:
+            return ""
+        try:
+            call = self.client.calls.create(
+                from_=self.from_number,
+                to=to,
+                url=twiml_url,
+            )
+            return str(getattr(call, "sid", "") or "")
+        except Exception as e:
+            print(f"❌ SignalWire outbound call failure: {e}")
+            return ""
+
     def send_estimate_link(self, to: str, link: str) -> bool:
-        """Text a secure link (deposit checkout, estimate, or scheduling page)."""
+        """Text a secure link from Buildstack Construction (deposit checkout, estimate, or scheduling page)."""
         body = (
             "Hi! Here is the secure link from Buildstack Construction Co.: "
             f"{link}. Reply here or call (757) 846-9275 anytime and we'll help."
