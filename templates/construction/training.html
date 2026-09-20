@@ -1,0 +1,251 @@
+{% extends "base.html" %}
+{% set co = company() %}
+{% block title %}Safety &amp; Skills Training | {{ co.name }}{% endblock %}
+{% block meta %}<meta name="robots" content="noindex, nofollow">{% endblock %}
+
+{% block content %}
+<section class="py-8 bg-slate-50 min-h-[80vh]">
+    <div class="max-w-4xl mx-auto px-4 sm:px-6">
+        <div class="flex items-center justify-between mb-6">
+            <div>
+                <p class="text-sm font-bold text-blue-700 uppercase tracking-widest">Training</p>
+                <h1 class="text-2xl sm:text-3xl font-black tracking-tight text-slate-900">Safety Orientation + Tools of the Trade</h1>
+            </div>
+            <div class="flex items-center gap-2">
+                <a href="/crew/training/ppt" class="px-4 py-2.5 text-sm font-semibold text-slate-600 bg-white border border-slate-200 hover:border-slate-300 rounded-xl transition-colors">⬇️ Download slides (PPT)</a>
+                <a href="/crew/dashboard" class="px-4 py-2.5 text-sm font-semibold text-slate-600 bg-white border border-slate-200 hover:border-slate-300 rounded-xl transition-colors">← Dashboard</a>
+            </div>
+        </div>
+
+        <div class="bg-amber-50 border border-amber-200 rounded-2xl px-5 py-4 text-sm text-amber-800 mb-6">
+            {{ disclaimer }}
+        </div>
+
+        <div class="grid md:grid-cols-3 gap-6 mb-8">
+            <div class="md:col-span-2 bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
+                <div class="flex items-center justify-between px-5 py-3 border-b border-slate-100">
+                    <p class="text-sm font-bold text-slate-900">Crew Orientation — slide deck</p>
+                    <div class="flex items-center gap-2 text-sm font-semibold text-slate-500">
+                        <button id="slide-prev" class="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200">←</button>
+                        <span id="slide-count" class="min-w-12 text-center">1 / 13</span>
+                        <button id="slide-next" class="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200">→</button>
+                    </div>
+                </div>
+                <div id="slide-box" class="px-6 py-8 min-h-[260px] bg-gradient-to-br from-slate-900 to-blue-900 text-white">
+                    <p id="slide-title" class="text-xl font-extrabold mb-4"></p>
+                    <ul id="slide-bullets" class="space-y-2.5 text-slate-100 text-sm"></ul>
+                </div>
+            </div>
+
+            <div class="space-y-4">
+                <div class="bg-white rounded-3xl border border-slate-200 shadow-sm p-5">
+                    <p class="text-sm font-bold text-slate-900 mb-1">Quick PDF / print</p>
+                    <p class="text-xs text-slate-500 mb-3">Open the deck, then Print → Save as PDF to keep your own copy for the crew records.</p>
+                    <button onclick="window.print()" class="w-full px-4 py-2.5 text-sm font-bold text-white bg-blue-700 hover:bg-blue-800 rounded-xl transition-colors">🖨️ Print this page</button>
+                </div>
+                <div id="history-box" class="bg-white rounded-3xl border border-slate-200 shadow-sm p-5">
+                    <p class="text-sm font-bold text-slate-900 mb-3">My results</p>
+                    <div id="history-list" class="space-y-2"></div>
+                </div>
+            </div>
+        </div>
+
+        <p class="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Tests</p>
+        <div id="tests-grid" class="grid md:grid-cols-2 gap-3 mb-8"></div>
+
+        <div id="quiz-wrap" class="hidden bg-white rounded-3xl border border-slate-200 shadow-sm p-6 mb-8">
+            <div class="flex items-center justify-between mb-4">
+                <p id="quiz-title" class="text-lg font-extrabold text-slate-900"></p>
+                <button id="quiz-close" class="text-sm font-semibold text-slate-400 hover:text-slate-600">✕ Close</button>
+            </div>
+            <div id="quiz-body" class="space-y-5"></div>
+            <button id="quiz-submit" class="w-full mt-5 py-3.5 text-base font-bold text-white bg-blue-700 hover:bg-blue-800 rounded-2xl transition-colors">Submit Test</button>
+        </div>
+
+        <div id="result-box" class="hidden bg-white rounded-3xl border border-slate-200 shadow-sm p-6 mb-8"></div>
+    </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function() {
+    const SLIDES = {{ slides | tojson }};
+    let slideIdx = 0;
+    const SLIDE_BOX = document.getElementById('slide-box');
+    const SLIDE_TITLE = document.getElementById('slide-title');
+    const SLIDE_BULLETS = document.getElementById('slide-bullets');
+    const SLIDE_COUNT = document.getElementById('slide-count');
+
+    function renderSlide(i) {
+        const s = SLIDES[i];
+        SLIDE_TITLE.textContent = s.title;
+        SLIDE_BULLETS.innerHTML = '';
+        (s.bullets || []).forEach(function(b) {
+            const li = document.createElement('li');
+            li.className = 'flex gap-2';
+            li.innerHTML = '<span class="shrink-0 text-blue-300">•</span><span>' + b + '</span>';
+            SLIDE_BULLETS.appendChild(li);
+        });
+        SLIDE_COUNT.textContent = (i + 1) + ' / ' + SLIDES.length;
+    }
+    document.getElementById('slide-prev').addEventListener('click', function() {
+        slideIdx = (slideIdx - 1 + SLIDES.length) % SLIDES.length; renderSlide(slideIdx);
+    });
+    document.getElementById('slide-next').addEventListener('click', function() {
+        slideIdx = (slideIdx + 1) % SLIDES.length; renderSlide(slideIdx);
+    });
+    renderSlide(0);
+
+    let tests = [];
+    let history = [];
+    const grid = document.getElementById('tests-grid');
+    const quizWrap = document.getElementById('quiz-wrap');
+    const quizBody = document.getElementById('quiz-body');
+    const quizTitle = document.getElementById('quiz-title');
+    const resultBox = document.getElementById('result-box');
+
+    function passedFor(slug) {
+        const row = history.find(function(h) { return h.test_slug === slug; });
+        return row ? row.passed : false;
+    }
+    function bestFor(slug) {
+        const rows = history.filter(function(h) { return h.test_slug === slug; });
+        if (!rows.length) return null;
+        return rows.reduce(function(a, b) { return a.percent >= b.percent ? a : b; });
+    }
+
+    function renderTests() {
+        grid.innerHTML = '';
+        tests.forEach(function(t) {
+            const passed = passedFor(t.slug);
+            const best = bestFor(t.slug);
+            const card = document.createElement('div');
+            card.className = 'bg-white rounded-2xl border ' + (passed ? 'border-emerald-200' : 'border-slate-200') + ' p-5 flex flex-col';
+            card.innerHTML =
+                '<div class="flex items-center justify-between mb-1">' +
+                    '<span class="text-xs font-bold uppercase tracking-wider ' + (passed ? 'text-emerald-600' : 'text-slate-400') + '">' +
+                        (passed ? '✅ Passed' : (best ? 'Retake available' : 'Not taken yet')) +
+                    '</span>' +
+                    '<span class="text-[10px] font-bold text-slate-400">' + t.count + ' Q · 70% to pass</span>' +
+                '</div>' +
+                '<p class="font-bold text-slate-900 text-sm mb-2">' + escapeHtml(t.title) + '</p>' +
+                (best
+                    ? '<p class="text-xs text-slate-500 mb-3">Best score: <span class="font-bold">' + best.percent + '%</span></p>'
+                    : '<p class="text-xs text-slate-500 mb-3">Prove your skills &amp; stay sharp.</p>') +
+                '<button class="mt-auto py-2.5 text-sm font-bold rounded-xl transition-colors ' +
+                    (passed ? 'bg-slate-100 text-slate-600 hover:bg-slate-200' : 'bg-blue-700 text-white hover:bg-blue-800') +
+                    '" data-open="' + t.slug + '">' + (passed ? 'Retake' : 'Take the test') + '</button>';
+            grid.appendChild(card);
+        });
+    }
+
+    function renderHistory() {
+        const list = document.getElementById('history-list');
+        list.innerHTML = '';
+        if (!history.length) {
+            list.innerHTML = '<p class="text-xs text-slate-400">No tests taken yet.</p>';
+            return;
+        }
+        history.slice(0, 8).forEach(function(h) {
+            const row = document.createElement('div');
+            row.className = 'flex items-center justify-between text-xs';
+            row.innerHTML =
+                '<span class="text-slate-500 truncate">' + escapeHtml(h.test_title) + '</span>' +
+                '<span class="font-bold shrink-0 ' + (h.passed ? 'text-emerald-600' : 'text-red-500') + '">' +
+                    (h.passed ? '✓ ' : '✗ ') + h.score + '/' + h.total + '</span>';
+            list.appendChild(row);
+        });
+    }
+
+    function load() {
+        fetch('/crew/training/content').then(function(r) { return r.json(); }).then(function(data) {
+            tests = data.tests;
+            history = data.history;
+            renderTests();
+            renderHistory();
+        }).catch(function() {
+            grid.innerHTML = '<p class="text-sm text-slate-500">Could not load tests — try again in a moment.</p>';
+        });
+    }
+
+    function startQuiz(slug) {
+        const t = tests.find(function(x) { return x.slug === slug; });
+        if (!t) return;
+        quizTitle.textContent = t.title;
+        quizBody.innerHTML = '';
+        t.questions.forEach(function(q, qi) {
+            const div = document.createElement('div');
+            div.className = 'border border-slate-200 rounded-xl p-4';
+            let opts = '';
+            q.options.forEach(function(o, oi) {
+                opts += '<label class="flex items-start gap-2 sm:gap-3 py-1.5 cursor-pointer">' +
+                    '<input type="radio" name="q' + qi + '" value="' + oi + '" class="mt-0.5">' +
+                    '<span class="text-sm text-slate-700">' + o + '</span></label>';
+            });
+            div.innerHTML = '<p class="text-sm font-bold text-slate-900 mb-2">' + (qi + 1) + '. ' + q.q + '</p>' + opts;
+            quizBody.appendChild(div);
+        });
+        quizBody.dataset.slug = slug;
+        quizWrap.classList.remove('hidden');
+        quizWrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+
+    grid.addEventListener('click', function(e) {
+        var btn = e.target.closest('[data-open]');
+        if (btn) startQuiz(btn.dataset.open);
+    });
+
+    document.getElementById('quiz-close').addEventListener('click', function() {
+        quizWrap.classList.add('hidden');
+    });
+
+    document.getElementById('quiz-submit').addEventListener('click', function() {
+        const t = tests.find(function(x) { return x.slug === quizBody.dataset.slug; });
+        if (!t) return;
+        const answers = [];
+        let missing = false;
+        t.questions.forEach(function(_, qi) {
+            const sel = document.querySelector('input[name="q' + qi + '"]:checked');
+            if (!sel) { missing = true; answers.push(0); } else { answers.push(Number(sel.value)); }
+        });
+        if (missing && !confirm('You skipped some questions — submit anyway?')) return;
+        const btn = document.getElementById('quiz-submit');
+        btn.disabled = true; btn.textContent = 'Grading…';
+        const body = new URLSearchParams();
+        body.append('test_slug', t.slug);
+        body.append('answers', JSON.stringify(answers));
+        fetch('/api/crew/app/training/submit', { method: 'POST', body: body }).then(function(r) { return r.json(); }).then(function(res) {
+            btn.disabled = false; btn.textContent = 'Submit Test';
+            quizWrap.classList.add('hidden');
+            resultBox.classList.remove('hidden');
+            let inner = '<div class="flex items-start justify-between mb-3">' +
+                '<div><p class="text-lg font-extrabold text-slate-900">' + (res.passed ? 'Passed — nice work.' : 'Not quite — review &amp; retake.') + '</p>' +
+                '<p class="text-sm text-slate-500">' + escapeHtml(res.test_title) + '</p></div>' +
+                '<span class="text-3xl font-black ' + (res.passed ? 'text-emerald-600' : 'text-red-500') + '">' + res.percent + '%</span></div>' +
+                '<p class="text-sm text-slate-600 mb-3">You answered <b>' + res.correct + ' of ' + res.total + '</b> correctly.</p>';
+            if (res.missed_topics && res.missed_topics.length) {
+                inner += '<p class="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Review these topics</p><ul class="list-disc list-inside text-sm text-slate-600">';
+                res.missed_topics.forEach(function(m) { inner += '<li>' + escapeHtml(m) + '</li>'; });
+                inner += '</ul>';
+            }
+            inner += '<button onclick="this.parentElement.classList.add(\'hidden\'); location.reload();" class="mt-5 w-full py-3 text-sm font-bold text-white bg-blue-700 hover:bg-blue-800 rounded-xl transition-colors">Done</button>';
+            resultBox.innerHTML = inner;
+            resultBox.scrollIntoView({ behavior: 'smooth' });
+        }).catch(function() {
+            btn.disabled = false; btn.textContent = 'Submit Test';
+            resultBox.classList.remove('hidden');
+            resultBox.innerHTML = '<p class="text-sm text-red-600">Something went wrong — please try again.</p>';
+        });
+    });
+
+    function escapeHtml(s) {
+        return String(s == null ? '' : s).replace(/[&<>"']/g, function(c) {
+            return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+        });
+    }
+
+    load();
+})();
+</script>
+{% endblock %}

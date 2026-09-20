@@ -134,6 +134,12 @@
                     <p id="pay-title" class="text-sm font-bold text-slate-900 mb-3">Pay History</p>
                     <div id="pay-list" class="space-y-3"></div>
                 </section>
+
+                <section id="tab-training" class="hidden">
+                    <p id="training-title" class="text-sm font-bold text-slate-900 mb-1">Safety + Skills Training</p>
+                    <p id="training-disclaimer" class="text-xs text-slate-400 mb-3"></p>
+                    <div id="training-list" class="space-y-3"></div>
+                </section>
             </main>
         </div>
 
@@ -141,11 +147,12 @@
             <button id="tabbtn-clock" data-tab="clock" class="flex-1 py-3 text-sm font-bold text-blue-600 border-t-2 border-blue-500">🕐 Clock</button>
             <button id="tabbtn-hours" data-tab="hours" class="flex-1 py-3 text-sm font-bold text-slate-400 border-t-2 border-transparent">🕒 Hours</button>
             <button id="tabbtn-pay" data-tab="pay" class="flex-1 py-3 text-sm font-bold text-slate-400 border-t-2 border-transparent">💰 Pay</button>
+            <button id="tabbtn-training" data-tab="training" class="flex-1 py-3 text-sm font-bold text-slate-400 border-t-2 border-transparent">📚 Training</button>
         </nav>
     </div>
 
     <script>
-        const state = { worker: null, jobs: [], hours: [], pay: [], clocked_in: false, clock_id: null, week_hours: 0, lastEarned: 0, updateTimer: null, sampling: false };
+        const state = { worker: null, jobs: [], hours: [], pay: [], clocked_in: false, clock_id: null, week_hours: 0, lastEarned: 0, updateTimer: null, sampling: false, training: [], trainingHistory: [], quizSlug: null, quizAnswers: {} };
 
         const $ = id => document.getElementById(id);
 
@@ -203,6 +210,7 @@
             renderJobs();
             renderHours();
             renderPay();
+            loadTraining();
             fillHourProjectSelect();
             const today = new Date();
             $('hours-date').value = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' + String(today.getDate()).padStart(2, '0');
@@ -310,6 +318,137 @@
             });
         }
 
+        async function loadTraining() {
+            const { res, data } = await api('/crew/training/content');
+            if (res.ok && data.status === 'ok') {
+                state.training = data.tests;
+                state.trainingHistory = data.history || [];
+                $('training-disclaimer').textContent = data.disclaimer || '';
+                renderTraining();
+            } else {
+                $('training-list').innerHTML = '<p class="text-sm text-slate-400 bg-white rounded-2xl border border-slate-200 p-5">Training not available right now.</p>';
+            }
+        }
+
+        function trainingPassed(slug) {
+            return state.trainingHistory.some(h => h.test_slug === slug && h.passed);
+        }
+        function trainingBest(slug) {
+            const rows = state.trainingHistory.filter(h => h.test_slug === slug);
+            if (!rows.length) return null;
+            return rows.reduce((a, b) => (a.percent >= b.percent ? a : b));
+        }
+
+        function renderTraining() {
+            const list = $('training-list');
+            list.innerHTML = '';
+            if (state.quizSlug) { renderQuiz(); return; }
+            if (!state.training.length) {
+                list.innerHTML = '<p class="text-sm text-slate-400 bg-white rounded-2xl border border-slate-200 p-5">No tests yet.</p>';
+                return;
+            }
+            state.training.forEach(t => {
+                const passed = trainingPassed(t.slug);
+                const best = trainingBest(t.slug);
+                const div = document.createElement('div');
+                div.className = 'bg-white rounded-2xl border border-slate-200 shadow-sm p-4' + (passed ? ' border-emerald-200' : '');
+                div.innerHTML = `
+                    <div class="flex items-center justify-between mb-1">
+                        <span class="text-[10px] font-bold uppercase tracking-wider ${passed ? 'text-emerald-600' : 'text-slate-400'}">${passed ? '✅ Passed' : (best ? 'Retake available' : 'Not taken yet')}</span>
+                        <span class="text-[10px] font-bold text-slate-400">${t.count} Q</span>
+                    </div>
+                    <p class="text-sm font-bold text-slate-900 mb-1">${escapeHtml(t.title)}</p>
+                    ${best ? `<p class="text-xs text-slate-500 mb-2">Best score: <span class="font-bold">${best.percent}%</span></p>` : '<p class="text-xs text-slate-500 mb-2">Prove your skills &amp; stay sharp.</p>'}
+                    <button class="w-full py-2.5 text-sm font-bold rounded-xl transition-colors ${passed ? 'bg-slate-100 text-slate-600 hover:bg-slate-200' : 'bg-blue-700 text-white hover:bg-blue-800'}" data-quiz="${t.slug}">${passed ? 'Retake' : 'Take the test'}</button>
+                `;
+                list.appendChild(div);
+            });
+        }
+
+        function renderQuiz() {
+            const t = state.training.find(x => x.slug === state.quizSlug);
+            const list = $('training-list');
+            if (!t) { state.quizSlug = null; renderTraining(); return; }
+            list.innerHTML = '';
+            const div = document.createElement('div');
+            div.className = 'space-y-4';
+            let body = `
+                <div class="flex items-center justify-between">
+                    <p class="text-sm font-bold text-slate-900">${escapeHtml(t.title)}</p>
+                    <button id="quiz-back" class="text-xs font-bold text-slate-400 hover:text-slate-600">✕ Back</button>
+                </div>
+            `;
+            t.questions.forEach((q, qi) => {
+                let opts = q.options.map((o, oi) => `
+                    <label class="flex items-start gap-2 py-1.5 cursor-pointer">
+                        <input type="radio" name="appq${qi}" value="${oi}" ${(state.quizAnswers[qi] === oi) ? 'checked' : ''} class="mt-0.5">
+                        <span class="text-sm text-slate-700">${escapeHtml(o)}</span>
+                    </label>
+                `).join('');
+                body += `<div class="bg-white rounded-2xl border border-slate-200 p-4">
+                            <p class="text-sm font-bold text-slate-900 mb-2">${qi + 1}. ${escapeHtml(q.q)}</p>
+                            ${opts}
+                        </div>`;
+            });
+            body += `<button id="quiz-submit-app" class="w-full py-3.5 text-base font-bold text-white bg-blue-700 hover:bg-blue-800 rounded-2xl transition-colors">Submit Test</button>`;
+            div.innerHTML = body;
+            list.appendChild(div);
+
+            $('quiz-back').addEventListener('click', () => { state.quizSlug = null; renderTraining(); });
+
+            t.questions.forEach((q, qi) => {
+                document.querySelectorAll(`input[name="appq${qi}"]`).forEach(r => {
+                    r.addEventListener('change', () => {
+                        state.quizAnswers[qi] = Number(r.value);
+                    });
+                });
+            });
+
+            $('quiz-submit-app').addEventListener('click', async () => {
+                const answers = [];
+                let missing = false;
+                t.questions.forEach((_, qi) => {
+                    if (state.quizAnswers[qi] === undefined) missing = true;
+                    answers.push(state.quizAnswers[qi] ?? 0);
+                });
+                if (missing && !confirm('You skipped some questions — submit anyway?')) return;
+                const btn = $('quiz-submit-app');
+                btn.disabled = true; btn.textContent = 'Grading…';
+                const { res, data } = await api('/api/crew/app/training/submit', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: new URLSearchParams({ test_slug: t.slug, answers: JSON.stringify(answers) })
+                });
+                btn.disabled = false; btn.textContent = 'Submit Test';
+                if (!res.ok) { alert(data.message || 'Could not submit.'); return; }
+                state.quizSlug = null; state.quizAnswers = {};
+                renderResult(data);
+            });
+        }
+
+        function renderResult(data) {
+            const list = $('training-list');
+            let inner = `
+                <div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
+                    <div class="flex items-start justify-between mb-3">
+                        <div>
+                            <p class="text-lg font-extrabold text-slate-900">${data.passed ? 'Passed — nice work.' : 'Not quite — review &amp; retake.'}</p>
+                            <p class="text-xs text-slate-500 mt-0.5">${escapeHtml(data.test_title)}</p>
+                        </div>
+                        <span class="text-3xl font-black ${data.passed ? 'text-emerald-600' : 'text-red-500'}">${data.percent}%</span>
+                    </div>
+                    <p class="text-sm text-slate-600 mb-3">You answered <b>${data.correct} of ${data.total}</b> correctly.</p>
+            `;
+            if (data.missed_topics && data.missed_topics.length) {
+                inner += '<p class="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Review these topics</p><ul class="list-disc list-inside text-sm text-slate-600 mb-3">';
+                data.missed_topics.forEach(m => { inner += `<li>${escapeHtml(m)}</li>`; });
+                inner += '</ul>';
+            }
+            inner += `<button id="result-done" class="w-full py-3 text-sm font-bold text-white bg-blue-700 hover:bg-blue-800 rounded-xl transition-colors">Done</button></div>`;
+            list.innerHTML = inner;
+            $('result-done').addEventListener('click', () => loadTraining());
+        }
+
         async function clockIn(id) {
             const btn = document.querySelector(`[data-act="in"]`);
             if (btn) { btn.disabled = true; btn.textContent = 'Checking location…'; }
@@ -385,7 +524,7 @@
         function showGeo(show) { $('geo-banner').classList.toggle('hidden', !show); }
 
         function switchTab(name) {
-            ['clock', 'hours', 'pay'].forEach(t => {
+            ['clock', 'hours', 'pay', 'training'].forEach(t => {
                 const panel = $('tab-' + t);
                 if (panel) panel.classList.toggle('hidden', t !== name);
                 const btn = $('tabbtn-' + t);
@@ -453,6 +592,7 @@
                 if (e.target.dataset.act === 'in') clockIn(Number(e.target.dataset.id));
                 if (e.target.dataset.act === 'out') clockOut(Number(e.target.dataset.id));
                 if (e.target.dataset.del) deleteHours(e.target.dataset.del);
+                if (e.target.dataset.quiz) { state.quizSlug = e.target.dataset.quiz; state.quizAnswers = {}; renderQuiz(); }
             });
 
             $('banner-stop').addEventListener('click', () => clockOut(state.clock_id));

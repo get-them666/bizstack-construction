@@ -324,6 +324,8 @@ async def lifecycle(app: FastAPI):
                     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
                 );
                 """)
+                cur.execute("ALTER TABLE worker_quiz_results ADD COLUMN IF NOT EXISTS test_slug VARCHAR(60);")
+                cur.execute("ALTER TABLE worker_quiz_results ADD COLUMN IF NOT EXISTS test_title VARCHAR(255);")
             conn.commit()
         print("✅ Schema ready.")
     except Exception as e:
@@ -3269,6 +3271,109 @@ async def worker_app_logout():
     resp = JSONResponse(content={"status": "ok"})
     resp.delete_cookie(WORKER_COOKIE)
     return resp
+
+
+# --- Training: safety orientation (OSHA-10 baseline) + trade skills tests -------------
+# Crew portal page and phone-app API. Content lives in training_service.py. Company
+# safety orientation module covers OSHA implementing rules (29 CFR 1926) and site
+# safety requirements. It is informational company training — NOT official OSHA-10/30
+# certification, which only an authorized OSHA trainer can issue.
+TRAINING_DISCLAIMER = ("This is Buildstack Construction company training covering OSHA "
+                       "implementing rules (29 CFR 1926) and site safety requirements. "
+                       "It is informational and does NOT certify or replace official "
+                       "OSHA-10/OSHA-30 training, which only an authorized OSHA trainer can provide.")
+
+
+@app.get("/crew/training", response_class=HTMLResponse)
+async def crew_training_page(request: Request):
+    require_worker(request)
+    worker = request.state.worker if hasattr(request.state, "worker") else None
+    return templates.TemplateResponse(
+        request=request,
+        name="training.html",
+        context={
+            "disclaimer": TRAINING_DISCLAIMER,
+            "slides": training_service.deck_slides("construction"),
+            "worker": worker or {},
+        },
+        headers={"Cache-Control": "no-cache, max-age=0"},
+    )
+
+
+@app.post("/crew/training/ppt")
+async def crew_training_ppt(request: Request, db=Depends(get_db)):
+    require_worker(request)
+    try:
+        data = training_service.build_deck("construction")
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": f"Could not build deck: {e}"})
+    return Response(content=data, media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                    headers={"Content-Disposition": "attachment; filename=crew-safety-orientation.pptx"})
+
+
+@app.get("/crew/training/content")
+async def crew_training_content(request: Request, db=Depends(get_db)):
+    worker = require_worker(request)
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT test_slug, test_title, score, total, passed, created_at "
+            "FROM worker_quiz_results WHERE worker_id = %s ORDER BY created_at DESC;",
+            (worker.get("id"),),
+        )
+        history = [
+            {
+                "test_slug": r["test_slug"] or "osha",
+                "test_title": r["test_title"] or "Site Safety Orientation (OSHA-10 baseline)",
+                "score": r["score"], "total": r["total"], "passed": r["passed"],
+                "at": r["created_at"].isoformat(),
+            }
+            for r in cur.fetchall()
+        ]
+    return JSONResponse(content={
+        "status": "ok",
+        "disclaimer": TRAINING_DISCLAIMER,
+        "tests": [
+            {"slug": t["slug"], "title": t["title"], "count": len(t["questions"]),
+             "questions": [{"q": q["q"], "options": q["options"], "topic": q.get("topic")} for q in t["questions"]]}
+            for t in training_service.ALL_TRAININGS
+        ],
+        "history": history,
+    })
+
+
+@app.post("/api/crew/app/training/submit")
+async def crew_training_submit(request: Request, test_slug: str = Form(...), answers: str = Form(...), db=Depends(get_db)):
+    worker = require_worker(request)
+    test = training_service.TRAINING_BY_SLUG.get(test_slug)
+    if not test:
+        return JSONResponse(status_code=400, content={"status": "error", "message": "Unknown test"})
+    try:
+        parsed = json.loads(answers)
+        if not isinstance(parsed, list):
+            raise ValueError("not a list")
+        grade = training_service.grade_training(parsed, test["questions"])
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"status": "error", "message": str(e)})
+    with db.cursor() as cur:
+        cur.execute("SELECT name FROM crew WHERE id = %s;", (worker.get("id"),))
+        row = cur.fetchone()
+        name = row["name"] if row else "Crew member"
+        cur.execute(
+            "INSERT INTO worker_quiz_results (worker_id, worker_name, score, total, passed, answers_json, test_slug, test_title) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id;",
+            (worker.get("id"), name, grade["correct"], grade["total"], grade["passed"], answers,
+             test["slug"], test["title"]),
+        )
+        result_id = cur.fetchone()["id"]
+        db.commit()
+    return JSONResponse(content={
+        "status": "ok",
+        "result_id": result_id,
+        "test_slug": test["slug"],
+        "test_title": test["title"],
+        "total": grade["total"], "correct": grade["correct"], "percent": grade["percent"],
+        "passed": grade["passed"], "missed_topics": grade["missed_topics"],
+    })
 
 
 # --- Payroll ----------------------------------------------------------------

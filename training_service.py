@@ -590,3 +590,615 @@ def grade_osha_quiz(answers) -> dict:
         "passed": passed,
         "missed_topics": missed,
     }
+
+
+# --- Trade skills tests -------------------------------------------------------
+# Each test is informational company-sponsored training (self-check), not an
+# official OSHA-10/30 certificate — that card can only be issued by an authorized
+# OSHA trainer. Questions cover core trade knowledge + job-site safety rules.
+
+TRADE_QUIZZES = {
+    "electrician": {
+        "title": "Electrician — Core Working Knowledge",
+        "pass_percent": 70,
+        "questions": [
+            {
+                "q": "Before working on a circuit, what must you do?",
+                "options": [
+                    "Assume it's dead and start cutting",
+                    "Lock out / tag out, verify it's dead with a tester",
+                    "Just wear rubber gloves",
+                    "Turn off the lights",
+                ],
+                "answer": 1,
+                "topic": "Electrical — LOTO & verification",
+            },
+            {
+                "q": "Which breaker feeds the circuit when you're at a panel?",
+                "options": [
+                    "Whichever looks newest",
+                    "Trace it with an appropriate tester or verify by labeling/checking",
+                    "The top breaker, always",
+                    "You don't need to know",
+                ],
+                "answer": 1,
+                "topic": "Electrical — panel safety",
+            },
+            {
+                "q": "A GFCI is required where?",
+                "options": [
+                    "Only outdoors",
+                    "Damp/wet locations and where the code requires (kitchen, bath, outdoor)",
+                    "Nowhere on new work",
+                    "Only in basements",
+                ],
+                "answer": 1,
+                "topic": "Electrical — GFCI",
+            },
+            {
+                "q": "Loose wires in a junction box:",
+                "options": [
+                    "Are fine if taped tight",
+                    "Must be terminated on proper connections and covered by a box cover",
+                    "Can hang inside the wall",
+                    "Only matter under load",
+                ],
+                "answer": 1,
+                "topic": "Electrical — boxes & terminations",
+            },
+            {
+                "q": "Which wire gauge is standard for a 15-amp branch circuit?",
+                "options": ["10 AWG", "6 AWG", "14 AWG", "16 AWG"],
+                "answer": 2,
+                "topic": "Electrical — wire sizing",
+            },
+            {
+                "q": "How do you confirm power is off before splicing?",
+                "options": [
+                    "Touch the wires quickly",
+                    "Use a non-contact voltage tester AND/or a meter at the point of work",
+                    "Check that lights are off",
+                    "Ask a coworker to guess",
+                ],
+                "answer": 1,
+                "topic": "Electrical — verify dead",
+            },
+            {
+                "q": "A screwdriver with a metallic shaft used on live gear can:",
+                "options": [
+                    "Speed up the job",
+                    "Short the circuit or shock you — use insulated tools and PPE",
+                    "Never cause a problem",
+                    "Only affect smart switches",
+                ],
+                "answer": 1,
+                "topic": "Electrical — hand tools",
+            },
+            {
+                "q": "After you finish a device install, the safest check is:",
+                "options": [
+                    "Turn power back on and test with proper equipment",
+                    "Assume it works",
+                    "Skip testing to save time",
+                    "Have a homeowner test it first",
+                ],
+                "answer": 0,
+                "topic": "Electrical — final test",
+            },
+        ],
+    },
+    "plumber": {
+        "title": "Plumber — Core Working Knowledge",
+        "pass_percent": 70,
+        "questions": [
+            {
+                "q": "Before taking apart any fixture, you should:",
+                "options": [
+                    "Start wrenching immediately",
+                    "Shut off the water supply and relieve pressure",
+                    "Assume it's empty",
+                    "Open every valve",
+                ],
+                "answer": 1,
+                "topic": "Plumbing — isolate supply",
+            },
+            {
+                "q": "A P-trap is primarily there to:",
+                "options": [
+                    "Collect gold",
+                    "Seal against sewer gas and catch small debris",
+                    "Slow down draining",
+                    "Connect to the vent only",
+                ],
+                "answer": 1,
+                "topic": "Plumbing — traps",
+            },
+            {
+                "q": "When working on gas or pressurized lines, the first step is:",
+                "options": [
+                    "Cut the line",
+                    "Lock out / shut off service and verify zero pressure",
+                    "Smell check only",
+                    "Nothing special",
+                ],
+                "answer": 1,
+                "topic": "Plumbing — LOTO / gas",
+            },
+            {
+                "q": "Drain lines need proper slope so they:",
+                "options": [
+                    "Look straight",
+                    "Flow by gravity (typically 1/4 inch per foot) and self-clean",
+                    "Sound quiet",
+                    "Fill with water",
+                ],
+                "answer": 1,
+                "topic": "Plumbing — drainage pitch",
+            },
+            {
+                "q": "Flux + heat on copper joints:",
+                "options": [
+                    "Needs a fire watch and heat shield near combustibles",
+                    "Is always safe",
+                    "Produces no fumes",
+                    "Should be done near drywall butts",
+                ],
+                "answer": 0,
+                "topic": "Plumbing — brazing/soldering fire safety",
+            },
+            {
+                "q": "A water heater's temperature & pressure (T&P) relief valve:",
+                "options": [
+                    "Can be capped off",
+                    "Must be installed and discharge safely — never cap or block it",
+                    "Is optional",
+                    "Only goes on gas units",
+                ],
+                "answer": 1,
+                "topic": "Plumbing — water heater safety",
+            },
+            {
+                "q": "Before soldering, why must the line be dry?",
+                "options": [
+                    "Water conducts heat and prevents a good solder bond",
+                    "It tastes better",
+                    "To cool the torch",
+                    "No reason",
+                ],
+                "answer": 0,
+                "topic": "Plumbing — soldering prep",
+            },
+            {
+                "q": "A water leak detected in a wall should be:",
+                "options": [
+                    "Covered with drywall patch",
+                    "Reported, isolated (shut off supply), and dried/repaired properly",
+                    "Ignored if small",
+                    "Bleached",
+                ],
+                "answer": 1,
+                "topic": "Plumbing — leak response",
+            },
+        ],
+    },
+    "roofing": {
+        "title": "Roofing & Siding — Core Working Knowledge",
+        "pass_percent": 70,
+        "questions": [
+            {
+                "q": "Working on a roof without approved fall protection:",
+                "options": [
+                    "Is fine on low slopes",
+                    "Is a violation at 6 feet+ — use a harness + anchor or guardrails/covers",
+                    "Only matters in rain",
+                    "Is allowed if you're experienced",
+                ],
+                "answer": 1,
+                "topic": "Roofing — fall protection",
+            },
+            {
+                "q": "On a ladder to the roof, you should:",
+                "options": [
+                    "Stand on the top rung",
+                    "Keep 3 points of contact and extend it 3 feet above the roof edge",
+                    "Lean sideways to reach",
+                    "Carry tools in both hands",
+                ],
+                "answer": 1,
+                "topic": "Roofing — ladder safety",
+            },
+            {
+                "q": "When the forecast calls for high wind, roof work should be:",
+                "options": [
+                    "Continue normally",
+                    "Stopped / deferred and materials secured",
+                    "Done only by the fastest crew",
+                    "Moved to the peak",
+                ],
+                "answer": 1,
+                "topic": "Roofing — weather",
+            },
+            {
+                "q": "A nail gun should always be:",
+                "options": [
+                    "Pointed at co-workers for fun",
+                    "Treated as loaded — keep fingers clear, wear eye protection, never point at anyone",
+                    "Dry-fired at feet",
+                    "Carried by the trigger",
+                ],
+                "answer": 1,
+                "topic": "Roofing — nail gun safety",
+            },
+            {
+                "q": "Two workers both at the eave working below the other:",
+                "options": [
+                    "Can throw debris from below",
+                    "Keep separated or use a gap safety plan so tools/debris don't hit anyone",
+                    "Should race",
+                    "Is standard practice",
+                ],
+                "answer": 1,
+                "topic": "Roofing — struck-by / debris",
+            },
+            {
+                "q": "Removed shingles loaded into a chute or dumpster must be:",
+                "options": [
+                    "Thrown over the roof edge",
+                    "Kept in one controlled discharge point with a clear zone below",
+                    "Left on the lawn",
+                    "Buried onsite",
+                ],
+                "answer": 1,
+                "topic": "Roofing — debris control",
+            },
+            {
+                "q": "Underlayment should be installed so that:",
+                "options": [
+                    "Any order works",
+                    "Upper laps shed water over lower (overlap with headlap as specified)",
+                    "It drapes loose",
+                    "It's only on the peak",
+                ],
+                "answer": 1,
+                "topic": "Roofing — underlayment",
+            },
+            {
+                "q": "Siding nails that are over-driven:",
+                "options": [
+                    "Are irrelevant",
+                    "Can split panels and void warranty — set the nail flush/at spec",
+                    "Make it stronger",
+                    "Only affect color",
+                ],
+                "answer": 1,
+                "topic": "Siding — fastening",
+            },
+        ],
+    },
+    "hvac": {
+        "title": "HVAC — Core Working Knowledge",
+        "pass_percent": 70,
+        "questions": [
+            {
+                "q": "Before servicing an HVAC unit, you should:",
+                "options": [
+                    "Reach inside the cabinet",
+                    "Lock out electrical power and verify it's disconnected",
+                    "Assume it's inert",
+                    "Only turn the thermostat off",
+                ],
+                "answer": 1,
+                "topic": "HVAC — LOTO",
+            },
+            {
+                "q": "Refrigerant must never be:",
+                "options": [
+                    "Recovered",
+                    "Vented to atmosphere — recover it with proper equipment",
+                    "Handled by a tech",
+                    "Measured",
+                ],
+                "answer": 1,
+                "topic": "HVAC — refrigerant handling",
+            },
+            {
+                "q": "A capacitor on a blower/compressor can:",
+                "options": [
+                    "Hold a dangerous charge — discharge it with a proper resistor/bleeder, not your hand",
+                    "Never shock anyone",
+                    "Be touched safely",
+                    "Only affect the fan",
+                ],
+                "answer": 0,
+                "topic": "HVAC — capacitor discharge",
+            },
+            {
+                "q": "Airflow restrictions (dirty filter, blocked coil) cause:",
+                "options": [
+                    "Nothing",
+                    "Higher energy use, freezing coils, and compressor damage",
+                    "Better airflow",
+                    "Quieter operation",
+                ],
+                "answer": 1,
+                "topic": "HVAC — airflow",
+            },
+            {
+                "q": "Supply and return duct connections should be:",
+                "options": [
+                    "Sealed and insulated where required to prevent air loss and condensation",
+                    "Left open to the attic",
+                    "Taped with duct tape only",
+                    "Optional",
+                ],
+                "answer": 0,
+                "topic": "HVAC — ducts",
+            },
+            {
+                "q": "Checking a flame or gas leak requires you to:",
+                "options": [
+                    "Smell only",
+                    "Use proper detection/gauges and follow the unit's service procedure",
+                    "Light a match",
+                    "Ignore it",
+                ],
+                "answer": 1,
+                "topic": "HVAC — gas safety",
+            },
+            {
+                "q": "Condensate drain lines that are clear:",
+                "options": [
+                    "Prevent water damage and mold — keep them unobstructed",
+                    "Are a problem",
+                    "Only matter in winter",
+                    "Should be capped",
+                ],
+                "answer": 0,
+                "topic": "HVAC — condensate",
+            },
+            {
+                "q": "When working on a roof-mounted unit:",
+                "options": [
+                    "No fall protection needed",
+                    "Use fall protection and secure tools/scooters so nothing falls on people below",
+                    "Sit on the condenser",
+                    "Skip PPE",
+                ],
+                "answer": 1,
+                "topic": "HVAC — rooftop fall protection",
+            },
+        ],
+    },
+    "painting": {
+        "title": "Painting & Finishing — Core Working Knowledge",
+        "pass_percent": 70,
+        "questions": [
+            {
+                "q": "Homes built before 1978 may contain:",
+                "options": [
+                    "Nothing hazardous",
+                    "Lead-based paint — don't sand/scrape without proper containment and PPE",
+                    "Radioactive paint",
+                    "Mercury only",
+                ],
+                "answer": 1,
+                "topic": "Painting — lead awareness",
+            },
+            {
+                "q": "Sanding drywall or primer creates:",
+                "options": [
+                    "No dust",
+                    "Respirable dust — wear a respirator and ventilate/contain the area",
+                    "Pure oxygen",
+                    "A nice finish",
+                ],
+                "answer": 1,
+                "topic": "Painting — dust control",
+            },
+            {
+                "q": "Solvent-based coatings and spray applications need:",
+                "options": [
+                    "No ventilation",
+                    "Ventilation, low-VOC where possible, and respirator protection",
+                    "A heater",
+                    "Only a hat",
+                ],
+                "answer": 1,
+                "topic": "Painting — VOC & ventilation",
+            },
+            {
+                "q": "On a ladder painting a high wall, you should:",
+                "options": [
+                    "Reach far sideways",
+                    "Keep the ladder close, your body square, and move the ladder instead of overreaching",
+                    "Stand on the top rung",
+                    "Stretch the roller length instead",
+                ],
+                "answer": 1,
+                "topic": "Painting — ladder safety",
+            },
+            {
+                "q": "Surface must be free of dirt, dust, and loose paint because:",
+                "options": [
+                    "It looks better that day",
+                    "Paint will not adhere well otherwise — prep is 80% of a good finish",
+                    "It's faster",
+                    "Of the smell",
+                ],
+                "answer": 1,
+                "topic": "Painting — prep",
+            },
+            {
+                "q": "Torn drop cloths under foot while painting can cause:",
+                "options": [
+                    "Nothing",
+                    "Trip hazards — keep floors clear and cloths flat/taped",
+                    "Better coverage",
+                    "Static",
+                ],
+                "answer": 1,
+                "topic": "Painting — slips/trips",
+            },
+            {
+                "q": "Cleanup of latex paint:",
+                "options": [
+                    "Pour it down the drain",
+                    "Wash brushes in water, collect rinsate, and dispose of paint properly — never down drains/storm",
+                    "Bury the cans",
+                    "Leave to dry in the sink",
+                ],
+                "answer": 1,
+                "topic": "Painting — disposal",
+            },
+            {
+                "q": "Two coats of primer on raw drywall:",
+                "options": [
+                    "Waits material",
+                    "Seals joints and gives an even finish coat — apply per spec",
+                    "Causes peeling",
+                    "Is futile",
+                ],
+                "answer": 1,
+                "topic": "Painting — finishing",
+            },
+        ],
+    },
+    "concrete": {
+        "title": "Concrete & Masonry — Core Working Knowledge",
+        "pass_percent": 70,
+        "questions": [
+            {
+                "q": "Cutting concrete generates:",
+                "options": [
+                    "Invisible air",
+                    "Silica dust — wet-cut and/or use dust collection plus a respirator",
+                    "No hazard",
+                    "Only noise",
+                ],
+                "answer": 1,
+                "topic": "Concrete — silica",
+            },
+            {
+                "q": "When a ready-mix truck is backing up:",
+                "options": [
+                    "Stand behind the truck to guide it",
+                    "Stay clear — spotters use the agreed signals and no one stands in the swing path",
+                    "Wave at the driver",
+                    "It doesn't matter",
+                ],
+                "answer": 1,
+                "topic": "Concrete — struck-by / backing",
+            },
+            {
+                "q": "Freshly placed concrete in contact with skin:",
+                "options": [
+                    "Is harmless",
+                    "Can cause chemical burns — flush with water immediately and wear gloves/boots",
+                    "Tans you",
+                    "Only stings on the legs",
+                ],
+                "answer": 1,
+                "topic": "Concrete — chemical burns",
+            },
+            {
+                "q": "Standing in a trench for utility work requires:",
+                "options": [
+                    "Nothing special",
+                    "A protected system (shoring/sloping) per OSHA at 5 ft+ and a safe entry/exit",
+                    "Sprinting in",
+                    "Just a hard hat",
+                ],
+                "answer": 1,
+                "topic": "Concrete — trench/excavation",
+            },
+            {
+                "q": "Concrete cures best when:",
+                "options": [
+                    "Left to dry fast",
+                    "Kept moist/cured per spec for several days to reach design strength",
+                    "Baked",
+                    "Frozen",
+                ],
+                "answer": 1,
+                "topic": "Concrete — curing",
+            },
+            {
+                "q": "A metal trowel floating before the mix is ready:",
+                "options": [
+                    "Speeds the pour",
+                    "Can seal the surface and cause dusting/delamination — wait for the right set",
+                    "Is required",
+                    "Helps the color",
+                ],
+                "answer": 1,
+                "topic": "Concrete — finishing",
+            },
+            {
+                "q": "Formwork should be:",
+                "options": [
+                    "Reused until it fails",
+                    "Braced/secured per the tie/brace plan — never stand under unsupported forms",
+                    "Covered in oil on the job",
+                    "Left loose",
+                ],
+                "answer": 1,
+                "topic": "Concrete — forms & bracing",
+            },
+            {
+                "q": "After the pour, foot traffic and rain on fresh concrete:",
+                "options": [
+                    "Are fine",
+                    "Must be protected — keep off and cover until the mix is set",
+                    "Help it dry",
+                    "Only matters indoors",
+                ],
+                "answer": 1,
+                "topic": "Concrete — fresh pour protection",
+            },
+        ],
+    },
+}
+
+# Slug -> test definition used by the portal and phone app.
+ALL_TRAININGS = [
+    {
+        "slug": "osha",
+        "title": "Site Safety Orientation (OSHA-10 baseline)",
+        "pass_percent": 70,
+        "questions": OSHA_QUIZ,
+    },
+    {"slug": "electrician", "title": "Electrician — Core Working Knowledge", "pass_percent": 70, "questions": TRADE_QUIZZES["electrician"]["questions"]},
+    {"slug": "plumber", "title": "Plumber — Core Working Knowledge", "pass_percent": 70, "questions": TRADE_QUIZZES["plumber"]["questions"]},
+    {"slug": "roofing", "title": "Roofing & Siding — Core Working Knowledge", "pass_percent": 70, "questions": TRADE_QUIZZES["roofing"]["questions"]},
+    {"slug": "hvac", "title": "HVAC — Core Working Knowledge", "pass_percent": 70, "questions": TRADE_QUIZZES["hvac"]["questions"]},
+    {"slug": "painting", "title": "Painting & Finishing — Core Working Knowledge", "pass_percent": 70, "questions": TRADE_QUIZZES["painting"]["questions"]},
+    {"slug": "concrete", "title": "Concrete & Masonry — Core Working Knowledge", "pass_percent": 70, "questions": TRADE_QUIZZES["concrete"]["questions"]},
+]
+
+TRAINING_BY_SLUG = {t["slug"]: t for t in ALL_TRAININGS}
+
+
+def grade_training(answers, questions):
+    """Grade a list of option indexes against a question list -> pass/fail + missed topics."""
+    flat = [int(a) if isinstance(a, (int, float)) else 0 for a in (answers or [])]
+    if len(flat) != len(questions):
+        raise ValueError(f"expected {len(questions)} answers")
+    correct = [i for i, a in enumerate(flat) if a == questions[i]["answer"]]
+    missed = sorted({questions[i].get("topic", "General") for i in range(len(questions)) if i not in correct})
+    pct = round(100 * len(correct) / len(questions))
+    passed = pct >= 70
+    return {
+        "total": len(questions),
+        "correct": len(correct),
+        "percent": pct,
+        "passed": passed,
+        "missed_topics": missed,
+    }
+
+
+def grade_trade_quiz(slug, answers) -> dict:
+    """Grade a trade test by slug. Falls back to the OSHA quiz for the 'osha' slug."""
+    test = TRAINING_BY_SLUG.get(slug)
+    if not test:
+        raise ValueError(f"unknown test: {slug}")
+    return grade_training(answers, test["questions"])
