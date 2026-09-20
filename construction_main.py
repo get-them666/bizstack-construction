@@ -3300,7 +3300,7 @@ async def crew_training_page(request: Request):
     )
 
 
-@app.post("/crew/training/ppt")
+@app.get("/crew/training/ppt")
 async def crew_training_ppt(request: Request, db=Depends(get_db)):
     require_worker(request)
     try:
