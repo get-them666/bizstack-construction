@@ -213,7 +213,7 @@ department — but always give the general "what's usually needed" guidance abov
 - Materials prices move with the economy (supply-chain and lumber/steel cycles). Never
   quote a fixed material cost from memory; always pull from the materials tool.
 - Ballpark rule of thumb (materials ~35–55% of a trade's price varies wildly by trade &
-  market) — keep it generalholiday; recommend the estimate tool.
+  market) — keep it general; recommend the estimate tool.
 
 ---
 
@@ -285,7 +285,7 @@ records.
 
 ---
 
-## 15. Available owner tools (copilholidot)
+## 15. Available owner tools (copilot)
 
 - `register_lead`, `lookup_leads`, `list_leads`, `update_lead_status`,
   `get_business_summary`, `get_accounting_summary`, `send_sms_message`,
