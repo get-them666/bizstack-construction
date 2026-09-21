@@ -438,3 +438,64 @@ def send_bid_inquiry(db, company_key, *, title="", solicitation="", contact_name
     except Exception as exc:
         print(f"[bid-inquiry {company_key}] email failed for {email}: {exc}", flush=True)
         return False
+
+
+def fire_pending_bid_inquiries(company_key, *, db=None, max_emails=0, dry_run=False):
+    """Fire bid-inquiry emails to every scan lead that has a real email and has
+    not been emailed yet (the manual 'fire them all' owner action). dry_run
+    only counts and prints the pending queue without sending."""
+    company_key = company_key if company_key in COMPANIES else "construction"
+    db_url = os.getenv("DATABASE_URL", "")
+    open_here = db is None
+    if open_here:
+        import psycopg
+        from psycopg.rows import dict_row
+        db = psycopg.connect(db_url, row_factory=dict_row)
+        db.autocommit = True
+    try:
+        with db.cursor() as cur:
+            cur.execute(
+                "SELECT id, name, phone, email, project_type, address, listing_url, source "
+                "FROM leads "
+                "WHERE campaign = 'lead-source-scan' AND status = 'new' "
+                "AND email IS NOT NULL AND email <> '' AND email NOT LIKE '%@lead.local' "
+                "AND NOT EXISTS ("
+                "  SELECT 1 FROM comms_logs cl "
+                "  WHERE cl.channel = 'email' AND cl.direction = 'outbound' AND LOWER(cl.recipient) = LOWER(leads.email)"
+                ") ORDER BY id;"
+            )
+            pending = cur.fetchall()
+        total = len(pending or [])
+        if dry_run:
+            for r in (pending or []):
+                rn = r.get("name") or "(untitled)"
+                print(f"[bulk-fire {company_key}] pending: #{r.get('id')} {rn[:60]} <{r.get('email')}>", flush=True)
+            print(f"[bulk-fire {company_key}] dry-run: {total} pending, not sending", flush=True)
+            return {"pending": total, "sent": 0, "dry_run": True}
+        selected = pending if max_emails <= 0 else pending[:max_emails]
+        sent = 0
+        for r in selected:
+            rn = r.get("name") or ""
+            if " · " in rn:
+                title, _, contact = rn.partition(" · ")
+            else:
+                title, contact = rn, ""
+            if send_bid_inquiry(
+                db, company_key,
+                title=title or (r.get("project_type") or ""),
+                solicitation="",
+                contact_name=contact, email=r.get("email", ""),
+                service=r.get("project_type") or "",
+                address=r.get("address") or "", url=r.get("listing_url") or "",
+                lead_id=r.get("id"),
+            ):
+                sent += 1
+            time.sleep(1.0)
+        print(f"[bulk-fire {company_key}] fired {sent}/{len(selected)} pending (total pending {total})", flush=True)
+        return {"pending": total, "selected": len(selected), "sent": sent}
+    finally:
+        if open_here:
+            try:
+                db.close()
+            except Exception:
+                pass

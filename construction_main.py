@@ -2874,6 +2874,19 @@ def _start_lead_source_scheduler():
             time.sleep(float(os.getenv("LEAD_SCAN_START_DELAY", "45") or 45))
         except (TypeError, ValueError):
             time.sleep(45)
+        fire_mode = (os.getenv("LEAD_FIRE_PENDING", "") or "").strip().lower()
+        if fire_mode:
+            try:
+                fire_max = max(0, int(os.getenv("LEAD_FIRE_MAX", "0") or 0))
+            except (TypeError, ValueError):
+                fire_max = 0
+            try:
+                result = auto_reply.fire_pending_bid_inquiries(
+                    "construction", dry_run=(fire_mode in ("dry", "dryrun", "count")), max_emails=fire_max,
+                )
+                print(f"[bulk-fire construction] result={result}", flush=True)
+            except Exception as exc:
+                print(f"[bulk-fire construction] failed: {exc}", flush=True)
         while True:
             try:
                 run_lead_source_scan()
