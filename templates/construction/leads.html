@@ -131,6 +131,21 @@
                                 <button type="submit" class="px-4 py-2.5 text-sm font-semibold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 rounded-xl transition-colors">Save notes</button>
                             </form>
                         </div>
+
+                        {% if lead.draft_reply %}
+                        <div class="mt-4 bg-amber-50 border border-amber-200 rounded-xl p-4">
+                            <div class="flex flex-wrap items-center justify-between gap-2 mb-2">
+                                <p class="text-xs font-bold text-amber-700 uppercase tracking-wider">Bot draft reply — review &amp; send</p>
+                            </div>
+                            <p class="text-sm text-slate-800 whitespace-pre-wrap bg-white rounded-lg p-3 border border-amber-100">{{ lead.draft_reply }}</p>
+                            <div class="mt-3 flex flex-wrap items-center gap-2">
+                                <form method="POST" action="/api/leads/{{ lead.id }}/fire-draft" onsubmit="this.querySelector('button').disabled = true; this.querySelector('button').textContent = 'Sending…';">
+                                    <button type="submit" class="px-4 py-2 text-sm font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl transition-colors">Send this reply</button>
+                                </form>
+                                <a href="mailto:{{ lead.email }}?subject=Your%20{{ lead.project_type or 'project' }}%20inquiry&body={{ (lead.draft_reply or '').replace(' ', '%20')[:1000] }}" class="px-3 py-2 text-sm font-semibold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 rounded-xl transition-colors">Open in email</a>
+                            </div>
+                        </div>
+                        {% endif %}
                     </div>
                 </details>
             </div>

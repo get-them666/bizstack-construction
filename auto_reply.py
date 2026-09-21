@@ -197,24 +197,159 @@ def _auto_quote(company_key, service, sqft):
     return None, None
 
 
-def auto_reply_to_lead(db, company_key, *, name="", phone="", email="", service="", address="",
-                       budget="", timeline="", message="", source="", funding=False,
-                       sqft=None, lead_id=None):
-    """Send an automatic first-touch reply to a newly captured lead (both companies).
+def _ensure_draft_column(db):
+    """Idempotently add the reply-draft column used by review mode."""
+    try:
+        with db.cursor() as cur:
+            cur.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS draft_reply TEXT;")
+            db.commit()
+    except Exception as exc:
+        print(f"[auto-reply] draft column ensure failed: {exc}", flush=True)
 
-    Optionally includes a quick ballpark quote (construction: estimating models;
-    broom: cleaning price list) and stamps the quoted range on the lead row.
-    Prefers SMS; falls back to email when there's no valid phone number, we already
-    auto-texted this number in the last 10 minutes, or the SMS send fails.
-    Skips entirely when AUTO_REPLY_ENABLED is false and there's no reachable channel."""
-    if os.getenv("AUTO_REPLY_ENABLED", "1").lower() not in ("1", "true", "yes"):
-        return None
+
+def _review_mode() -> bool:
+    """True when the bot should stage reply drafts for owner review instead of sending.
+
+    LEAD_AUTO_SEND=1 (or on/true/yes) re-enables automatic email/text. Without it
+    (or when set to 0/off) every new lead gets a review draft instead."""
+    return (os.getenv("LEAD_AUTO_SEND", "") or "").strip().lower() not in ("1", "true", "yes", "on")
+
+
+def _smoke_recipient_email(email: str) -> bool:
+    """Quick scrub so we never hand a junk/placeholder address to the send providers."""
+    email = (email or "").strip().lower()
+    if not email or "@" not in email or "." not in email.split("@", 1)[1]:
+        return False
+    if email.endswith("@lead.local"):
+        return False
+    bad_tlds = ("local", "invalid", "test", "example", "fake", "none", "missing", "unknown")
+    if email.rsplit(".", 1)[-1].lower() in bad_tlds:
+        return False
+    return True
+
+
+def _outbound_cap(channel: str, default: int = 30) -> int:
+    env = {"email": "EMAIL_DAILY_CAP", "text": "TEXT_DAILY_CAP", "sms": "TEXT_DAILY_CAP"}.get(channel, "")
+    raw = os.getenv(env, "") if env else ""
+    try:
+        return max(0, int(raw or default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _outbound_sent_today(db, channel: str) -> int:
+    try:
+        with db.cursor() as cur:
+            cur.execute(
+                "SELECT COUNT(*) AS c FROM comms_logs WHERE direction = 'outbound' AND channel = %s "
+                "AND created_at >= date_trunc('day', now());",
+                (channel,),
+            )
+            row = cur.fetchone()
+        return int(row["c"] if isinstance(row, dict) else (row[0] if row else 0))
+    except Exception:
+        return 0
+
+
+def _channel_allowed(db, channel: str) -> tuple:
+    """Return (ok, reason_or_empty). Enforces the daily outbound caps."""
+    cap = _outbound_cap(channel)
+    if cap <= 0:
+        return True, ""
+    used = _outbound_sent_today(db, channel)
+    if used >= cap:
+        return False, f"{channel} daily cap ({cap}) reached — {used} sent today"
+    return True, ""
+
+
+def _phone_e164(phone):
+    digits = re.sub(r"\D", "", str(phone or ""))
+    if not digits:
+        return ""
+    if digits.startswith("1") and len(digits) == 11:
+        return "+" + digits
+    if len(digits) == 10:
+        return "+1" + digits
+    return "+" + digits
+
+
+def _stage_draft(db, lead_id, company_key, channel, recipient, body):
+    """Store a review draft on the lead and surface it in notes (both sites)."""
+    if not lead_id:
+        return False
+    _ensure_draft_column(db)
+    draft = f"[BOT DRAFT REPLY – {channel}, not sent] To: {recipient}\n{body}"
+    try:
+        with db.cursor() as cur:
+            cur.execute("SELECT notes, draft_reply FROM leads WHERE id = %s;", (lead_id,))
+            lead = cur.fetchone()
+            notes = (lead.get("notes") or "") if lead else ""
+            stamp = time.strftime("%b %d %Y %H:%M")
+            note = f"\n[BOT DRAFT REPLY ({channel}) {stamp}] To: {recipient}\n{body[:800]}"
+            notes = (notes.strip() + note).strip()[:6000] if notes.strip() else note.strip()[:6000]
+            cur.execute(
+                "UPDATE leads SET notes = %s, draft_reply = %s WHERE id = %s;",
+                (notes, draft[:4000], lead_id),
+            )
+            db.commit()
+        print(f"[auto-reply {company_key}] staged draft on leads#{lead_id} ({channel})", flush=True)
+        return True
+    except Exception as exc:
+        print(f"[auto-reply {company_key}] draft stage failed for lead {lead_id}: {exc}", flush=True)
+        return False
+
+
+def _fire_sent_effect(db, lead_id, company_key, channel, recipient, body):
+    """Mark a lead contacted after a successful real send; clears the staged draft."""
+    try:
+        with db.cursor() as cur:
+            cur.execute(
+                "SELECT notes, draft_reply FROM leads WHERE id = %s;", (lead_id,),
+            )
+            lead = cur.fetchone()
+            notes = (lead.get("notes") or "") if lead else ""
+            notes = (_strip_draft_marker(notes))[:6000] if notes else ""
+            cur.execute(
+                "UPDATE leads SET notes = %s, draft_reply = NULL, status = 'contacted' "
+                "WHERE id = %s AND status = 'new';",
+                (notes, lead_id),
+            )
+            cur.execute(
+                "INSERT INTO comms_logs (direction, channel, sender, recipient, message_body) "
+                "VALUES ('outbound', %s, 'system', %s, %s);",
+                (channel, recipient, body[:2000]),
+            )
+            db.commit()
+        print(f"[auto-reply {company_key}] sent {channel} to {recipient} (lead #{lead_id})", flush=True)
+        return True
+    except Exception as exc:
+        print(f"[auto-reply {company_key}] post-send bookkeeping failed for lead {lead_id}: {exc}", flush=True)
+        return False
+
+
+def _strip_draft_marker(notes: str) -> str:
+    """Remove previous BOT DRAFT REPLY blocks from a lead's notes after a real send."""
+    import re as _re
+
+    cleaned = _re.sub(r"\[BOT DRAFT REPLY[^\]]*\] To: .*?(?:\n|$)", "", notes or "")
+    cleaned = _re.sub(r"\n\[BOT DRAFT REPLY\b.*(?:\n|$)", "", cleaned)
+    return _re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+
+
+def ensure_lead_reply(db, company_key, *, name="", phone="", email="", service="", address="",
+                      budget="", timeline="", message="", source="", funding=False,
+                      sqft=None, lead_id=None):
+    """Guarantee a reply exists for a new lead (both companies).
+
+    In auto mode (LEAD_AUTO_SEND=1) sends the first-touch email/text immediately,
+    respecting the EMAIL_DAILY_CAP / TEXT_DAILY_CAP budgets and refusing junk
+    addresses. In review mode stages the drafted reply in the lead notes for the
+    owner to fire manually. Returns {"sent": bool, "staged": bool, "msg": str}."""
+    _ensure_draft_column(db)
+    auto = not _review_mode()
     company_key = company_key if company_key in COMPANIES else "broom"
     email = (email or "").strip()
     service = (service or "").strip()
-    if not email:
-        return None
-    co_name = COMPANIES[company_key]["name"]
 
     quote, est = _auto_quote(company_key, service, sqft)
     if est and company_key == "construction" and lead_id:
@@ -229,33 +364,147 @@ def auto_reply_to_lead(db, company_key, *, name="", phone="", email="", service=
         except Exception as exc:
             print(f"[auto-reply {company_key}] estimate stamp failed for lead {lead_id}: {exc}", flush=True)
 
+    co_name = COMPANIES[company_key]["name"]
     msg = _build_message(company_key, co_name, quote=quote, name=name, service=service, address=address,
-                         budget=budget, timeline=timeline, message=message, source=source,
-                         funding=funding)
+                         budget=budget, timeline=timeline, message=message, source=source, funding=funding)
 
-    sent_email = False
-    if email:
+    sent = staged = False
+
+    if email and _smoke_recipient_email(email):
         try:
             cfg = documents_service.smtp_config_from_env()
-            if documents_service.smtp_configured(cfg):
-                subject = f"Thanks for reaching out{f', {name.split()[0]}' if name else ''} — {co_name}"
-                run_coro(documents_service.send_email(cfg, email, subject, msg.replace("\n", "<br>")))
-                with db.cursor() as cur:
-                    cur.execute(
-                        "INSERT INTO comms_logs (direction, channel, sender, recipient, message_body) "
-                        "VALUES ('outbound', 'email', 'system', %s, %s);",
-                        (email, msg),
-                    )
-                    db.commit()
-                sent_email = True
-                print(f"[auto-reply {company_key}] sent email to {email} (source={source})", flush=True)
-        except Exception as exc:
-            print(f"[auto-reply {company_key}] email failed for {email}: {exc}", flush=True)
+            has_smtp = documents_service.smtp_configured(cfg)
+        except Exception:
+            has_smtp = False
+        if auto and has_smtp:
+            ok, why = _channel_allowed(db, "email")
+            if ok:
+                try:
+                    subject = f"Thanks for reaching out{f', {name.split()[0]}' if name else ''} — {co_name}"
+                    run_coro(documents_service.send_email(cfg, email, subject, msg.replace("\n", "<br>")))
+                    sent = _fire_sent_effect(db, lead_id, company_key, "email", email, msg)
+                except Exception as exc:
+                    print(f"[auto-reply {company_key}] email failed for {email}: {exc}", flush=True)
+            else:
+                print(f"[auto-reply {company_key}] email to {email} skipped — {why}", flush=True)
+        if not sent:
+            staged = _stage_draft(db, lead_id, company_key, "email", email, msg) or staged
 
-    if sent_email:
-        return msg
-    print(f"[auto-reply {company_key}] no email on file for lead (phone={_valid_phone(phone)})", flush=True)
-    return None
+    if _valid_phone(phone) and not sent:
+        to = _phone_e164(phone)
+        try:
+            import signalwire_service
+            sw = signalwire_service.SignalWireService()
+            has_sw = bool(sw.is_configured())
+        except Exception:
+            sw = None
+            has_sw = False
+        if auto and has_sw:
+            ok, why = _channel_allowed(db, "text")
+            if ok:
+                try:
+                    if sw.send_sms(to, msg):
+                        sent = _fire_sent_effect(db, lead_id, company_key, "text", to, msg)
+                except Exception as exc:
+                    print(f"[auto-reply {company_key}] sms failed for {to}: {exc}", flush=True)
+            else:
+                print(f"[auto-reply {company_key}] sms to {to} skipped — {why}", flush=True)
+        if not sent:
+            staged = _stage_draft(db, lead_id, company_key, "text", to, msg) or staged
+
+    if not email and not _valid_phone(phone):
+        print(f"[auto-reply {company_key}] no reachable channel for lead (phone={_valid_phone(phone)}, email={email})", flush=True)
+    print(f"[auto-reply {company_key}] lead reply for #{lead_id}: sent={sent} staged={staged}", flush=True)
+    return {"sent": sent, "staged": staged, "msg": msg}
+
+
+def fire_lead_draft(db, company_key, lead_id):
+    """Send a staged draft reply for a lead (the owner 'Send this reply' action).
+
+    Reads the draft stored on the lead, sends via the best channel, logs it, marks
+    the lead contacted, and clears the draft. Manual fire still honors the daily
+    caps and address scrub, but returns per-channel reasons when blocked."""
+    result = {"sent": False, "why": ""}
+    if not lead_id:
+        result["why"] = "no lead id"
+        return result
+    _ensure_draft_column(db)
+    try:
+        with db.cursor() as cur:
+            cur.execute("SELECT * FROM leads WHERE id = %s;", (lead_id,))
+            lead = cur.fetchone()
+        if not lead:
+            result["why"] = "lead not found"
+            return result
+        draft = (lead.get("draft_reply") or "").strip()
+        body = draft.split("\n", 1)[1] if "\n" in draft else draft
+        candidate_channel = "text" if draft.startswith("[BOT DRAFT REPLY – text") else "email"
+        candidate_channels = ["text", "email"] if candidate_channel == "text" else ["email", "text"]
+        for channel in candidate_channels:
+            if channel == "email":
+                recipient = (lead.get("email") or "").strip()
+                if not _smoke_recipient_email(recipient):
+                    continue
+            else:
+                recipient = _phone_e164(lead.get("phone"))
+                if not _valid_phone(recipient):
+                    continue
+            ok, why = _channel_allowed(db, "text" if channel == "text" else "email")
+            if not ok:
+                result["why"] = why
+                print(f"[auto-reply {company_key}] manual fire blocked — {why}", flush=True)
+                continue
+            if channel == "email":
+                try:
+                    cfg = documents_service.smtp_config_from_env()
+                    if not documents_service.smtp_configured(cfg):
+                        result["why"] = "email not configured"
+                        continue
+                    subject = (draft.split("\n", 1)[0] or "Thanks for reaching out")
+                    run_coro(documents_service.send_email(cfg, recipient, subject.replace("To: ", ""), body.replace("\n", "<br>")))
+                except Exception as exc:
+                    print(f"[auto-reply {company_key}] fire email failed: {exc}", flush=True)
+                    result["why"] = str(exc)[:200]
+                    continue
+            else:
+                to = recipient
+                try:
+                    import signalwire_service
+                    sw = signalwire_service.SignalWireService()
+                    if not sw.is_configured():
+                        result["why"] = "text not configured"
+                        continue
+                    sw.send_sms(to, body)
+                except Exception as exc:
+                    print(f"[auto-reply {company_key}] fire sms failed: {exc}", flush=True)
+                    result["why"] = str(exc)[:200]
+                    continue
+            sent = _fire_sent_effect(db, lead_id, company_key, channel, recipient, body)
+            if sent:
+                result["sent"] = True
+                result["channel"] = channel
+                result["why"] = ""
+            return result
+    except Exception as exc:
+        result["why"] = f"fire failed: {exc}"[:300]
+        print(f"[auto-reply {company_key}] fire draft failed for lead {lead_id}: {exc}", flush=True)
+    return result
+
+
+def auto_reply_to_lead(db, company_key, *, name="", phone="", email="", service="", address="",
+                       budget="", timeline="", message="", source="", funding=False,
+                       sqft=None, lead_id=None):
+    """Back-compat wrapper around ensure_lead_reply: returns the message text when
+    a reply was actually sent, otherwise None (callers treat None as 'not sent')."""
+    if os.getenv("AUTO_REPLY_ENABLED", "1").lower() not in ("1", "true", "yes"):
+        return None
+    out = ensure_lead_reply(
+        db, company_key, name=name, phone=phone, email=email, service=service,
+        address=address, budget=budget, timeline=timeline, message=message,
+        source=source, funding=funding, sqft=sqft, lead_id=lead_id,
+    )
+    return out["msg"] if out.get("sent") else None
+
 
 def build_bid_inquiry(company_key, *, title="", solicitation="", contact_name="", service="",
                       address="", state="", url=""):

@@ -129,6 +129,7 @@ async def lifecycle(app: FastAPI):
                 cur.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS deposit_cents INTEGER;")
                 cur.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS stripe_session_id VARCHAR(255);")
                 cur.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS notes TEXT;")
+                cur.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS draft_reply TEXT;")
                 cur.execute("""
                 CREATE TABLE IF NOT EXISTS payments (
                     id SERIAL PRIMARY KEY,
@@ -1487,6 +1488,15 @@ async def update_lead_notes(lead_id: int, request: Request, notes: str = Form(""
         cur.execute("UPDATE leads SET notes = %s WHERE id = %s;", (notes, lead_id))
         db.commit()
     return JSONResponse(content={"status": "success"})
+
+
+@app.post("/api/leads/{lead_id}/fire-draft")
+async def fire_lead_draft_route(lead_id: int, request: Request, db=Depends(get_db)):
+    require_admin(request)
+    result = auto_reply.fire_lead_draft(db, "construction", lead_id)
+    if request.headers.get("hx-request"):
+        return JSONResponse(content={"status": "fired" if result.get("sent") else "blocked", "why": result.get("why", "")})
+    return RedirectResponse(url=request.headers.get("referer") or "/leads", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.post("/api/leads/{lead_id}/delete")
