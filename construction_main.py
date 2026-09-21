@@ -52,6 +52,7 @@ import construction_radar
 import materials_service
 import training_service
 import lead_sources
+import inbound_email
 
 db_url = os.getenv("DATABASE_URL", "postgresql://shaun:secret@localhost:5432/buildstack")
 templates = Jinja2Templates(directory="templates/construction")
@@ -171,6 +172,7 @@ async def lifecycle(app: FastAPI):
                     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
                 );
                 """)
+                inbound_email._ensure_schema(cur)
                 cur.execute("""
                 CREATE TABLE IF NOT EXISTS users (
                     id SERIAL PRIMARY KEY,
@@ -2868,12 +2870,29 @@ def _start_lead_source_scheduler():
     except (TypeError, ValueError):
         interval_h = 6
 
+    poll_on = (os.getenv("INBOUND_POLL", "") or "").strip().lower() in ("1", "true", "yes", "on")
+    if poll_on:
+        threading.Thread(target=inbound_email.poll_loop, daemon=True).start()
+
     def _runner():
         print(f"[lead-source] scheduler started (every {interval_h:g}h)", flush=True)
         try:
             time.sleep(float(os.getenv("LEAD_SCAN_START_DELAY", "45") or 45))
         except (TypeError, ValueError):
             time.sleep(45)
+        debug_active = (os.getenv("LEAD_DEBUG_ACTIVE", "") or "").strip().lower() in ("1", "true", "yes", "on")
+        if debug_active:
+            try:
+                with psycopg.connect(db_url, row_factory=dict_row) as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            "SELECT id, name, phone, email, project_type, status, deposit_status "
+                            "FROM leads WHERE status IN ('quoted','deposit','in_progress') "
+                            "AND company = 'construction' ORDER BY created_at DESC;"
+                        )
+                        print(f"[debug-active] rows={cur.fetchall()}", flush=True)
+            except Exception as exc:
+                print(f"[debug-active] failed: {exc}", flush=True)
         fire_mode = (os.getenv("LEAD_FIRE_PENDING", "") or "").strip().lower()
         if fire_mode:
             try:
@@ -2895,6 +2914,25 @@ def _start_lead_source_scheduler():
             time.sleep(interval_h * 3600)
 
     threading.Thread(target=_runner, daemon=True).start()
+
+
+@app.post("/api/email/inbound")
+async def email_inbound_webhook(request: Request):
+    secret = (os.getenv("INBOUND_EMAIL_SECRET", "") or "").strip()
+    if secret:
+        given = request.query_params.get("secret") or ""
+        if not hmac.compare_digest(given, secret):
+            return JSONResponse(content={"ok": False, "error": "unauthorized"}, status_code=401)
+    try:
+        body = await request.json()
+        result = inbound_email.handle_webhook_payload(
+            body, "construction", os.getenv("SMTP_FROM", "") or "hello@bizstackperks.com"
+        )
+        print(f"[email-inbound] webhook ingested: {result}", flush=True)
+        return JSONResponse(content={"ok": True, **result})
+    except Exception as exc:
+        print(f"[email-inbound] webhook error: {exc}", flush=True)
+        return JSONResponse(content={"ok": False, "error": str(exc)[:300]}, status_code=500)
 
 
 @app.post("/lead-sources/scan")

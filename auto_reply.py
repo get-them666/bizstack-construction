@@ -457,12 +457,13 @@ def fire_pending_bid_inquiries(company_key, *, db=None, max_emails=0, dry_run=Fa
             cur.execute(
                 "SELECT id, name, phone, email, project_type, address, listing_url, source "
                 "FROM leads "
-                "WHERE campaign = 'lead-source-scan' AND status = 'new' "
+                "WHERE campaign = 'lead-source-scan' AND status = 'new' AND company = %s "
                 "AND email IS NOT NULL AND email <> '' AND email NOT LIKE '%@lead.local' "
                 "AND NOT EXISTS ("
                 "  SELECT 1 FROM comms_logs cl "
                 "  WHERE cl.channel = 'email' AND cl.direction = 'outbound' AND LOWER(cl.recipient) = LOWER(leads.email)"
-                ") ORDER BY id;"
+                ") ORDER BY id;",
+                (company_key,),
             )
             pending = cur.fetchall()
         total = len(pending or [])

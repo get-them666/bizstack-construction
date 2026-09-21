@@ -20,6 +20,7 @@ Tuning knobs (env):
 """
 import json
 import os
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -116,9 +117,17 @@ def _request(params):
         return json.loads(resp.read().decode("utf-8", "replace"))
 
 
+def _clean_email(raw):
+    e = re.sub(r"\s+", "", str(raw or ""))
+    e = e.lstrip("<").rstrip(">").rstrip(".")
+    if "@" not in e or "." not in e.split("@", 1)[1]:
+        return ""
+    return e
+
+
 def _poc(result):
     for c in result.get("pointOfContacts") or []:
-        email = (c.get("email") or "").strip()
+        email = _clean_email(c.get("email"))
         phone = (c.get("phone") or "").strip()
         if email or phone:
             return {"name": (c.get("fullName") or "").strip(), "email": email, "phone": phone}
