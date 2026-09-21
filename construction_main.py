@@ -1768,7 +1768,10 @@ def _follow_up_new_lead(lead_id: int) -> None:
                 return
             swml_url = (os.getenv("APP_BASE_URL", "") or f"https://{company()['domain']}").rstrip("/") + "/comms/outbound-voice.swml"
             try:
-                sid = signalwire.create_ai_outbound_call(to, swml_url)
+                if vapi_service.VapiService().is_configured():
+                    sid = vapi_service.VapiService().create_ai_outbound_call(to, f"AI immediate callback for new lead {lead_id}")
+                else:
+                    sid = signalwire.create_ai_outbound_call(to, swml_url)
             except Exception as e:
                 print(f"📞[followup] dial failed for lead {lead_id}: {e}", flush=True)
                 return
