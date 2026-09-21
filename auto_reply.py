@@ -418,7 +418,7 @@ def ensure_lead_reply(db, company_key, *, name="", phone="", email="", service="
     return {"sent": sent, "staged": staged, "msg": msg}
 
 
-def fire_lead_draft(db, company_key, lead_id):
+def fire_lead_draft(db, company_key, lead_id, *, force=False):
     """Send a staged draft reply for a lead (the owner 'Send this reply' action).
 
     Reads the draft stored on the lead, sends via the best channel, logs it, marks
@@ -449,7 +449,15 @@ def fire_lead_draft(db, company_key, lead_id):
                 recipient = _phone_e164(lead.get("phone"))
                 if not _valid_phone(recipient):
                     continue
-            ok, why = _channel_allowed(db, "text" if channel == "text" else "email")
+            if not force:
+                ok, why = _channel_allowed(db, "text" if channel == "text" else "email")
+                if not ok:
+                    result["why"] = why
+                    print(f"[auto-reply {company_key}] manual fire blocked \u2014 {why}", flush=True)
+                    continue
+            else:
+                ok = True
+                why = ""
             if not ok:
                 result["why"] = why
                 print(f"[auto-reply {company_key}] manual fire blocked — {why}", flush=True)
@@ -491,39 +499,48 @@ def fire_lead_draft(db, company_key, lead_id):
     return result
 
 
-def fire_all_drafts(db, company_key):
+def fire_all_drafts(db, company_key=None):
     """Owner action: fire every staged review draft for a company at once.
 
     Loops over leads with a draft_reply set, sends each via fire_lead_draft
     (which re-checks caps + scrub per lead), and reports sent/skipped. Returns
     {"pending": n, "sent": m, "skipped": k, "reasons": {reason: count}}."""
-    company_key = company_key if company_key in COMPANIES else "broom"
+    company_key = company_key if company_key in COMPANIES else None
     _ensure_draft_column(db)
     pending = []
     try:
         with db.cursor() as cur:
-            cur.execute(
-                "SELECT id FROM leads WHERE company = %s AND draft_reply IS NOT NULL "
-                "AND LOWER(COALESCE(draft_reply, '')) <> '' ORDER BY id;",
-                (company_key,),
-            )
-            pending = [r["id"] for r in cur.fetchall()]
+            if company_key:
+                cur.execute(
+                    "SELECT id FROM leads WHERE company = %s AND draft_reply IS NOT NULL "
+                    "AND LOWER(COALESCE(draft_reply, '')) <> '' ORDER BY id;",
+                    (company_key,),
+                )
+                pending = [r["id"] for r in cur.fetchall()]
+            else:
+                for ck in COMPANIES:
+                    cur.execute(
+                        "SELECT id FROM leads WHERE company = %s AND draft_reply IS NOT NULL "
+                        "AND LOWER(COALESCE(draft_reply, '')) <> '' ORDER BY id;",
+                        (ck,),
+                    )
+                    pending += [(ck, r["id"]) for r in cur.fetchall()]
     except Exception as exc:
-        print(f"[auto-reply {company_key}] fire-all query failed: {exc}", flush=True)
+        print(f"[auto-reply] fire-all query failed: {exc}", flush=True)
         return {"pending": 0, "sent": 0, "skipped": 0, "errors": [f"query failed: {exc}"]}
     sent = 0
     skipped = 0
     reasons = {}
-    for lead_id in pending:
-        res = fire_lead_draft(db, company_key, lead_id)
+    for ck, lead_id in pending:
+        res = fire_lead_draft(db, ck, lead_id, force=True)
         if res.get("sent"):
             sent += 1
         else:
             skipped += 1
             why = res.get("why") or "unknown"
             reasons[why] = reasons.get(why, 0) + 1
-    print(f"[auto-reply {company_key}] fire-all: {len(pending)} pending, {sent} sent, {skipped} skipped", flush=True)
-    return {"pending": len(pending), "sent": sent, "skipped": skipped, "reasons": reasons}
+    print(f"[auto-reply] fire-all: {len(pending)} pending, {sent} sent, {skipped} skipped", flush=True)
+    return {'pending': len(pending), 'sent': sent, 'skipped': skipped, 'reasons': reasons}
 
 
 def auto_reply_to_lead(db, company_key, *, name="", phone="", email="", service="", address="",
