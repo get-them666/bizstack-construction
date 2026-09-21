@@ -32,6 +32,7 @@ class VapiService:
         return {
             "Authorization": f"Bearer {os.getenv('VAPI_API_KEY')}",
             "Content-Type": "application/json",
+            "User-Agent": "bizstack-voice/1.0",
         }
 
     def _request(self, method: str, path: str, body=None):
@@ -62,16 +63,17 @@ class VapiService:
             created = self._request("POST", "/assistant", {
                 "name": "bizstack-voice",
                 "model": {
-                    "provider": "customLLM",
+                    "provider": "custom-llm",
                     "url": f"{self._app_base()}/vapi/llm",
                     "model": "voice-agent",
                 },
                 "firstMessage": "Hey, thanks for reaching out — how can I help?",
                 "voice": {
                     "provider": "11labs",
-                    "voiceId": "charlie",
-                    "stability": 0.6,
-                    "similarityBoost": 0.85,
+                    "model": "eleven_turbo_v2_5",
+                    "voiceId": "ryan",
+                    "stability": 0.5,
+                    "similarityBoost": 0.75,
                 },
             })
             self._assistant_id = created["id"]
@@ -96,9 +98,19 @@ class VapiService:
                 "provider": "vapi",
                 "name": "bizstack-voice",
                 "assistantId": assistant_id,
+                "numberDesiredAreaCode": os.getenv("VAPI_AREA_CODE", "757"),
             })
             self._phone_id = created["id"]
             return created["id"]
+
+    @staticmethod
+    def _e164(number: str) -> str:
+        digits = "".join(ch for ch in (number or "").strip() if ch.isdigit())
+        if digits.startswith("1") and len(digits) == 11:
+            return "+" + digits
+        if len(digits) == 10:
+            return "+1" + digits
+        return "+" + digits
 
     def create_ai_outbound_call(self, to: str, context: str = "", notes: str = "") -> str:
         if not self.is_configured():
@@ -108,13 +120,18 @@ class VapiService:
         body = {
             "assistantId": assistant_id,
             "phoneNumberId": phone_id,
-            "customer": {"number": to},
+            "customer": {"number": self._e164(to)},
         }
         seed = (context or "").strip() or (notes or "").strip()
         if seed:
             body["assistantOverrides"] = {
                 "firstMessage": seed,
-                "model": {"messages": [{"role": "system", "content": seed}]},
+                "model": {
+                    "provider": "custom-llm",
+                    "url": f"{self._app_base()}/vapi/llm",
+                    "model": "voice-agent",
+                    "messages": [{"role": "system", "content": seed}],
+                },
             }
         created = self._request("POST", "/call", body)
         return created.get("id") or ""
