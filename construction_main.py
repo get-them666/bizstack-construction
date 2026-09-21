@@ -2829,26 +2829,26 @@ def run_lead_source_scan():
                     _follow_up_new_lead(r["lead_id"])
                 except Exception as exc:
                     print(f"[lead-source] follow-up failed for {r['lead_id']}: {exc}", flush=True)
+            owner_digest = (os.getenv("LEAD_SOURCE_OWNER_DIGEST", "") or "").strip().lower() not in ("0", "false", "no", "off")
+            if owner_digest and rows:
+                try:
+                    digest_items = [
+                        {
+                            "title": r.get("title", ""), "solicitation": r.get("solicitation", ""),
+                            "contact_name": r.get("contact_name", ""), "service": r.get("service", ""),
+                            "address": r.get("address", ""), "state": r.get("state", ""),
+                            "url": r.get("url", ""), "phone": r.get("phone", ""), "email": r.get("email", ""),
+                        }
+                        for r in rows
+                    ]
+                    auto_reply.send_owner_lead_digest(push_db, "construction", digest_items)
+                except Exception as exc:
+                    print(f"[lead-source] owner digest failed: {exc}", flush=True)
         finally:
             try:
                 push_db.close()
             except Exception:
                 pass
-        owner_digest = (os.getenv("LEAD_SOURCE_OWNER_DIGEST", "") or "").strip().lower() not in ("0", "false", "no", "off")
-        if owner_digest and rows:
-            try:
-                digest_items = [
-                    {
-                        "title": r.get("title", ""), "solicitation": r.get("solicitation", ""),
-                        "contact_name": r.get("contact_name", ""), "service": r.get("service", ""),
-                        "address": r.get("address", ""), "state": r.get("state", ""),
-                        "url": r.get("url", ""), "phone": r.get("phone", ""), "email": r.get("email", ""),
-                    }
-                    for r in rows
-                ]
-                auto_reply.send_owner_lead_digest(push_db, "construction", digest_items)
-            except Exception as exc:
-                print(f"[lead-source] owner digest failed: {exc}", flush=True)
         errors = "; ".join(result.get("errors", []))[:300]
     except Exception as exc:
         errors = str(exc)[:300]
