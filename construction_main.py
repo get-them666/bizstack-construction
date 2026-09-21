@@ -23,13 +23,15 @@ import secrets
 import threading
 import time
 import urllib.parse
+from pathlib import Path
 from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
 from contextlib import asynccontextmanager
 
+import asyncio
 import psycopg
 from psycopg.rows import dict_row
-from fastapi import FastAPI, Request, Form, UploadFile, Response, Depends, HTTPException, status
+from fastapi import FastAPI, Request, Form, UploadFile, Response, Depends, HTTPException, status, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -482,6 +484,19 @@ def _set_setting(db, key, value):
         db.commit()
 
 
+# --- Crew feature toggles (namespaced away from Broom's perms_worker) -------
+CREW_PERMS_KEY = "perms_crew"
+
+
+def _crew_features(db) -> dict:
+    return auth_service.features_for("worker", _get_setting(db, CREW_PERMS_KEY, ""))
+
+
+def _require_crew_feature(db, feature: str):
+    if not bool(_crew_features(db).get(feature)):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This tool is turned off for your account")
+
+
 def _otp_enabled(db) -> bool:
     env = os.getenv("OTP_ENABLED", "").strip().lower()
     if env in ("0", "false", "no", "off"):
@@ -666,6 +681,33 @@ def build_tool_handlers(db, stripe_svc):
             return {"ok": True, "sent_to": to}
         except Exception as e:
             return {"ok": False, "error": str(e)}
+
+    def make_outbound_call(to, notes=""):
+        digits = "".join(ch for ch in str(to or "") if ch.isdigit())
+        if len(digits) < 10:
+            return {"ok": False, "error": "I need a valid 10-digit phone number."}
+        if not signalwire.is_configured():
+            return {"ok": False, "error": "SignalWire is not configured."}
+        e164 = ("+1" + digits) if not digits.startswith("1") else ("+" + digits)
+        swml_base = (os.getenv("APP_BASE_URL", "") or f"https://{company()['domain']}").rstrip("/")
+        swml_url = f"{swml_base}/comms/outbound-voice.swml"
+        try:
+            sid = signalwire.create_ai_outbound_call(e164, swml_url)
+        except Exception as e:
+            return {"ok": False, "error": f"Call could not be placed: {e}"}
+        if not sid:
+            return {"ok": False, "error": "Call could not be placed right now."}
+        try:
+            with db.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO comms_logs (direction, channel, sender, recipient, message_body) "
+                    "VALUES ('outbound', 'voice', 'assistant', %s, %s);",
+                    (e164, f"[AI outbound call] {str(notes or '')[:500]}"),
+                )
+                db.commit()
+        except Exception:
+            pass
+        return {"ok": True, "call_sid": sid, "to": e164}
 
     def create_deposit_link(lead_id):
         with db.cursor() as cur:
@@ -907,15 +949,25 @@ def build_tool_handlers(db, stripe_svc):
         }
 
     def generate_training_deck(kind="worker"):
-        is_construction = kind in ("construction", "construction-osha", "osha")
-        kind = "construction" if is_construction else kind
-        if kind not in ("worker", "host", "construction"):
+        kind = training_service.CONSTRUCTION_DECK_KINDS.get(kind, kind)
+        if kind not in ("worker", "host", "construction",
+                        "construction-trades", "construction-safety",
+                        "construction-app", "construction-ethics"):
             return {"ok": False, "error": f"Unknown deck kind: {kind}"}
         try:
             data = training_service.build_deck(kind)
         except Exception as e:
             return {"ok": False, "error": f"Could not build deck: {e}"}
-        label = "Crew Orientation + OSHA-10 Baseline" if kind == "construction" else ("Worker Orientation" if kind == "worker" else "Host & Lead Onboarding")
+        DECK_LABELS = {
+            "construction": "Crew Orientation + OSHA-10 Baseline",
+            "construction-trades": "Tools of the Trade",
+            "construction-safety": "Job Site Safety (OSHA-10 Baseline)",
+            "construction-app": "Crew App — Install & Time Reporting",
+            "construction-ethics": "Workplace Ethics & Professional Conduct",
+            "worker": "Worker Orientation",
+            "host": "Host & Lead Onboarding",
+        }
+        label = DECK_LABELS.get(kind, kind)
         with db.cursor() as cur:
             cur.execute(
                 "INSERT INTO generated_documents (title, category, file_name, file_type, file_data) "
@@ -927,9 +979,12 @@ def build_tool_handlers(db, stripe_svc):
         return {"ok": True, "doc_id": doc_id, "title": label,
                 "download_url": f"/docs/download/{doc_id}"}
 
-    def grade_training_quiz(crew_id, answers):
+    def grade_training_quiz(crew_id, answers, test_slug="osha"):
+        test = training_service.TRAINING_BY_SLUG.get(test_slug)
+        if not test:
+            return {"ok": False, "error": f"Unknown test slug: {test_slug}"}
         try:
-            grade = training_service.grade_osha_quiz(answers)
+            grade = training_service.grade_training(answers, test["questions"])
         except ValueError as e:
             return {"ok": False, "error": str(e)}
         name = ""
@@ -941,10 +996,10 @@ def build_tool_handlers(db, stripe_svc):
                     name = row["name"]
         with db.cursor() as cur:
             cur.execute(
-                "INSERT INTO worker_quiz_results (worker_id, worker_name, score, total, passed, answers_json) "
-                "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id;",
+                "INSERT INTO worker_quiz_results (worker_id, worker_name, score, total, passed, answers_json, test_slug, test_title) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id;",
                 (crew_id, name or "Crew (copilot)", grade["correct"], grade["total"], grade["passed"],
-                 json.dumps(answers)),
+                 json.dumps(answers), test["slug"], test["title"]),
             )
             result_id = cur.fetchone()["id"]
             db.commit()
@@ -955,6 +1010,79 @@ def build_tool_handlers(db, stripe_svc):
             "missed_topics": grade.get("missed_topics", []),
             "message": "Passed — clear for jobs." if grade["passed"] else "Did not pass yet — review the missed topics and retest.",
         }
+
+    def training_status():
+        """Per-crew training report: which OSHA-10/safety + trade tests each crew member has passed."""
+        with db.cursor() as cur:
+            cur.execute(
+                "SELECT Q.worker_id, c.name, c.is_active, Q.test_slug, Q.test_title, MAX(Q.q) AS best "
+                "FROM ("
+                "  SELECT worker_id, test_slug, test_title, "
+                "         ROUND(100.0 * score / NULLIF(total, 0)) AS q "
+                "  FROM worker_quiz_results WHERE passed = TRUE"
+                ") Q JOIN crew c ON c.id = Q.worker_id "
+                "GROUP BY Q.worker_id, c.name, c.is_active, Q.test_slug, Q.test_title "
+                "ORDER BY c.is_active DESC, c.name, Q.test_title;"
+            )
+            passed_rows = cur.fetchall()
+            cur.execute("SELECT id, name, phone, role, is_active FROM crew ORDER BY is_active DESC, name;")
+            crew = cur.fetchall()
+        by_crew = {}
+        for r in passed_rows:
+            by_crew.setdefault(r["worker_id"], []).append({
+                "test_slug": r["test_slug"] or "osha",
+                "test_title": r["test_title"] or "Site Safety Orientation (OSHA-10 baseline)",
+                "best_percent": int(r["best"]),
+            })
+        out = []
+        for c in crew:
+            done = by_crew.get(c["id"], [])
+            out.append({
+                "crew_id": c["id"], "name": c["name"], "phone": c["phone"],
+                "role": c["role"], "is_active": c["is_active"],
+                "tests_passed": done,
+                "all_done": any(t["test_slug"] == "osha" for t in done),
+            })
+        outstanding = [r for r in out if not r["all_done"]]
+        return {"ok": True, "crew": out, "outstanding_count": len(outstanding),
+                "outstanding": outstanding}
+
+    def remind_crew_training(crew_id=0):
+        """Text a reminder to crew who haven't passed the OSHA-10 baseline safety orientation yet."""
+        if crew_id:
+            with db.cursor() as cur:
+                cur.execute(
+                    "SELECT c.id, c.name, c.phone, MAX(q.worker_id) IS NOT NULL AS did "
+                    "FROM crew c LEFT JOIN worker_quiz_results q "
+                    "  ON q.worker_id = c.id AND q.test_slug = 'osha' AND q.passed = TRUE "
+                    "WHERE c.id = %s GROUP BY c.id, c.name, c.phone;", (crew_id,))
+                rows = cur.fetchall()
+        else:
+            with db.cursor() as cur:
+                cur.execute(
+                    "SELECT c.id, c.name, c.phone, MAX(q.worker_id) IS NOT NULL AS did "
+                    "FROM crew c LEFT JOIN worker_quiz_results q "
+                    "  ON q.worker_id = c.id AND q.test_slug = 'osha' AND q.passed = TRUE "
+                    "WHERE c.is_active = TRUE GROUP BY c.id, c.name, c.phone "
+                    "HAVING MAX(q.worker_id) IS NULL;")
+                rows = cur.fetchall()
+        domain = company()["domain"]
+        sent, reminded = [], 0
+        for r in rows:
+            if r["did"]:
+                continue
+            digits = "".join(ch for ch in str(r["phone"] or "") if ch.isdigit())
+            if len(digits) < 10:
+                continue
+            e164 = "+" + digits if not digits.startswith("+") else digits
+            body = (f"Hi {r['name']} — time to knock out your Buildstack safety orientation "
+                    f"(about 10 minutes, covers the OSHA-10 basics + your trade). "
+                    f"Open {domain}/app -> Training tab, read the slides, then pass the quiz. "
+                    f"Passing it clears you for job sites. Questions? Text the office.")
+            if signalwire.send_sms(e164, body):
+                reminded += 1
+            sent.append({"crew_id": r["id"], "name": r["name"]})
+        return {"ok": True, "reminded_count": reminded, "reminded": sent}
 
     return {
         "register_lead": register_lead,
@@ -974,9 +1102,12 @@ def build_tool_handlers(db, stripe_svc):
         "estimate_materials": estimate_materials,
         "get_material_price": get_material_price,
         "sister_business_summary": sister_business_summary,
+        "make_outbound_call": make_outbound_call,
         "run_site_health_check": run_site_health_check,
         "generate_training_deck": generate_training_deck,
         "grade_training_quiz": grade_training_quiz,
+        "training_status": training_status,
+        "remind_crew_training": remind_crew_training,
     }
 
 
@@ -1097,6 +1228,10 @@ async def submit_lead(
         )
     except Exception as e:
         print(f"⚠️ submit-lead auto-reply failed: {e}", flush=True)
+    try:
+        _follow_up_new_lead(lead_id)
+    except Exception as e:
+        print(f"⚠️ submit-lead follow-up failed: {e}", flush=True)
     return JSONResponse(content={"status": "success", "lead_id": lead_id})
 
 
@@ -1472,8 +1607,8 @@ async def voice_webhook(request: Request, db=Depends(get_db)):
     )
     twiml_payload = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say voice="alice">{greeting}</Say>
-    <Record maxLength="30" action="/comms/voice-action" transcribe="true" transcribeCallback="/comms/voice-transcribe"/>
+    <Say voice="Polly.Joanna-Neural">{greeting}</Say>
+    <Record maxLength="30" playBeep="false" action="/comms/voice-action" transcribe="true" transcribeCallback="/comms/voice-transcribe"/>
 </Response>"""
     return Response(content=twiml_payload, media_type="application/xml")
 
@@ -1483,7 +1618,7 @@ async def voice_action(request: Request, db=Depends(get_db)):
     ai_response = "Thanks for the details. Our team will follow up shortly to schedule your free estimate. Have a great day!"
     twiml_payload = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say voice="alice">{ai_response}</Say>
+    <Say voice="Polly.Joanna-Neural">{ai_response}</Say>
     <Hangup/>
 </Response>"""
     return Response(content=twiml_payload, media_type="application/xml")
@@ -1516,6 +1651,81 @@ def _bot_phone_digits(phone):
     if not phone:
         return ""
     return "".join(ch for ch in str(phone) if ch.isdigit())
+
+
+_CALL_START_HOUR = 9
+_CALL_END_HOUR = 19
+_CALL_TZ = "America/New_York"
+
+
+def _follow_up_new_lead(lead_id: int) -> None:
+    """AI-call a freshly created lead in a background thread (call only).
+
+    Email follow-up for construction leads is already sent inline by auto_reply at
+    each lead-creation site, so this only dials the lead with the outbound voice
+    agent — deduped via bot_calls, gated to call hours, and skipped for fake or
+    empty phone numbers."""
+
+    def _run():
+        try:
+            db = psycopg.connect(db_url, row_factory=dict_row)
+            db.autocommit = True
+        except Exception as e:
+            print(f"📞[followup] db failure: {e}", flush=True)
+            return
+        try:
+            with db.cursor() as cur:
+                cur.execute(
+                    "SELECT id, name, phone, project_type FROM leads WHERE id = %s;",
+                    (lead_id,),
+                )
+                row = cur.fetchone()
+            if not row:
+                return
+            from zoneinfo import ZoneInfo
+
+            now = datetime.now(ZoneInfo(_CALL_TZ))
+            if not (_CALL_START_HOUR <= now.hour < _CALL_END_HOUR):
+                return
+            digits = _bot_phone_digits(row.get("phone"))
+            if len(digits) < 10:
+                return
+            with db.cursor() as cur:
+                cur.execute("SELECT 1 FROM bot_calls WHERE lead_id = %s LIMIT 1;", (lead_id,))
+                if cur.fetchone():
+                    return
+            to = ("+" + digits) if digits.startswith("1") else ("+1" + digits)
+            own = _bot_phone_digits(getattr(signalwire, "from_number", ""))
+            if own and digits[-10:] == own[-10:]:
+                return
+            swml_url = (os.getenv("APP_BASE_URL", "") or f"https://{company()['domain']}").rstrip("/") + "/comms/outbound-voice.swml"
+            try:
+                sid = signalwire.create_ai_outbound_call(to, swml_url)
+            except Exception as e:
+                print(f"📞[followup] dial failed for lead {lead_id}: {e}", flush=True)
+                return
+            if sid:
+                with db.cursor() as cur:
+                    cur.execute(
+                        "CREATE TABLE IF NOT EXISTS bot_calls (call_sid TEXT PRIMARY KEY, lead_id INTEGER, "
+                        "direction TEXT, status TEXT, turns INTEGER DEFAULT 0, "
+                        "created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP);"
+                    )
+                    cur.execute(
+                        "INSERT INTO bot_calls (call_sid, lead_id, direction, status) "
+                        "VALUES (%s, %s, 'outbound', 'dialed') ON CONFLICT (call_sid) DO NOTHING;",
+                        (sid, lead_id),
+                    )
+                    cur.execute(
+                        "INSERT INTO comms_logs (direction, channel, sender, recipient, message_body) "
+                        "VALUES ('outbound', 'voice', 'system', %s, %s);",
+                        (to, f"AI immediate callback for new lead {lead_id}"),
+                    )
+                print(f"📞[followup] dialed lead {lead_id} ({to}) sid={sid}", flush=True)
+        except Exception as e:
+            print(f"📞[followup] follow-up failed for lead {lead_id}: {e}", flush=True)
+
+    threading.Thread(target=_run, daemon=True).start()
 
 
 def _bot_lead_for_call(db, phone):
@@ -1581,15 +1791,15 @@ def _outbound_turn(db, sid, to, text, turns):
     if turns >= max_turns:
         twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say voice="alice">{ai_reply}</Say>
-    <Say voice="alice">Thanks so much. We will follow up shortly. Have a great day!</Say>
+    <Say voice="Polly.Joanna-Neural">{ai_reply}</Say>
+    <Say voice="Polly.Joanna-Neural">Thanks so much. We will follow up shortly. Have a great day!</Say>
     <Hangup/>
 </Response>"""
     else:
         twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say voice="alice">{ai_reply}</Say>
-    <Record maxLength="60" action="/comms/outbound-voice-action" transcribe="true" transcribeCallback="/comms/outbound-voice-transcribe"/>
+    <Say voice="Polly.Joanna-Neural">{ai_reply}</Say>
+    <Record maxLength="60" playBeep="false" action="/comms/outbound-voice-action" transcribe="true" transcribeCallback="/comms/outbound-voice-transcribe"/>
 </Response>"""
     return Response(content=twiml, media_type="application/xml")
 
@@ -1606,6 +1816,10 @@ async def outbound_voice_webhook(request: Request, db=Depends(get_db)):
             "direction TEXT, status TEXT, turns INTEGER DEFAULT 0, "
             "created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP);"
         )
+        try:
+            cur.execute("ALTER TABLE bot_calls ALTER COLUMN status TYPE TEXT;")
+        except Exception:
+            pass
         cur.execute(
             "INSERT INTO bot_calls (call_sid, lead_id, direction, status) VALUES (%s, %s, 'outbound', 'answering') "
             "ON CONFLICT (call_sid) DO NOTHING;",
@@ -1626,8 +1840,8 @@ async def outbound_voice_webhook(request: Request, db=Depends(get_db)):
         )
     twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say voice="alice">{greeting}</Say>
-    <Record maxLength="60" action="/comms/outbound-voice-action" transcribe="true" transcribeCallback="/comms/outbound-voice-transcribe"/>
+    <Say voice="Polly.Joanna-Neural">{greeting}</Say>
+    <Record maxLength="60" playBeep="false" action="/comms/outbound-voice-action" transcribe="true" transcribeCallback="/comms/outbound-voice-transcribe"/>
 </Response>"""
     return Response(content=twiml, media_type="application/xml")
 
@@ -1691,6 +1905,25 @@ GENERAL
 
 VOICE_TOOL_URL = (os.getenv("APP_BASE_URL", "") or "") + "/api/voice/tool"
 
+_VOICE_KNOWLEDGE_FILES = [
+    Path(__file__).resolve().parent / "bot_knowledge.md",
+    Path(__file__).resolve().parent / "construction_knowledge.md",
+]
+
+
+def _voice_prompt() -> str:
+    """Combine the live knowledge base files with the construction voice prompt at request time."""
+    parts = [VOICE_AGENT_PROMPT]
+    for path in _VOICE_KNOWLEDGE_FILES:
+        try:
+            text = path.read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+        if not text:
+            continue
+        parts.append("## OPERATING MANUAL — " + path.name + "\n" + text)
+    return "\n\n".join(parts)
+
 
 def _swaig_parameters(props: dict, required: list, notes: str = ""):
     return {
@@ -1702,17 +1935,18 @@ def _swaig_parameters(props: dict, required: list, notes: str = ""):
     }
 
 
-@app.api_route("/voice.swml", methods=["GET", "POST"])
-@app.api_route("/voice-app.swml", methods=["GET", "POST"])
-async def voice_swml():
-    swml = {
+def _build_voice_swml(prompt: str, ai_params_extra: dict | None = None) -> dict:
+    ai_params = {"ai_model": "gpt-4.1", "temperature": 0.7, "frequency_penalty": 0.3}
+    if ai_params_extra:
+        ai_params.update(ai_params_extra)
+    return {
         "version": "1.0.0",
         "sections": {
             "main": [
                 {"answer": {}},
                 {
                     "ai": {
-                        "prompt": {"text": VOICE_AGENT_PROMPT},
+                        "prompt": {"text": prompt},
                         "languages": [
                             {
                                 "name": "English",
@@ -1721,6 +1955,7 @@ async def voice_swml():
                                 "speech_fillers": ["one moment please,", "hmm...", "let's see,"],
                             }
                         ],
+                        "params": ai_params,
                         "post_prompt_url": (os.getenv("APP_BASE_URL", "") or "") + "/api/voice/debug",
                         "pronounce": [
                             {"replace": "Buildstack", "with": "build stack", "ignore_case": True},
@@ -1766,6 +2001,120 @@ async def voice_swml():
                                         ["to", "body"],
                                     ),
                                 },
+                                {
+                                    "function": "send_email_message",
+                                    "description": "Send an email to a client (e.g. written scope, receipts, follow-ups).",
+                                    "parameters": _swaig_parameters(
+                                        {
+                                            "to": {"type": "string", "description": "Recipient email."},
+                                            "subject": {"type": "string", "description": "Email subject."},
+                                            "body": {"type": "string", "description": "Email body text."},
+                                        },
+                                        ["to", "subject", "body"],
+                                    ),
+                                },
+                                {
+                                    "function": "estimate_materials",
+                                    "description": "Build a line-item material cost estimate for a project type (kitchen, bath, whole-home, roofing, drywall, deck/fence, handyman, masonry, plumbing, electrical). Never quote materials from memory.",
+                                    "parameters": _swaig_parameters(
+                                        {
+                                            "project_type": {"type": "string", "description": "Project type: whole-home, kitchen, bath, roofing, drywall, deck/fence, handyman, masonry, plumbing, electrical, etc."},
+                                            "sqft": {"type": "number", "description": "Approximate square footage the work covers."},
+                                            "live": {"type": "boolean", "description": "Try a live materials API if configured; else price book."},
+                                        },
+                                        ["project_type"],
+                                        "Convert the caller's scope to sqft first when possible.",
+                                    ),
+                                },
+                                {
+                                    "function": "get_material_price",
+                                    "description": "Look up the current price for a single material SKU (e.g. stud_2x4x8, drywall_sheet_1/2, shingles_per_square, pex_a_1/2_per_ft, copper_wire_per_lb).",
+                                    "parameters": _swaig_parameters(
+                                        {"sku": {"type": "string", "description": "Material SKU to look up."}},
+                                        ["sku"],
+                                    ),
+                                },
+                                {
+                                    "function": "create_deposit_link",
+                                    "description": "Create a Stripe deposit-checkout link for a saved lead so they can reserve the project. Use AFTER register_lead returns the lead id, then text the link with send_sms_message.",
+                                    "parameters": _swaig_parameters(
+                                        {"lead_id": {"type": "integer", "description": "The lead id returned by register_lead."}},
+                                        ["lead_id"],
+                                    ),
+                                },
+                                {
+                                    "function": "list_leads",
+                                    "description": "Look up clients/leads (statuses like new/contacted/quoted/deposit/in_progress/completed/lost). Use when the owner or a client asks about a project or lead status.",
+                                    "parameters": _swaig_parameters(
+                                        {"status": {"type": "string", "description": "Optional status filter: new, contacted, quoted, deposit, in_progress, completed, lost."}},
+                                        [],
+                                    ),
+                                },
+                                {
+                                    "function": "update_lead_status",
+                                    "description": "Move a lead to a new status (new, contacted, quoted, deposit, in_progress, completed, lost).",
+                                    "parameters": _swaig_parameters(
+                                        {
+                                            "lead_id": {"type": "integer", "description": "Lead id to update."},
+                                            "status": {"type": "string", "description": "New status: new, contacted, quoted, deposit, in_progress, completed, or lost."},
+                                        },
+                                        ["lead_id", "status"],
+                                    ),
+                                },
+                                {
+                                    "function": "lookup_permits",
+                                    "description": "Look up local permits/permits we found by city or address.",
+                                    "parameters": _swaig_parameters(
+                                        {
+                                            "city": {"type": "string", "description": "City to search, e.g. Norfolk."},
+                                            "address": {"type": "string", "description": "Street address to search."},
+                                        },
+                                        [],
+                                    ),
+                                },
+                                {
+                                    "function": "list_crew",
+                                    "description": "List the crew with roles and contact info. Use for owner or scheduling questions.",
+                                    "parameters": _swaig_parameters({}, []),
+                                },
+                                {
+                                    "function": "lookup_crew_timesheets",
+                                    "description": "Look up submitted crew timesheets, optionally filtered by crew member, project, or status (submitted/approved).",
+                                    "parameters": _swaig_parameters(
+                                        {
+                                            "crew_id": {"type": "integer", "description": "Optional crew member id."},
+                                            "project_id": {"type": "integer", "description": "Optional project id."},
+                                            "status": {"type": "string", "description": "Optional timesheet status."},
+                                        },
+                                        [],
+                                    ),
+                                },
+                                {
+                                    "function": "get_accounting_summary",
+                                    "description": "Pull revenue (payments + deposits) and payroll totals. Use for owner accounting questions.",
+                                    "parameters": _swaig_parameters({}, []),
+                                },
+                                {
+                                    "function": "get_business_summary",
+                                    "description": "Quick totals: open leads, deposits collected, payroll status. Use for a fast business pulse check.",
+                                    "parameters": _swaig_parameters({}, []),
+                                },
+                                {
+                                    "function": "sister_business_summary",
+                                    "description": "Describe the sister company Broom Service (short-term rental cleaning). Use when asked about what our sister company does.",
+                                    "parameters": _swaig_parameters({}, []),
+                                },
+                                {
+                                    "function": "make_outbound_call",
+                                    "description": "Place an outgoing phone call to a number RIGHT NOW and answer it as the voice agent (AI). Use when you promised to call someone back, or the owner asks the bot to reach out by phone.",
+                                    "parameters": _swaig_parameters(
+                                        {
+                                            "to": {"type": "string", "description": "Destination phone number in E.164 format, e.g. +17558469275."},
+                                            "notes": {"type": "string", "description": "Optional reminder of why the call is being placed."},
+                                        },
+                                        ["to"],
+                                    ),
+                                },
                             ],
                         },
                     }
@@ -1773,10 +2122,76 @@ async def voice_swml():
             ]
         },
     }
-    return JSONResponse(content=swml)
 
 
-VOICE_ALLOWED_TOOLS = {"register_lead", "lookup_leads", "send_sms_message"}
+@app.api_route("/voice.swml", methods=["GET", "POST"])
+@app.api_route("/voice-app.swml", methods=["GET", "POST"])
+async def voice_swml():
+    return JSONResponse(content=_build_voice_swml(_voice_prompt()))
+
+
+@app.api_route("/comms/outbound-voice.swml", methods=["GET", "POST"])
+async def outbound_voice_swml(request: Request, db=Depends(get_db)):
+    to = request.query_params.get("to") or request.query_params.get("To") or ""
+    if not to:
+        try:
+            form = dict(await request.form())
+            to = form.get("to") or form.get("To") or ""
+        except Exception:
+            pass
+    digits = "".join(ch for ch in str(to or "") if ch.isdigit())
+    greeting = ""
+    if len(digits) >= 10:
+        try:
+            with db.cursor() as cur:
+                cur.execute(
+                    "SELECT id, name, phone, email, project_type, address, budget, timeline, description, status "
+                    "FROM leads WHERE phone IS NOT NULL ORDER BY id DESC LIMIT 300;"
+                )
+                for r in cur.fetchall():
+                    p = "".join(ch for ch in str(r.get("phone") or "") if ch.isdigit())
+                    if p and p[-10:] == digits[-10:]:
+                        greeting = (
+                            f"OUTBOUND CALL — you are the {company()['name']} voice assistant. "
+                            f"You are calling {r.get('name') or 'this lead'}"
+                            + (f" ({r.get('email') or r.get('phone')})" if (r.get('email') or r.get('phone')) else "")
+                            + (f" about a {r.get('project_type')} project" if r.get("project_type") else "")
+                            + (f" at {r.get('address')}" if r.get("address") else "")
+                            + f" (lead #{r['id']}). Greet them by first name, briefly remind them why you are calling, "
+                              f"and keep it quick, friendly, and low-pressure. Work the conversation from there — it is a live human."
+                        )
+                        break
+        except Exception as e:
+            print(f"⚠️ OUTBOUND-SWML lead lookup failed: {e}", flush=True)
+    prompt = (greeting + "\n\n" if greeting else "") + _voice_prompt()
+    return JSONResponse(content=_build_voice_swml(
+        prompt,
+        ai_params_extra={
+            "direction": "outbound",
+            "wait_for_user": True,
+            "outbound_attention_timeout": 20000,
+        },
+    ))
+
+
+VOICE_ALLOWED_TOOLS = {
+    "register_lead",
+    "lookup_leads",
+    "send_sms_message",
+    "send_email_message",
+    "estimate_materials",
+    "get_material_price",
+    "create_deposit_link",
+    "list_leads",
+    "update_lead_status",
+    "lookup_permits",
+    "list_crew",
+    "lookup_crew_timesheets",
+    "get_accounting_summary",
+    "get_business_summary",
+    "sister_business_summary",
+    "make_outbound_call",
+}
 
 
 def _swaig_tool_response_text(name: str, result) -> str:
@@ -1792,6 +2207,72 @@ def _swaig_tool_response_text(name: str, result) -> str:
         return "Requests: " + "; ".join(lines)
     if name == "send_sms_message":
         return "Text sent." if result.get("ok") else str(result.get("error") or "Text couldn't be sent.")
+    if name == "send_email_message":
+        if result.get("ok"):
+            return f"Email sent to {result.get('sent_to')}."
+        return str(result.get("error") or "Email couldn't be sent.")
+    if name == "estimate_materials":
+        est = (result.get("estimate") or {}) if result.get("ok") else {}
+        lines = est.get("lines") or []
+        if result.get("ok") and lines:
+            total_low = est.get("total_low_dollars") or 0
+            total_high = est.get("total_high_dollars") or 0
+            return f"Materials ballpark: ${total_low:,.0f} to ${total_high:,.0f}. Source: {est.get('source', 'price book')}."
+        return str(result.get("error") or "I can't pull material pricing on that right now.")
+    if name == "get_material_price":
+        if result.get("ok"):
+            return f"{result.get('sku')} is about ${result.get('price_dollars'):,.2f}."
+        return str(result.get("error") or "I couldn't find that material.")
+    if name == "create_deposit_link":
+        if result.get("ok"):
+            return f"Deposit link ready: {result.get('url')}."
+        return str(result.get("error") or "The deposit link couldn't be created right now.")
+    if name == "list_leads":
+        leads = result.get("leads") or []
+        if not leads:
+            return "No leads found."
+        lines = [f"{l.get('name', 'Client')} — {l.get('project_type') or l.get('status') or 'lead'} — {l.get('status')} (lead #{l.get('id')})" for l in leads[:8]]
+        return "Leads: " + "; ".join(lines)
+    if name == "update_lead_status":
+        if result.get("ok"):
+            return f"Lead #{result.get('lead_id')} is now {result.get('status')}."
+        return str(result.get("error") or "Couldn't update that lead.")
+    if name == "lookup_permits":
+        permits = result.get("permits") or []
+        if not permits:
+            return "No permits found for that search."
+        lines = [f"{p.get('permit_number') or p.get('address') or 'Permit'} — {p.get('work_type') or p.get('job_description') or ''}" for p in permits[:5]]
+        return "Permits: " + "; ".join(lines)
+    if name == "list_crew":
+        crew = result.get("crew") or []
+        if not crew:
+            return "No crew on file."
+        lines = [f"{c.get('name')} — {c.get('role')}" for c in crew[:8]]
+        return "Crew: " + "; ".join(lines)
+    if name == "lookup_crew_timesheets":
+        rows = result.get("timesheets") or []
+        if not rows:
+            return "No timesheets found."
+        lines = [f"{t.get('crew_name') or 'Crew member'} — {t.get('work_date')} {t.get('hours')}h ({t.get('status')})" for t in rows[:6]]
+        return "Timesheets: " + "; ".join(lines)
+    if name == "get_accounting_summary":
+        if result.get("ok"):
+            return (f"Collected ${result.get('total_collections_cents', 0) / 100:,.0f}, "
+                    f"deposits ${result.get('collected_deposits_cents', 0) / 100:,.0f}, "
+                    f"payroll paid ${result.get('payroll_paid_total_cents', 0) / 100:,.0f}.")
+        return str(result.get("error") or "Couldn't pull accounting right now.")
+    if name == "get_business_summary":
+        if result.get("ok"):
+            return f"{result.get('total_leads')} total leads, {result.get('open_leads')} open, {result.get('deposits_collected') or 0} deposits collected."
+        return str(result.get("error") or "Couldn't pull the summary right now.")
+    if name == "sister_business_summary":
+        if result.get("ok"):
+            return str(result.get("message") or "Broom Service keeps short-term rentals stay-ready for guests.")
+        return str(result.get("error") or "Couldn't pull that right now.")
+    if name == "make_outbound_call":
+        if result.get("ok"):
+            return f"I'm calling {result.get('to')} now."
+        return str(result.get("error") or "I couldn't place that call right now.")
     return json.dumps(result, default=str, ensure_ascii=False)
 
 
@@ -1984,6 +2465,12 @@ async def instant_quote_submit(
     except Exception as e:
         print(f"⚠️ instant quote auto-reply failed: {e}", flush=True)
 
+    if lead_id:
+        try:
+            _follow_up_new_lead(lead_id)
+        except Exception as e:
+            print(f"⚠️ instant quote follow-up failed: {e}", flush=True)
+
     ctx.update({"quote": est, "lead_id": lead_id, "prop": prop})
     return templates.TemplateResponse(request=request, name="instant_quote.html", context=ctx)
 
@@ -2111,6 +2598,11 @@ async def get_started_submit(
         )
     except Exception as e:
         print(f"⚠️ get-started auto-reply failed: {e}", flush=True)
+
+    try:
+        _follow_up_new_lead(lead_id)
+    except Exception as e:
+        print(f"⚠️ get-started follow-up failed: {e}", flush=True)
 
     return RedirectResponse(url="/get-started?sent=1", status_code=status.HTTP_303_SEE_OTHER)
 
@@ -2484,6 +2976,10 @@ async def job_lead_convert(job_id: int, request: Request, db=Depends(get_db)):
         )
     except Exception as e:
         print(f"⚠️ job-lead auto-reply failed: {e}", flush=True)
+    try:
+        _follow_up_new_lead(lead_id)
+    except Exception as e:
+        print(f"⚠️ job-lead follow-up failed: {e}", flush=True)
     return RedirectResponse(url="/job-leads?ok=converted+to+lead+%23" + str(lead_id), status_code=status.HTTP_303_SEE_OTHER)
 
 
@@ -2735,6 +3231,81 @@ async def crew_admin_page(request: Request, db=Depends(get_db)):
     })
 
 
+@app.get("/crew/access", response_class=HTMLResponse)
+async def crew_access_page(request: Request, db=Depends(get_db)):
+    require_admin(request)
+    return templates.TemplateResponse(request=request, name="crew_access.html", context={
+        "user": {"email": require_auth(request)[1]},
+        "saved": request.query_params.get("saved"),
+        "features": _crew_features(db),
+        "catalog": auth_service.CREW_FEATURES,
+        "bulletin": _get_setting(db, BULLETIN_KEY, ""),
+    })
+
+
+@app.post("/api/crew/access")
+async def crew_access_save(request: Request, db=Depends(get_db)):
+    require_admin(request)
+    form = await request.form()
+    features = dict(auth_service.DEFAULT_CREW_FEATURES)
+    for key in features:
+        features[key] = (form.get(f"feature_{key}") == "on")
+    _set_setting(db, CREW_PERMS_KEY, json.dumps(features))
+    _set_setting(db, BULLETIN_KEY, (str(form.get("bulletin") or "")).strip()[:500])
+    return RedirectResponse(url="/crew/access?saved=1", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.get("/crew/admin/training", response_class=HTMLResponse)
+async def crew_training_report(request: Request, db=Depends(get_db)):
+    require_admin(request)
+    tests = training_service.ALL_TRAININGS
+    with db.cursor() as cur:
+        cur.execute("SELECT id, name, role, is_active FROM crew ORDER BY is_active DESC, name;")
+        crew = cur.fetchall()
+        cur.execute(
+            "SELECT worker_id, test_slug, ROUND(100.0 * score / NULLIF(total, 0)) AS pct, passed, created_at "
+            "FROM worker_quiz_results ORDER BY created_at DESC;"
+        )
+        results = cur.fetchall()
+    crew_ids = [c["id"] for c in crew]
+    best = {}  # (worker_id, test_slug) -> best percent
+    ever_passed = {}  # (worker_id, test_slug) -> True
+    for r in results:
+        if r["worker_id"] not in crew_ids:
+            continue
+        key = (r["worker_id"], r["test_slug"] or "osha")
+        best[key] = max(best.get(key, 0), r["pct"] or 0)
+        if r["passed"]:
+            ever_passed[key] = True
+    matrix = []
+    for c in crew:
+        done = []
+        for t in tests:
+            key = (c["id"], t["slug"])
+            done.append({
+                "slug": t["slug"], "title": t["title"],
+                "best": best.get(key),
+                "passed": bool(ever_passed.get(key)),
+            })
+        matrix.append({"crew": {"id": c["id"], "name": c["name"], "role": c["role"], "is_active": c["is_active"]}, "tests": done})
+    return templates.TemplateResponse(request=request, name="crew_training_report.html", context={
+        "user": {"email": require_auth(request)[1]},
+        "crew": crew, "tests": tests, "matrix": matrix,
+    })
+
+
+@app.post("/api/crew/training/remind")
+async def crew_training_remind(request: Request, crew_id: str = Form(""), db=Depends(get_db)):
+    require_admin(request)
+    tools = build_tool_handlers(db, stripe_svc)
+    try:
+        cid = int(crew_id or 0)
+    except (TypeError, ValueError):
+        cid = 0
+    result = tools["remind_crew_training"](crew_id=cid)
+    return JSONResponse(result)
+
+
 @app.post("/api/crew")
 async def crew_create(request: Request, name: str = Form(...), phone: str = Form(""), email: str = Form(""),
                       role: str = Form("laborer"), pay_type: str = Form("hourly"), pay_rate: str = Form("0"),
@@ -2967,6 +3538,7 @@ async def crew_delete_hours(sheet_id: int, request: Request, db=Depends(get_db))
 async def crew_photo_upload(request: Request, project_id: int = Form(0), caption: str = Form(""),
                             punchlist: str = Form(""), photo: UploadFile = Form(...), db=Depends(get_db)):
     worker = require_worker(request)
+    _require_crew_feature(db, "photos")
     with db.cursor() as cur:
         cur.execute("SELECT id FROM crew WHERE id = %s;", (worker.get("id"),))
         if not cur.fetchone():
@@ -3113,7 +3685,7 @@ async def worker_app_me(request: Request, db=Depends(get_db)):
         if not crew_row:
             return JSONResponse(status_code=401, content={"status": "error", "message": "Not logged in"})
         cur.execute("""
-            SELECT p.id, p.name, p.address, p.summary, p.status,
+            SELECT p.id, p.name, p.address, p.summary, p.status, p.start_date, p.end_date,
                    c.id AS clock_id, c.punch_in_at AS clocked_since
             FROM project_assignments pa
             JOIN projects p ON p.id = pa.project_id
@@ -3126,6 +3698,8 @@ async def worker_app_me(request: Request, db=Depends(get_db)):
             jobs.append({
                 "id": j["id"], "name": j["name"], "address": j["address"],
                 "summary": j["summary"], "status": j["status"],
+                "start_date": j["start_date"].isoformat() if j["start_date"] else None,
+                "end_date": j["end_date"].isoformat() if j["end_date"] else None,
                 "clock_id": j["clock_id"], "clocked_since": (j["clocked_since"].isoformat() if j["clocked_since"] else None),
                 "lat": None, "lng": None,
             })
@@ -3167,6 +3741,7 @@ async def worker_app_me(request: Request, db=Depends(get_db)):
         "status": "ok",
         "worker": {"id": crew_row["id"], "name": crew_row["name"], "phone": crew_row["phone"],
                    "role": crew_row["role"], "pay_rate": float(crew_row["pay_rate"] or 0)},
+        "features": _crew_features(db),
         "jobs": jobs,
         "week_hours": week_hours,
         "open_clock": open_clock and {"id": open_clock["id"], "project_id": open_clock["project_id"],
@@ -3180,6 +3755,7 @@ async def worker_app_me(request: Request, db=Depends(get_db)):
 async def worker_app_clock(request: Request, project_id: int = Form(0), action: str = Form(...),
                            lat: str = Form(""), lng: str = Form(""), accuracy: str = Form(""), db=Depends(get_db)):
     worker = require_worker(request)
+    _require_crew_feature(db, "timeclock")
     with db.cursor() as cur:
         cur.execute("SELECT id FROM crew WHERE id = %s AND is_active = TRUE;", (worker.get("id"),))
         if not cur.fetchone():
@@ -3236,6 +3812,7 @@ async def worker_app_clock(request: Request, project_id: int = Form(0), action: 
 async def worker_app_hours(request: Request, project_id: int = Form(0), work_date: str = Form(""),
                            hours: str = Form(""), work_type: str = Form("regular"), db=Depends(get_db)):
     worker = require_worker(request)
+    _require_crew_feature(db, "hours")
     try:
         hrs = float(hours)
     except (TypeError, ValueError):
@@ -3256,6 +3833,7 @@ async def worker_app_hours(request: Request, project_id: int = Form(0), work_dat
 @app.post("/api/crew/app/hours/{sheet_id}/delete")
 async def worker_app_hours_delete(sheet_id: int, request: Request, db=Depends(get_db)):
     worker = require_worker(request)
+    _require_crew_feature(db, "hours")
     with db.cursor() as cur:
         cur.execute("SELECT id FROM timesheets WHERE id = %s AND crew_id = %s AND status = 'submitted';",
                     (sheet_id, worker.get("id")))
@@ -3273,6 +3851,172 @@ async def worker_app_logout():
     return resp
 
 
+# --- Crew app: Bulletin alerts --------------------------------------------------
+BULLETIN_KEY = "crew_bulletin"
+
+
+@app.get("/api/crew/app/bulletin")
+async def worker_app_bulletin(request: Request, db=Depends(get_db)):
+    require_worker(request)
+    text = _get_setting(db, BULLETIN_KEY, "")
+    return JSONResponse(content={"text": text or None})
+
+
+# --- Crew app: Photos ----------------------------------------------------------
+@app.get("/api/crew/app/photos")
+async def worker_app_photos(request: Request, project_id: int = 0, db=Depends(get_db)):
+    worker = require_worker(request)
+    _require_crew_feature(db, "photos")
+    with db.cursor() as cur:
+        if project_id:
+            cur.execute("""
+                SELECT jp.id, jp.project_id, p.name AS project_name, jp.crew_id, c.name AS crew_name,
+                       jp.caption, jp.is_punchlist, jp.filename, jp.created_at
+                FROM job_photos jp
+                LEFT JOIN projects p ON p.id = jp.project_id
+                LEFT JOIN crew c ON c.id = jp.crew_id
+                WHERE jp.project_id = %s ORDER BY jp.created_at DESC LIMIT 200;
+            """, (project_id,))
+        else:
+            cur.execute("""
+                SELECT jp.id, jp.project_id, p.name AS project_name, jp.crew_id, c.name AS crew_name,
+                       jp.caption, jp.is_punchlist, jp.filename, jp.created_at
+                FROM job_photos jp
+                JOIN project_assignments pa ON pa.project_id = jp.project_id AND pa.crew_id = %s
+                LEFT JOIN projects p ON p.id = jp.project_id
+                LEFT JOIN crew c ON c.id = jp.crew_id
+                ORDER BY jp.created_at DESC LIMIT 200;
+            """, (worker.get("id"),))
+        photos = []
+        for r in cur.fetchall():
+            photos.append({
+                "id": r["id"], "project_id": r["project_id"], "project_name": r["project_name"],
+                "crew_id": r["crew_id"], "crew_name": r["crew_name"], "caption": r["caption"],
+                "is_punchlist": bool(r["is_punchlist"]),
+                "url": f"/uploads/{r['filename']}",
+                "created_at": r["created_at"].isoformat(),
+            })
+    return JSONResponse(content={"photos": photos})
+
+
+@app.post("/api/crew/app/photos")
+async def worker_app_photos_upload(request: Request, project_id: int = Form(0), caption: str = Form(""),
+                                   punchlist: str = Form(""), photo: UploadFile = Form(...), db=Depends(get_db)):
+    worker = require_worker(request)
+    _require_crew_feature(db, "photos")
+    with db.cursor() as cur:
+        cur.execute("SELECT id FROM crew WHERE id = %s;", (worker.get("id"),))
+        if not cur.fetchone():
+            raise HTTPException(status_code=401, detail="Worker not found")
+    raw = await photo.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="Empty file")
+    ext = os.path.splitext(photo.filename or "")[1][:10] or ".jpg"
+    fname = f"{uuid.uuid4().hex[:12]}{ext.lower()}"
+    with open(os.path.join("uploads", fname), "wb") as fh:
+        fh.write(raw)
+    with db.cursor() as cur:
+        cur.execute(
+            "INSERT INTO job_photos (project_id, crew_id, filename, caption, is_punchlist) VALUES (%s,%s,%s,%s,%s);",
+            (project_id or None, worker.get("id"), fname, caption, punchlist.lower() in ("on", "true", "1")),
+        )
+        db.commit()
+    return JSONResponse(content={"status": "ok", "url": f"/uploads/{fname}"})
+
+
+# --- Crew app: Messages with the office ---------------------------------------
+@app.get("/api/crew/app/messages")
+async def worker_app_messages(request: Request, after: int = 0, db=Depends(get_db)):
+    worker = require_worker(request)
+    _require_crew_feature(db, "messages")
+    with db.cursor() as cur:
+        cur.execute("""
+            SELECT m.id, m.author_role, m.author_id, m.author_name, m.company, m.kind,
+                   m.audience, m.scope, m.recipient_role, m.recipient_id, m.recipient_name,
+                   m.body, m.created_at
+            FROM messages m
+            WHERE m.id > %s
+              AND (m.company = 'construction'
+                   OR m.author_id = %s
+                   OR m.recipient_id = %s)
+            ORDER BY m.id ASC LIMIT 500;
+        """, (after, worker.get("id"), worker.get("id")))
+        rows = cur.fetchall()
+    msgs = [_crew_message_visible_and_serialize(m, worker) for m in rows]
+    msgs = [m for m in msgs if m is not None]
+    return JSONResponse(content={"messages": msgs})
+
+
+def _crew_message_visible_and_serialize(m, worker):
+    """Mirror Broom's _message_visible semantics for construction crew: a DM is
+    shown if this crew member wrote it or it is addressed to them; office
+    announcements show whenever the scope covers construction/all."""
+    kind = m.get("kind") or "announcement"
+    if kind == "dm":
+        is_author = (m["author_role"] == "crew" and m["author_id"] == worker.get("id"))
+        is_recipient = (m["recipient_id"] == worker.get("id"))
+        if not (is_author or is_recipient):
+            return None
+    else:
+        scope = m.get("scope") or "all"
+        if scope not in ("all", "construction"):
+            return None
+    return {
+        "id": m["id"], "kind": kind,
+        "author": ("crew" if m["author_role"] == "crew" else "office"),
+        "author_id": m["author_id"],
+        "author_name": m["author_name"] or ("Office" if m["author_role"] == "admin" else "Crew"),
+        "recipient_role": m["recipient_role"], "recipient_id": m["recipient_id"],
+        "body": m["body"], "at": m["created_at"].isoformat(),
+    }
+
+
+@app.post("/api/crew/app/messages")
+async def worker_app_messages_send(request: Request, body: str = Form(...), db=Depends(get_db)):
+    worker = require_worker(request)
+    _require_crew_feature(db, "messages")
+    body = (body or "").strip()[:2000]
+    if not body:
+        return JSONResponse(content={"status": "error", "error": "Empty message"}, status_code=400)
+    with db.cursor() as cur:
+        cur.execute(
+            "INSERT INTO messages (author_role, author_id, author_name, company, kind, audience, scope, recipient_role, body) "
+            "VALUES ('crew', %s, %s, 'construction', 'dm', 'office', 'all', 'admin', %s) RETURNING id, created_at;",
+            (worker.get("id"), worker.get("name", ""), body),
+        )
+        row = cur.fetchone()
+        new_id = row["id"]
+        db.commit()
+    _broadcast_ws({
+        "id": new_id, "kind": "dm", "author": "crew",
+        "author_id": worker.get("id"), "author_name": worker.get("name", "Crew"),
+        "recipient_role": "admin", "body": body, "at": row["created_at"].isoformat(),
+    })
+    return JSONResponse(content={"status": "ok", "id": new_id})
+
+
+WS_CLIENTS: set = set()
+
+
+@app.websocket("/ws/messages")
+async def ws_messages(websocket: WebSocket):
+    await websocket.accept()
+    WS_CLIENTS.add(websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        WS_CLIENTS.discard(websocket)
+
+
+def _broadcast_ws(message: dict):
+    for client in list(WS_CLIENTS):
+        try:
+            asyncio.create_task(client.send_json(message))
+        except Exception:
+            WS_CLIENTS.discard(client)
+
+
 # --- Training: safety orientation (OSHA-10 baseline) + trade skills tests -------------
 # Crew portal page and phone-app API. Content lives in training_service.py. Company
 # safety orientation module covers OSHA implementing rules (29 CFR 1926) and site
@@ -3288,32 +4032,74 @@ TRAINING_DISCLAIMER = ("This is Buildstack Construction company training coverin
 async def crew_training_page(request: Request):
     require_worker(request)
     worker = request.state.worker if hasattr(request.state, "worker") else None
+    decks = [
+        {
+            "kind": "construction-trades",
+            "name": "Tools of the Trade",
+            "blurb": "Tape measure, math, framing, drywall, roofing, plumbing, electrical, HVAC, tile, painting, concrete.",
+            "slides": training_service.deck_slides("construction-trades"),
+        },
+        {
+            "kind": "construction-safety",
+            "name": "Job Site Safety (OSHA-10)",
+            "blurb": "The Fatal Four, fall protection, PPE, chemicals, LOTO, trenches, silica & asbestos.",
+            "slides": training_service.deck_slides("construction-safety"),
+        },
+        {
+            "kind": "construction-app",
+            "name": "Crew App — Install & Time Reporting",
+            "blurb": "Install the app, log in, jobs & map, clock in/out, time reporting & overtime, direct deposit.",
+            "slides": training_service.deck_slides("construction-app"),
+        },
+        {
+            "kind": "construction-ethics",
+            "name": "Workplace Ethics & Conduct",
+            "blurb": "Honesty, time reporting, client trust, confidentiality, zero tolerance for harassment.",
+            "slides": training_service.deck_slides("construction-ethics"),
+        },
+    ]
     return templates.TemplateResponse(
         request=request,
         name="training.html",
         context={
             "disclaimer": TRAINING_DISCLAIMER,
-            "slides": training_service.deck_slides("construction"),
+            "decks": decks,
             "worker": worker or {},
         },
         headers={"Cache-Control": "no-cache, max-age=0"},
     )
 
 
+DECK_FILENAMES = {
+    "construction": "crew-safety-orientation.pptx",
+    "construction-trades": "tools-of-the-trade.pptx",
+    "construction-safety": "job-site-safety-osha10.pptx",
+    "construction-app": "crew-app-install-and-time-reporting.pptx",
+    "construction-ethics": "workplace-ethics-and-conduct.pptx",
+    "worker": "worker-orientation.pptx",
+    "host": "host-onboarding.pptx",
+}
+
+
 @app.get("/crew/training/ppt")
-async def crew_training_ppt(request: Request, db=Depends(get_db)):
+@app.get("/crew/training/ppt/{deck}")
+async def crew_training_ppt(request: Request, db=Depends(get_db), deck: str = "construction"):
     require_worker(request)
+    kind = training_service.CONSTRUCTION_DECK_KINDS.get(deck, deck)
+    if kind not in DECK_FILENAMES:
+        return JSONResponse(status_code=404, content={"ok": False, "error": "Unknown deck"})
     try:
-        data = training_service.build_deck("construction")
+        data = training_service.build_deck(kind)
     except Exception as e:
-        return JSONResponse({"ok": False, "error": f"Could not build deck: {e}"})
+        return JSONResponse(status_code=500, content={"ok": False, "error": f"Could not build deck: {e}"})
     return Response(content=data, media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                    headers={"Content-Disposition": "attachment; filename=crew-safety-orientation.pptx"})
+                    headers={"Content-Disposition": f"attachment; filename={DECK_FILENAMES[kind]}"})
 
 
 @app.get("/crew/training/content")
 async def crew_training_content(request: Request, db=Depends(get_db)):
     worker = require_worker(request)
+    _require_crew_feature(db, "training")
     with db.cursor() as cur:
         cur.execute(
             "SELECT test_slug, test_title, score, total, passed, created_at "
@@ -3334,7 +4120,8 @@ async def crew_training_content(request: Request, db=Depends(get_db)):
         "disclaimer": TRAINING_DISCLAIMER,
         "tests": [
             {"slug": t["slug"], "title": t["title"], "count": len(t["questions"]),
-             "questions": [{"q": q["q"], "options": q["options"], "topic": q.get("topic")} for q in t["questions"]]}
+             "questions": [{"q": q["q"], "options": q.get("options"), "topic": q.get("topic"),
+                            "type": q.get("type"), "accept": q.get("accept")} for q in t["questions"]]}
             for t in training_service.ALL_TRAININGS
         ],
         "history": history,
@@ -3344,6 +4131,7 @@ async def crew_training_content(request: Request, db=Depends(get_db)):
 @app.post("/api/crew/app/training/submit")
 async def crew_training_submit(request: Request, test_slug: str = Form(...), answers: str = Form(...), db=Depends(get_db)):
     worker = require_worker(request)
+    _require_crew_feature(db, "training")
     test = training_service.TRAINING_BY_SLUG.get(test_slug)
     if not test:
         return JSONResponse(status_code=400, content={"status": "error", "message": "Unknown test"})
