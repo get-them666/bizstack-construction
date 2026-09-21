@@ -51,6 +51,7 @@ import auth_service
 import construction_radar
 import materials_service
 import training_service
+import lead_sources
 
 db_url = os.getenv("DATABASE_URL", "postgresql://shaun:secret@localhost:5432/buildstack")
 templates = Jinja2Templates(directory="templates/construction")
@@ -183,6 +184,30 @@ async def lifecycle(app: FastAPI):
                 cur.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS estimate_low_cents INTEGER;")
                 cur.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS estimate_high_cents INTEGER;")
                 cur.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS estimate_json TEXT;")
+                cur.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS listing_url VARCHAR(512);")
+                cur.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS campaign VARCHAR(80);")
+                cur.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS referral_code VARCHAR(120);")
+                cur.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS analysis_json TEXT;")
+                cur.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS funding_needed BOOLEAN DEFAULT FALSE;")
+                cur.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS funding_use TEXT;")
+                cur.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS partner_id INTEGER;")
+                cur.execute("""
+                CREATE TABLE IF NOT EXISTS lead_posts (
+                    post_id TEXT PRIMARY KEY,
+                    subreddit TEXT,
+                    created_utc TEXT,
+                    lead_id INTEGER
+                );
+                """)
+                cur.execute("""
+                CREATE TABLE IF NOT EXISTS lead_source_seen (
+                    source VARCHAR(40) NOT NULL,
+                    external_id TEXT NOT NULL,
+                    lead_id INTEGER,
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (source, external_id)
+                );
+                """)
                 cur.execute("""
                 CREATE TABLE IF NOT EXISTS crew (
                     id SERIAL PRIMARY KEY,
@@ -350,6 +375,12 @@ async def lifecycle(app: FastAPI):
             _start_permit_importer()
         except Exception as exc:
             print(f"[permit-scan] could not start importer: {exc}", flush=True)
+
+    if not os.getenv("DISABLE_LEAD_SCAN"):
+        try:
+            _start_lead_source_scheduler()
+        except Exception as exc:
+            print(f"[lead-source] could not start scheduler: {exc}", flush=True)
 
     yield
 
@@ -2680,6 +2711,203 @@ def _radar_worker(source: str, scan_fn):
         }
 
 
+# --- Public lead sources (bid/RFP boards) -----------------------------------
+_lead_source_status = {
+    "running": False, "last_run": None, "found": 0, "created": 0, "pushed": 0, "errors": "",
+}
+_lead_source_lock = threading.Lock()
+
+
+def _ingest_public_source_leads(matches):
+    """Dedupe by (source, external_id), insert new leads, return created rows."""
+    created = []
+    seen = 0
+    with psycopg.connect(db_url, row_factory=dict_row) as conn:
+        with conn.cursor() as cur:
+            for m in matches:
+                src = m.get("source") or "public"
+                ext = str(m.get("external_id") or "")
+                if not ext:
+                    continue
+                cur.execute(
+                    "SELECT 1 FROM lead_source_seen WHERE source = %s AND external_id = %s;",
+                    (src, ext),
+                )
+                if cur.fetchone():
+                    seen += 1
+                    continue
+                contact_name = (m.get("contact_name") or "").strip()
+                name = (m.get("title") or "Government bid").strip()
+                if contact_name:
+                    name = f"{name} · {contact_name}"
+                cur.execute(
+                    "INSERT INTO leads (name, phone, email, project_type, address, description, source, status, company, listing_url, campaign) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, 'new', 'construction', %s, 'lead-source-scan') RETURNING id;",
+                    (
+                        name[:250], m.get("phone") or "", (m.get("email") or "").strip(),
+                        (m.get("service") or "")[:120], (m.get("address") or "")[:250],
+                        (m.get("description") or "")[:2000], src, (m.get("url") or "")[:512],
+                    ),
+                )
+                lead_id = cur.fetchone()["id"]
+                cur.execute(
+                    "INSERT INTO lead_source_seen (source, external_id, lead_id) VALUES (%s, %s, %s) "
+                    "ON CONFLICT (source, external_id) DO NOTHING;",
+                    (src, ext, lead_id),
+                )
+                created.append({
+                    "lead_id": lead_id, "name": name, "phone": m.get("phone") or "",
+                    "email": (m.get("email") or "").strip(), "service": m.get("service") or "",
+                    "address": m.get("address") or "", "source": src, "title": m.get("title") or "",
+                    "contact_name": contact_name, "url": m.get("url") or "",
+                })
+        conn.commit()
+    return created, seen
+
+
+def run_lead_source_scan():
+    with _lead_source_lock:
+        if _lead_source_status.get("running"):
+            return {"status": "already_running"}
+        _lead_source_status.update({"running": True, "errors": ""})
+    started = datetime.utcnow()
+    found = created = pushed = 0
+    errors = ""
+    try:
+        result = lead_sources.scan(preset="construction")
+        matches = result.get("matches", [])
+        found = len(matches)
+        rows, _seen = _ingest_public_source_leads(matches)
+        created = len(rows)
+        auto_contact = (os.getenv("LEAD_SOURCE_AUTO_CONTACT", "") or "").strip().lower() in ("1", "true", "yes", "on")
+        auto_email = (os.getenv("LEAD_SOURCE_AUTO_EMAIL", "") or "").strip().lower() in ("1", "true", "yes", "on")
+        try:
+            inquiry_cap = max(0, int(os.getenv("LEAD_INQUIRY_MAX_PER_RUN", "15") or 15))
+        except (TypeError, ValueError):
+            inquiry_cap = 15
+        try:
+            inquiry_delay = max(0.0, float(os.getenv("LEAD_INQUIRY_DELAY", "1.5") or 1.5))
+        except (TypeError, ValueError):
+            inquiry_delay = 1.5
+        inquiries = 0
+        push_db = psycopg.connect(db_url, row_factory=dict_row)
+        push_db.autocommit = True
+        try:
+            for r in rows:
+                try:
+                    auto_reply.notify_owner_email(
+                        "construction", lead_id=r["lead_id"], name=r["name"], phone=r["phone"],
+                        email=r["email"], service=r["service"], address=r["address"],
+                        message=r["title"], source=r["source"],
+                    )
+                except Exception as exc:
+                    print(f"[lead-source] owner notify failed for {r['lead_id']}: {exc}", flush=True)
+                if auto_email and r.get("email") and inquiries < inquiry_cap:
+                    try:
+                        if auto_reply.send_bid_inquiry(
+                            push_db, "construction", title=r["title"], contact_name=r.get("contact_name", ""),
+                            email=r["email"], service=r["service"], address=r["address"],
+                            url=r.get("url", ""), lead_id=r["lead_id"],
+                        ):
+                            pushed += 1
+                            inquiries += 1
+                            if inquiry_delay > 0:
+                                time.sleep(inquiry_delay)
+                    except Exception as exc:
+                        print(f"[lead-source] bid inquiry failed for {r['lead_id']}: {exc}", flush=True)
+                if not auto_contact:
+                    continue
+                try:
+                    auto_reply.auto_reply_to_lead(
+                        push_db, "construction", name=r["name"], phone=r["phone"],
+                        email=r["email"], service=r["service"], address=r["address"],
+                        message=r["title"], source=r["source"], lead_id=r["lead_id"],
+                    )
+                except Exception as exc:
+                    print(f"[lead-source] auto-reply failed for {r['lead_id']}: {exc}", flush=True)
+                try:
+                    _follow_up_new_lead(r["lead_id"])
+                except Exception as exc:
+                    print(f"[lead-source] follow-up failed for {r['lead_id']}: {exc}", flush=True)
+        finally:
+            try:
+                push_db.close()
+            except Exception:
+                pass
+        owner_digest = (os.getenv("LEAD_SOURCE_OWNER_DIGEST", "") or "").strip().lower() not in ("0", "false", "no", "off")
+        if owner_digest and rows:
+            try:
+                digest_items = [
+                    {
+                        "title": r.get("title", ""), "solicitation": r.get("solicitation", ""),
+                        "contact_name": r.get("contact_name", ""), "service": r.get("service", ""),
+                        "address": r.get("address", ""), "state": r.get("state", ""),
+                        "url": r.get("url", ""), "phone": r.get("phone", ""), "email": r.get("email", ""),
+                    }
+                    for r in rows
+                ]
+                auto_reply.send_owner_lead_digest(push_db, "construction", digest_items)
+            except Exception as exc:
+                print(f"[lead-source] owner digest failed: {exc}", flush=True)
+        errors = "; ".join(result.get("errors", []))[:300]
+    except Exception as exc:
+        errors = str(exc)[:300]
+        print(f"[lead-source] scan failed: {exc}", flush=True)
+    with _lead_source_lock:
+        _lead_source_status.update({
+            "running": False, "last_run": started.isoformat(), "found": found,
+            "created": created, "pushed": pushed, "errors": errors,
+        })
+    print(f"[lead-source] found={found} created={created} pushed={pushed} {errors or 'ok'}", flush=True)
+    return {"status": "ok", "found": found, "created": created, "pushed": pushed, "errors": errors}
+
+
+def _start_lead_source_scheduler():
+    try:
+        interval_h = max(0.5, float(os.getenv("LEAD_SCAN_INTERVAL_HOURS", "6") or 6))
+    except (TypeError, ValueError):
+        interval_h = 6
+
+    def _runner():
+        print(f"[lead-source] scheduler started (every {interval_h:g}h)", flush=True)
+        try:
+            time.sleep(float(os.getenv("LEAD_SCAN_START_DELAY", "45") or 45))
+        except (TypeError, ValueError):
+            time.sleep(45)
+        while True:
+            try:
+                run_lead_source_scan()
+            except Exception as exc:
+                print(f"[lead-source] loop error: {exc}", flush=True)
+            time.sleep(interval_h * 3600)
+
+    threading.Thread(target=_runner, daemon=True).start()
+
+
+@app.post("/lead-sources/scan")
+async def lead_sources_scan(request: Request):
+    require_admin(request)
+    return JSONResponse(content=run_lead_source_scan())
+
+
+@app.get("/lead-sources/status")
+async def lead_sources_status(request: Request):
+    require_admin(request)
+    with _lead_source_lock:
+        return JSONResponse(content=dict(_lead_source_status))
+
+
+@app.post("/acquisition/scan/public")
+async def acquisition_scan_public(request: Request):
+    is_authed, _ = require_auth(request)
+    if not is_authed:
+        return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
+    if not _lead_source_status.get("running"):
+        threading.Thread(target=run_lead_source_scan, daemon=True).start()
+        return RedirectResponse(url="/acquisition?scan_started=Public+bid+boards", status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(url="/acquisition?scan_running=public", status_code=status.HTTP_303_SEE_OTHER)
+
+
 @app.get("/acquisition", response_class=HTMLResponse)
 async def acquisition_page(request: Request, db=Depends(get_db)):
     is_authed, user_email = require_auth(request)
@@ -2752,6 +2980,7 @@ async def acquisition_page(request: Request, db=Depends(get_db)):
             "reddit": _radar_status("reddit"),
             "linkedin": _radar_status("linkedin"),
         },
+        "lead_source_status": dict(_lead_source_status),
     })
 
 

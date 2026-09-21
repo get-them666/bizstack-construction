@@ -49,6 +49,13 @@ def _usd(cents):
     return f"${cents // 100:,}"
 
 
+def _owner_targets():
+    """Owner/admin mailbox list: NOTIFY_EMAIL, else ADMIN_EMAIL, else hello@."""
+    return [t.strip() for t in (os.getenv("NOTIFY_EMAIL", "") or "").split(",") if t.strip()] or [
+        (os.getenv("ADMIN_EMAIL", "") or "").strip() or "hello@bizstackperks.com"
+    ]
+
+
 def notify_owner_email(company_key, *, lead_id, name="", phone="", email="", service="", address="",
                        budget="", timeline="", message="", source=""):
     """Email the owner/admin whenever a new lead is captured.
@@ -62,11 +69,7 @@ def notify_owner_email(company_key, *, lead_id, name="", phone="", email="", ser
     message = (message or "").strip()
     if not name and not phone and not email:
         return False
-    targets = [
-        t.strip() for t in (os.getenv("NOTIFY_EMAIL", "") or "").split(",")
-    ] or [
-        (os.getenv("ADMIN_EMAIL", "") or "").strip() or "hello@bizstackperks.com"
-    ]
+    targets = _owner_targets()
     summary = (
         f"New {co_name} lead (#{lead_id}) — {name}, {phone}"
         + (f", {email}" if email else "")
@@ -253,3 +256,185 @@ def auto_reply_to_lead(db, company_key, *, name="", phone="", email="", service=
         return msg
     print(f"[auto-reply {company_key}] no email on file for lead (phone={_valid_phone(phone)})", flush=True)
     return None
+
+def build_bid_inquiry(company_key, *, title="", solicitation="", contact_name="", service="",
+                      address="", state="", url=""):
+    """Return (subject, body) for an outbound public-contract bid inquiry."""
+    company_key = company_key if company_key in COMPANIES else "construction"
+    co_name = COMPANIES[company_key]["name"]
+    contact = (contact_name or "").strip()
+    greeting = f"Dear {contact}," if contact else "Hello,"
+    sol = (solicitation or "").strip()
+    ref_line = f"Solicitation {sol}" if sol else (title.strip() or "your recent opportunity")
+    blurb = (
+        "Buildstack Construction is a licensed and insured general contractor serving Virginia "
+        "and North Carolina, specializing in residential and light-commercial remodeling, roofing, "
+        "and specialty trade work."
+        if company_key == "construction" else
+        "Broom Service provides janitorial, custodial, grounds, and building-services support across "
+        "Virginia and North Carolina."
+    )
+    lines = [
+        greeting,
+        f"{co_name} is interested in {ref_line}"
+        + (f" — {title.strip()}" if title and title.strip() != ref_line else "")
+        + (f" ({address.strip()})" if address else "") + ".",
+        blurb,
+        "Could you please send the full solicitation package (scope, specifications, submission "
+        "requirements, and any pre-bid or site-visit details)? We can provide licensing, insurance, "
+        "and past-performance information as needed.",
+        "Thank you for your time.",
+        "",
+        f"— {co_name}",
+        "hello@bizstackperks.com · (757) 846-9275",
+    ]
+    if url:
+        lines.append(f"Opportunity: {url}")
+    msg = "\n".join(lines)
+    subject = (f"Bid inquiry — {title.strip() or ref_line}")[:140]
+    return subject, msg
+
+
+def send_owner_lead_digest(db, company_key, items):
+    """Email the owner a digest of new public-contract leads with ready-to-send
+    drafts, so they can review and fire them off themselves.
+
+    Sent to NOTIFY_EMAIL / the business mailbox. Because that address is on our
+    own verified domain it is deliverable even while SES is in sandbox, so this
+    works regardless of the Resend daily quota.
+    """
+    company_key = company_key if company_key in COMPANIES else "construction"
+    co_name = COMPANIES[company_key]["name"]
+    items = [it for it in (items or []) if it]
+    if not items:
+        return False
+    targets = _owner_targets()
+    cfg = documents_service.smtp_config_from_env()
+    if not documents_service.smtp_configured(cfg):
+        print(f"[owner-digest {company_key}] SMTP not configured; skipped", flush=True)
+        return False
+    parts = [
+        f"{len(items)} new public-contract lead(s) for {co_name}.",
+        "Each draft below is ready to send. Copy it into your email, set the To: address, and send.",
+        "",
+    ]
+    for i, it in enumerate(items, 1):
+        subject, body = build_bid_inquiry(
+            company_key,
+            title=it.get("title", ""), solicitation=it.get("solicitation", ""),
+            contact_name=it.get("contact_name", ""), service=it.get("service", ""),
+            address=it.get("address", ""), state=it.get("state", ""), url=it.get("url", ""),
+        )
+        parts.append("=" * 60)
+        parts.append(f"{i}. {it.get('title') or '(untitled)'}")
+        if it.get("service"):
+            parts.append(f"Trade/service: {it['service']}")
+        if it.get("address"):
+            parts.append(f"Location: {it['address']}")
+        parts.append(f"To: {it.get('email') or '(no email listed — use the link)'}")
+        if it.get("phone"):
+            parts.append(f"Phone: {it.get('phone')}")
+        if it.get("url"):
+            parts.append(f"Link: {it['url']}")
+        parts.append("")
+        parts.append(f"--- DRAFT — subject: {subject} ---")
+        parts.append(body)
+        parts.append("")
+    digest = "\n".join(parts)
+    subject_line = f"{len(items)} new {co_name} bid lead(s) — ready-to-send drafts"
+    ok = False
+    for to in targets:
+        if not to:
+            continue
+        try:
+            run_coro(documents_service.send_email(cfg, to, subject_line, digest))
+            ok = True
+            print(f"[owner-digest {company_key}] emailed {len(items)} draft(s) to {to}", flush=True)
+        except Exception as exc:
+            print(f"[owner-digest {company_key}] digest to {to} failed: {exc}", flush=True)
+    if ok and db is not None:
+        try:
+            with db.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO comms_logs (direction, channel, sender, recipient, message_body) "
+                    "VALUES ('outbound', 'email', 'system', %s, %s);",
+                    (",".join(targets), digest),
+                )
+                db.commit()
+        except Exception as exc:
+            print(f"[owner-digest {company_key}] comms log failed: {exc}", flush=True)
+    return ok
+
+
+def send_bid_inquiry(db, company_key, *, title="", solicitation="", contact_name="", email="",
+                     service="", address="", state="", url="", lead_id=None):
+    """Send a professional bid-inquiry email to a public-contract point of contact.
+
+    For outbound public-sector opportunities (e.g. SAM.gov). This is NOT the
+    inbound auto-reply: the recipient is a buyer, so we express interest and ask
+    for the full solicitation package. Email only — never SMS or AI-call a
+    government contracting officer.
+    """
+    company_key = company_key if company_key in COMPANIES else "construction"
+    co_name = COMPANIES[company_key]["name"]
+    email = (email or "").strip()
+    if not email:
+        return False
+    if db is not None:
+        try:
+            with db.cursor() as cur:
+                cur.execute(
+                    "SELECT 1 FROM comms_logs WHERE channel = 'email' AND direction = 'outbound' "
+                    "AND LOWER(recipient) = LOWER(%s) LIMIT 1;",
+                    (email,),
+                )
+                if cur.fetchone():
+                    print(f"[bid-inquiry {company_key}] already emailed {email}; skipping", flush=True)
+                    return False
+        except Exception:
+            pass
+    if db is not None:
+        try:
+            cap = int(os.getenv("LEAD_EMAIL_DAILY_CAP", "80") or 80)
+        except (TypeError, ValueError):
+            cap = 80
+        if cap > 0:
+            try:
+                with db.cursor() as cur:
+                    cur.execute(
+                        "SELECT COUNT(*) AS c FROM comms_logs WHERE channel = 'email' "
+                        "AND direction = 'outbound' AND created_at >= date_trunc('day', now());"
+                    )
+                    row = cur.fetchone()
+                    sent_today = (row["c"] if isinstance(row, dict) else row[0]) if row else 0
+                if sent_today >= cap:
+                    print(f"[bid-inquiry {company_key}] daily email cap ({cap}) reached; skipping {email}", flush=True)
+                    return False
+            except Exception:
+                pass
+    subject, msg = build_bid_inquiry(
+        company_key, title=title, solicitation=solicitation, contact_name=contact_name,
+        service=service, address=address, state=state, url=url,
+    )
+    try:
+        cfg = documents_service.smtp_config_from_env()
+        if not documents_service.smtp_configured(cfg):
+            print(f"[bid-inquiry {company_key}] SMTP not configured; skipped {email}", flush=True)
+            return False
+        run_coro(documents_service.send_email(cfg, email, subject, msg.replace("\n", "<br>")))
+        if db is not None:
+            try:
+                with db.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO comms_logs (direction, channel, sender, recipient, message_body) "
+                        "VALUES ('outbound', 'email', 'system', %s, %s);",
+                        (email, msg),
+                    )
+                    db.commit()
+            except Exception as exc:
+                print(f"[bid-inquiry {company_key}] comms log failed: {exc}", flush=True)
+        print(f"[bid-inquiry {company_key}] emailed {email} (lead #{lead_id})", flush=True)
+        return True
+    except Exception as exc:
+        print(f"[bid-inquiry {company_key}] email failed for {email}: {exc}", flush=True)
+        return False

@@ -482,6 +482,31 @@ def mime_type(filename: str):
     return "application/pdf"
 
 
+class EmailQuotaExhausted(RuntimeError):
+    """Raised when the transactional email provider's daily quota is spent."""
+
+
+_RESEND_QUOTA_UNTIL = 0.0
+
+
+def _resend_quota_blocked() -> bool:
+    import time
+
+    return time.time() < _RESEND_QUOTA_UNTIL
+
+
+def _mark_resend_quota_exhausted() -> None:
+    """Pause Resend until the next UTC midnight (when its daily quota resets)."""
+    global _RESEND_QUOTA_UNTIL
+    import datetime as _dt
+    import time
+
+    now = _dt.datetime.now(_dt.timezone.utc)
+    reset = (now + _dt.timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    _RESEND_QUOTA_UNTIL = reset.timestamp()
+    print(f"[EMAIL] Resend daily quota exhausted; pausing Resend until {reset.isoformat()}", flush=True)
+
+
 async def _send_via_resend_api(cfg: dict, to: str, subject: str, body: str, physical: str, api_key: str) -> bool:
     import asyncio
     import json as _json
@@ -528,6 +553,10 @@ async def _send_via_resend_api(cfg: dict, to: str, subject: str, body: str, phys
                 return True
         except urllib.error.HTTPError as he:
             detail = (he.read() or b"").decode(errors="replace")[:400]
+            low = detail.lower()
+            if he.code == 429 or "daily_quota_exceeded" in low or "quota" in low:
+                _mark_resend_quota_exhausted()
+                raise EmailQuotaExhausted(f"Resend HTTP {he.code}: {detail}") from he
             raise RuntimeError(f"Resend HTTP {he.code}: {detail}") from he
 
     return await asyncio.to_thread(_post)
@@ -583,16 +612,43 @@ async def send_email(cfg: dict, to: str, subject: str, body: str, attachment: by
         key = (cfg.get("SMTP_PASS") or "").strip()
     resend_key = key
 
+    def _domain(addr: str) -> str:
+        return (addr or "").rsplit("@", 1)[-1].strip().lower()
+
+    # Mail to our own verified sending domain is always deliverable via SES and
+    # never consumes the Resend quota, so route it there first and keep Resend
+    # for external prospects.
+    internal_recipient = bool(_domain(cfg.get("SMTP_FROM")) and _domain(cfg.get("SMTP_FROM")) == _domain(to))
+    fallback_on_quota = (os_getenv("EMAIL_FALLBACK_SES_ON_QUOTA", "") or "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
     # Cloud hosts (Railway) frequently block outbound SMTP egress entirely.
     # Prefer the Resend HTTPS REST API when a key is available, then fall back
     # to the SMTP ladder below.
-    if resend_key and (cfg.get("SMTP_FROM") or ""):
-        try:
-            sent_ok = await _send_via_resend_api(cfg, to, subject, body, physical, resend_key)
-            if sent_ok:
-                return True
-        except Exception as e:
-            print(f"[EMAIL] Resend API attempt failed: {e}")
+    if resend_key and (cfg.get("SMTP_FROM") or "") and not internal_recipient:
+        if _resend_quota_blocked():
+            print("[EMAIL] Resend paused for the day (daily quota); skipping Resend attempt", flush=True)
+            if not fallback_on_quota:
+                return False
+        else:
+            try:
+                sent_ok = await _send_via_resend_api(cfg, to, subject, body, physical, resend_key)
+                if sent_ok:
+                    return True
+            except EmailQuotaExhausted as e:
+                # The sandbox SES identity and firewalled SMTP can't reach
+                # external recipients, and retrying only burns quota: stop for
+                # the day unless explicitly told to try SES anyway.
+                print(f"[EMAIL] {e}", flush=True)
+                if not fallback_on_quota:
+                    print("[EMAIL] Stopping external sends for the day", flush=True)
+                    return False
+            except Exception as e:
+                print(f"[EMAIL] Resend API attempt failed: {e}")
 
     # AWS SES over HTTPS (443): works from cloud hosts whose SMTP egress is
     # firewalled. When creds are present SES is authoritative, so a failure is

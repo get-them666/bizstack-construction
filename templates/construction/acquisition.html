@@ -6,7 +6,7 @@
     <div class="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-8">
         <div>
             <h1 class="text-3xl font-extrabold tracking-tight text-slate-900">Lead Acquisition</h1>
-            <p class="mt-1 text-slate-600 text-sm">Scan <span class="font-semibold text-slate-800">Reddit</span> and <span class="font-semibold text-slate-800">LinkedIn</span> for homeowners &amp; investors looking for construction work nearby — then reply with a ready-made outreach message.</p>
+            <p class="mt-1 text-slate-600 text-sm">Find work automatically: public <span class="font-semibold text-slate-800">bid/RFP boards</span> near you, plus <span class="font-semibold text-slate-800">Reddit</span> and <span class="font-semibold text-slate-800">LinkedIn</span> posts from homeowners &amp; investors — then reply with a ready-made outreach message.</p>
         </div>
         <div class="flex gap-2 shrink-0">
             <form method="post" action="/acquisition/scan/reddit">
@@ -16,6 +16,9 @@
                 <button type="submit" class="inline-flex items-center justify-center px-4 py-2.5 text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-xl transition-all shadow-sm shadow-blue-200">Scan LinkedIn</button>
             </form>
             <a href="/get-started" target="_blank" class="inline-flex items-center justify-center px-4 py-2.5 text-sm font-semibold text-slate-700 bg-white border border-slate-200 rounded-xl transition-all shadow-sm">Funnel</a>
+            <form method="post" action="/acquisition/scan/public">
+                <button type="submit" class="inline-flex items-center justify-center px-4 py-2.5 text-sm font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl transition-all shadow-sm shadow-emerald-200">Scan Bid Boards</button>
+            </form>
         </div>
     </div>
 
@@ -44,6 +47,23 @@
                 <span class="inline-flex items-center gap-1 mr-2"><span class="w-1.5 h-1.5 rounded-full {% if st.get('running') %}bg-amber-500 animate-pulse{% else %}bg-emerald-500{% endif %}"></span>{{ s|capitalize }}: {{ st.get('created', 0) }} new</span>{% endfor %}
             </p>
             {% for s in ['reddit', 'linkedin'] %}{% set st = radar_status.get(s, {}) %}{% if st.get('errors') %}<p class="mt-2 text-xs text-rose-600 max-w-md">{{ s }}: {{ st['errors'][:200] }}</p>{% endif %}{% endfor %}
+        </div>
+    </div>
+
+    <div class="rounded-2xl border border-emerald-200 bg-emerald-50 p-5 mb-8">
+        <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div>
+                <p class="text-xs font-semibold uppercase tracking-wider text-emerald-700">Public bid sources — runs automatically every {{ 6 }}h</p>
+                <p class="mt-1 text-sm text-emerald-900">SAM.gov contract opportunities near you (VA / NC), filtered to residential &amp; light-commercial construction trades. New bids become leads and notify the owner.</p>
+                <p class="mt-2 text-xs text-emerald-800">
+                    <span class="inline-flex items-center gap-1 mr-3"><span class="w-1.5 h-1.5 rounded-full {% if lead_source_status.get('running') %}bg-amber-500 animate-pulse{% else %}bg-emerald-500{% endif %}"></span>{% if lead_source_status.get('running') %}scanning…{% else %}{{ lead_source_status.get('created', 0) }} new / {{ lead_source_status.get('found', 0) }} found{% endif %}</span>
+                    {% if lead_source_status.get('last_run') %}<span class="text-emerald-700">last run {{ lead_source_status['last_run'][:16].replace('T', ' ') }} UTC</span>{% endif %}
+                </p>
+                {% if lead_source_status.get('errors') %}<p class="mt-1 text-xs text-rose-600">{{ lead_source_status['errors'][:200] }}</p>{% endif %}
+            </div>
+            <form method="post" action="/acquisition/scan/public" class="shrink-0">
+                <button type="submit" class="inline-flex items-center justify-center px-4 py-2.5 text-sm font-semibold text-emerald-800 bg-white border border-emerald-300 hover:bg-emerald-100 rounded-xl transition-all shadow-sm">Scan now</button>
+            </form>
         </div>
     </div>
 
