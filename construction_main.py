@@ -42,6 +42,7 @@ from con_ai_agent import BusinessAIAgent
 from loan_outreach import start_outreach_tasks
 from stripe_service import StripeService, default_deposit_cents
 from signalwire_service import SignalWireService
+import vapi_service
 import property_service
 import estimating_service
 import auto_reply
@@ -58,6 +59,7 @@ db_url = os.getenv("DATABASE_URL", "postgresql://shaun:secret@localhost:5432/bui
 templates = Jinja2Templates(directory="templates/construction")
 stripe_svc = StripeService()
 signalwire = SignalWireService()
+vapi = vapi_service.VapiService(default_base="https://construction.bizstackperks.com")
 APP_TZ = ZoneInfo(os.getenv("APP_TIMEZONE", "America/New_York"))
 
 LEAD_STATUSES = ["new", "contacted", "quoted", "deposit", "in_progress", "completed", "lost"]
@@ -724,9 +726,27 @@ def build_tool_handlers(db, stripe_svc):
         digits = "".join(ch for ch in str(to or "") if ch.isdigit())
         if len(digits) < 10:
             return {"ok": False, "error": "I need a valid 10-digit phone number."}
-        if not signalwire.is_configured():
-            return {"ok": False, "error": "SignalWire is not configured."}
         e164 = ("+1" + digits) if not digits.startswith("1") else ("+" + digits)
+        if vapi.is_configured():
+            try:
+                sid = vapi.create_ai_outbound_call(e164, notes or "")
+            except Exception as e:
+                return {"ok": False, "error": f"Call could not be placed: {e}"}
+            if not sid:
+                return {"ok": False, "error": "Call could not be placed right now."}
+            try:
+                with db.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO comms_logs (direction, channel, sender, recipient, message_body) "
+                        "VALUES ('outbound', 'voice', 'assistant', %s, %s);",
+                        (e164, f"[AI outbound call] {str(notes or '')[:500]}"),
+                    )
+                    db.commit()
+            except Exception:
+                pass
+            return {"ok": True, "call_sid": sid, "to": e164}
+        if not signalwire.is_configured():
+            return {"ok": False, "error": "Vapi and SignalWire are both unconfigured."}
         swml_base = (os.getenv("APP_BASE_URL", "") or f"https://{company()['domain']}").rstrip("/")
         swml_url = f"{swml_base}/comms/outbound-voice.swml"
         try:
@@ -2212,6 +2232,130 @@ async def outbound_voice_swml(request: Request, db=Depends(get_db)):
     ))
 
 
+def _voice_openai_tools() -> list:
+    """Derive OpenAI function schemas from the canonical SWAIG function list."""
+    try:
+        sw = _build_voice_swml(_voice_prompt())
+        funcs = sw["sections"]["main"][1]["ai"]["SWAIG"].get("functions", [])
+    except Exception:
+        funcs = []
+    out = []
+    for f in funcs:
+        name = f.get("function")
+        if not name or name not in VOICE_ALLOWED_TOOLS:
+            continue
+        out.append({
+            "type": "function",
+            "function": {
+                "name": name,
+                "description": f.get("description", ""),
+                "parameters": f.get("parameters") or {"type": "object", "properties": {}},
+            },
+        })
+    return out
+
+
+def _voice_tool_dispatch(db, name: str, args: dict) -> str:
+    """Run one voice tool and turn its result into spoken text."""
+    if name not in VOICE_ALLOWED_TOOLS:
+        return "I'm not able to do that yet, but the team will follow up by text."
+    if not isinstance(args, dict):
+        return "I didn't catch all the details. Could you repeat the date and time?"
+    try:
+        handlers = build_tool_handlers(db, stripe_svc)
+        result = handlers[name](**args)
+    except TypeError as e:
+        print(f"⚠️ VAPI-TOOL bad args: {e}", flush=True)
+        return "I didn't catch all the details. Could you repeat the date and time?"
+    except Exception as e:
+        print(f"⚠️ VAPI-TOOL error: {e}", flush=True)
+        return "That hit a snag — I'll have the team follow up by text."
+    return _swaig_tool_response_text(name, result)
+
+
+def _vapi_messages_to_openai(payload: dict) -> list:
+    """Convert Vapi customLLM messages into OpenAI-format messages with our voice prompt."""
+    conversation = [{"role": "system", "content": _voice_prompt()}]
+    seen_system = False
+    for m in payload.get("messages") or []:
+        if not isinstance(m, dict):
+            continue
+        role = m.get("role")
+        content = m.get("content")
+        if isinstance(content, list):
+            parts = []
+            for seg in content:
+                if isinstance(seg, dict):
+                    parts.append(str(seg.get("text") or seg.get("value") or ""))
+                elif isinstance(seg, str):
+                    parts.append(seg)
+            content = " ".join(p for p in parts if p)
+        elif content is None:
+            continue
+        if role == "system":
+            if seen_system:
+                continue
+            seen_system = True
+            conversation[0] = {"role": "system", "content": str(content)}
+            continue
+        if role not in ("user", "assistant", "tool"):
+            continue
+        item = {"role": role, "content": str(content)}
+        if role == "tool":
+            item["tool_call_id"] = m.get("toolCallId") or m.get("tool_call_id") or "vapi_call"
+        conversation.append(item)
+    return conversation
+
+
+@app.api_route("/vapi/llm", methods=["POST"])
+async def vapi_llm(request: Request, db=Depends(get_db)):
+    """OpenAI-compatible chat completion served to Vapi's customLLM provider.
+
+    Runs the same voice prompt + tool harness as the SWML agent, so the brains
+    stay entirely in this app. Vapi only supplies the transcript + audio.
+    """
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+
+    from openai import OpenAI
+    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    model = os.getenv("OPENAI_VOICE_MODEL", "gpt-4o-mini")
+    messages = _vapi_messages_to_openai(payload)
+    tools = _voice_openai_tools() or None
+
+    for _ in range(6):
+        resp = client.chat.completions.create(model=model, messages=messages, tools=tools, temperature=0.7)
+        msg = resp.choices[0].message
+        tool_calls = getattr(msg, "tool_calls", None)
+        if not tool_calls:
+            text = (msg.content or "").strip()
+            return {"choices": [{"message": {"role": "assistant", "content": text or "One moment — let me check that for you."}}]}
+        calls = []
+        for tc in tool_calls:
+            calls.append({"id": tc.id, "type": "function",
+                          "function": {"name": tc.function.name, "arguments": tc.function.arguments}})
+        messages.append({"role": "assistant", "content": msg.content or "", "tool_calls": calls})
+        for tc in tool_calls:
+            try:
+                args = json.loads(tc.function.arguments or "{}")
+            except Exception:
+                args = {}
+            if not isinstance(args, dict):
+                args = {}
+            try:
+                result = _voice_tool_dispatch(db, tc.function.name, args)
+            except Exception as e:
+                print(f"⚠️ VAPI-TOOL {tc.function.name} crash: {e}", flush=True)
+                result = "That hit a snag — the team will follow up by text."
+            messages.append({"role": "tool", "tool_call_id": tc.id, "content": str(result)})
+
+    return {"choices": [{"message": {"role": "assistant", "content": "Let me pass this to the team to get you squared away — they'll follow up by text."}}]}
+
+
 VOICE_ALLOWED_TOOLS = {
     "register_lead",
     "lookup_leads",
@@ -2864,6 +3008,74 @@ def run_lead_source_scan():
     return {"status": "ok", "found": found, "created": created, "pushed": pushed, "errors": errors}
 
 
+def pipeline_digest():
+    """Env-gated boot report (LEAD_PIPELINE_DIGEST=1): one JSON print of the
+    whole shared lead pipeline across companies."""
+    try:
+        with psycopg.connect(db_url, row_factory=dict_row) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT source, company, status, COUNT(*) AS c FROM leads "
+                    "GROUP BY 1, 2, 3 ORDER BY 1, 2, 3;"
+                )
+                by_source = cur.fetchall()
+                cur.execute(
+                    "SELECT COUNT(*) FILTER (WHERE source IN ('website','referral') AND email IS NOT NULL "
+                    "  AND email <> '' AND email NOT LIKE '%@lead.local') AS website_real_email, "
+                    "COUNT(*) FILTER (WHERE source IN ('website','referral')) AS website_total, "
+                    "COUNT(*) FILTER (WHERE source IN ('website','referral') AND status = 'analyzed') AS website_analyzed, "
+                    "COUNT(*) FILTER (WHERE source IN ('website','referral') AND status IN ('quoted','deposit','in_progress')) AS website_active, "
+                    "COUNT(*) FILTER (WHERE source IN ('website','referral') AND last_reply_at IS NOT NULL) AS website_replied "
+                    "FROM leads;"
+                )
+                website = cur.fetchone()
+                cur.execute(
+                    "SELECT COUNT(*) AS scan_pending FROM leads WHERE campaign = 'lead-source-scan' AND status = 'new' "
+                    "AND email IS NOT NULL AND email <> '' AND email NOT LIKE '%@lead.local' "
+                    "AND NOT EXISTS (SELECT 1 FROM comms_logs cl WHERE cl.channel = 'email' AND cl.direction = 'outbound' "
+                    "  AND LOWER(cl.recipient) = LOWER(leads.email));"
+                )
+                scan_pending = cur.fetchone()["scan_pending"]
+                cur.execute(
+                    "SELECT COUNT(*) AS overdue FROM leads WHERE email IS NOT NULL AND email <> '' "
+                    "AND email NOT LIKE '%@lead.local' AND last_reply_at IS NULL "
+                    "AND source IN ('website','referral') "
+                    "AND EXISTS (SELECT 1 FROM comms_logs cl WHERE cl.channel = 'email' AND cl.direction = 'outbound' "
+                    "  AND LOWER(cl.recipient) = LOWER(leads.email)) "
+                    "AND NOT EXISTS (SELECT 1 FROM leads l2 WHERE l2.id = leads.id AND status IN ('quoted','deposit','in_progress','completed','lost'));"
+                )
+                overdue = cur.fetchone()["overdue"]
+                cur.execute(
+                    "SELECT COUNT(*) FILTER (WHERE email LIKE '%@lead.local') AS masked, "
+                    "COUNT(*) FILTER (WHERE source = 'reddit') AS reddit, "
+                    "COUNT(*) FILTER (WHERE source = 'permit_finder') AS permits "
+                    "FROM leads;"
+                )
+                masked = cur.fetchone()
+                cur.execute(
+                    "SELECT COUNT(*) AS callable FROM leads WHERE source IN ('website','referral') "
+                    "AND status IN ('new','analyzed','contacted') "
+                    "AND length(regexp_replace(COALESCE(phone,''), '[^0-9]', '', 'g')) >= 10;"
+                )
+                callable = cur.fetchone()["callable"]
+                cur.execute(
+                    "SELECT id, name, status, project_type, company FROM leads "
+                    "WHERE status IN ('quoted','deposit','in_progress') ORDER BY created_at DESC;"
+                )
+                active_jobs = cur.fetchall()
+        return {
+            "by_source": by_source,
+            "website": website,
+            "scan_pending": scan_pending,
+            "website_overdue_no_reply": overdue,
+            "masked_reddit_permits": masked,
+            "website_callable": callable,
+            "active_jobs": active_jobs,
+        }
+    except Exception as exc:
+        return {"error": str(exc)[:400]}
+
+
 def _start_lead_source_scheduler():
     try:
         interval_h = max(0.5, float(os.getenv("LEAD_SCAN_INTERVAL_HOURS", "6") or 6))
@@ -2893,6 +3105,12 @@ def _start_lead_source_scheduler():
                         print(f"[debug-active] rows={cur.fetchall()}", flush=True)
             except Exception as exc:
                 print(f"[debug-active] failed: {exc}", flush=True)
+        digest_on = (os.getenv("LEAD_PIPELINE_DIGEST", "") or "").strip().lower() in ("1", "true", "yes", "on")
+        if digest_on:
+            try:
+                print(f"[pipeline-digest] {pipeline_digest()}", flush=True)
+            except Exception as exc:
+                print(f"[pipeline-digest] failed: {exc}", flush=True)
         fire_mode = (os.getenv("LEAD_FIRE_PENDING", "") or "").strip().lower()
         if fire_mode:
             try:
