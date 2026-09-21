@@ -1,13 +1,14 @@
-"""Authentication, OTP, roles and feature permissions for Broom Service.
+"""Authentication, OTP, roles and feature permissions for Buildstack Construction.
 
 Sessions are stateless HMAC-signed tokens (no dependency on itsdangerous).
-Every role — admin, worker, host — logs in with a password/PIN. An email OTP
+Every role — admin, worker — logs in with a password/PIN. An email OTP
 step can be layered on top; it is configurable per role and only enforced when
 email delivery is actually configured (see _otp_enabled in main.py).
 
-Workers and hosts see a restricted toolset. An admin can toggle each tool on
-or off; the toggles are stored in app_settings as JSON under `perms_worker`
-and `perms_host`.
+Crew members see a restricted toolset. An admin can toggle each tool on
+or off; the toggles are stored in app_settings as JSON under `perms_crew`.
+This key is namespaced away from Broom Service's `perms_worker`/`perms_host`
+so the two companies' toggles never collide in the shared app_settings table.
 """
 
 import os
@@ -24,34 +25,47 @@ OTP_TTL_SECONDS = 10 * 60
 SESSION_TTL_SECONDS = 72 * 60 * 60
 MAX_OTP_ATTEMPTS = 6
 
-ROLES = ("admin", "worker", "host")
+ROLES = ("admin", "worker")
+
+# Construction crew feature catalogue: key -> human label on the Access page.
+# Namespaced under `perms_crew` in app_settings so it never clobbers Broom
+# Service's `perms_worker` / `perms_host` keys in the shared database.
+CREW_FEATURES = {
+    "jobs": "Assigned jobs & tasks",
+    "timeclock": "Time clock (clock in / out)",
+    "map": "Job location maps & directions",
+    "photos": "Job photos for the office",
+    "messages": "Messages with the office",
+    "schedule": "Schedule calendar",
+    "hours": "Log hours",
+    "pay": "Pay summary",
+    "training": "Safety & skills training",
+}
+
+# Sensible defaults: give crew everything they already use today.
+DEFAULT_CREW_FEATURES = {
+    "jobs": True,
+    "timeclock": True,
+    "map": True,
+    "photos": True,
+    "messages": True,
+    "schedule": True,
+    "hours": True,
+    "pay": True,
+    "training": True,
+}
 
 # Feature catalogue: key -> human label shown on the Access page.
 WORKER_FEATURES = {
     "jobs": "Assigned jobs & tasks",
     "timeclock": "Time clock (clock in / out)",
     "map": "Job location maps & directions",
-    "pay": "Pay summary & paychecks",
-    "paystubs": "Download paystub PDFs",
-    "photos": "Photo finish (room photos for the office)",
+    "photos": "Job photos for the office",
     "messages": "Messages with the office",
-    "devices": "Door & alarm access codes",
-}
-HOST_FEATURES = {
-    "bookings": "Their bookings & schedule",
-    "properties": "Their properties",
-    "payments": "Payment status",
-    "map": "Booking location maps",
-    "photos": "Cleaning photos & photo finish",
-    "messages": "Messages with the office",
-    "devices": "Smart devices (locks, alarms, lighting)",
-}
-
-# Sensible defaults: give workers only what they need to do the job and get
-# paid; give hosts only read access to their own bookings.
-DEFAULT_PERMISSIONS = {
-    "worker": {k: (k in ("jobs", "timeclock", "map", "pay", "paystubs", "photos", "messages", "devices")) for k in WORKER_FEATURES},
-    "host": {k: (k in ("bookings", "properties", "payments", "map", "photos", "messages", "devices")) for k in HOST_FEATURES},
+    "schedule": "Schedule calendar",
+    "hours": "Log hours",
+    "pay": "Pay summary",
+    "training": "Safety & skills training",
 }
 
 
@@ -143,7 +157,9 @@ def verify_otp(code: str, code_hash: str) -> bool:
 
 
 def permissions_defaults(role: str) -> dict:
-    return dict(DEFAULT_PERMISSIONS.get(role, {}))
+    if role == "worker":
+        return dict(DEFAULT_CREW_FEATURES)
+    return {}
 
 
 def features_for(role: str, stored_json) -> dict:
@@ -163,4 +179,4 @@ def features_for(role: str, stored_json) -> dict:
 def feature_label(role: str, key: str) -> str:
     if role == "worker":
         return WORKER_FEATURES.get(key, key)
-    return HOST_FEATURES.get(key, key)
+    return key

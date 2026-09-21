@@ -110,6 +110,7 @@ async def lifecycle(app: FastAPI):
                     timeline VARCHAR(120),
                     description TEXT,
                     source VARCHAR(50) DEFAULT 'website',
+                    company VARCHAR(40) DEFAULT 'construction',
                     status VARCHAR(50) DEFAULT 'new',
                     deposit_status VARCHAR(50) DEFAULT 'none',
                     deposit_cents INTEGER,
@@ -118,6 +119,8 @@ async def lifecycle(app: FastAPI):
                     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
                 );
                 """)
+                cur.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS company VARCHAR(40) DEFAULT 'construction';")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_leads_company ON leads(company);")
                 cur.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS deposit_status VARCHAR(50) DEFAULT 'none';")
                 cur.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS deposit_cents INTEGER;")
                 cur.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS stripe_session_id VARCHAR(255);")
@@ -130,10 +133,12 @@ async def lifecycle(app: FastAPI):
                     stripe_payment_intent_id VARCHAR(255),
                     amount_cents INTEGER NOT NULL,
                     currency VARCHAR(10) DEFAULT 'usd',
+                    company VARCHAR(40) DEFAULT 'construction',
                     status VARCHAR(50) NOT NULL DEFAULT 'paid',
                     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
                 );
                 """)
+                cur.execute("ALTER TABLE payments ADD COLUMN IF NOT EXISTS company VARCHAR(40) DEFAULT 'construction';")
                 cur.execute("""
                 CREATE TABLE IF NOT EXISTS app_settings (
                     key TEXT PRIMARY KEY,

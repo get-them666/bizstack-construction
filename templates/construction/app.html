@@ -88,6 +88,11 @@
 
             <div id="offline-banner" class="hidden bg-amber-500 text-white text-center text-xs font-bold px-4 py-2">OFFLINE — data may be stale</div>
 
+            <div id="bulletin-banner" class="hidden bg-blue-700 text-white px-5 py-3 flex items-center justify-between gap-3">
+                <p id="bulletin-text" class="text-xs font-semibold flex-1"></p>
+                <button id="bulletin-close" type="button" class="text-white/70 hover:text-white text-lg leading-none">×</button>
+            </div>
+
             <main id="home-body" class="flex-1 px-5 pb-24 -mt-4">
                 <div id="clocked-banner" class="hidden bg-red-500 text-white rounded-2xl px-5 py-3 mb-4 shadow-lg shadow-red-200 flex items-center justify-between">
                     <span class="text-sm font-bold">● On the clock — location live to the office</span>
@@ -97,6 +102,51 @@
                 <section id="tab-clock">
                     <p id="jobs-title" class="text-sm font-bold text-slate-900 mb-3">My Jobs</p>
                     <div id="jobs-list" class="space-y-3"></div>
+                </section>
+
+                <section id="tab-map" class="hidden">
+                    <p id="map-title" class="text-sm font-bold text-slate-900 mb-3">Your Jobs on the Map</p>
+                    <div id="map-list" class="space-y-2 mb-3"></div>
+                    <div id="map-embed-wrap" class="hidden rounded-2xl overflow-hidden border border-slate-200">
+                        <iframe id="map-embed" class="w-full" style="height: 300px" frameborder="0" loading="lazy" allowfullscreen src="about:blank"></iframe>
+                        <a id="map-nav-btn" href="#" target="_blank" rel="noopener"
+                           class="block text-center py-3 text-sm font-bold text-white bg-blue-700 hover:bg-blue-800">🧭 Get Directions</a>
+                    </div>
+                </section>
+
+                <section id="tab-schedule" class="hidden">
+                    <div class="flex items-center justify-between mb-3">
+                        <button id="cal-prev" type="button" class="px-3 py-1.5 text-xs font-bold text-slate-500 bg-white border border-slate-200 rounded-xl">‹ Prev</button>
+                        <p id="cal-title" class="text-sm font-extrabold text-slate-900"></p>
+                        <button id="cal-next" type="button" class="px-3 py-1.5 text-xs font-bold text-slate-500 bg-white border border-slate-200 rounded-xl">Next ›</button>
+                    </div>
+                    <div id="cal-grid" class="bg-white rounded-2xl border border-slate-200 p-2"></div>
+                    <p id="cal-day-title" class="text-sm font-bold text-slate-900 mt-4 mb-3 hidden"></p>
+                    <div id="cal-day-jobs" class="space-y-3"></div>
+                </section>
+
+                <section id="tab-chat" class="hidden flex flex-col" style="height: calc(100vh - 260px);">
+                    <p id="chat-title" class="text-sm font-bold text-slate-900 mb-3">Message the Office</p>
+                    <div id="chat-list" class="flex-1 overflow-y-auto space-y-3 pr-1">
+                        <div class="text-center text-xs text-slate-400 py-6">Connecting…</div>
+                    </div>
+                    <form id="chat-form" class="flex items-end gap-2 mt-3">
+                        <textarea id="chat-input" rows="1" placeholder="Message the office…"
+                            class="flex-1 px-4 py-2.5 rounded-xl border border-slate-200 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-400"></textarea>
+                        <button type="submit" class="shrink-0 px-5 py-2.5 text-sm font-bold text-white bg-blue-700 hover:bg-blue-800 rounded-xl">Send</button>
+                    </form>
+                </section>
+
+                <section id="tab-photos" class="hidden">
+                    <p id="photos-title" class="text-sm font-bold text-slate-900 mb-3">Job Photos</p>
+                    <p class="text-xs text-slate-500 mb-3">Show the office the progress, or flag problems / punch list items. 📷</p>
+                    <div id="photos-jobs" class="space-y-2 mb-4"></div>
+                    <div id="photos-gallery" class="hidden">
+                        <p class="text-sm font-bold text-slate-900 mb-2" id="photos-gallery-title"></p>
+                        <div id="photos-grid" class="grid grid-cols-2 gap-2"></div>
+                        <button id="photos-add" type="button"
+                            class="mt-4 w-full py-3 text-sm font-bold text-white bg-blue-700 hover:bg-blue-800 rounded-xl">📷 Take a Photo</button>
+                    </div>
                 </section>
 
                 <section id="tab-hours" class="hidden">
@@ -143,16 +193,49 @@
             </main>
         </div>
 
-        <nav id="tabbar" class="hidden fixed bottom-0 inset-x-0 z-40 bg-white border-t border-slate-200 safe-bottom flex justify-around">
-            <button id="tabbtn-clock" data-tab="clock" class="flex-1 py-3 text-sm font-bold text-blue-600 border-t-2 border-blue-500">🕐 Clock</button>
-            <button id="tabbtn-hours" data-tab="hours" class="flex-1 py-3 text-sm font-bold text-slate-400 border-t-2 border-transparent">🕒 Hours</button>
-            <button id="tabbtn-pay" data-tab="pay" class="flex-1 py-3 text-sm font-bold text-slate-400 border-t-2 border-transparent">💰 Pay</button>
-            <button id="tabbtn-training" data-tab="training" class="flex-1 py-3 text-sm font-bold text-slate-400 border-t-2 border-transparent">📚 Training</button>
+        <nav id="tabbar" class="hidden fixed bottom-0 inset-x-0 z-40 bg-white border-t border-slate-200 safe-bottom overflow-x-auto flex">
+            <button id="tabbtn-clock" data-tab="clock" class="min-w-[76px] shrink-0 flex-1 py-3 text-sm font-bold text-blue-600 border-t-2 border-blue-500">🕐 Clock</button>
+            <button id="tabbtn-schedule" data-tab="schedule" class="min-w-[76px] shrink-0 flex-1 py-3 text-sm font-bold text-slate-400 border-t-2 border-transparent">📅 Schedule</button>
+            <button id="tabbtn-map" data-tab="map" class="min-w-[76px] shrink-0 flex-1 py-3 text-sm font-bold text-slate-400 border-t-2 border-transparent">🗺️ Map</button>
+            <button id="tabbtn-chat" data-tab="chat" class="min-w-[76px] shrink-0 flex-1 py-3 text-sm font-bold text-slate-400 border-t-2 border-transparent">💬 Office<span id="chat-dot" class="hidden ml-1 inline-block w-2 h-2 rounded-full bg-red-500"></span></button>
+            <button id="tabbtn-photos" data-tab="photos" class="min-w-[76px] shrink-0 flex-1 py-3 text-sm font-bold text-slate-400 border-t-2 border-transparent">📷 Photos</button>
+            <button id="tabbtn-hours" data-tab="hours" class="min-w-[76px] shrink-0 flex-1 py-3 text-sm font-bold text-slate-400 border-t-2 border-transparent">🕒 Hours</button>
+            <button id="tabbtn-pay" data-tab="pay" class="min-w-[76px] shrink-0 flex-1 py-3 text-sm font-bold text-slate-400 border-t-2 border-transparent">💰 Pay</button>
+            <button id="tabbtn-training" data-tab="training" class="min-w-[76px] shrink-0 flex-1 py-3 text-sm font-bold text-slate-400 border-t-2 border-transparent">📚 Training</button>
         </nav>
     </div>
 
+    <!-- Crew Photo Upload Modal -->
+    <div id="photo-view" class="hidden fixed inset-0 z-50 bg-slate-900/70 flex items-center justify-center p-5">
+        <div class="w-full bg-white rounded-3xl shadow-2xl p-6">
+            <div class="flex items-center justify-between mb-4">
+                <h3 class="text-lg font-extrabold text-slate-900">📷 Job Photo</h3>
+                <button id="photo-close" type="button" class="text-slate-400 hover:text-slate-600 text-2xl leading-none">×</button>
+            </div>
+            <p class="text-xs text-slate-500 mb-4">Show the office the progress, flag a problem, or log a punch-list item.</p>
+            <form id="photo-form">
+                <input type="hidden" id="photo-project" name="project_id">
+                <label class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">Caption</label>
+                <input id="photo-caption" name="caption" placeholder="Framing done, ready for inspection…"
+                    class="w-full mb-3 px-4 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white">
+                <label class="flex items-center gap-2 mb-3 text-sm font-semibold text-slate-700 cursor-pointer">
+                    <input id="photo-punchlist" name="punchlist" type="checkbox" class="accent-blue-700">
+                    Flag as punch list
+                </label>
+                <label class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">Photo</label>
+                <input id="photo-file" name="photo" type="file" accept="image/*" capture="environment" required
+                    class="w-full mb-4 px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 text-sm">
+                <button id="photo-submit" type="submit"
+                    class="w-full py-3.5 text-sm font-bold text-white bg-blue-700 hover:bg-blue-800 rounded-xl transition-all shadow-md shadow-blue-100 uppercase tracking-wider">
+                    Upload Photo
+                </button>
+                <p id="photo-status" class="hidden mt-3 text-center text-sm font-bold text-emerald-600"></p>
+            </form>
+        </div>
+    </div>
+
     <script>
-        const state = { worker: null, jobs: [], hours: [], pay: [], clocked_in: false, clock_id: null, week_hours: 0, lastEarned: 0, updateTimer: null, sampling: false, training: [], trainingHistory: [], quizSlug: null, quizAnswers: {} };
+        const state = { worker: null, jobs: [], hours: [], pay: [], clocked_in: false, clock_id: null, week_hours: 0, lastEarned: 0, updateTimer: null, sampling: false, training: [], trainingHistory: [], quizSlug: null, quizAnswers: {}, features: {}, bulletin: null, photos: [], chatStarted: false, chatRetry: 0, chatWs: null, chatLastId: 0, chatSeen: new Set(), chatLocked: false };
 
         const $ = id => document.getElementById(id);
 
@@ -194,12 +277,14 @@
             state.jobs = data.jobs;
             state.hours = data.hours;
             state.pay = data.pay;
+            state.features = data.features || {};
             state.week_hours = data.week_hours || 0;
             state.clocked_in = !!data.open_clock;
             state.clock_id = (data.open_clock && data.open_clock.id) || null;
             state.lastEarned = (data.pay && data.pay.length && data.pay[0].gross_cents) || 0;
             renderHome();
             checkGeo();
+            loadBulletin();
             show('home');
         }
 
@@ -214,13 +299,45 @@
             fillHourProjectSelect();
             const today = new Date();
             $('hours-date').value = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' + String(today.getDate()).padStart(2, '0');
+            buildTabbar();
             $('tabbar').classList.remove('hidden');
-            switchTab('clock');
+            const firstTab = ['clock', 'schedule', 'map', 'chat', 'photos', 'hours', 'pay', 'training'].find(t => tabEnabled(t)) || 'clock';
+            switchTab(firstTab);
+        }
+
+        function tabEnabled(t) {
+            const f = state.features;
+            switch (t) {
+                case 'clock': return state.features.timeclock !== false;
+                case 'schedule': return !!f.schedule;
+                case 'map': return !!f.map;
+                case 'chat': return !!f.messages;
+                case 'photos': return !!f.photos;
+                case 'hours': return !!f.hours;
+                case 'pay': return !!f.pay;
+                case 'training': return !!f.training;
+                default: return true;
+            }
+        }
+
+        function buildTabbar() {
+            [['clock', 'timeclock'], ['schedule', 'schedule'], ['map', 'map'], ['chat', 'messages'], ['photos', 'photos'], ['hours', 'hours'], ['pay', 'pay'], ['training', 'training']].forEach(([t, fk]) => {
+                const btn = $('tabbtn-' + t);
+                if (!btn) return;
+                if (fk === 'timeclock') { btn.classList.toggle('hidden', state.features.timeclock === false); return; }
+                btn.classList.toggle('hidden', state.features[fk] === false);
+            });
         }
 
         function renderJobs() {
             const list = $('jobs-list');
             list.innerHTML = '';
+            if (state.features.jobs === false) {
+                $('jobs-title').classList.add('hidden');
+                $('clocked-banner').classList.add('hidden');
+                return;
+            }
+            $('jobs-title').classList.remove('hidden');
             if (!state.jobs.length) {
                 list.innerHTML = '<p class="text-sm text-slate-400 bg-white rounded-2xl border border-slate-200 p-5">No jobs assigned yet.</p>';
                 $('clocked-banner').classList.add('hidden');
@@ -233,15 +350,24 @@
                 const chip = j.status === 'active'
                     ? '<span class="px-2 py-1 text-xs font-semibold rounded-full bg-emerald-50 text-emerald-600 border border-emerald-100">Active</span>'
                     : '<span class="px-2 py-1 text-xs font-semibold rounded-full bg-blue-50 text-blue-600 border border-blue-100">Planned</span>';
-                const coords = (j.lat != null && j.lng != null) ? `href="https://www.google.com/maps/dir/?api=1&destination=${j.lat},${j.lng}"` : (j.address ? `href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(j.address)}"` : '');
-                const actions = isOpen
-                    ? `<button class="flex-1 text-center px-3 py-2.5 text-xs font-bold text-white bg-red-500 hover:bg-red-600 rounded-xl" data-act="out" data-id="${j.id}">Clock Out</button>`
-                    : `<button class="flex-1 text-center px-3 py-2.5 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl" data-act="in" data-id="${j.id}">🕐 Clock In</button>`;
+                const coords = (j.lat != null && j.lng != null)
+                    ? `href="https://www.google.com/maps/dir/?api=1&destination=${j.lat},${j.lng}"`
+                    : (j.address && state.features.map ? `href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(j.address)}"` : '');
+                let actions = '';
+                if (state.features.timeclock !== false) {
+                    actions = isOpen
+                        ? `<button class="flex-1 text-center px-3 py-2.5 text-xs font-bold text-white bg-red-500 hover:bg-red-600 rounded-xl" data-act="out" data-id="${j.id}">Clock Out</button>`
+                        : `<button class="flex-1 text-center px-3 py-2.5 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl" data-act="in" data-id="${j.id}">🕐 Clock In</button>`;
+                }
+                if (state.features.photos !== false && !isOpen) {
+                    actions += `<button class="flex-1 text-center px-3 py-2.5 text-xs font-bold text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-xl" data-act="photo" data-id="${j.id}">📷 Photo</button>`;
+                }
                 div.innerHTML = `
                     <div class="flex items-start justify-between gap-3">
                         <div>
                             <p class="text-sm font-bold text-slate-800">${escapeHtml(j.name)}</p>
                             ${j.address ? '<p class="text-xs text-slate-500 mt-0.5">📍 ' + escapeHtml(j.address) + '</p>' : ''}
+                            ${j.start_date ? '<p class="text-xs text-slate-400 mt-0.5">🗓 starts ' + escapeHtml(j.start_date) + '</p>' : ''}
                             ${j.summary ? '<p class="text-xs text-slate-400 mt-0.5">' + escapeHtml(j.summary) + '</p>' : ''}
                         </div>
                         ${chip}
@@ -319,6 +445,7 @@
         }
 
         async function loadTraining() {
+            if (state.features.training === false) { state.training = []; $('training-list').innerHTML = ''; return; }
             const { res, data } = await api('/crew/training/content');
             if (res.ok && data.status === 'ok') {
                 state.training = data.tests;
@@ -379,6 +506,13 @@
                 </div>
             `;
             t.questions.forEach((q, qi) => {
+                if (q.type === 'text') {
+                    body += `<div class="bg-white rounded-2xl border border-slate-200 p-4">
+                                <p class="text-sm font-bold text-slate-900 mb-2">${qi + 1}. ${escapeHtml(q.q)}</p>
+                                <input type="text" name="appq${qi}" value="${state.quizAnswers[qi] || ''}" placeholder="Type your answer (e.g. 4 3/8)" class="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 focus:border-blue-500 focus:outline-none" autocomplete="off">
+                            </div>`;
+                    return;
+                }
                 let opts = q.options.map((o, oi) => `
                     <label class="flex items-start gap-2 py-1.5 cursor-pointer">
                         <input type="radio" name="appq${qi}" value="${oi}" ${(state.quizAnswers[qi] === oi) ? 'checked' : ''} class="mt-0.5">
@@ -397,6 +531,11 @@
             $('quiz-back').addEventListener('click', () => { state.quizSlug = null; renderTraining(); });
 
             t.questions.forEach((q, qi) => {
+                if (q.type === 'text') {
+                    const inp = document.querySelector(`input[name="appq${qi}"]`);
+                    if (inp) inp.addEventListener('input', () => { state.quizAnswers[qi] = inp.value.trim(); });
+                    return;
+                }
                 document.querySelectorAll(`input[name="appq${qi}"]`).forEach(r => {
                     r.addEventListener('change', () => {
                         state.quizAnswers[qi] = Number(r.value);
@@ -407,9 +546,15 @@
             $('quiz-submit-app').addEventListener('click', async () => {
                 const answers = [];
                 let missing = false;
-                t.questions.forEach((_, qi) => {
-                    if (state.quizAnswers[qi] === undefined) missing = true;
-                    answers.push(state.quizAnswers[qi] ?? 0);
+                t.questions.forEach((q, qi) => {
+                    let a = state.quizAnswers[qi];
+                    if (q.type === 'text') {
+                        if (!a) missing = true;
+                    } else {
+                        if (a === undefined) missing = true;
+                        a = a ?? 0;
+                    }
+                    answers.push(a);
                 });
                 if (missing && !confirm('You skipped some questions — submit anyway?')) return;
                 const btn = $('quiz-submit-app');
@@ -524,9 +669,10 @@
         function showGeo(show) { $('geo-banner').classList.toggle('hidden', !show); }
 
         function switchTab(name) {
-            ['clock', 'hours', 'pay', 'training'].forEach(t => {
+            ['clock', 'schedule', 'map', 'chat', 'photos', 'hours', 'pay', 'training'].forEach(t => {
                 const panel = $('tab-' + t);
-                if (panel) panel.classList.toggle('hidden', t !== name);
+                if (!panel) return;
+                panel.classList.toggle('hidden', t !== name);
                 const btn = $('tabbtn-' + t);
                 if (btn) {
                     btn.classList.toggle('text-blue-600', t === name);
@@ -535,6 +681,328 @@
                     btn.classList.toggle('border-transparent', t !== name);
                 }
             });
+            if (name === 'map') renderMap();
+            if (name === 'schedule') renderCalendar();
+            if (name === 'chat') { if (!state.chatStarted) startChat(); loadChatHistory(); $('chat-dot').classList.add('hidden'); }
+            if (name === 'photos') renderPhotosJobs();
+        }
+
+        /* ---------- Bulletin ---------- */
+        async function loadBulletin() {
+            try {
+                const { res, data } = await api('/api/crew/app/bulletin');
+                if (!res.ok || !data.text) { $('bulletin-banner').classList.add('hidden'); return; }
+                state.bulletin = data.text;
+                $('bulletin-text').textContent = state.bulletin;
+                $('bulletin-banner').classList.remove('hidden');
+            } catch (e) {}
+        }
+
+        /* ---------- Schedule / calendar ---------- */
+        let calYear = 0, calMonth = 0, calSelected = '';
+        const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+        const WEEKDAYS = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
+
+        function todayKey() {
+            const t = new Date();
+            return t.getFullYear() + '-' + String(t.getMonth() + 1).padStart(2, '0') + '-' + String(t.getDate()).padStart(2, '0');
+        }
+
+        function renderCalendar() {
+            if (!calYear) {
+                const d = new Date();
+                if (d.getMonth() === 0 && d.getDate() === 1) { calYear = d.getFullYear(); calMonth = 0; }
+                else { calYear = d.getFullYear(); calMonth = d.getMonth(); }
+            }
+            $('cal-title').textContent = MONTHS[calMonth] + ' ' + calYear;
+            const grid = $('cal-grid');
+            grid.innerHTML = '';
+            const first = new Date(calYear, calMonth, 1);
+            let cursor = new Date(calYear, calMonth, 1 - first.getDay());
+            const today = todayKey();
+            const jobsOnDate = {};
+            state.jobs.forEach(j => {
+                const dts = [];
+                if (j.start_date) dts.push(j.start_date.slice(0, 10));
+                if (j.end_date && j.end_date !== j.start_date) {
+                    let d = new Date(j.start_date);
+                    const end = new Date(j.end_date);
+                    while (d <= end) {
+                        dts.push(d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'));
+                        d.setDate(d.getDate() + 1);
+                    }
+                }
+                dts.forEach(k => { (jobsOnDate[k] = jobsOnDate[k] || []).push(j); });
+            });
+            const head = document.createElement('div');
+            head.className = 'grid grid-cols-7';
+            WEEKDAYS.forEach(w => {
+                const h = document.createElement('div');
+                h.className = 'text-center text-[10px] font-bold text-slate-400 py-1';
+                h.textContent = w;
+                head.appendChild(h);
+            });
+            grid.appendChild(head);
+            const body = document.createElement('div');
+            body.className = 'grid grid-cols-7 gap-1';
+            for (let i = 0; i < 42; i++) {
+                const cell = document.createElement('button');
+                cell.type = 'button';
+                const inMonth = cursor.getMonth() === calMonth;
+                const key = cursor.getFullYear() + '-' + String(cursor.getMonth() + 1).padStart(2, '0') + '-' + String(cursor.getDate()).padStart(2, '0');
+                cell.className = 'relative rounded-lg py-2 text-sm font-semibold ' +
+                    (inMonth ? 'text-slate-800' : 'text-slate-300') +
+                    (key === today ? ' bg-blue-50 text-blue-700' : '') +
+                    (calSelected === key ? ' ring-2 ring-blue-400' : '');
+                cell.textContent = cursor.getDate();
+                if (jobsOnDate[key] && jobsOnDate[key].length) {
+                    const dot = document.createElement('span');
+                    dot.className = 'absolute bottom-1 left-1/2 -translate-x-1/2 w-1.5 h-1.5 rounded-full bg-blue-500';
+                    cell.appendChild(dot);
+                }
+                const jobsHere = jobsOnDate[key] || [];
+                cell.addEventListener('click', () => { calSelected = key; renderCalendar(); selectCalDay(key, jobsHere); });
+                body.appendChild(cell);
+                cursor.setDate(cursor.getDate() + 1);
+            }
+            grid.appendChild(body);
+            $('cal-day-title').classList.remove('hidden');
+            $('cal-day-title').textContent = 'Jobs on ' + (calSelected || today);
+            selectCalDay(calSelected || today, jobsOnDate[calSelected || today] || []);
+        }
+
+        function selectCalDay(key, jobs) {
+            calSelected = key;
+            const list = $('cal-day-jobs');
+            list.innerHTML = '';
+            if (!jobs.length) {
+                list.innerHTML = '<p class="text-sm text-slate-400 bg-white rounded-2xl border border-slate-200 p-5">No jobs this day.</p>';
+                return;
+            }
+            jobs.forEach(j => {
+                const div = document.createElement('button');
+                div.type = 'button';
+                div.className = 'w-full text-left bg-white rounded-2xl border border-slate-200 shadow-sm p-4';
+                div.innerHTML = `
+                    <div class="flex items-start justify-between gap-3">
+                        <div>
+                            <p class="text-sm font-bold text-slate-800">${escapeHtml(j.name)}</p>
+                            ${j.address ? '<p class="text-xs text-slate-500 mt-0.5">📍 ' + escapeHtml(j.address) + '</p>' : ''}
+                        </div>
+                        <span class="px-2 py-1 text-xs font-semibold rounded-full ${j.status === 'active' ? 'bg-emerald-50 text-emerald-600 border border-emerald-100' : 'bg-blue-50 text-blue-600 border border-blue-100'}">${escapeHtml(j.status)}</span>
+                    </div>`;
+                list.appendChild(div);
+            });
+        }
+
+        /* ---------- Map ---------- */
+        function renderMap() {
+            const jobs = state.jobs.filter(j => j.address);
+            const list = $('map-list');
+            list.innerHTML = '';
+            if (!jobs.length) {
+                list.innerHTML = '<p class="text-sm text-slate-400 bg-white rounded-2xl border border-slate-200 p-5">No job locations yet.</p>';
+                $('map-embed-wrap').classList.add('hidden');
+                return;
+            }
+            const sorted = [...jobs].sort((a, b) => (a.clocked_in ? 0 : 1) - (b.clocked_in ? 0 : 1));
+            sorted.forEach((j, i) => {
+                const row = document.createElement('button');
+                row.type = 'button';
+                row.className = 'w-full text-left bg-white rounded-xl border border-slate-200 p-3' + (i === 0 ? ' border-blue-300 ring-2 ring-blue-100' : '');
+                row.innerHTML = `
+                    <div class="flex items-center justify-between">
+                        <span class="text-sm font-bold text-slate-800">${escapeHtml(j.name)}</span>
+                        <span class="text-xs text-slate-400">${j.clocked_in ? '● On the clock' : (j.status === 'active' ? 'Active' : 'Planned')}</span>
+                    </div>
+                    <p class="text-xs text-slate-500 mt-0.5">${escapeHtml(j.address)}</p>`;
+                row.addEventListener('click', () => {
+                    list.querySelectorAll('button').forEach(b => { b.classList.remove('border-blue-300', 'ring-2', 'ring-blue-100'); });
+                    row.classList.add('border-blue-300', 'ring-2', 'ring-blue-100');
+                    showJobMap(j);
+                });
+                list.appendChild(row);
+            });
+            showJobMap(sorted[0]);
+        }
+
+        function showJobMap(j) {
+            const wrap = $('map-embed-wrap');
+            if (!j || !j.address) { wrap.classList.add('hidden'); return; }
+            wrap.classList.remove('hidden');
+            $('map-embed').src = 'https://www.google.com/maps?q=' + encodeURIComponent(j.address) + '&output=embed';
+            $('map-nav-btn').href = 'https://www.google.com/maps/dir/?api=1&destination=' + encodeURIComponent(j.address);
+        }
+
+        /* ---------- Chat ---------- */
+        function startChat() {
+            state.chatStarted = true;
+            state.chatSeen.clear();
+            loadChatHistory();
+            connectChat();
+        }
+
+        function connectChat() {
+            if (!state.chatStarted) return;
+            if (document.hidden && !state.chatRetry) { state.chatWs = null; return; }
+            const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+            const ws = new WebSocket(proto + '://' + location.host + '/ws/messages');
+            state.chatWs = ws;
+            state.chatRetry = 0;
+            ws.onmessage = ev => {
+                const m = JSON.parse(ev.data);
+                if (m.status && m.status === 'ok') return;
+                if (m.clear) { state.chatLastId = 0; $('chat-list').innerHTML = '<div class="text-center text-xs text-slate-400 py-6">Chat cleared by the office.</div>'; return; }
+                if (filterChat(m)) { appendChat(m); if ($('tab-chat').classList.contains('hidden')) $('chat-dot').classList.remove('hidden'); }
+            };
+            ws.onclose = ev => {
+                if (ev.code === 1008) { chatLocked(); return; }
+                if (state.chatWs === ws && state.chatStarted) {
+                    state.chatRetry = Math.min(state.chatRetry + 1, 20);
+                    const delay = state.chatRetry * 3000;
+                    setTimeout(() => { if (state.chatStarted && state.chatWs === ws) connectChat(); }, delay);
+                }
+            };
+        }
+
+        function filterChat(m) {
+            if (!m) return false;
+            if (m.author === 'office') return true;
+            if (m.author === 'crew') return true;
+            return false;
+        }
+
+        function appendChat(m, force = false) {
+            if (!force && state.chatSeen.has(m.id)) return;
+            state.chatSeen.add(m.id);
+            const list = $('chat-list');
+            list.querySelector('.py-6')?.remove();
+            const isSelf = m.author === 'crew' && m.author_id === state.worker.id;
+            const time = m.at ? new Date(m.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
+            const badge = (m.author_name || (m.author === 'office' ? 'Office' : 'Crew'));
+            const el = document.createElement('div');
+            el.className = 'flex ' + (isSelf ? 'justify-end' : 'justify-start');
+            el.innerHTML = `
+                <div class="max-w-[75%] rounded-2xl px-4 py-2.5 text-sm ${isSelf ? 'bg-blue-700 text-white rounded-br-sm' : 'bg-slate-100 text-slate-800 rounded-bl-sm'}">
+                    <div class="text-xs font-bold ${isSelf ? 'text-blue-200' : 'text-blue-600'}">${escapeHtml(badge)}</div>
+                    <div class="whitespace-pre-wrap break-words mt-0.5">${escapeHtml(m.body)}</div>
+                    <div class="text-[10px] mt-1 opacity-60">${time}</div>
+                </div>`;
+            list.appendChild(el);
+            list.scrollTop = list.scrollHeight;
+            state.chatLastId = Math.max(state.chatLastId, m.id);
+        }
+
+        function chatLocked() {
+            $('chat-list').innerHTML =
+                '<div class="text-center text-sm text-red-600 bg-red-50 border border-red-100 rounded-xl my-4 py-4 px-3">🔒 Chat is locked to this account.</div>';
+        }
+
+        async function loadChatHistory() {
+            try {
+                const { res, data } = await api('/api/crew/app/messages?after=0');
+                if (!res.ok) { if (res.status === 403 || res.status === 401) { chatLocked(); return; } return; }
+                const list = $('chat-list');
+                const visible = (data.messages || []).filter(filterChat);
+                list.innerHTML = '';
+                visible.forEach(m => appendChat(m, true));
+                if (!visible.length) list.innerHTML = '<div class="text-center text-xs text-slate-400 py-6">No messages yet — say hi to the office 👋</div>';
+            } catch (e) {}
+        }
+
+        /* ---------- Photos ---------- */
+        function renderPhotosJobs() {
+            const list = $('photos-jobs');
+            list.innerHTML = '';
+            if (!state.jobs.length) {
+                list.innerHTML = '<p class="text-sm text-slate-400 bg-white rounded-2xl border border-slate-200 p-5">No jobs yet.</p>';
+                $('photos-gallery').classList.add('hidden');
+                return;
+            }
+            const sorted = [...state.jobs].sort((a, b) => (b.start_date || '0000') < (a.start_date || '0000') ? -1 : 1);
+            sorted.forEach(j => {
+                const row = document.createElement('button');
+                row.type = 'button';
+                row.className = 'w-full text-left bg-white rounded-xl border border-slate-200 p-3';
+                row.innerHTML = `
+                    <div class="flex items-center justify-between">
+                        <span class="text-sm font-bold text-slate-800">${escapeHtml(j.name)}</span>
+                        <span class="text-xs text-slate-400">${j.start_date ? fmtDate(j.start_date) : ''}</span>
+                    </div>
+                    <p class="text-xs text-slate-500 mt-0.5">${j.address ? escapeHtml(j.address) : ''}</p>`;
+                row.addEventListener('click', () => renderPhotosGallery(j));
+                list.appendChild(row);
+            });
+            renderPhotosGallery(sorted[0]);
+        }
+
+        async function renderPhotosGallery(j) {
+            $('photos-gallery').classList.remove('hidden');
+            $('photos-gallery-title').textContent = j.name + (j.start_date ? ' — ' + fmtDate(j.start_date) : '');
+            $('photos-add').dataset.event = j.id;
+            $('photos-add').classList.remove('hidden');
+            const grid = $('photos-grid');
+            grid.innerHTML = '<div class="text-center text-xs text-slate-400 py-6 col-span-2">Loading…</div>';
+            try {
+                const { res, data } = await api('/api/crew/app/photos?project_id=' + j.id);
+                grid.innerHTML = '';
+                if (!res.ok || !data.photos || !data.photos.length) {
+                    grid.innerHTML = '<div class="text-center text-xs text-slate-400 py-6 col-span-2">No photos yet for this job.</div>';
+                    return;
+                }
+                data.photos.forEach(p => {
+                    const card = document.createElement('div');
+                    card.className = 'bg-white rounded-xl overflow-hidden border border-slate-200';
+                    card.innerHTML = `
+                        <img src="${p.url}" alt="job photo" loading="lazy" class="w-full h-28 object-cover">
+                        <div class="px-2 py-1.5">
+                            <p class="text-[11px] font-bold text-slate-700">${escapeHtml(p.caption || 'Job photo')}${p.is_punchlist ? ' <span class="text-red-500">⚠</span>' : ''}</p>
+                            <p class="text-[10px] text-slate-400">${escapeHtml(p.crew_name || '')} · ${escapeHtml(p.created_at ? p.created_at.slice(0, 10) : '')}</p>
+                        </div>`;
+                    grid.appendChild(card);
+                });
+            } catch (e) {
+                grid.innerHTML = '<div class="text-center text-xs text-slate-400 py-6 col-span-2">Could not load photos.</div>';
+            }
+        }
+
+        function openPhotoModal(id) {
+            $('photo-project').value = id;
+            $('photo-caption').value = '';
+            $('photo-punchlist').checked = false;
+            $('photo-file').value = '';
+            $('photo-status').classList.add('hidden');
+            $('photo-view').classList.remove('hidden');
+        }
+
+        function closePhotoModal() {
+            $('photo-view').classList.add('hidden');
+        }
+
+        async function submitPhoto(e) {
+            e.preventDefault();
+            const id = parseInt($('photo-project').value, 10);
+            const file = $('photo-file').files[0];
+            if (!id || !file) return;
+            const btn = $('photo-submit');
+            btn.disabled = true; btn.textContent = 'Uploading…';
+            const fd = new FormData();
+            fd.append('project_id', id);
+            fd.append('caption', $('photo-caption').value);
+            fd.append('punchlist', $('photo-punchlist').checked ? 'true' : '');
+            fd.append('photo', file);
+            const { res } = await api('/api/crew/app/photos', { method: 'POST', body: fd });
+            btn.disabled = false; btn.textContent = 'Upload Photo';
+            const status = $('photo-status');
+            if (res.ok) {
+                status.textContent = '✅ Photo uploaded';
+                status.classList.remove('hidden');
+                const job = state.jobs.find(j => j.id === id);
+                if (job) renderPhotosGallery(job);
+            } else {
+                status.textContent = 'Upload failed — try again.';
+                status.classList.remove('hidden');
+            }
         }
 
         function probeGeo() {
@@ -584,6 +1052,8 @@
             });
 
             $('logout-btn').addEventListener('click', async () => {
+                if (state.chatWs) { try { state.chatWs.close(); } catch (e) {} }
+                state.chatStarted = false; state.chatWs = null; state.chatLastId = 0; state.chatSeen.clear();
                 await api('/api/crew/app/logout', { method: 'POST' });
                 show('login');
             });
@@ -591,6 +1061,7 @@
             document.addEventListener('click', (e) => {
                 if (e.target.dataset.act === 'in') clockIn(Number(e.target.dataset.id));
                 if (e.target.dataset.act === 'out') clockOut(Number(e.target.dataset.id));
+                if (e.target.dataset.act === 'photo') openPhotoModal(Number(e.target.dataset.id));
                 if (e.target.dataset.del) deleteHours(e.target.dataset.del);
                 if (e.target.dataset.quiz) { state.quizSlug = e.target.dataset.quiz; state.quizAnswers = {}; renderQuiz(); }
             });
@@ -599,6 +1070,59 @@
 
             document.querySelectorAll('#tabbar [data-tab]').forEach(b => {
                 b.addEventListener('click', () => switchTab(b.dataset.tab));
+            });
+
+            $('cal-prev').addEventListener('click', () => { calMonth--; if (calMonth < 0) { calMonth = 11; calYear--; } renderCalendar(); });
+            $('cal-next').addEventListener('click', () => { calMonth++; if (calMonth > 11) { calMonth = 0; calYear++; } renderCalendar(); });
+
+            $('photos-add').addEventListener('click', () => {
+                const id = parseInt($('photos-add').dataset.event, 10);
+                if (id) openPhotoModal(id);
+            });
+
+            $('photo-close').addEventListener('click', closePhotoModal);
+            $('photo-form').addEventListener('submit', submitPhoto);
+            $('photo-view').addEventListener('click', e => {
+                if (e.target === $('photo-view')) closePhotoModal();
+            });
+
+            $('bulletin-close').addEventListener('click', () => $('bulletin-banner').classList.add('hidden'));
+            setInterval(loadBulletin, 60000);
+
+            const chatForm = $('chat-form');
+            chatForm.addEventListener('submit', async e => {
+                e.preventDefault();
+                const input = $('chat-input');
+                const text = input.value.trim();
+                if (!text) return;
+                input.value = '';
+                try {
+                    const { res, data } = await api('/api/crew/app/messages', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                        body: new URLSearchParams({ body: text })
+                    });
+                    if (!res.ok) { input.value = text; alert('Message failed to send.'); }
+                    else if (data && data.id) {
+                        state.chatLastId = Math.max(state.chatLastId, data.id);
+                        const fake = { id: data.id, author: 'crew', author_id: state.worker.id, author_name: state.worker.name, body: text, at: new Date().toISOString() };
+                        appendChat(fake);
+                    }
+                } catch (err) { input.value = text; alert('Message failed to send.'); }
+            });
+            $('chat-input').addEventListener('keydown', e => {
+                if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); chatForm.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); }
+            });
+
+            document.addEventListener('visibilitychange', () => {
+                if (document.hidden) {
+                    state.chatRetry = 1;
+                    if (state.chatWs) { try { state.chatWs.close(); } catch (e) {} state.chatWs = null; }
+                    stopTracking();
+                } else {
+                    if (state.chatStarted) { state.chatRetry = 0; connectChat(); }
+                    if (state.clocked_in) startTracking();
+                }
             });
 
             $('hours-form').addEventListener('submit', async (e) => {

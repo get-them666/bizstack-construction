@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% set co = company() %}
+{% block title %}Safety & Skills Training | {{ co.name }} Owner Portal{% endblock %}
+{% block meta %}<meta name="robots" content="noindex, nofollow">{% endblock %}
+
+{% block content %}
+<section class="py-10 bg-slate-50 min-h-[80vh]">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="flex flex-wrap items-end justify-between gap-4 mb-6">
+            <div>
+                <p class="text-sm font-bold text-indigo-600 uppercase tracking-widest">Owner portal · Training</p>
+                <h1 class="text-3xl font-black tracking-tight text-slate-900">Safety &amp; Skills Training</h1>
+                <p class="text-sm text-slate-500 mt-1">Who has passed each test. Crew take these in the phone app ({{ request.base_url }}app → 📚 Training tab).</p>
+            </div>
+            <div class="flex gap-2">
+                <a href="/crew/admin" class="px-4 py-2.5 text-sm font-semibold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 rounded-xl transition-colors">← Crew</a>
+                <a href="/dashboard" class="px-4 py-2.5 text-sm font-semibold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 rounded-xl transition-colors">Dashboard</a>
+            </div>
+        </div>
+
+        <form method="POST" action="/api/crew/training/remind" class="mb-6" onsubmit="return confirm('Text a reminder to every active crew member who has not passed the safety orientation yet?')">
+            <button type="submit" class="px-4 py-2.5 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition-colors">📲 Remind outstanding crew (SMS)</button>
+        </form>
+
+        <div class="flex flex-wrap items-center gap-3 mb-4">
+            <span class="px-2.5 py-1 text-xs font-bold rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">✓ Passed</span>
+            <span class="px-2.5 py-1 text-xs font-bold rounded-full bg-amber-50 text-amber-700 border border-amber-200">Tried, not passed</span>
+            <span class="px-2.5 py-1 text-xs font-bold rounded-full bg-slate-100 text-slate-500">Not started</span>
+        </div>
+
+        <div class="bg-white rounded-3xl border border-slate-200 overflow-x-auto">
+            <table class="w-full text-sm">
+                <thead>
+                    <tr class="bg-slate-50 border-b border-slate-200 text-left">
+                        <th class="px-4 py-3 text-slate-600 font-bold uppercase tracking-wider text-xs sticky left-0 bg-slate-50">Crew member</th>
+                        {% for t in tests %}
+                        <th class="px-4 py-3 text-slate-600 font-bold uppercase tracking-wider text-xs text-center">
+                            <span class="block">{{ t.title | replace(' — Core Working Knowledge', '') }}</span>
+                            <span class="block font-normal text-slate-400 normal-case">({{ t.pass_percent }}% to pass)</span>
+                        </th>
+                        {% endfor %}
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in matrix %}
+                    <tr class="border-b border-slate-100 hover:bg-slate-50">
+                        <td class="px-4 py-3 sticky left-0 bg-white">
+                            <span class="font-bold text-slate-900">{{ row.crew.name }}</span>
+                            {% if not row.crew.is_active %}<span class="text-xs font-bold text-slate-400">(inactive)</span>{% endif %}
+                            <div class="text-xs text-slate-500">{{ row.crew.role or 'crew' }}</div>
+                        </td>
+                        {% for t in row.tests %}
+                        <td class="px-4 py-3 text-center align-middle">
+                            {% if t.best %}
+                                <span class="inline-block px-2.5 py-1.5 rounded-full text-xs font-bold {% if t.passed %}bg-emerald-50 text-emerald-700 border border-emerald-200{% else %}bg-amber-50 text-amber-700 border border-amber-200{% endif %}">
+                                    {% if t.passed %}✓{% else %}✗{% endif %} {{ t.best }}%
+                                </span>
+                            {% else %}
+                                <span class="text-slate-300">—</span>
+                            {% endif %}
+                        </td>
+                        {% endfor %}
+                    </tr>
+                    {% endfor %}
+                    {% if not crew %}
+                    <tr><td colspan="{{ tests|length + 1 }}" class="px-6 py-14 text-center">
+                        <p class="text-4xl mb-3">👷</p>
+                        <p class="font-semibold text-slate-700">No crew added yet</p>
+                        <p class="text-sm text-slate-500 mt-1">Add crew first at <a href="/crew/admin" class="text-indigo-600 font-semibold">Crew</a>.</p>
+                    </td></tr>
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</section>
+{% endblock %}

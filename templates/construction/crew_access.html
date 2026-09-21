@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% set co = company() %}
+{% block title %}Crew App Access | {{ co.name }} Owner Portal{% endblock %}
+{% block meta %}<meta name="robots" content="noindex, nofollow">{% endblock %}
+
+{% block content %}
+<section class="py-10 bg-slate-50 min-h-[80vh]">
+    <div class="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="flex flex-wrap items-end justify-between gap-4 mb-6">
+            <div>
+                <p class="text-sm font-bold text-indigo-600 uppercase tracking-widest">Owner portal · Your crew app</p>
+                <h1 class="text-3xl font-black tracking-tight text-slate-900">Crew App Access</h1>
+                <p class="text-sm text-slate-500 mt-1">Choose which tools show up in the crew phone app. Changes apply immediately.</p>
+            </div>
+            <a href="/crew/admin" class="px-4 py-2.5 text-sm font-semibold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 rounded-xl transition-colors">← Crew</a>
+        </div>
+
+        {% if saved %}
+        <div class="mb-5 px-4 py-3 rounded-2xl bg-emerald-50 border border-emerald-200 text-sm font-semibold text-emerald-700">✓ Crew app settings saved.</div>
+        {% endif %}
+
+        <form method="POST" action="/api/crew/access" class="bg-white rounded-3xl border border-slate-200 p-6">
+            <p class="text-sm font-bold text-slate-900 mb-3">Tools in the crew app</p>
+            <div class="space-y-3">
+                {% for key, label in catalog.items() %}
+                <label class="flex items-center justify-between gap-4 p-4 rounded-2xl border border-slate-200 hover:border-indigo-200 cursor-pointer transition-colors">
+                    <span class="text-sm font-semibold text-slate-800">{{ label }}</span>
+                    <input type="checkbox" name="feature_{{ key }}" {% if features.get(key) %}checked{% endif %}
+                           class="w-6 h-6 accent-indigo-600">
+                </label>
+                {% endfor %}
+            </div>
+
+            <p class="text-sm font-bold text-slate-900 mt-8 mb-2">Bulletin (shows at the top of the crew app)</p>
+            <textarea name="bulletin" rows="2" maxlength="500" placeholder="e.g. Safety stand-down Monday 7am — wear your steel toes."
+                      class="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">{{ bulletin }}</textarea>
+
+            <button type="submit" class="mt-6 w-full py-3 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition-colors">Save access settings</button>
+        </form>
+
+        <p class="text-xs text-slate-400 mt-4">Locked tools are hidden from the crew app and blocked server-side.</p>
+    </div>
+</section>
+{% endblock %}

@@ -64,6 +64,11 @@ class BusinessAIAgent:
                 "review accounting, and summarize the sister company (Broom Service).\n"
                 "Rule: READs are free. Before any database CHANGE, restate the change in "
                 "one short line and confirm with the owner first.\n"
+                "You also track crew safety + skills training (OSHA-10 safety orientation and "
+                "trade tests). Use training_status to report who has and hasn't completed "
+                "their training, and remind_crew_training to text reminders to workers who "
+                "haven't passed the safety orientation yet (that is a send — were the owner "
+                "to ask you to text every outstanding worker, do it without re-confirming).\n"
                 "You also know about Broom Service (bizstackperks.com) — the sister "
                 "short-term-rental turnover-cleaning company. Use sister_business_summary "
                 "to report on it. Never expose tenant or guest data to the public assistant."
@@ -328,9 +333,9 @@ TOOL USAGE RULES:
                 "type": "function",
                 "function": {
                     "name": "generate_training_deck",
-                    "description": "Generate an OSHA-10 / orientation / safety / HR / sexual-harassment / trades-knowledge training deck (worker on-boarding) as a PowerPoint and save it.",
+                    "description": "Generate a crew orientation PowerPoint training deck. Kinds: construction-trades (Tools of the Trade), construction-safety (Job Site Safety / OSHA-10 baseline), construction-app (Crew App install & time reporting), construction-ethics (Workplace Ethics & Conduct), construction (combined orientation), worker, host.",
                     "parameters": self._props(
-                        {"kind": "string"}, ["kind"], "kind: worker."
+                        {"kind": "string"}, ["kind"], "kind: construction-trades, construction-safety, construction-app, construction-ethics, construction, worker, or host."
                     ),
                 },
             },
@@ -338,11 +343,29 @@ TOOL USAGE RULES:
                 "type": "function",
                 "function": {
                     "name": "grade_training_quiz",
-                    "description": "Grade a worker's OSHA-10 / orientation quiz; returns pass/fail, score, and missed topics for review.",
+                    "description": "Grade a worker's training test (OSHA-10 safety, trade entry tests, or ethics). Returns pass/fail, score, and missed topics for review.",
                     "parameters": self._props(
-                        {"crew_id": "integer", "answers": "array"},
-                        ["crew_id", "answers"],
-                        "answers: list of {question_id, answer} dicts. Topics include tape-measure reading, simple math, basic electrical, framing/drywall/roofing/tile/plumbing basics.",
+                        {"crew_id": "integer", "test_slug": "string", "answers": "array"},
+                        ["crew_id", "test_slug", "answers"],
+                        "test_slug: entry-tape, entry-framing, entry-drywall, entry-roofing, entry-plumbing, entry-electrical, entry-hvac, entry-tile, entry-painting, entry-concrete, or osha/electrician/plumber/roofing/hvac/painting/concrete core tests. answers: list of option indexes or typed strings for tape-measure questions.",
+                    ),
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "training_status",
+                    "description": "Safety + skills training report: which crew members have passed the OSHA-10 safety orientation and trade skills tests, best scores, and who still has outstanding training.",
+                    "parameters": self._props({}, [], ""),
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "remind_crew_training",
+                    "description": "Text a reminder to crew who haven't passed the OSHA-10 safety orientation yet (or a single crew member by id), pointing them to the Training tab in the crew phone app.",
+                    "parameters": self._props(
+                        {"crew_id": "integer"}, [], "Optional single crew id to remind."
                     ),
                 },
             },

@@ -9,39 +9,48 @@
         <div class="flex items-center justify-between mb-6">
             <div>
                 <p class="text-sm font-bold text-blue-700 uppercase tracking-widest">Training</p>
-                <h1 class="text-2xl sm:text-3xl font-black tracking-tight text-slate-900">Safety Orientation + Tools of the Trade</h1>
+                <h1 class="text-2xl sm:text-3xl font-black tracking-tight text-slate-900">Safety + Trades + App + Ethics — Crew Orientation</h1>
             </div>
-            <div class="flex items-center gap-2">
-                <a href="/crew/training/ppt" class="px-4 py-2.5 text-sm font-semibold text-slate-600 bg-white border border-slate-200 hover:border-slate-300 rounded-xl transition-colors">⬇️ Download slides (PPT)</a>
-                <a href="/crew/dashboard" class="px-4 py-2.5 text-sm font-semibold text-slate-600 bg-white border border-slate-200 hover:border-slate-300 rounded-xl transition-colors">← Dashboard</a>
-            </div>
+            <a href="/crew/dashboard" class="px-4 py-2.5 text-sm font-semibold text-slate-600 bg-white border border-slate-200 hover:border-slate-300 rounded-xl transition-colors">← Dashboard</a>
         </div>
 
         <div class="bg-amber-50 border border-amber-200 rounded-2xl px-5 py-4 text-sm text-amber-800 mb-6">
             {{ disclaimer }}
         </div>
 
+        <div class="grid md:grid-cols-4 gap-3 mb-6" id="deck-tabs">
+            {% for d in decks %}
+            <button data-deck="{{ d.kind }}"
+                    class="deck-tab text-left px-4 py-3 rounded-2xl border transition-colors {% if loop.first %}bg-blue-700 text-white border-blue-700{% else %}bg-white text-slate-700 border-slate-200 hover:border-blue-300{% endif %}">
+                <span class="block text-sm font-extrabold">{{ d.name }}</span>
+                <span class="block text-[11px] mt-0.5 {% if loop.first %}text-blue-200{% else %}text-slate-400{% endif %}">{{ d.blurb }}</span>
+            </button>
+            {% endfor %}
+        </div>
+
         <div class="grid md:grid-cols-3 gap-6 mb-8">
             <div class="md:col-span-2 bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
                 <div class="flex items-center justify-between px-5 py-3 border-b border-slate-100">
-                    <p class="text-sm font-bold text-slate-900">Crew Orientation — slide deck</p>
+                    <p class="text-sm font-bold text-slate-900" id="deck-title"></p>
                     <div class="flex items-center gap-2 text-sm font-semibold text-slate-500">
                         <button id="slide-prev" class="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200">←</button>
-                        <span id="slide-count" class="min-w-12 text-center">1 / 13</span>
+                        <span id="slide-count" class="min-w-12 text-center">1 / 1</span>
                         <button id="slide-next" class="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200">→</button>
                     </div>
                 </div>
                 <div id="slide-box" class="px-6 py-8 min-h-[260px] bg-gradient-to-br from-slate-900 to-blue-900 text-white">
                     <p id="slide-title" class="text-xl font-extrabold mb-4"></p>
                     <ul id="slide-bullets" class="space-y-2.5 text-slate-100 text-sm"></ul>
+                    <button id="slide-voice" class="mt-6 hidden items-center gap-2 px-4 py-2 text-xs font-bold rounded-xl bg-blue-600 hover:bg-blue-500 text-white transition-colors">🔊 Narrate this slide</button>
                 </div>
             </div>
 
             <div class="space-y-4">
-                <div class="bg-white rounded-3xl border border-slate-200 shadow-sm p-5">
-                    <p class="text-sm font-bold text-slate-900 mb-1">Quick PDF / print</p>
-                    <p class="text-xs text-slate-500 mb-3">Open the deck, then Print → Save as PDF to keep your own copy for the crew records.</p>
-                    <button onclick="window.print()" class="w-full px-4 py-2.5 text-sm font-bold text-white bg-blue-700 hover:bg-blue-800 rounded-xl transition-colors">🖨️ Print this page</button>
+                <div id="download-box" class="bg-white rounded-3xl border border-slate-200 shadow-sm p-5">
+                    <p class="text-sm font-bold text-slate-900 mb-1">Download slides (PPT)</p>
+                    <p class="text-xs text-slate-500 mb-3">Save the deck for crew records, or print → PDF for a paper copy.</p>
+                    <a id="ppt-download" href="/crew/training/ppt/construction-trades"
+                       class="w-full block text-center px-4 py-2.5 text-sm font-bold text-white bg-blue-700 hover:bg-blue-800 rounded-xl transition-colors">⬇️ Download this deck</a>
                 </div>
                 <div id="history-box" class="bg-white rounded-3xl border border-slate-200 shadow-sm p-5">
                     <p class="text-sm font-bold text-slate-900 mb-3">My results</p>
@@ -70,15 +79,20 @@
 {% block scripts %}
 <script>
 (function() {
-    const SLIDES = {{ slides | tojson }};
+    const DECKS = {{ decks | tojson }};
+    let currentDeck = DECKS[0];
     let slideIdx = 0;
     const SLIDE_BOX = document.getElementById('slide-box');
     const SLIDE_TITLE = document.getElementById('slide-title');
     const SLIDE_BULLETS = document.getElementById('slide-bullets');
     const SLIDE_COUNT = document.getElementById('slide-count');
+    const DECK_TITLE = document.getElementById('deck-title');
+    const VOICE_BTN = document.getElementById('slide-voice');
+    const PPT_DL = document.getElementById('ppt-download');
+    const TABS = document.querySelectorAll('.deck-tab');
 
     function renderSlide(i) {
-        const s = SLIDES[i];
+        const s = currentDeck.slides[i];
         SLIDE_TITLE.textContent = s.title;
         SLIDE_BULLETS.innerHTML = '';
         (s.bullets || []).forEach(function(b) {
@@ -87,13 +101,50 @@
             li.innerHTML = '<span class="shrink-0 text-blue-300">•</span><span>' + b + '</span>';
             SLIDE_BULLETS.appendChild(li);
         });
-        SLIDE_COUNT.textContent = (i + 1) + ' / ' + SLIDES.length;
+        SLIDE_COUNT.textContent = (i + 1) + ' / ' + currentDeck.slides.length;
+        VOICE_BTN.classList.toggle('hidden', !(s.voice && 'speechSynthesis' in window));
     }
+
+    function setDeck(deck, tabBtn) {
+        currentDeck = deck;
+        slideIdx = 0;
+        DECK_TITLE.textContent = deck.name;
+        PPT_DL.setAttribute('href', '/crew/training/ppt/' + deck.kind);
+        TABS.forEach(function(t) {
+            const sel = t === tabBtn;
+            t.classList.toggle('bg-blue-700', sel);
+            t.classList.toggle('text-white', sel);
+            t.classList.toggle('border-blue-700', sel);
+            t.classList.toggle('bg-white', !sel);
+            t.classList.toggle('text-slate-700', !sel);
+            t.classList.toggle('border-slate-200', !sel);
+            t.classList.toggle('hover:border-blue-300', !sel);
+            const sub = t.querySelector('span:last-child');
+            if (sub) sub.classList.toggle('text-blue-200', sel);
+            if (sub) sub.classList.toggle('text-slate-400', !sel);
+        });
+        renderSlide(0);
+    }
+
+    TABS.forEach(function(t) {
+        t.addEventListener('click', function() {
+            const deck = DECKS.find(function(d) { return d.kind === t.dataset.deck; });
+            if (deck) setDeck(deck, t);
+        });
+    });
     document.getElementById('slide-prev').addEventListener('click', function() {
-        slideIdx = (slideIdx - 1 + SLIDES.length) % SLIDES.length; renderSlide(slideIdx);
+        slideIdx = (slideIdx - 1 + currentDeck.slides.length) % currentDeck.slides.length; renderSlide(slideIdx);
     });
     document.getElementById('slide-next').addEventListener('click', function() {
-        slideIdx = (slideIdx + 1) % SLIDES.length; renderSlide(slideIdx);
+        slideIdx = (slideIdx + 1) % currentDeck.slides.length; renderSlide(slideIdx);
+    });
+    VOICE_BTN.addEventListener('click', function() {
+        const s = currentDeck.slides[slideIdx];
+        if (!s.voice || !('speechSynthesis' in window)) return;
+        speechSynthesis.cancel();
+        const u = new SpeechSynthesisUtterance(s.voice);
+        u.rate = 1;
+        speechSynthesis.speak(u);
     });
     renderSlide(0);
 
@@ -177,13 +228,17 @@
         t.questions.forEach(function(q, qi) {
             const div = document.createElement('div');
             div.className = 'border border-slate-200 rounded-xl p-4';
-            let opts = '';
-            q.options.forEach(function(o, oi) {
-                opts += '<label class="flex items-start gap-2 sm:gap-3 py-1.5 cursor-pointer">' +
-                    '<input type="radio" name="q' + qi + '" value="' + oi + '" class="mt-0.5">' +
-                    '<span class="text-sm text-slate-700">' + o + '</span></label>';
-            });
-            div.innerHTML = '<p class="text-sm font-bold text-slate-900 mb-2">' + (qi + 1) + '. ' + q.q + '</p>' + opts;
+            let inner = '<p class="text-sm font-bold text-slate-900 mb-2">' + (qi + 1) + '. ' + q.q + '</p>';
+            if (q.type === 'text') {
+                inner += '<input type="text" name="q' + qi + '" placeholder="Type your answer (e.g. 4 3/8)" class="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 focus:border-blue-500 focus:outline-none" autocomplete="off">';
+            } else {
+                (q.options || []).forEach(function(o, oi) {
+                    inner += '<label class="flex items-start gap-2 sm:gap-3 py-1.5 cursor-pointer">' +
+                        '<input type="radio" name="q' + qi + '" value="' + oi + '" class="mt-0.5">' +
+                        '<span class="text-sm text-slate-700">' + o + '</span></label>';
+                });
+            }
+            div.innerHTML = inner;
             quizBody.appendChild(div);
         });
         quizBody.dataset.slug = slug;
@@ -205,9 +260,16 @@
         if (!t) return;
         const answers = [];
         let missing = false;
-        t.questions.forEach(function(_, qi) {
-            const sel = document.querySelector('input[name="q' + qi + '"]:checked');
-            if (!sel) { missing = true; answers.push(0); } else { answers.push(Number(sel.value)); }
+        t.questions.forEach(function(q, qi) {
+            if (q.type === 'text') {
+                const inp = document.querySelector('input[name="q' + qi + '"]');
+                const val = inp ? (inp.value || '').trim() : '';
+                if (!val) { missing = true; }
+                answers.push(val);
+            } else {
+                const sel = document.querySelector('input[name="q' + qi + '"]:checked');
+                if (!sel) { missing = true; answers.push(0); } else { answers.push(Number(sel.value)); }
+            }
         });
         if (missing && !confirm('You skipped some questions — submit anyway?')) return;
         const btn = document.getElementById('quiz-submit');

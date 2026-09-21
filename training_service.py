@@ -439,6 +439,289 @@ def _slides_content(kind: str) -> list[tuple[str, list[str]]]:
                 "Certificate is recorded in your crew record",
             ]),
         ]
+    if kind in ("construction-trades", "trades", "construction-tools"):
+        return [
+            ("Welcome to Tools of the Trade!", [
+                "Today: the trades knowledge you'll use on real jobs",
+                "Tape measure, framing, drywall, roofing, plumbing, electrical, HVAC, tile, painting, concrete",
+                "Short test at the end — pass it and you're cleared for jobs",
+            ]),
+            ("About Buildstack Construction", [
+                "Licensed, insured general contractor — resi + commercial",
+                "Whole-home renovations, kitchens, baths, drywall, roofing, decks, all trades",
+                "We build trust with 5-star work, safety first, every day",
+            ]),
+            ("Reading a Tape Measure", [
+                "Know your marks: 1/16, 1/8, 1/4, 1/2 and whole inches",
+                "Measure twice, cut once — re-check before any cut",
+                "Read from the hook end; account for the hook's thickness",
+                "Practice on a board until it's second nature",
+            ]),
+            ("Basic Math on the Job", [
+                "Simple addition & subtraction for cuts and layout",
+                "Fractions: half of 3/4\" is 3/8\" — know your fractions",
+                "Square and level every layout (3-4-5 or a square)",
+                "Ask before guessing — math mistakes cost materials and time",
+            ]),
+            ("Framing Basics", [
+                "Framing is the skeleton — walls, floors, and roof structure",
+                "Standard stud spacing is 16\" or 24\" on center",
+                "Keep studs plumb, plates straight, and corners square",
+                "Safety: hands clear of nail gun paths, wear eye protection",
+            ]),
+            ("Drywall Basics", [
+                "Hang sheets flat, seams centered over studs",
+                "Screw spacing roughly every 12\" along studs",
+                "Tape and float joints in stages — thin coats build smooth",
+                "Never leave unfinished mud for the next shift",
+            ]),
+            ("Roofing & Siding Basics", [
+                "Work from the bottom up so every layer overlaps water flow",
+                "Nail patterns and fasteners matter — follow spec",
+                "Never work a roof without tie-off/fall protection at 6 ft+",
+                "Keep ladders firm: 3 points of contact, don't overreach",
+            ]),
+            ("Plumbing Basics", [
+                "Know the main shut-off and how to kill water in seconds",
+                "PEX, copper, PVC — each needs the right fittings and glue",
+                "Every connection leaks until it's tested — pressure test before closing walls",
+                "Call the owner for anything suspect; no guess-plumbing",
+            ]),
+            ("Electrical Basics", [
+                "LOTO before touching anything — test that circuits are dead",
+                "Wires are color-coded — hot, neutral, ground, never mixed",
+                "Use GFCI where required; never overload a circuit",
+                "Leave electrical beyond basics to the licensed electrician",
+            ]),
+            ("HVAC Basics", [
+                "Gas is dangerous — smell/leak test, call it in immediately",
+                "Keep vents, returns and units clear of debris",
+                "Filters, coils, and lines need gentle handling",
+                "Never bypass a safety switch or limit",
+            ]),
+            ("Tile & Flooring Basics", [
+                "Prep the subfloor/backer — flat matters more than anything",
+                "Use leveling/thinset spec for the tile size",
+                "Spacers keep grout lines straight; wipe grout before it hardens",
+                "Let adhesives, mortar, and sealers cure per label",
+            ]),
+            ("Painting & Finishing Basics", [
+                "Prep is 80% of a good finish — clean, sand, prime",
+                "Ventilate and wear a respirator for solvent/spray",
+                "Keep drop cloths flat — no trip hazards",
+                "Two thin coats beat one thick coat, every time",
+            ]),
+            ("Concrete & Masonry Basics", [
+                "Wet-cut to control silica dust — respirator when it's heavy",
+                "Fresh concrete burns skin — flush with water, wear gloves/boots",
+                "Stay clear of ready-mix backing — spotters use agreed signals",
+                "Trenches 5 ft+ need shoring/sloping — never enter unprotected",
+            ]),
+            ("Materials, Prep & Cleanup", [
+                "Keep materials dry, stacked, and off wet ground",
+                "Clean as you go — a tidy site is a safe site",
+                "Protect finished work with drop cloths and floor protection",
+                "End of day: tools secured, trash out, site locked",
+            ]),
+            ("Your Trades Test", [
+                "Coverage: tape measure, math, framing, drywall, roofing, tile, plumbing, electrical basics",
+                "70% to pass — study the slides, then take it",
+                "Pass and the certificate is recorded in your crew record",
+                "Questions? Ask the office before you test",
+            ]),
+        ]
+    if kind in ("construction-safety", "safety", "osha"):
+        return [
+            ("Welcome to Job Site Safety!", [
+                "Today: the OSHA-10 baseline that keeps everyone working safe",
+                "The Fatal Four, fall protection, PPE, chemicals, LOTO, trenches, silica & asbestos",
+                "Short test at the end — pass to be cleared for jobs",
+            ]),
+            ("OSHA-10: The Fatal Four", [
+                "Falls — the #1 killer on job sites",
+                "Struck-by — stay out of equipment swing/reach paths",
+                "Caught-in/between — never enter trenches or between moving parts",
+                "Electrical — LOTO, test before touching, use GFCI",
+            ]),
+            ("Fall Protection", [
+                "Fall protection required at 6 feet and above",
+                "Guardrails, covers, or a harness + anchor — no exceptions",
+                "Never work on a roof without tie-off or other approved fall protection",
+                "Keep ladders on firm ground: 3 points of contact, don't stand above the top rung",
+            ]),
+            ("PPE — Every Job, No Exceptions", [
+                "Hard hat + eye protection on active job sites",
+                "Gloves, steel-toe footwear, hearing protection, hi-vis as the task requires",
+                "Check your PPE daily; report damaged gear to the owner",
+                "No PPE, no work — period",
+            ]),
+            ("Hazard Communication & Chemicals", [
+                "Read the SDS before using any chemical product",
+                "Eye/face wash and ventilation when mixing or spraying",
+                "Never mix bleach with ammonia or other cleaners (deadly gas)",
+                "Use the right chemical for the right task; store safely",
+            ]),
+            ("Lockout / Tagout (LOTO)", [
+                "LOTO prevents accidental energy release — electrical, plumbing, equipment",
+                "Only the person who applied the lock removes it",
+                "Verify with a tester that circuits are dead before working",
+                "Never wedge a switch or bypass a safety guard",
+            ]),
+            ("Trench & Excavation Safety", [
+                "Never enter an unprotected trench — that's caught-in/between risk",
+                "Trenches 5 ft+ need shoring, sloping, or a protective system",
+                "Keep spoil piles and equipment clear of the trench edge",
+                "When in doubt, ask the owner before going in",
+            ]),
+            ("Silica, Dust & Asbestos Awareness", [
+                "Wet cut concrete/masonry + use dust collection",
+                "Wear a respirator where silica or dust is heavy",
+                "Older builds (pre-1970s) may have asbestos or lead paint — don't disturb it",
+                "Report any suspected asbestos/lead to the owner immediately",
+            ]),
+            ("Electrical Safety", [
+                "Test before touching — assume it's live until verified dead",
+                "Use GFCI-protected circuits and extension cords",
+                "Inspect cords for damage; never daisy-chain improperly",
+                "Only the licensed electrician does the electrical work",
+            ]),
+            ("Ergonomics & Lifting", [
+                "Lift with your legs, not your back; get help for heavy loads",
+                "Two-person lifts for sheet goods and long runs",
+                "Use carts, dollies and lifting tools when available",
+                "Stretch and stay hydrated in the heat",
+            ]),
+            ("Incident Reporting", [
+                "Report every injury, near miss, or unsafe condition — immediately",
+                "First aid kit locations are posted; know where yours is",
+                "Fatal Four concerns override the schedule — stop and speak up",
+                "No retaliation for safety reports — ever",
+            ]),
+            ("Your Safety Test", [
+                "Coverage: Fatal Four, falls, PPE, chemicals, LOTO, trenches, silica/asbestos, electrical",
+                "70% to pass — study the slides, then take it",
+                "Pass and the certificate is recorded in your crew record",
+                "Safety is the job before every job",
+            ]),
+        ]
+    if kind in ("construction-app", "app", "crew-app"):
+        return [
+            ("Welcome to the Crew App!", [
+                "Today: how to get the app, log in, and track your time",
+                "Download & install, log in, jobs & map, clock in/out, time reporting, direct deposit",
+                "Short quiz at the end — easy if you follow along",
+            ]),
+            ("Download & Install the App", [
+                "Open construction.bizstackperks.com on your phone",
+                "Log in there the first time — it installs itself as a web app",
+                "Use Chrome or Safari and choose 'Add to Home Screen'",
+                "That's it — no app store download needed",
+            ]),
+            ("Add to Home Screen", [
+                "In the browser menu, tap 'Add to Home Screen'",
+                "It now opens full-screen, just like a native app",
+                "Name it whatever you like — 'Buildstack' works",
+                "The icon lives on your home screen for every shift",
+            ]),
+            ("Log In with Your Phone + PIN", [
+                "Your login is your phone number and the PIN the owner set",
+                "PINs are personal — never share yours, never log in for someone else",
+                "Lock your phone when you're not using it",
+                "Forgot your PIN? Call the office and they'll reset it",
+            ]),
+            ("Your Job List & Map", [
+                "Your assigned jobs show with date, time, and address",
+                "Tap 'Directions' / the map to navigate to the job",
+                "Jobs stay on your screen so you always know your day",
+                "See who's on the crew for that job",
+            ]),
+            ("Clock In / Clock Out", [
+                "Clock in when you're on site and ready to work",
+                "Clock out when the job is done — before you leave!",
+                "Clock in AND out on every job — that's how payroll happens",
+                "The app checks you're at the right property",
+            ]),
+            ("Time Reporting & Overtime", [
+                "Report ALL hours honestly — every minute you worked",
+                "Never punch in/out for someone else — that's a firing offense",
+                "Overtime rules apply when they apply — the app tracks it",
+                "Check your timesheet at end of week before payday",
+            ]),
+            ("Pay & Direct Deposit", [
+                "Set up direct deposit (Stripe) so checks land automatically",
+                "You get paid per job at your rate on your paycheck",
+                "Pay stubs, hours, and history live under 'Pay'",
+                "Pay questions go to the office — never the client",
+            ]),
+            ("Getting Help", [
+                "App stuck? Restart it, then call the office",
+                "Login issues → call the office, they'll reset your PIN",
+                "Job questions, changes, or concerns → call the office or use the app",
+                "The office is your backstop — 24/7 if needed",
+            ]),
+            ("Your App Quiz", [
+                "Coverage: install, login, jobs/map, clock in/out, time reporting, pay",
+                "70% to pass — follow the slides and you're set",
+                "Pass and it's recorded in your crew record",
+                "Welcome aboard — see you on the job",
+            ]),
+        ]
+    if kind in ("construction-ethics", "ethics", "hr"):
+        return [
+            ("Welcome to Workplace Ethics!", [
+                "Today: how we act, on and off the job site",
+                "Honesty, respect, confidentiality, and zero tolerance for harassment",
+                "Short test at the end — pass to be cleared for jobs",
+            ]),
+            ("Honesty Is the Foundation", [
+                "Be honest about time, materials, and what you complete",
+                "Never punch for someone else — report all hours truthfully",
+                "Don't cut corners to rush — 5-star quality is the brand",
+                "If you made a mistake, say so — fixing it early is what pros do",
+            ]),
+            ("Client Property & Trust", [
+                "You work inside people's homes and businesses — act like a guest",
+                "No smoking, no eating client food, no using their things",
+                "Leave every site exactly as you found it, plus better",
+                "Treat their property like you'd want yours treated",
+            ]),
+            ("Confidentiality", [
+                "Never share client or business information with anyone",
+                "No photos of client homes, interiors, or materials on social media",
+                "Addresses, keys, codes, and pricing stay in-house",
+                "Privacy is trust — lose it once, you lose everything",
+            ]),
+            ("Sexual Harassment — Zero Tolerance", [
+                "Zero tolerance — always, toward anyone, at work",
+                "Unwelcome touching, comments, jokes, or advances are prohibited",
+                "Reporting is safe and confidential — no retaliation, ever",
+                "See it? Report it. The policy protects everyone",
+            ]),
+            ("Reporting Problems & Concerns", [
+                "Damage, hazards, or client issues → report right away with a photo",
+                "Harassment or anything wrong → tell the owner or use the report channel",
+                "Reporting is never punished. Ever.",
+                "Silence is not loyalty — reporting protects the crew",
+            ]),
+            ("Drugs, Alcohol & Policy", [
+                "No alcohol, drugs, or impairment on any job site — ever",
+                "That includes the night before — show up ready to work safely",
+                "Prescription meds that affect work must be disclosed to the office",
+                "Safety policy violations are grounds for removal from jobs",
+            ]),
+            ("Company Tools & Materials", [
+                "Company tools and materials are for jobs, not personal use",
+                "Log and return equipment at end of day",
+                "Report damaged or lost gear — don't hide it",
+                "Stealing is termination and legal action — no exceptions",
+            ]),
+            ("Your Ethics Test", [
+                "Coverage: honesty, time reporting, client trust, confidentiality, harassment, reporting",
+                "70% to pass — study the slides, then take it",
+                "Pass and the certificate is recorded in your crew record",
+                "Ethics isn't a policy — it's who we are",
+            ]),
+        ]
     return [
         ("Welcome to Broom Service", [
             "Short-term rental cleaning + co-hosting, powered by automation",
@@ -495,14 +778,38 @@ def _slides_content(kind: str) -> list[tuple[str, list[str]]]:
     ]
 
 
+CONSTRUCTION_DECK_KINDS = {
+    "construction": "construction",
+    "construction-osha": "construction",
+    "osha": "construction",
+    "construction-trades": "construction-trades",
+    "trades": "construction-trades",
+    "construction-tools": "construction-trades",
+    "construction-safety": "construction-safety",
+    "safety": "construction-safety",
+    "construction-app": "construction-app",
+    "app": "construction-app",
+    "crew-app": "construction-app",
+    "construction-ethics": "construction-ethics",
+    "ethics": "construction-ethics",
+    "hr": "construction-ethics",
+}
+
+
 def deck_slides(kind: str) -> list[dict]:
     """Deck slides as {title, bullets, voice} — voice is the bot's narration text."""
-    parsed = "construction" if kind in ("construction", "construction-osha", "osha") else ("host" if kind != "worker" else "worker")
+    parsed = CONSTRUCTION_DECK_KINDS.get(kind, kind)
+    if parsed not in ("construction", "construction-trades", "construction-safety", "construction-app", "construction-ethics"):
+        parsed = "host" if parsed != "worker" else "worker"
     phrases = {
         "Welcome to Broom Service!": "Welcome to Broom Service.",
         "Welcome to Broom Service": "Welcome to Broom Service.",
         "About Our Company": "About our company.",
         "Welcome to Buildstack Construction!": "Welcome to Buildstack Construction.",
+        "Welcome to Tools of the Trade!": "Welcome to Tools of the Trade.",
+        "Welcome to Job Site Safety!": "Welcome to job site safety.",
+        "Welcome to the Crew App!": "Welcome to the crew app.",
+        "Welcome to Workplace Ethics!": "Welcome to workplace ethics.",
     }
     out = []
     for title, bullets in _slides_content(parsed):
@@ -513,11 +820,16 @@ def deck_slides(kind: str) -> list[dict]:
 
 
 def build_deck(kind: str) -> bytes:
-    """Build a powerpoint deck. kind: 'worker', 'host', or 'construction'. Returns .pptx bytes."""
+    """Build a powerpoint deck. kind: 'worker', 'host', or a construction deck
+    ('construction'|'construction-trades'|'construction-safety'|'construction-app'|'construction-ethics').
+    Returns .pptx bytes."""
     from pptx import Presentation
 
-    is_construction = kind in ("construction", "construction-osha", "osha")
-    kind = "construction" if is_construction else ("host" if kind != "worker" else "worker")
+    kind = CONSTRUCTION_DECK_KINDS.get(kind, kind)
+    if kind not in ("worker", "host", "construction",
+                    "construction-trades", "construction-safety",
+                    "construction-app", "construction-ethics"):
+        kind = "host" if kind != "worker" else "worker"
     prs = Presentation()
     prs.slide_width = 12192000
     prs.slide_height = 6858000
@@ -528,6 +840,18 @@ def build_deck(kind: str) -> bytes:
     elif kind == "construction":
         doc_title = "Crew Orientation + OSHA-10 Baseline"
         subtitle = "Your pay app, job-site safety (the fatal four), and how we build — plus your knowledge test."
+    elif kind == "construction-trades":
+        doc_title = "Tools of the Trade"
+        subtitle = "Tape measure, framing, drywall, roofing, plumbing, electrical, HVAC, tile, painting, concrete — plus your trades test."
+    elif kind == "construction-safety":
+        doc_title = "Job Site Safety (OSHA-10 Baseline)"
+        subtitle = "The Fatal Four, fall protection, PPE, chemicals, LOTO, trenches, silica & asbestos — plus your safety test."
+    elif kind == "construction-app":
+        doc_title = "Crew App — Install & Time Reporting"
+        subtitle = "Download & install the app, log in, jobs & map, clock in/out, time reporting & overtime, direct deposit — plus your quiz."
+    elif kind == "construction-ethics":
+        doc_title = "Workplace Ethics & Professional Conduct"
+        subtitle = "Honesty, client trust, confidentiality, zero tolerance for harassment, reporting — plus your ethics test."
     else:
         doc_title = "Host & Lead Onboarding"
         subtitle = "Welcome to Broom Service — how we help your property earn."
@@ -536,6 +860,10 @@ def build_deck(kind: str) -> bytes:
     for title, bullets in _slides_content(kind):
         _add_bullets_slide(prs, title, bullets)
 
+    return _save_pptx(prs)
+
+
+def _save_pptx(prs) -> bytes:
     from io import BytesIO
     buf = BytesIO()
     prs.save(buf)
@@ -1160,6 +1488,204 @@ TRADE_QUIZZES = {
 }
 
 # Slug -> test definition used by the portal and phone app.
+# Entry tests are short, simple, trade-specific comprehension checks (with
+# free-text tape-measure reading questions where the trade reads a tape).
+ENTRY_QUIZZES = {
+    "tape": {
+        "title": "Reading a Tape Measure — Entry",
+        "pass_percent": 70,
+        "questions": [
+            {"q": "The small marks on a standard tape measure are _______ of an inch.",
+             "options": ["1/8 or 1/16", "The same as inches", "Only decorative", "1 yard each"],
+             "answer": 0, "topic": "Tape measure"},
+            {"q": "How many inches are in one foot?", "options": ["10", "12", "16", "100"],
+             "answer": 1, "topic": "Units"},
+            {"q": "Write the measurement: the tape reads exactly 4 inches plus three of the 1/8-inch marks.",
+             "type": "text", "accept": ["4 3/8", "4 3/8\"", "4-3/8", "4.375", "4 3/8 in", "4 3/8 inches"],
+             "topic": "Tape measure"},
+            {"q": "Write the measurement: the tape reads exactly 1 foot plus half of the next inch.",
+             "type": "text", "accept": ["1' 1/2\"", "1 ft 1/2 in", "12 1/2", "12.5", "12 1/2\"", "1 foot 1/2 inch", "12 1/2 inches", "1' 0.5\"", "1 ft 0.5 in"],
+             "topic": "Tape measure"},
+            {"q": "How many inches is 2 feet?", "options": ["12", "20", "24", "36"], "answer": 2, "topic": "Units"},
+            {"q": "Which is larger, 3/4 inch or 5/8 inch?", "options": ["3/4 inch", "5/8 inch", "They are equal", "Neither"],
+             "answer": 0, "topic": "Fractions in the trades"},
+        ],
+    },
+    "framing": {
+        "title": "Framing — Entry",
+        "pass_percent": 70,
+        "questions": [
+            {"q": "Standard wall stud spacing is:", "options": ["12 inches or 24 inches only", "16 or 24 inches on center", "Whatever looks right", "Every 10 inches"],
+             "answer": 1, "topic": "Framing basics"},
+            {"q": "A stud should be checked with a level so it is:", "options": ["Plumb", "Painted", "Rounded", "Loose"],
+             "answer": 0, "topic": "Framing basics"},
+            {"q": "Write the measurement: a 2x4 measured from end to end reads 8 feet exactly.", "type": "text",
+             "accept": ["8 ft", "8'", "8 feet", "96 inches", "96 in", "8ft", "8 ft.", "8 feet long"],
+             "topic": "Framing basics"},
+            {"q": "When using a nail gun, your free hand should be:", "options": ["In the nail path", "Clear of the nail path and trigger", "On the trigger too", "Behind the board"],
+             "answer": 1, "topic": "Framing safety"},
+            {"q": "What is a common floor joist spacing?", "options": ["16 or 24 inches on center", "Always 7 feet", "No pattern", "Every 3 inches"],
+             "answer": 0, "topic": "Framing basics"},
+            {"q": "Framing walls should be checked so they are:", "options": ["Square and level", "Tilted slightly", "Random", "Not attached"],
+             "answer": 0, "topic": "Framing basics"},
+        ],
+    },
+    "drywall": {
+        "title": "Drywall — Entry",
+        "pass_percent": 70,
+        "questions": [
+            {"q": "Standard drywall for walls is usually:", "options": ["1/2 inch thick", "4 inches thick", "Paper thin", "1 inch thick only"],
+             "answer": 0, "topic": "Drywall basics"},
+            {"q": "Drywall screws should be spaced about every ______ along the studs.", "options": ["12 inches", "10 feet", "3 inches", "Only at corners"],
+             "answer": 0, "topic": "Drywall basics"},
+            {"q": "Seams between drywall sheets should:", "options": ["Land on a stud", "Float in mid-air", "Overlap randomly", "Touch the floor only"],
+             "answer": 0, "topic": "Drywall basics"},
+            {"q": "Write the measurement: a drywall sheet measures 48 inches wide.", "type": "text",
+             "accept": ["48 in", "4 ft", "4 feet", "48\"", "48 inches", "4ft"],
+             "topic": "Drywall basics"},
+            {"q": "Tape and joint compound is applied:", "options": ["In thin coats, in stages", "All at once, thick", "Never", "Only on floors"],
+             "answer": 0, "topic": "Drywall finishing"},
+            {"q": "Which room usually gets moisture-resistant (green) drywall?", "options": ["Bathroom", "Living room only", "Garage only", "Attic"],
+             "answer": 0, "topic": "Drywall moisture"},
+        ],
+    },
+    "roofing": {
+        "title": "Roofing & Siding — Entry",
+        "pass_percent": 70,
+        "questions": [
+            {"q": "Fall protection is required when working at what height above a lower level?", "options": ["6 feet", "15 feet", "1 foot", "Only on 2-story roofs"],
+             "answer": 0, "topic": "Roofing safety"},
+            {"q": "Shingles are installed:", "options": ["From the bottom of the roof up", "From the peak down", "Any order", "Only on the ridge"],
+             "answer": 0, "topic": "Roofing installation"},
+            {"q": "Roof ladders and climbing should keep:", "options": ["3 points of contact", "2 points of contact", "No contact", "One hand full of tools"],
+             "answer": 0, "topic": "Roofing safety"},
+            {"q": "Write the measurement: a piece of siding is 12 feet long.", "type": "text",
+             "accept": ["12 ft", "12'", "12 feet", "144 inches", "144 in", "12ft"],
+             "topic": "Roofing & siding"},
+            {"q": "Siding nails that are over-driven can:", "options": ["Split the panel", "Strengthen it", "Change the color", "Nothing"],
+             "answer": 0, "topic": "Siding fastening"},
+            {"q": "Underlayment (felt/ice-and-water) should be installed so it:", "options": ["Laps so water sheds downward", "Hangs loose", "Covers the peak only", "Wraps the gutters"],
+             "answer": 0, "topic": "Roofing underlayment"},
+        ],
+    },
+    "plumbing": {
+        "title": "Plumbing — Entry",
+        "pass_percent": 70,
+        "questions": [
+            {"q": "Before starting plumbing work, the first thing to know is:", "options": ["Where the shut-off is", "The color of the pipes", "How long the job is", "The apprentice's name"],
+             "answer": 0, "topic": "Plumbing basics"},
+            {"q": "PEX, copper, and PVC each need:", "options": ["The right fittings and tool for that material", "Are all the same", "No tools", "Only glue"],
+             "answer": 0, "topic": "Plumbing materials"},
+            {"q": "Before closing up walls, you should:", "options": ["Pressure-test the pipes", "Skip the test", "Pour water everywhere", "Paint the pipes"],
+             "answer": 0, "topic": "Plumbing testing"},
+            {"q": "Write the measurement: a length of pipe measures 3 feet 6 inches.", "type": "text",
+             "accept": ["3 ft 6 in", "3'6\"", "3' 6\"", "42 inches", "42 in", "3 foot 6 inches", "3.5 ft", "3.5 feet"],
+             "topic": "Plumbing"},
+            {"q": "If you are unsure about a plumbing connection, you should:", "options": ["Ask the owner before guessing", "Guess and move on", "Hide it", "Blame the pipe"],
+             "answer": 0, "topic": "Plumbing basics"},
+            {"q": "What color pipe indicates a water SUPPLY line in most homes?", "options": ["Copper or PEX", "Always black gas pipe", "Always the drain", "Doesn't matter"],
+             "answer": 0, "topic": "Plumbing basics"},
+        ],
+    },
+    "electrical": {
+        "title": "Electrical — Entry",
+        "pass_percent": 70,
+        "questions": [
+            {"q": "Before working near wires or panels, you must:", "options": ["Assume it's live, then LOTO and test it's dead", "Start cutting", "Touch it quickly", "Pour water on it"],
+             "answer": 0, "topic": "Electrical safety"},
+            {"q": "GFCI outlets are required in:", "options": ["Damp/wet areas like kitchens & baths", "Bedrooms only", "Attics only", "Nowhere"],
+             "answer": 0, "topic": "Electrical safety"},
+            {"q": "If a cord looks frayed or damaged, you should:", "options": ["Stop using it and replace it", "Tape it loosely and continue", "Ignore it", "Wrap it in foil"],
+             "answer": 0, "topic": "Electrical safety"},
+            {"q": "Write the measurement: a 12-gauge wire run measures 50 feet.", "type": "text",
+             "accept": ["50 ft", "50'", "50 feet", "600 inches", "50ft"],
+             "topic": "Electrical"},
+            {"q": "Real electrical work (panels, wiring) is done by:", "options": ["The licensed electrician", "Anyone with pliers", "Only if it's a weekend", "The homeowner, always"],
+             "answer": 0, "topic": "Electrical scope"},
+            {"q": "When testing a circuit to confirm it's dead, you use a:", "options": ["Voltage tester/meter", "Hammer", "Flashlight", "Wet finger"],
+             "answer": 0, "topic": "Electrical testing"},
+        ],
+    },
+    "hvac": {
+        "title": "HVAC — Entry",
+        "pass_percent": 70,
+        "questions": [
+            {"q": "Before servicing an HVAC unit, first:", "options": ["Lock out power and verify it's off", "Open the cabinet and look", "Assume it's off", "Spray it down"],
+             "answer": 0, "topic": "HVAC safety"},
+            {"q": "Refrigerant must never be:", "options": ["Vented to the air — it's recovered properly", "Measured", "Handled by techs", "Kept in the truck"],
+             "answer": 0, "topic": "HVAC refrigerant"},
+            {"q": "A blocked/dirty filter causes:", "options": ["Higher energy use and frozen coils", "Better airflow", "Nothing", "Quieter operation"],
+             "answer": 0, "topic": "HVAC airflow"},
+            {"q": "Write the measurement: a duct run measures 9 feet 4 inches.", "type": "text",
+             "accept": ["9 ft 4 in", "9'4\"", "9' 4\"", "112 inches", "112 in", "9 foot 4 inches"],
+             "topic": "HVAC"},
+            {"q": "If you smell gas near HVAC equipment, you should:", "options": ["Stop, leave it closed, and call it in", "Keep working", "Light a match to check", "Ignore it"],
+             "answer": 0, "topic": "HVAC gas safety"},
+            {"q": "Never bypass a ______ on the unit.", "options": ["Safety switch or limit", "Filter", "Screw", "Label"],
+             "answer": 0, "topic": "HVAC safety"},
+        ],
+    },
+    "tile": {
+        "title": "Tile & Flooring — Entry",
+        "pass_percent": 70,
+        "questions": [
+            {"q": "The most important thing for tile is:", "options": ["A flat, prepped surface", "A bright color", "Extra glue", "No backer"],
+             "answer": 0, "topic": "Tile prep"},
+            {"q": "Tile spacers are used to:", "options": ["Keep grout lines straight and even", "Hold tools", "Level furniture", "Nothing"],
+             "answer": 0, "topic": "Tile installation"},
+            {"q": "In wet areas, tile goes on:", "options": ["Cement backer board, not regular drywall", "Paper", "Loose boards", "Carpet"],
+             "answer": 0, "topic": "Tile backer"},
+            {"q": "Write the measurement: a tile measures 12 inches by 24 inches.", "type": "text",
+             "accept": ["12 x 24", "12 by 24", "12\" x 24\"", "1 ft x 2 ft", "1 foot by 2 feet", "12x24"],
+             "topic": "Tile & flooring"},
+            {"q": "After laying tile, you let the mortar/thinset:", "options": ["Cure before walking and grouting", "Stay wet", "Dry cracked", "Cover it in water"],
+             "answer": 0, "topic": "Tile curing"},
+            {"q": "Grout should be wiped from the tile surface:", "options": ["Before it hardens", "A week later", "Never", "With a hammer"],
+             "answer": 0, "topic": "Tile grout"},
+        ],
+    },
+    "painting": {
+        "title": "Painting & Finishing — Entry",
+        "pass_percent": 70,
+        "questions": [
+            {"q": "What is 80% of a good paint finish?", "options": ["Prep (clean, sand, prime)", "Buying expensive brushes", "Painting fast", "Lots of paint in one coat"],
+             "answer": 0, "topic": "Painting prep"},
+            {"q": "When spraying or using solvent paints, you need:", "options": ["Ventilation and a respirator", "A heater", "No protection", "Less time"],
+             "answer": 0, "topic": "Painting VOC"},
+            {"q": "Two thin coats are better than:", "options": ["One thick coat", "No coats", "Ten coats of primer", "Rolling once"],
+             "answer": 0, "topic": "Painting finishing"},
+            {"q": "Write the measurement: a wall to paint measures 10 feet by 8 feet.", "type": "text",
+             "accept": ["10 x 8", "10 by 8", "10' x 8'", "10 ft x 8 ft", "10 x 8 ft", "10 feet by 8 feet"],
+             "topic": "Painting"},
+            {"q": "Drop cloths in the work area should be:", "options": ["Flat and taped (no trip hazards)", "Bunched up", "Wet", "Moved constantly"],
+             "answer": 0, "topic": "Painting safety"},
+            {"q": "Latex paint cleanup (brushes/rinsate) should:", "options": ["Never go down drains/storm — collect and dispose properly", "Go down the sink", "Be buried", "Stay on the brush"],
+             "answer": 0, "topic": "Painting disposal"},
+        ],
+    },
+    "concrete": {
+        "title": "Concrete & Masonry — Entry",
+        "pass_percent": 70,
+        "questions": [
+            {"q": "Cutting concrete creates:", "options": ["Silica dust — wet-cut & collect dust", "No risk", "Only noise", "Extra strength"],
+             "answer": 0, "topic": "Concrete silica"},
+            {"q": "Fresh concrete on skin can:", "options": ["Cause chemical burns — flush with water", "Help your hands", "Nothing", "Tan you"],
+             "answer": 0, "topic": "Concrete safety"},
+            {"q": "When a ready-mix truck backs up, you should:", "options": ["Stay clear; spotters use signals", "Stand behind it to guide", "Wave it in close", "Run next to it"],
+             "answer": 0, "topic": "Concrete struck-by"},
+            {"q": "Write the measurement: a concrete slab is 5 feet 6 inches wide.", "type": "text",
+             "accept": ["5 ft 6 in", "5'6\"", "5' 6\"", "66 inches", "66 in", "5 foot 6 inches", "5.5 ft"],
+             "topic": "Concrete"},
+            {"q": "Standing in a trench for utility work 5 ft+ requires:", "options": ["Shoring or sloping protection", "Just a hard hat", "Sprinting in", "Nothing"],
+             "answer": 0, "topic": "Concrete trench"},
+            {"q": "Fresh concrete before it sets should be:", "options": ["Kept off and covered", "Walked on to test", "Sprayed with gasoline", "Left open to rain"],
+             "answer": 0, "topic": "Concrete fresh pour"},
+        ],
+    },
+}
+
+
+# Slug -> test definition used by the portal and phone app.
 ALL_TRAININGS = [
     {
         "slug": "osha",
@@ -1175,25 +1701,54 @@ ALL_TRAININGS = [
     {"slug": "concrete", "title": "Concrete & Masonry — Core Working Knowledge", "pass_percent": 70, "questions": TRADE_QUIZZES["concrete"]["questions"]},
 ]
 
+ALL_TRAININGS.extend(
+    {"slug": "entry-" + slug, "title": t["title"], "pass_percent": t["pass_percent"], "questions": t["questions"]}
+    for slug, t in ENTRY_QUIZZES.items()
+)
+
 TRAINING_BY_SLUG = {t["slug"]: t for t in ALL_TRAININGS}
 
 
 def grade_training(answers, questions):
-    """Grade a list of option indexes against a question list -> pass/fail + missed topics."""
-    flat = [int(a) if isinstance(a, (int, float)) else 0 for a in (answers or [])]
-    if len(flat) != len(questions):
+    """Grade answers (option indexes or free-text strings) against questions.
+
+    Questions may declare ``type: "text"`` plus an ``accept`` list of valid
+    normalized answers; those compare as free text. Everything else compares by
+    option index.
+    """
+    if len(answers) != len(questions):
         raise ValueError(f"expected {len(questions)} answers")
-    correct = [i for i, a in enumerate(flat) if a == questions[i]["answer"]]
-    missed = sorted({questions[i].get("topic", "General") for i in range(len(questions)) if i not in correct})
-    pct = round(100 * len(correct) / len(questions))
+    scored = []
+    for i, a in enumerate(answers):
+        q = questions[i]
+        if q.get("type") == "text":
+            accept = {_norm(s) for s in q.get("accept", [])}
+            correct = _norm(a) in accept if accept else False
+        else:
+            try:
+                correct = int(a) == q["answer"]
+            except (TypeError, ValueError):
+                correct = False
+        scored.append(correct)
+    correct_idx = [i for i, ok in enumerate(scored) if ok]
+    missed = sorted({questions[i].get("topic", "General") for i, ok in enumerate(scored) if not ok})
+    pct = round(100 * len(correct_idx) / len(questions))
     passed = pct >= 70
     return {
         "total": len(questions),
-        "correct": len(correct),
+        "correct": len(correct_idx),
         "percent": pct,
         "passed": passed,
         "missed_topics": missed,
     }
+
+
+def _norm(s) -> str:
+    import unicodedata
+    s = unicodedata.normalize("NFKC", str(s or ""))
+    s = s.replace("–", "-").replace("—", "-").replace("⁄", "/")
+    s = s.replace('"', "").replace("′", "'").replace("“", "").replace("”", "")
+    return " ".join(s.strip().lower().split())
 
 
 def grade_trade_quiz(slug, answers) -> dict:
