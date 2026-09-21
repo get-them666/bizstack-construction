@@ -1457,6 +1457,8 @@ async def leads_page(request: Request, status_filter: str = "", q: str = "", db=
         leads = cur.fetchall()
         cur.execute("SELECT status, COUNT(*) AS c FROM leads WHERE company = 'construction' GROUP BY status;")
         counts = {r["status"]: r["c"] for r in cur.fetchall()}
+        cur.execute("SELECT COUNT(*) AS c FROM leads WHERE company = 'construction' AND draft_reply IS NOT NULL AND LOWER(COALESCE(draft_reply, '')) <> '';")
+        draft_count = cur.fetchone()["c"]
 
     return templates.TemplateResponse(request=request, name="leads.html", context={
         "user": {"email": user_email},
@@ -1466,6 +1468,7 @@ async def leads_page(request: Request, status_filter: str = "", q: str = "", db=
         "counts": counts,
         "active_status": status_filter,
         "q": q,
+        "draft_count": draft_count,
         "default_deposit": default_deposit_cents() / 100,
     })
 
@@ -1496,6 +1499,15 @@ async def fire_lead_draft_route(lead_id: int, request: Request, db=Depends(get_d
     result = auto_reply.fire_lead_draft(db, "construction", lead_id)
     if request.headers.get("hx-request"):
         return JSONResponse(content={"status": "fired" if result.get("sent") else "blocked", "why": result.get("why", "")})
+    return RedirectResponse(url=request.headers.get("referer") or "/leads", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/api/leads/fire-all-drafts")
+async def fire_all_drafts_route(request: Request, db=Depends(get_db)):
+    require_admin(request)
+    result = auto_reply.fire_all_drafts(db, "construction")
+    if request.headers.get("hx-request"):
+        return JSONResponse(content=result)
     return RedirectResponse(url=request.headers.get("referer") or "/leads", status_code=status.HTTP_303_SEE_OTHER)
 
 

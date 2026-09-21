@@ -491,6 +491,41 @@ def fire_lead_draft(db, company_key, lead_id):
     return result
 
 
+def fire_all_drafts(db, company_key):
+    """Owner action: fire every staged review draft for a company at once.
+
+    Loops over leads with a draft_reply set, sends each via fire_lead_draft
+    (which re-checks caps + scrub per lead), and reports sent/skipped. Returns
+    {"pending": n, "sent": m, "skipped": k, "reasons": {reason: count}}."""
+    company_key = company_key if company_key in COMPANIES else "broom"
+    _ensure_draft_column(db)
+    pending = []
+    try:
+        with db.cursor() as cur:
+            cur.execute(
+                "SELECT id FROM leads WHERE company = %s AND draft_reply IS NOT NULL "
+                "AND LOWER(COALESCE(draft_reply, '')) <> '' ORDER BY id;",
+                (company_key,),
+            )
+            pending = [r["id"] for r in cur.fetchall()]
+    except Exception as exc:
+        print(f"[auto-reply {company_key}] fire-all query failed: {exc}", flush=True)
+        return {"pending": 0, "sent": 0, "skipped": 0, "errors": [f"query failed: {exc}"]}
+    sent = 0
+    skipped = 0
+    reasons = {}
+    for lead_id in pending:
+        res = fire_lead_draft(db, company_key, lead_id)
+        if res.get("sent"):
+            sent += 1
+        else:
+            skipped += 1
+            why = res.get("why") or "unknown"
+            reasons[why] = reasons.get(why, 0) + 1
+    print(f"[auto-reply {company_key}] fire-all: {len(pending)} pending, {sent} sent, {skipped} skipped", flush=True)
+    return {"pending": len(pending), "sent": sent, "skipped": skipped, "reasons": reasons}
+
+
 def auto_reply_to_lead(db, company_key, *, name="", phone="", email="", service="", address="",
                        budget="", timeline="", message="", source="", funding=False,
                        sqft=None, lead_id=None):

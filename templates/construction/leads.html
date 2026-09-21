@@ -11,7 +11,15 @@
                 <p class="text-sm font-bold text-indigo-600 uppercase tracking-widest">Owner portal</p>
                 <h1 class="text-3xl font-black tracking-tight text-slate-900">Leads</h1>
             </div>
-            <a href="/dashboard" class="px-4 py-2.5 text-sm font-semibold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 rounded-xl transition-colors">← Dashboard</a>
+            <div class="flex items-center gap-2">
+                <form method="POST" action="/api/leads/fire-all-drafts" onsubmit="this.querySelector('button').disabled = true; this.querySelector('button').textContent = 'Firing…';" class="flex items-center gap-2">
+                    {% if draft_count %}
+                    <span class="text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-2.5 py-1.5 rounded-full">{{ draft_count }} draft{{ 's' if draft_count != 1 }} ready</span>
+                    {% endif %}
+                    <button type="submit" class="px-4 py-2.5 text-sm font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl transition-colors">Fire all drafts</button>
+                </form>
+                <a href="/dashboard" class="px-4 py-2.5 text-sm font-semibold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 rounded-xl transition-colors">← Dashboard</a>
+            </div>
         </div>
 
         <!-- Filters -->
