@@ -801,3 +801,36 @@ def fire_pending_bid_inquiries(company_key, *, db=None, max_emails=0, dry_run=Fa
                 db.close()
             except Exception:
                 pass
+
+
+def bot_health(db):
+    """Owner check: bot activity summary right now (no logs scrolling).
+
+    Queries the real outbound tables + leads to report how many review drafts were
+    sent today, how many are still staged, and today's scrub counts — so an owner
+    can check "have any leads been contacted / sent today?" at a glance. Returns
+    {"sent_today": n, "staged": m, "caps": {"email": x, "text": y}, "error": ""}."""
+    _ensure_draft_column(db)
+    result = {"sent_today": 0, "staged": 0, "caps": {}, "error": ""}
+    try:
+        with db.cursor() as cur:
+            cur.execute(
+                "SELECT COALESCE(SUM(CASE WHEN channel = 'email' THEN 1 ELSE 0 END), 0) AS email, "
+                "COALESCE(SUM(CASE WHEN channel = 'text' THEN 1 ELSE 0 END), 0) AS text "
+                "FROM outbound_log WHERE sent_at::date = CURRENT_DATE;",
+            )
+            row = cur.fetchone() or {}
+            result["sent_today"] = (row.get("email") or 0) + (row.get("text") or 0)
+            result["caps"] = {"email": row.get("email") or 0, "text": row.get("text") or 0}
+            cur.execute(
+                "SELECT COUNT(*) AS n FROM leads WHERE draft_reply IS NOT NULL "
+                "AND LOWER(COALESCE(draft_reply, '')) <> '';",
+            )
+            result["staged"] = (cur.fetchone() or {}).get("n") or 0
+    except Exception as exc:
+        result["error"] = f"query failed: {exc}"
+        print(f"[auto-reply] bot_health query failed: {exc}", flush=True)
+    print(f"[auto-reply] bot-health: {result['sent_today']} sent today, "
+          f"{result['staged']} staged, caps {result['caps']}", flush=True)
+    return result
+

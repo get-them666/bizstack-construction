@@ -1502,10 +1502,25 @@ async def fire_lead_draft_route(lead_id: int, request: Request, db=Depends(get_d
     return RedirectResponse(url=request.headers.get("referer") or "/leads", status_code=status.HTTP_303_SEE_OTHER)
 
 
+@app.get("/api/bot/health")
+async def bot_health_route(request: Request, db=Depends(get_db)):
+    """Owner glance: bot activity right now as JSON (no log scrolling).
+
+    Reports how many review drafts were sent today (email + text, honoring the
+    daily caps), how many leads are still staged with a draft, and today's
+    remaining cap budget per channel. Lets the owner confirm 'any leads got
+    contacted' at a glance without grepping logs."""
+    try:
+        return auto_reply.bot_health(db)
+    except Exception as exc:
+        print(f"[auto-reply] bot/health failed: {exc}", flush=True)
+        return JSONResponse(status_code=500, content={"error": str(exc)[:300]})
+
+
 @app.post("/api/leads/fire-all-drafts")
 async def fire_all_drafts_route(request: Request, db=Depends(get_db)):
     require_admin(request)
-    result = auto_reply.fire_all_drafts(db, "construction")
+    result = auto_reply.fire_all_drafts(db)
     if request.headers.get("hx-request"):
         return JSONResponse(content=result)
     return RedirectResponse(url=request.headers.get("referer") or "/leads", status_code=status.HTTP_303_SEE_OTHER)
