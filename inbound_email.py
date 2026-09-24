@@ -15,6 +15,8 @@ import json
 import os
 import re
 import time
+import urllib.request
+import urllib.error
 from email.header import decode_header
 from email.parser import BytesParser
 from email.utils import parseaddr
@@ -240,19 +242,33 @@ def poll_loop():
 
 
 def handle_webhook_payload(payload, company_key, mailbox_from):
-    """Ingest a Resend-style 'email.received' array or a single object."""
+    """Ingest a Resend-style 'email.received' array or a single object.
+
+    Supports both the raw Resend envelope ({"type": "email.received",
+    "data": {...}}) and pre-flattened dicts. Resend webhooks only carry
+    metadata, so the message body is fetched from the Receiving API when
+    an email_id is present (RESEND_API_KEY required); otherwise the raw
+    text/html fields are used.
+    """
     records = payload if isinstance(payload, list) else [payload]
     msgs = []
     for rec in records:
-        if isinstance(rec, dict):
-            msgs.append({
-                "from": rec.get("from") or "",
-                "to": (rec.get("to") or ""),
-                "subject": rec.get("subject") or "",
-                "date": rec.get("date") or "",
-                "text": rec.get("text") or rec.get("html") or "",
-                "external_id": "wh|" + str(rec.get("id") or "") or "",
-            })
+        if isinstance(rec, dict) and rec.get("type") == "email.received" and isinstance(rec.get("data"), dict):
+            rec = rec["data"]
+        if not isinstance(rec, dict):
+            continue
+        email_id = rec.get("email_id") or rec.get("id") or ""
+        text = rec.get("text") or rec.get("html") or ""
+        if email_id and not text:
+            text = _resend_fetch_body(email_id)
+        msgs.append({
+            "from": rec.get("from") or "",
+            "to": (rec.get("to") or ""),
+            "subject": rec.get("subject") or "",
+            "date": rec.get("created_at") or rec.get("date") or "",
+            "text": text,
+            "external_id": "wh|" + str(email_id) or "",
+        })
     db = psycopg.connect(os.getenv("DATABASE_URL", ""), row_factory=dict_row)
     db.autocommit = False
     try:
@@ -262,6 +278,32 @@ def handle_webhook_payload(payload, company_key, mailbox_from):
             db.close()
         except Exception:
             pass
+
+
+def _resend_fetch_body(email_id):
+    """Fetch an inbound email's text body from the Resend Receiving API."""
+    key = (os.getenv("RESEND_API_KEY", "") or "").strip()
+    if not key or not email_id:
+        return ""
+    url = f"https://api.resend.com/emails/receiving/{email_id}"
+    req = urllib.request.Request(url, headers={
+        "Authorization": f"Bearer {key}",
+        "User-Agent": "bizstack-inbound/1.0",
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode("utf-8", "replace"))
+    except (urllib.error.HTTPError, urllib.error.URLError, ValueError, OSError) as exc:
+        print(f"[email-inbound] receiving.get failed for {email_id}: {exc}", flush=True)
+        return ""
+    text = (data.get("text") or data.get("html") or "").strip()
+    if not text:
+        return ""
+    if not data.get("text"):
+        text = _TAG_RE.sub(" ", text)
+        text = _ENT_RE.sub(" ", text)
+        text = _MULTI_WS.sub(" ", text)
+    return text[:8000]
 
 
 if __name__ == "__main__":
