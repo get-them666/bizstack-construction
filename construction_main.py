@@ -728,30 +728,10 @@ def build_tool_handlers(db, stripe_svc):
         if len(digits) < 10:
             return {"ok": False, "error": "I need a valid 10-digit phone number."}
         e164 = ("+1" + digits) if not digits.startswith("1") else ("+" + digits)
-        if vapi.is_configured():
-            try:
-                sid = vapi.create_ai_outbound_call(e164, notes or "")
-            except Exception as e:
-                return {"ok": False, "error": f"Call could not be placed: {e}"}
-            if not sid:
-                return {"ok": False, "error": "Call could not be placed right now."}
-            try:
-                with db.cursor() as cur:
-                    cur.execute(
-                        "INSERT INTO comms_logs (direction, channel, sender, recipient, message_body) "
-                        "VALUES ('outbound', 'voice', 'assistant', %s, %s);",
-                        (e164, f"[AI outbound call] {str(notes or '')[:500]}"),
-                    )
-                    db.commit()
-            except Exception:
-                pass
-            return {"ok": True, "call_sid": sid, "to": e164}
-        if not signalwire.is_configured():
-            return {"ok": False, "error": "Vapi and SignalWire are both unconfigured."}
-        swml_base = (os.getenv("APP_BASE_URL", "") or f"https://{company()['domain']}").rstrip("/")
-        swml_url = f"{swml_base}/comms/outbound-voice.swml"
+        if not vapi.is_configured():
+            return {"ok": False, "error": "Vapi is not configured (VAPI_API_KEY missing)."}
         try:
-            sid = signalwire.create_ai_outbound_call(e164, swml_url)
+            sid = vapi.create_ai_outbound_call(e164, notes or "")
         except Exception as e:
             return {"ok": False, "error": f"Call could not be placed: {e}"}
         if not sid:

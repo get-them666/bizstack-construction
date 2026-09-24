@@ -135,7 +135,8 @@ def _ingest(db, company_key, msgs, mailbox_from):
                 continue
             inserted += 1
             matched += 1
-            cur.execute("SELECT id, email, name, notes, status FROM leads WHERE id = %s;", (lead["id"],))
+            lead_id = lead["id"]
+            cur.execute("SELECT id, email, name, notes, status, phone FROM leads WHERE id = %s;", (lead_id,))
             lead = cur.fetchone()
             notes = lead.get("notes") or ""
             stamp = time.strftime("%Y-%m-%d %H:%M")
@@ -146,8 +147,23 @@ def _ingest(db, company_key, msgs, mailbox_from):
                 "UPDATE leads SET notes = %s, last_reply_at = CURRENT_TIMESTAMP, "
                 "status = CASE WHEN status IN ('new', 'contacted') THEN 'contacted' ELSE status END "
                 "WHERE id = %s;",
-                (notes, lead["id"]),
+                (notes, lead_id),
             )
+            try:
+                import auto_reply
+                auto_reply.ensure_lead_reply(
+                    db,
+                    company_key,
+                    name=lead.get("name") or "",
+                    phone=lead.get("phone") or "",
+                    email=sender,
+                    service="",
+                    message=f"Previous reply: {subject}\n{text[:500]}",
+                    source="inbound-email",
+                    lead_id=lead_id,
+                )
+            except Exception as exc:
+                print(f"[email-inbound] auto-reply failed for lead {lead_id}: {exc}", flush=True)
         db.commit()
     return {"matched": matched, "inserted": inserted, "deduped": deduped, "skipped": skipped}
 

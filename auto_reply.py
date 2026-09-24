@@ -152,6 +152,17 @@ def _build_message(company_key, co_name, quote=None, **ctx):
         ]
         return " ".join(lines) + footer
 
+    if source == "sam-gov":
+        lines = [
+            greeting,
+            f"Thank you for the solicitation at {address}." if address else "Thank you for the solicitation.",
+            "We are reviewing the requirements and intend to submit a response"
+            + (f" for {service}" if service else "")
+            + ". Please let us know if additional documentation or a site visit is needed to complete our bid.",
+            "Our team is available at (757) 846-9275 to coordinate next steps.",
+        ]
+        return " ".join(lines) + footer
+
     # generic inbound (get-started funnel, website form, contact)
     lines = [
         greeting,

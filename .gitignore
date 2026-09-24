@@ -15,3 +15,7 @@ __pycache__/
 opencode.json
 skills-lock.json
 .opencode/
+
+# --- session resume (never commit - may contain secrets) ---
+SESSION_STATE.md
+SESSION_NOTES.md
