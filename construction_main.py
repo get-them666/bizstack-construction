@@ -1773,12 +1773,11 @@ def _follow_up_new_lead(lead_id: int) -> None:
             own = _bot_phone_digits(getattr(signalwire, "from_number", ""))
             if own and digits[-10:] == own[-10:]:
                 return
-            swml_url = (os.getenv("APP_BASE_URL", "") or f"https://{company()['domain']}").rstrip("/") + "/comms/outbound-voice.swml"
             try:
-                if vapi_service.VapiService().is_configured():
-                    sid = vapi_service.VapiService().create_ai_outbound_call(to, f"AI immediate callback for new lead {lead_id}")
-                else:
-                    sid = signalwire.create_ai_outbound_call(to, swml_url)
+                if not vapi_service.VapiService().is_configured():
+                    print(f"📞[followup] Vapi not configured, skipping dial for lead {lead_id}", flush=True)
+                    return
+                sid = vapi_service.VapiService().create_ai_outbound_call(to, f"AI immediate callback for new lead {lead_id}")
             except Exception as e:
                 print(f"📞[followup] dial failed for lead {lead_id}: {e}", flush=True)
                 return
