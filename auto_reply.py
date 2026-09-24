@@ -392,8 +392,11 @@ def ensure_lead_reply(db, company_key, *, name="", phone="", email="", service="
             if ok:
                 try:
                     subject = f"Thanks for reaching out{f', {name.split()[0]}' if name else ''} — {co_name}"
-                    run_coro(documents_service.send_email(cfg, email, subject, msg.replace("\n", "<br>")))
-                    sent = _fire_sent_effect(db, lead_id, company_key, "email", email, msg)
+                    delivered = run_coro(documents_service.send_email(cfg, email, subject, msg.replace("\n", "<br>")))
+                    if delivered:
+                        sent = _fire_sent_effect(db, lead_id, company_key, "email", email, msg)
+                    else:
+                        print(f"[auto-reply {company_key}] email to {email} not delivered (provider returned False); staging draft", flush=True)
                 except Exception as exc:
                     print(f"[auto-reply {company_key}] email failed for {email}: {exc}", flush=True)
             else:
