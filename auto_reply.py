@@ -115,6 +115,26 @@ def _valid_phone(phone):
     return 10 <= len(digits) <= 15
 
 
+def _person_first(name):
+    """First name from a lead name field.
+
+    SAM.gov leads store name as "{title} · {contact name}", web/inbound
+    leads usually as a plain person name. Always prefer the actual person.
+    """
+    if not name:
+        return ""
+    raw = (name or "").strip()
+    if " · " in raw:
+        raw = raw.rsplit(" · ", 1)[-1].strip()
+    raw = raw.strip().strip('"').strip()
+    if not raw:
+        return ""
+    first = raw.split()[0]
+    if len(first) < 2:
+        return ""
+    return first
+
+
 def _build_message(company_key, co_name, quote=None, **ctx):
     source = (ctx.get("source") or "").lower()
     name = (ctx.get("name") or "").strip()
@@ -124,7 +144,8 @@ def _build_message(company_key, co_name, quote=None, **ctx):
     address = (ctx.get("address") or "").strip()
     detail = ctx.get("message") or ""
 
-    greeting = f"Hi {name.split()[0]}," if name else "Hi there,"
+    first = _person_first(name)
+    greeting = f"Hi {first}," if first else "Hi there,"
     footer = f"\n\n{COMPANIES[company_key]['cta']} Reply STOP to opt out."
     quote_line = f" Quick ballpark quote: {quote}." if quote else ""
 
@@ -391,7 +412,7 @@ def ensure_lead_reply(db, company_key, *, name="", phone="", email="", service="
             ok, why = _channel_allowed(db, "email")
             if ok:
                 try:
-                    subject = f"Thanks for reaching out{f', {name.split()[0]}' if name else ''} — {co_name}"
+                    subject = f"Thanks for reaching out{f', {_person_first(name)}' if _person_first(name) else ''} — {co_name}"
                     delivered = run_coro(documents_service.send_email(cfg, email, subject, msg.replace("\n", "<br>")))
                     if delivered:
                         sent = _fire_sent_effect(db, lead_id, company_key, "email", email, msg)

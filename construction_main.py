@@ -1906,9 +1906,13 @@ async def outbound_voice_webhook(request: Request, db=Depends(get_db)):
         db.commit()
 
     if lead and lead.get("name"):
+        first = auto_reply._person_first(lead["name"])
         greeting = (
-            f"Hi {lead['name'].split()[0]}, this is the assistant from {company()['name']} calling about your "
+            f"Hi {first}, this is the assistant from {company()['name']} calling about your "
             f"{lead.get('project_type') or 'project'} request. Quick one — are you still interested in a free estimate?"
+        ) if first else (
+            f"Hi there, this is the assistant from {company()['name']}. "
+            f"I'm calling about your recent {lead.get('project_type') or 'public sector'} project request. Are you still interested in a free estimate?"
         )
     else:
         greeting = (
