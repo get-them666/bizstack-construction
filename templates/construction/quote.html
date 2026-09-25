@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% set co = company() %}
-{% block title %}Get a Free Quote | {{ co.name }} — Licensed Contractor in {{ co.service_area }}{% endblock %}
-{% block meta %}<meta name="description" content="Request a free, no-obligation estimate from {{ co.name }}. Licensed general contractor serving {{ co.service_area }}. Same-week walkthroughs available.">{% endblock %}
+{% block title %}Get a Free Quote | {{ co.name }} — General Contractor in {{ co.service_area }}{% endblock %}
+{% block meta %}<meta name="description" content="Request a free, no-obligation estimate from {{ co.name }}. General contractor serving {{ co.service_area }}. Request an on-site walkthrough.">{% endblock %}
 
 {% block content %}
 <section class="py-16 bg-gradient-to-br from-slate-900 to-indigo-900 text-white">
@@ -99,7 +99,10 @@ document.addEventListener('DOMContentLoaded', function() {
         e.preventDefault();
         const box = document.getElementById('lead-result');
         const data = new FormData(form);
-        data.set('source', 'quotes_page');
+        const params = new URLSearchParams(window.location.search);
+        const channel = (params.get('src') || 'quotes_page').replace(/[^a-z0-9_-]/gi, '').slice(0, 40) || 'quotes_page';
+        const campaign = (params.get('camp') || params.get('ref') || '').replace(/[^a-z0-9_-]/gi, '').slice(0, 40);
+        data.set('source', campaign ? `${channel}-${campaign}` : channel);
         try {
             const res = await fetch('/submit-lead', { method: 'POST', body: data });
             const json = await res.json();
