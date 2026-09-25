@@ -4,14 +4,14 @@
 | Field | Value |
 |---|---|
 | Category | Cleaning Service (secondary: Home Improvement) |
-| Phone | (757) 846-9275 |
+| Phone | (757) 908-7121 |
 | Website | https://bizstackperks.com |
 | Hours | Open 24 hours |
 | Service area | Williamsburg–Hampton Roads, VA · Currituck County & Elizabeth City, NC |
 | Handle | facebook.com/bizstackhosts |
 
 ## 2. Intro (short bio, <=150 chars)
-5-star short-term rental turnover cleaning & co-hosting. Guest-funded turnovers across Hampton Roads, VA. Text or call 24/7: (757) 846-9275
+5-star short-term rental turnover cleaning & co-hosting. Guest-funded turnovers across Hampton Roads, VA. Text or call 24/7: (757) 908-7121
 
 ## 3. About -> Long Description
 Broom Service keeps short-term rental operators in the Hampton Roads area at 5-star service levels with professional turnover cleaning, deep cleaning, linen restock, and digital co-hosting — all built on an automated operations layer that dispatches and tracks your crew in real time.
@@ -22,7 +22,7 @@ Here's what separates us from a typical cleaning service:
 - **True co-hosting, not lock-in.** Pick standalone turnovers, digital co-hosting (10–15% of gross), or full-service management (20–30%). No all-or-nothing contracts — unbundle exactly what you need and keep control of your listing.
 - **24/7 AI phone coverage.** Guests and owners can call or text anytime; our AI assistant answers questions, handles early check-outs, and can send secure check-in links mid-call.
 
-Serving Airbnb, Vrbo, and direct-booking hosts across Williamsburg–Hampton Roads, VA (Virginia Beach, Norfolk, Chesapeake, Newport News), plus Currituck County and Elizabeth City, NC. Call or text us today: (757) 846-9275, or start at bizstackperks.com.
+Serving Airbnb, Vrbo, and direct-booking hosts across Williamsburg–Hampton Roads, VA (Virginia Beach, Norfolk, Chesapeake, Newport News), plus Currituck County and Elizabeth City, NC. Call or text us today: (757) 908-7121, or start at bizstackperks.com.
 
 ## 4. Services (with prices)
 - Turnover cleaning — $160
@@ -37,7 +37,7 @@ Serving Airbnb, Vrbo, and direct-booking hosts across Williamsburg–Hampton Roa
 
 ## 6. First 3 posts
 **Post 1 (intro + booking)**
-New page! Broom Service does 5-star STR turnover cleaning for Airbnb & Vrbo across Hampton Roads. The kicker: your guests fund the turnover fee at booking — zero out-of-pocket for hosts. Book at bizstackperks.com/book or text (757) 846-9275.
+New page! Broom Service does 5-star STR turnover cleaning for Airbnb & Vrbo across Hampton Roads. The kicker: your guests fund the turnover fee at booking — zero out-of-pocket for hosts. Book at bizstackperks.com/book or text (757) 908-7121.
 
 **Post 2 (verified angle)**
 Every clean is photo-verified, time-stamped, and location-checked — no blind cleaning. Hosts see the proof before the next guest walks in. Turnover $160 · Deep $275 · Linen $70 · Inspection $95.

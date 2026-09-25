@@ -134,6 +134,6 @@ class SignalWireService:
         """Text a secure link from Buildstack Construction (deposit checkout, estimate, or scheduling page)."""
         body = (
             "Hi! Here is the secure link from Buildstack Construction Co.: "
-            f"{link}. Reply here or call (757) 846-9275 anytime and we'll help."
+            f"{link}. Reply here or call (757) 908-7121 anytime and we'll help."
         )
         return self.send_sms(to, body)

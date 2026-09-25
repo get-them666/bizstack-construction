@@ -103,8 +103,8 @@ def notify_owner_email(company_key, *, lead_id, name="", phone="", email="", ser
     return ok
 
 COMPANIES = {
-    "broom": {"name": "Broom Service", "cta": "Call or text us at (757) 846-9275 anytime."},
-    "construction": {"name": "Buildstack Construction", "cta": "Call or text us at (757) 846-9275 anytime."},
+    "broom": {"name": "Broom Service", "cta": "Call or text us at (757) 908-7121 anytime."},
+    "construction": {"name": "Buildstack Construction", "cta": "Call or text us at (757) 908-7121 anytime."},
 }
 
 
@@ -180,7 +180,7 @@ def _build_message(company_key, co_name, quote=None, **ctx):
             "We are reviewing the requirements and intend to submit a response"
             + (f" for {service}" if service else "")
             + ". Please let us know if additional documentation or a site visit is needed to complete our bid.",
-            "Our team is available at (757) 846-9275 to coordinate next steps.",
+            "Our team is available at (757) 908-7121 to coordinate next steps.",
         ]
         return " ".join(lines) + footer
 
@@ -622,7 +622,7 @@ def build_bid_inquiry(company_key, *, title="", solicitation="", contact_name=""
         "Thank you for your time.",
         "",
         f"— {co_name}",
-        "hello@bizstackperks.com · (757) 846-9275",
+        "hello@bizstackperks.com · (757) 908-7121",
     ]
     if url:
         lines.append(f"Opportunity: {url}")

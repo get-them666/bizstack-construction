@@ -316,6 +316,18 @@ TOOL USAGE RULES:
             {
                 "type": "function",
                 "function": {
+                    "name": "search_materials",
+                    "description": "Search the brand catalog (Home Depot / Lowe's) by category, brand, store, or free text — returns real products with store item numbers and current prices. Never fabricate a brand or SKU.",
+                    "parameters": self._props(
+                        {"category": "string", "brand": "string", "query": "string", "store": "string", "limit": "integer"},
+                        [],
+                        "brand e.g. GAF, Hampton Bay, MOEN, TrafficMaster. query: free-text product lookup.",
+                    ),
+                },
+            },
+            {
+                "type": "function",
+                "function": {
                     "name": "sister_business_summary",
                     "description": "Summary report for the sister company (Broom Service — bizstackperks.com STR turnover cleaning): jobs/leads, revenue, crew, payroll, bank status.",
                     "parameters": self._props({}, [], ""),

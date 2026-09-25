@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% set co = company() %}
+{% block title %}Supplies | {{ co.name }} Owner Portal{% endblock %}
+{% block meta %}<meta name="robots" content="noindex, nofollow">{% endblock %}
+
+{% block content %}
+<section class="py-10 bg-slate-50 min-h-[80vh]">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="flex flex-wrap items-end justify-between gap-4 mb-6">
+            <div>
+                <p class="text-sm font-bold text-indigo-600 uppercase tracking-widest">Operations</p>
+                <h1 class="text-3xl font-black tracking-tight text-slate-900">Supplies Inventory</h1>
+                <p class="mt-1 text-sm text-slate-500">Materials &amp; consumables on hand. Items at or below reorder level are highlighted.</p>
+            </div>
+            <div class="flex items-center gap-3">
+                <a href="/inventory?company=construction" class="px-4 py-2 text-sm font-semibold rounded-xl border transition-colors {{ 'bg-indigo-600 text-white border-indigo-600' if active_company == 'construction' else 'bg-white text-slate-700 border-slate-200 hover:border-indigo-300' }}">Construction</a>
+                <a href="/inventory?company=broom" class="px-4 py-2 text-sm font-semibold rounded-xl border transition-colors {{ 'bg-indigo-600 text-white border-indigo-600' if active_company == 'broom' else 'bg-white text-slate-700 border-slate-200 hover:border-indigo-300' }}">Broom</a>
+            </div>
+        </div>
+
+        <div class="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
+            <table class="min-w-full divide-y divide-slate-200 text-sm">
+                <thead class="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
+                    <tr>
+                        <th class="px-5 py-3">Item</th>
+                        <th class="px-5 py-3">Category</th>
+                        <th class="px-5 py-3 text-right">On Hand</th>
+                        <th class="px-5 py-3 text-right">Reorder At</th>
+                        <th class="px-5 py-3"></th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100">
+                    {% for item in items %}
+                    <tr class="{{ 'bg-amber-50' if item.low else '' }}">
+                        <td class="px-5 py-3 font-semibold text-slate-800">{{ item.item_name }}</td>
+                        <td class="px-5 py-3 text-slate-500">{{ item.category or '—' }}</td>
+                        <td class="px-5 py-3 text-right font-mono">
+                            {{ "{:g}".format(item.qty_on_hand) }} <span class="text-xs text-slate-400">{{ item.unit or '' }}</span>
+                        </td>
+                        <td class="px-5 py-3 text-right text-slate-500">{{ "{:g}".format(item.reorder_level) }}</td>
+                        <td class="px-5 py-3 whitespace-nowrap">
+                            <form method="post" action="/inventory/update" class="inline-flex items-center gap-1">
+                                <input type="hidden" name="item_id" value="{{ item.id }}">
+                                <input type="hidden" name="company" value="{{ active_company }}">
+                                <button name="delta" value="-1" class="w-7 h-7 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-100">−</button>
+                                <button name="delta" value="1" class="w-7 h-7 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-100">+</button>
+                                <button name="delta" value="5" class="px-2 h-7 rounded-lg border border-slate-200 text-xs text-slate-600 hover:bg-slate-100">+5</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="5" class="px-5 py-10 text-center text-slate-400">No supplies tracked yet. Add your first item below.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <div class="mt-6 bg-white rounded-3xl border border-slate-200 shadow-sm p-5 max-w-lg">
+            <h2 class="text-sm font-bold text-slate-800">Add / adjust item</h2>
+            <form method="post" action="/inventory/update" class="mt-3 grid grid-cols-2 gap-3">
+                <input type="hidden" name="company" value="{{ active_company }}">
+                <input name="item_name" required placeholder="Item name" class="col-span-2 px-3 py-2 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                <input name="quantity" type="number" step="any" placeholder="Qty (e.g. -2, +3, 12)" class="px-3 py-2 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                <input name="reorder_level" type="number" step="any" placeholder="Reorder at" class="px-3 py-2 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                <input name="category" placeholder="Category (e.g. roofing)" class="px-3 py-2 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                <button type="submit" class="px-4 py-2 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition-colors">Save</button>
+            </form>
+        </div>
+    </div>
+</section>
+{% endblock %}

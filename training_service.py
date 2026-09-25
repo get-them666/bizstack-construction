@@ -771,7 +771,7 @@ def _slides_content(kind: str) -> list[tuple[str, list[str]]]:
             "Clear house rules and a clean, stocked property",
         ]),
         ("Support & Next Steps", [
-            "Questions? Text/call +1 (757) 846-9275 or email hello@bizstackperks.com",
+            "Questions? Text/call +1 (757) 908-7121 or email hello@bizstackperks.com",
             "Submit your property for a free analysis",
             "Let's get your listing earning",
         ]),

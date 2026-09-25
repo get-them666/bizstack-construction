@@ -32,7 +32,7 @@ import asyncio
 import psycopg
 from psycopg.rows import dict_row
 from fastapi import FastAPI, Request, Form, UploadFile, Response, Depends, HTTPException, status, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, Response
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 import aiosmtplib
@@ -73,8 +73,8 @@ STATUS_LABELS = {
 def company() -> dict:
     return {
         "name": os.getenv("COMPANY_NAME", "Buildstack Construction Co."),
-        "phone": os.getenv("COMPANY_PHONE", "+1 (757) 846-9275"),
-        "phone_e164": os.getenv("SIGNALWIRE_PHONE", "+17578469275"),
+        "phone": os.getenv("COMPANY_PHONE", "+1 (757) 908-7121"),
+        "phone_e164": os.getenv("VAPI_PHONE", "+17579087121"),
         "email": os.getenv("COMPANY_EMAIL", "hello@bizstackperks.com"),
         "domain": os.getenv("COMPANY_DOMAIN", "construction.bizstackperks.com"),
         "license": os.getenv("CONTRACTOR_LICENSE", ""),
@@ -189,6 +189,47 @@ async def lifecycle(app: FastAPI):
                 cur.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS estimate_low_cents INTEGER;")
                 cur.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS estimate_high_cents INTEGER;")
                 cur.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS estimate_json TEXT;")
+                cur.execute("""
+                CREATE TABLE IF NOT EXISTS supplies_inventory (
+                    id SERIAL PRIMARY KEY,
+                    company VARCHAR(40) NOT NULL DEFAULT 'broom',
+                    item_name VARCHAR(255) NOT NULL,
+                    sku VARCHAR(120),
+                    category VARCHAR(120),
+                    qty_on_hand NUMERIC(12,2) NOT NULL DEFAULT 0,
+                    unit VARCHAR(50) DEFAULT 'each',
+                    reorder_level NUMERIC(12,2) NOT NULL DEFAULT 0,
+                    notes TEXT,
+                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                );
+                """)
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_supplies_company ON supplies_inventory(company);")
+                cur.execute("""
+                CREATE TABLE IF NOT EXISTS hosts (
+                    id SERIAL PRIMARY KEY,
+                    name VARCHAR(255) NOT NULL,
+                    phone VARCHAR(50),
+                    email VARCHAR(255),
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                );
+                """)
+                cur.execute("ALTER TABLE hosts ADD COLUMN IF NOT EXISTS allergens TEXT;")
+                cur.execute("ALTER TABLE hosts ADD COLUMN IF NOT EXISTS cleaning_supplies TEXT;")
+                cur.execute("ALTER TABLE hosts ADD COLUMN IF NOT EXISTS special_instructions TEXT;")
+                cur.execute("ALTER TABLE hosts ADD COLUMN IF NOT EXISTS property_address VARCHAR(255);")
+                cur.execute("ALTER TABLE hosts ADD COLUMN IF NOT EXISTS property_name VARCHAR(255);")
+                cur.execute("""
+                CREATE TABLE IF NOT EXISTS properties (
+                    id SERIAL PRIMARY KEY,
+                    name VARCHAR(255),
+                    address VARCHAR(255),
+                    host_id INTEGER,
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                );
+                """)
+                cur.execute("ALTER TABLE properties ADD COLUMN IF NOT EXISTS allergens TEXT;")
+                cur.execute("ALTER TABLE properties ADD COLUMN IF NOT EXISTS cleaning_supplies TEXT;")
                 cur.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS listing_url VARCHAR(512);")
                 cur.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS campaign VARCHAR(80);")
                 cur.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS referral_code VARCHAR(120);")
@@ -367,6 +408,13 @@ async def lifecycle(app: FastAPI):
         print("✅ Schema ready.")
     except Exception as e:
         print(f"⚠️ Database init skipped: {e}")
+
+    try:
+        with psycopg.connect(db_url) as conn:
+            count = materials_service.refresh_catalog(conn)
+            print(f"📦 materials_catalog ready ({count} rows).")
+    except Exception as e:
+        print(f"⚠️ materials_catalog refresh skipped: {e}")
 
     if not os.getenv("DISABLE_LOAN_OUTREACH"):
         _outreach_tasks = start_outreach_tasks()
@@ -949,6 +997,13 @@ def build_tool_handlers(db, stripe_svc):
             return {"ok": False, "sku": sku, "error": "Sku not found in price book."}
         return {"ok": True, "sku": sku, "price_cents": int(cents), "price_dollars": round(cents / 100, 2)}
 
+    def search_materials(category="", brand="", query="", store="", limit=8):
+        svc = materials_service.BusinessMaterialsService()
+        try:
+            return svc.search_materials(category=category, brand=brand, query=query, store=store, limit=limit)
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
     def sister_business_summary():
         with db.cursor() as cur:
             cur.execute("SELECT COUNT(*) AS c FROM leads WHERE company = 'broom';")
@@ -1123,6 +1178,209 @@ def build_tool_handlers(db, stripe_svc):
             sent.append({"crew_id": r["id"], "name": r["name"]})
         return {"ok": True, "reminded_count": reminded, "reminded": sent}
 
+    def lookup_property(address=""):
+        """Look up a US property by street address (RentCast) for real sqft/beds/baths."""
+        a = str(address or "").strip()
+        if not a:
+            return {"ok": False, "error": "What's the property street address?"}
+        prop = property_service.lookup_address(a)
+        if not prop:
+            return {
+                "ok": False,
+                "configured": property_service.is_configured(),
+                "error": "I couldn't pull that property right now.",
+            }
+        out = {k: prop.get(k) for k in ("address", "sqft", "beds", "baths", "year_built", "stories", "property_type", "source")}
+        out["ok"] = True
+        return out
+
+    def quote_project(project_type="", address="", sqft=0, materials="", name="", phone="", notes="", lead_id=0):
+        """Real ballpark quote for any construction trade, grounded in the property + material grades."""
+        if not str(project_type or "").strip():
+            return {"ok": False, "error": "What type of work do you need — roof, kitchen, bath, whole-home?"}
+        prop = None
+        manual = 0.0
+        try:
+            manual = max(float(sqft or 0), 0)
+        except (TypeError, ValueError):
+            manual = 0.0
+        if manual <= 0 and address:
+            prop = property_service.lookup_address(address)
+        est = estimating_service.estimate(project_type, prop, manual if manual > 0 else None, str(materials or ""))
+        if not est:
+            est = estimating_service.auto_quote(project_type, manual if manual > 0 else None)
+        if not est:
+            return {"ok": False, "error": "I don't have a pricing model for that kind of work yet — the estimator will follow up."}
+        assumed = bool(est.get("assumed_sqft")) or (not prop and manual <= 0 and est.get("quantifier") and "sq ft" in est.get("quantifier", "").lower())
+        needs_sqft = assumed and manual <= 0
+        out = {
+            "ok": True,
+            "project_type": project_type,
+            "label": est.get("label"),
+            "quantifier": est.get("quantifier"),
+            "low_est": est.get("low_est"),
+            "high_est": est.get("high_est"),
+            "sqft": est.get("sqft"),
+            "material_notes": est.get("material_notes") or [],
+            "notes": est.get("notes") or [],
+            "assumed_sqft": assumed,
+            "needs_sqft": needs_sqft,
+            "property": ({"address": prop.get("address"), "sqft": prop.get("sqft"), "beds": prop.get("beds"), "baths": prop.get("baths"), "year_built": prop.get("year_built")} if prop else None),
+        }
+        stamped_lead = None
+        if name and phone:
+            lead_result = register_lead(name=name, phone=phone, project_type=project_type,
+                                        address=address, notes=(f"Quoted {est.get('low_est')}-{est.get('high_est')}: {est.get('material_notes')}; {notes}"))
+            stamped_lead = lead_result.get("lead_id")
+        elif lead_id:
+            try:
+                with db.cursor() as cur:
+                    cur.execute("UPDATE leads SET estimate_low_cents = %s, estimate_high_cents = %s, "
+                                "status = COALESCE(NULLIF(status,''),'quoted') WHERE id = %s RETURNING id;",
+                                (est.get("low_cents"), est.get("high_cents"), int(lead_id)))
+                    row = cur.fetchone()
+                    db.commit()
+                stamped_lead = row["id"] if row else int(lead_id)
+            except Exception:
+                db.rollback()
+                stamped_lead = int(lead_id)
+        out["lead_id"] = stamped_lead
+        return out
+
+    def get_inventory(company="construction", category="", low_only=False):
+        """List supply inventory for construction (or broom), optionally at/below reorder level."""
+        co = "construction" if (company or "").lower() in ("construction", "buildstack", "build") else (
+            "broom" if (company or "").lower() in ("broom", "hosts", "cleaning") else "construction")
+        with db.cursor() as cur:
+            cur.execute("SELECT * FROM supplies_inventory WHERE company = %s ORDER BY category, item_name;", (co,))
+            rows = cur.fetchall()
+        items = []
+        for r in rows:
+            if category and (r.get("category") or "").lower() != str(category).lower():
+                continue
+            qty = float(r.get("qty_on_hand") or 0)
+            reorder = float(r.get("reorder_level") or 0)
+            low = qty <= reorder
+            if low_only and not low:
+                continue
+            items.append({"id": r["id"], "item_name": r["item_name"], "sku": r.get("sku"),
+                          "category": r.get("category"), "qty_on_hand": qty, "unit": r.get("unit"),
+                          "reorder_level": reorder, "low": low, "notes": r.get("notes")})
+        return {"ok": True, "company": co, "items": items}
+
+    def update_inventory(item_name="", qty_delta=0, company="construction", category="", set_qty=None):
+        """Adjust supply quantity (add/remove via qty_delta, or set absolute)."""
+        if not str(item_name or "").strip():
+            return {"ok": False, "error": "Which supply item?"}
+        co = "construction" if (company or "").lower() in ("construction", "buildstack", "build", "") else (
+            "broom" if (company or "").lower() in ("broom", "hosts", "cleaning") else "construction")
+        with db.cursor() as cur:
+            cur.execute("SELECT * FROM supplies_inventory WHERE company = %s AND item_name ILIKE %s;",
+                        (co, str(item_name).strip()))
+            row = cur.fetchone()
+            if not row:
+                cur.execute(
+                    "INSERT INTO supplies_inventory (company, item_name, category, qty_on_hand, unit, reorder_level) "
+                    "VALUES (%s, %s, %s, %s, %s, %s) RETURNING *;",
+                    (co, str(item_name).strip(), category or "general", 0, "each", 0))
+                row = cur.fetchone()
+            cur_qty = float(row.get("qty_on_hand") or 0)
+            reorder = float(row.get("reorder_level") or 0)
+            if set_qty is not None:
+                new_qty = float(set_qty)
+            else:
+                new_qty = cur_qty + float(qty_delta or 0)
+            cur.execute("UPDATE supplies_inventory SET qty_on_hand = %s, updated_at = CURRENT_TIMESTAMP WHERE id = %s;",
+                        (new_qty, row["id"]))
+            db.commit()
+        return {"ok": True, "id": row["id"], "item": row["item_name"], "qty_on_hand": new_qty,
+                "low": new_qty <= reorder, "company": co}
+
+    def reorder_report(company="construction"):
+        """Every supply at/below its reorder level — the restock shopping list."""
+        co = "construction" if (company or "").lower() in ("construction", "buildstack", "build", "") else (
+            "broom" if (company or "").lower() in ("broom", "hosts", "cleaning") else "construction")
+        with db.cursor() as cur:
+            cur.execute("SELECT * FROM supplies_inventory WHERE company = %s "
+                        "AND qty_on_hand <= reorder_level ORDER BY category, item_name;", (co,))
+            rows = cur.fetchall()
+        items = [{"item_name": r["item_name"], "category": r.get("category"),
+                  "qty_on_hand": float(r.get("qty_on_hand") or 0), "unit": r.get("unit"),
+                  "reorder_level": float(r.get("reorder_level") or 0)} for r in rows]
+        return {"ok": True, "company": co, "items": items}
+
+    def find_people(query="", company="construction"):
+        """Search employees (crew), customers, and leads by name/phone/email."""
+        q = str(query or "").strip()
+        if not q:
+            return {"ok": False, "error": "Give me a name or number to look up."}
+        like = lambda col: f"{col} ILIKE %s"
+        matches = []
+        with db.cursor() as cur:
+            cur.execute(f"SELECT id, name, phone, email, role, 'worker' AS kind FROM crew WHERE {like('name')} OR {like('phone')} OR {like('email')} LIMIT 20;",
+                        (f"%{q}%", f"%{q}%", f"%{q}%"))
+            for r in cur.fetchall():
+                r["company"] = "construction"
+                matches.append(r)
+            try:
+                cur.execute(f"SELECT id, name, phone, email, 'customer' AS kind FROM customers WHERE {like('name')} OR {like('phone')} OR {like('email')} LIMIT 20;",
+                            (f"%{q}%", f"%{q}%", f"%{q}%"))
+                for r in cur.fetchall():
+                    r["company"] = "construction"
+                    matches.append(r)
+            except Exception:
+                pass
+            cur.execute(f"SELECT id, name, phone, email, project_type, 'lead' AS kind FROM leads WHERE {like('name')} OR {like('phone')} OR {like('email')} LIMIT 20;",
+                        (f"%{q}%", f"%{q}%", f"%{q}%"))
+            for r in cur.fetchall():
+                r["company"] = r.get("company") or "construction"
+                matches.append(r)
+        if not matches:
+            return {"ok": False, "error": f"No employee, customer, or lead matching '{q}'."}
+        return {"ok": True, "people": matches[:25]}
+
+    def navigation_guide(role="", company="construction"):
+        """How to navigate our websites/apps for employees, customers, and the owner."""
+        role = (role or "").lower().strip()
+        if "work" in role or "employ" in role or "crew" in role or "staff" in role or "team" in role:
+            role = "employee"
+        elif "host" in role or "propert" in role:
+            role = "host"
+        elif "own" in role or "admin" in role or "boss" in role or "shaun" in role:
+            role = "owner"
+        elif "customer" in role or "client" in role or "caller" in role or "prospect" in role or "guest" in role:
+            role = "customer"
+        else:
+            role = "anyone"
+        guide = {
+            "employee": [
+                "Construction site: construction.bizstackperks.com — crew tools at /construction/crew (roles, timesheets, schedule, training) and your app at /construction/app (Training, jobs, clock in/out).",
+                "Text the office any time at +1 (757) 908-7121.",
+            ],
+            "customer": [
+                "Construction site: construction.bizstackperks.com — free-estimate form at /quote and the instant-quote tool that ballparks a range in minutes from an address.",
+                "Call or text the same number any time: +1 (757) 908-7121.",
+            ],
+            "host": [
+                "Broom host portal: bizstackperks.com/host-portal — your properties, cleaning schedules, photo verification, and payment status.",
+                "Call or text the same number any time: +1 (757) 908-7121.",
+            ],
+            "owner": [
+                "Construction dashboard: construction.bizstackperks.com — project pipeline, deposits, crew, accounting, permits, radar at /dashboard, /leads, /payments.",
+                "Master dashboard: bizstackperks.com — accounting, labor, payroll, hosts, customers, leads, documents, both companies.",
+            ],
+            "anyone": [
+                "Construction: construction.bizstackperks.com — instant-quote from an address, free-estimate form at /quote, portfolio, crew app.",
+                "Broom: bizstackperks.com — book cleanings, host portal, pay by link.",
+                "Call or text the same number any time: +1 (757) 908-7121.",
+            ],
+        }
+        if company:
+            if str(company).lower() in ("construction", "buildstack"):
+                return {"ok": True, "role": role, "pages": [g for g in guide.get(role, guide["anyone"]) if "construction" in g.lower() or "owner" in g.lower()] or guide["owner"]}
+            return {"ok": True, "role": role, "pages": [g for g in guide.get(role, guide["anyone"]) if "construction" not in g.lower()] or guide["owner"]}
+        return {"ok": True, "role": role, "pages": guide.get(role, guide["anyone"])}
+
     return {
         "register_lead": register_lead,
         "lookup_leads": lookup_leads,
@@ -1140,6 +1398,7 @@ def build_tool_handlers(db, stripe_svc):
         "get_accounting_summary": get_accounting_summary,
         "estimate_materials": estimate_materials,
         "get_material_price": get_material_price,
+        "search_materials": search_materials,
         "sister_business_summary": sister_business_summary,
         "make_outbound_call": make_outbound_call,
         "run_site_health_check": run_site_health_check,
@@ -1147,6 +1406,13 @@ def build_tool_handlers(db, stripe_svc):
         "grade_training_quiz": grade_training_quiz,
         "training_status": training_status,
         "remind_crew_training": remind_crew_training,
+        "lookup_property": lookup_property,
+        "quote_project": quote_project,
+        "get_inventory": get_inventory,
+        "update_inventory": update_inventory,
+        "reorder_report": reorder_report,
+        "find_people": find_people,
+        "navigation_guide": navigation_guide,
     }
 
 
@@ -1451,6 +1717,84 @@ async def leads_page(request: Request, status_filter: str = "", q: str = "", db=
         "draft_count": draft_count,
         "default_deposit": default_deposit_cents() / 100,
     })
+
+
+@app.get("/inventory", response_class=HTMLResponse)
+async def inventory_page(request: Request, company: str = "construction", db=Depends(get_db)):
+    is_authed, user_email = require_auth(request)
+    if not is_authed:
+        return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
+    co = "construction" if company and company.lower() == "construction" else (
+        "broom" if company and company.lower() == "broom" else "construction")
+    with db.cursor() as cur:
+        cur.execute("SELECT * FROM supplies_inventory WHERE company = %s ORDER BY category, item_name;", (co,))
+        rows = cur.fetchall()
+    items = []
+    for r in rows:
+        qty = float(r.get("qty_on_hand") or 0)
+        reorder = float(r.get("reorder_level") or 0)
+        items.append({
+            "id": r["id"], "item_name": r["item_name"], "category": r.get("category"),
+            "qty_on_hand": qty, "unit": r.get("unit"), "reorder_level": reorder,
+            "low": qty <= reorder,
+        })
+    return templates.TemplateResponse(request=request, name="inventory.html", context={
+        "active_company": co, "items": items, "user": {"email": user_email},
+    })
+
+
+@app.post("/inventory/update")
+async def inventory_update(
+    request: Request,
+    item_id: int = Form(0),
+    item_name: str = Form(""),
+    company: str = Form("construction"),
+    delta: str = Form(""),
+    quantity: str = Form(""),
+    reorder_level: str = Form(""),
+    category: str = Form(""),
+    db=Depends(get_db),
+):
+    is_authed, _ = require_auth(request)
+    if not is_authed:
+        return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
+    co = "construction" if company and company.lower() == "construction" else (
+        "broom" if company and company.lower() == "broom" else "construction")
+    try:
+        change = float(delta or quantity or "0")
+    except ValueError:
+        change = 0.0
+    try:
+        reorder_f = float(reorder_level) if reorder_level else None
+    except ValueError:
+        reorder_f = None
+    with db.cursor() as cur:
+        if item_id:
+            cur.execute("SELECT * FROM supplies_inventory WHERE id = %s;", (item_id,))
+            row = cur.fetchone()
+        elif item_name.strip():
+            cur.execute("SELECT * FROM supplies_inventory WHERE company = %s AND item_name ILIKE %s;", (co, item_name.strip()))
+            row = cur.fetchone()
+            if not row:
+                cur.execute(
+                    "INSERT INTO supplies_inventory (company, item_name, category, reorder_level) VALUES (%s, %s, %s, %s) RETURNING *;",
+                    (co, item_name.strip(), category or "general", reorder_f or 0),
+                )
+                row = cur.fetchone()
+        else:
+            row = None
+        if not row:
+            return RedirectResponse(url=f"/inventory?company={co}", status_code=303)
+        new_qty = float(row.get("qty_on_hand") or 0) + change
+        if reorder_f is not None:
+            cur.execute(
+                "UPDATE supplies_inventory SET qty_on_hand = %s, reorder_level = %s, category = COALESCE(NULLIF(%s,''), category), updated_at = NOW() WHERE id = %s;",
+                (new_qty, reorder_f, category or "", row["id"]),
+            )
+        else:
+            cur.execute("UPDATE supplies_inventory SET qty_on_hand = %s, updated_at = NOW() WHERE id = %s;", (new_qty, row["id"]))
+        db.commit()
+    return RedirectResponse(url=f"/inventory?company={co}", status_code=303)
 
 
 @app.post("/api/leads/{lead_id}/status")
@@ -1968,19 +2312,21 @@ ABOUT THE COMPANY
 - Website: https://{company()['domain']}. Phone, call or text 24/7: {company()['phone']}. Email: {company()['email']}.
 - We are the sister company to Broom Service, so we also turn short-term rentals (Airbnb/Vrbo) into stay-ready, revenue-producing properties.
 
-HOW WE WORK
-- Every project starts with a free on-site estimate. We do not quote final prices over the phone.
+HOW TO QUOTE CONSTRUCTION WORK (real numbers, right on the call):
+1. ALWAYS get the property street address first and run lookup_property to pull the real square footage, beds, baths, and year built. Ground the quote in the actual home, never a guess.
+2. Ask what they want done in plain words (kitchen, bath, whole-home, roof, etc.) and WHAT MATERIAL they have in mind. Ask directly: for a roof ask "3-tab, architectural, or architectural 30- or 40-year?" and "any metal?"; for counters ask "laminate, quartz, granite, or marble?"; for framing/deck ask "standard, premium, or engineered lumber?"; for siding, flooring, tile, windows, cabinets ask the style/brand they're considering. The caller may not know — offer the standard/entry choice as the default and note what upgrading does to the price.
+3. Call quote_project with project_type + address (+ materials text combining their answers) to get a ballpark range computed from the real property and the grades they chose. Speak the range plainly, e.g. "for an architectural 30-year shingle roof on a ~1,800 sq ft home, ballpark is about $19,000 to $33,000 — final price comes from the free on-site walkthrough."
+4. If lookup_property finds the address but comes back with NO square footage (the property records may only give address/geo data), ask the caller for the approximate square footage — or the general home size ("small, medium, large") if they don't know — and pass that into quote_project via the sqft field. Only when the caller truly can't give any size at all should you rely on the assumed-size estimate, and still tell them it's based on an assumed home size.
+5. quote_project saves the lead stamped with the range if you provide the caller's name and phone. Confirm their name and best number, pass them through, and offer the free on-site walkthrough for the exact written price.
+6. If the caller wants to move forward on the spot, create the deposit payment link with create_deposit_link (after registering the lead) and text it to them mid-call with send_sms_message so they can lock in the project and the slot today.
+- The range from quote_project is a ballpark to qualify, never a firm bid — the written fixed price always comes from the free on-site walkthrough.
 - We give a clear written scope, a fixed price (not open-ended time and materials), and a schedule.
 
-WHAT TO DO ON A CALL
-1. Find out what the caller needs done and where the property is.
-2. Collect their name and best phone number.
-3. Save it as a lead with the register_lead tool, including project type, address, and any budget or timeline they mention.
-4. Tell them an estimator will call back to schedule a free walkthrough. Never promise a specific start date or final price.
-
 GENERAL
+- Use find_people when you want to recognize who's calling (an employee, a returning customer) or pull up someone's record.
+- Use navigation_guide to walk an employee, customer, or the owner through our websites/apps (quotes, crew app, dashboards).
 - Point callers to https://{company()['domain']} or the free-estimate form.
-- Never expose internal data, credentials, or secrets. Never invent prices or schedules.
+- Never expose internal data, credentials, or secrets. Never invent prices or schedules beyond quote_project's range.
 - If a caller is distressed or reports an emergency (gas leak, flooding, no power), tell them to call 911 or the appropriate emergency service first.
 """
 
@@ -2116,6 +2462,21 @@ def _build_voice_swml(prompt: str, ai_params_extra: dict | None = None) -> dict:
                                     ),
                                 },
                                 {
+                                    "function": "search_materials",
+                                    "description": "Search the Buildstack materials catalog for specific products by brand, style, color, category, or text — returns real brands with model numbers and store SKU/item numbers (Home Depot, Lowe's) plus 2026 retail ballpark prices. Use when a caller asks for a specific brand/style (e.g. 'Hampton Bay shaker cabinets', 'GAF Timberline HDZ shingles charcoal', 'LVP flooring', 'MOEN kitchen faucet') so you can name exact products + item numbers instead of guessing. Never invent a brand or SKU — only return what this tool returns.",
+                                    "parameters": _swaig_parameters(
+                                        {
+                                            "category": {"type": "string", "description": "Optional category: cabinets, countertops, flooring, roofing, fixtures."},
+                                            "brand": {"type": "string", "description": "Optional brand, e.g. Hampton Bay, GAF, MOEN, Delta, TrafficMaster, Shaw."},
+                                            "query": {"type": "string", "description": "Optional free-text search, e.g. 'shaker', 'charcoal', 'kitchen faucet', 'LVP'."},
+                                            "store": {"type": "string", "description": "Optional store: Home Depot or Lowe's."},
+                                            "limit": {"type": "integer", "description": "Max results to return (default 8)."},
+                                        },
+                                        [],
+                                        "Search the catalog when the caller names a brand, style, or asks what a material costs.",
+                                    ),
+                                },
+                                {
                                     "function": "create_deposit_link",
                                     "description": "Create a Stripe deposit-checkout link for a saved lead so they can reserve the project. Use AFTER register_lead returns the lead id, then text the link with send_sms_message.",
                                     "parameters": _swaig_parameters(
@@ -2194,6 +2555,85 @@ def _build_voice_swml(prompt: str, ai_params_extra: dict | None = None) -> dict:
                                             "notes": {"type": "string", "description": "Optional reminder of why the call is being placed."},
                                         },
                                         ["to"],
+                                    ),
+                                },
+                                {
+                                    "function": "lookup_property",
+                                    "description": "Look up a US property by street address and return square footage, beds, baths, year built, and stories. Use for any construction quote to size the job instead of guessing. NOTE: the property record may return only address/geo data with NO sqft/beds/baths — if sqft comes back empty, ask the caller for approximate square footage before quoting.",
+                                    "parameters": _swaig_parameters(
+                                        {"address": {"type": "string", "description": "Full property street address, e.g. 456 Oak Ave, Virginia Beach VA."}},
+                                        ["address"],
+                                    ),
+                                },
+                                {
+                                    "function": "quote_project",
+                                    "description": "Give a REAL ballpark quote for any construction trade (kitchen, bath, whole-home, roof, drywall, deck/fence, plus all trades). Looks up the property's square footage from the address, applies material grades the caller names (shingles 3-tab/architectural/20/30/40yr, countertop laminate/quartz/granite/marble, lumber standard/premium/engineered), saves the lead stamped with the range, and returns a spoken quote. If no sqft is available (address lookup had no size and caller gave none), it falls back to an assumed ~1,750 sq ft home and marks needs_sqft — say you can tighten the range if they give the square footage.",
+                                    "parameters": _swaig_parameters(
+                                        {
+                                            "project_type": {"type": "string", "description": "Type of work: kitchen, bath, whole-home, roof, drywall, deck/fence, basement, electrical, plumbing, etc."},
+                                            "address": {"type": "string", "description": "Optional property street address. Use it so we can look up sqft."},
+                                            "sqft": {"type": "number", "description": "Approximate square footage if known. Ask the caller for it when the address lookup doesn't return a size."},
+                                            "materials": {"type": "string", "description": "Material choices the caller names, free text, e.g. 'architectural 30-year shingles, marble countertops, premium lumber'."},
+                                            "name": {"type": "string", "description": "Optional caller name to attach."},
+                                            "phone": {"type": "string", "description": "Optional caller phone in E.164."},
+                                            "notes": {"type": "string", "description": "Optional project details."},
+                                            "lead_id": {"type": "integer", "description": "Optional lead id to stamp the quoted range onto."},
+                                        },
+                                        ["project_type"],
+                                        "Get the property address and pull real sqft; if no size comes back, ask the caller for approximate square footage before quoting; otherwise quote on the assumed size and note it.",
+                                    ),
+                                },
+                                {
+                                    "function": "get_inventory",
+                                    "description": "List construction supply inventory on hand, optionally by category or only items at/below reorder level. Use for 'what supplies do we have' / 'what do we need' questions.",
+                                    "parameters": _swaig_parameters(
+                                        {
+                                            "company": {"type": "string", "description": "construction or broom."},
+                                            "category": {"type": "string", "description": "Optional category filter, e.g. roofing, lumber."},
+                                            "low_only": {"type": "boolean", "description": "Only show items at or below reorder level."},
+                                        },
+                                        [],
+                                    ),
+                                },
+                                {
+                                    "function": "update_inventory",
+                                    "description": "Adjust construction supply quantity on hand. Pass qty_delta to add/remove, or set_qty to set an absolute value. Use when supplies are used, restocked, or purchased.",
+                                    "parameters": _swaig_parameters(
+                                        {
+                                            "item_name": {"type": "string", "description": "Exact inventory item name."},
+                                            "qty_delta": {"type": "number", "description": "Signed change: +5 for restock, -2 for used."},
+                                            "company": {"type": "string", "description": "construction or broom."},
+                                            "category": {"type": "string", "description": "Optional category when creating the item."},
+                                            "set_qty": {"type": "number", "description": "Optional absolute quantity to set."},
+                                        },
+                                        ["item_name"],
+                                    ),
+                                },
+                                {
+                                    "function": "reorder_report",
+                                    "description": "List every construction supply at or below its reorder level — the restock shopping list.",
+                                    "parameters": _swaig_parameters(
+                                        {"company": {"type": "string", "description": "construction or broom."}},
+                                        [],
+                                    ),
+                                },
+                                {
+                                    "function": "find_people",
+                                    "description": "Search employees (crew), customers, and leads by name, phone, or email. Use to recognize who's on the phone or to pull up a person's record.",
+                                    "parameters": _swaig_parameters(
+                                        {"query": {"type": "string", "description": "Name, phone, or email to search."}},
+                                        ["query"],
+                                    ),
+                                },
+                                {
+                                    "function": "navigation_guide",
+                                    "description": "Explain how to navigate our websites/apps for employees (crew), customers, or the owner (crew app, quotes, dashboards).",
+                                    "parameters": _swaig_parameters(
+                                        {
+                                            "role": {"type": "string", "description": "employee, customer, or owner."},
+                                            "company": {"type": "string", "description": "Optional: construction or broom to narrow."},
+                                        },
+                                        [],
                                     ),
                                 },
                             ],
@@ -2297,13 +2737,19 @@ def _voice_tool_dispatch(db, name: str, args: dict) -> str:
 
 
 def _vapi_messages_to_openai(payload: dict) -> list:
-    """Convert Vapi customLLM messages into OpenAI-format messages with our voice prompt."""
+    """Convert Vapi customLLM messages into OpenAI-format messages with our voice prompt.
+
+    Vapi always injects its own generic system message ("You are an assistant."),
+    which would otherwise overwrite our voice brain — so inbound system messages
+    are dropped and our `_voice_prompt()` stays authoritative.
+    """
     conversation = [{"role": "system", "content": _voice_prompt()}]
-    seen_system = False
     for m in payload.get("messages") or []:
         if not isinstance(m, dict):
             continue
         role = m.get("role")
+        if role == "system":
+            continue
         content = m.get("content")
         if isinstance(content, list):
             parts = []
@@ -2315,12 +2761,6 @@ def _vapi_messages_to_openai(payload: dict) -> list:
             content = " ".join(p for p in parts if p)
         elif content is None:
             continue
-        if role == "system":
-            if seen_system:
-                continue
-            seen_system = True
-            conversation[0] = {"role": "system", "content": str(content)}
-            continue
         if role not in ("user", "assistant", "tool"):
             continue
         item = {"role": role, "content": str(content)}
@@ -2330,7 +2770,65 @@ def _vapi_messages_to_openai(payload: dict) -> list:
     return conversation
 
 
+def _vapi_assistant_text(client, model, messages, tools, db) -> str:
+    """Run the voice conversation through OpenAI, executing allowed tools, and
+    return the final assistant text. Mirrors the SWML tool loop."""
+    for _ in range(6):
+        resp = client.chat.completions.create(model=model, messages=messages, tools=tools, temperature=0.7)
+        msg = resp.choices[0].message
+        tool_calls = getattr(msg, "tool_calls", None)
+        if not tool_calls:
+            return (msg.content or "").strip() or "One moment — let me check that for you."
+        calls = []
+        for tc in tool_calls:
+            calls.append({"id": tc.id, "type": "function",
+                          "function": {"name": tc.function.name, "arguments": tc.function.arguments}})
+        messages.append({"role": "assistant", "content": msg.content or "", "tool_calls": calls})
+        for tc in tool_calls:
+            try:
+                args = json.loads(tc.function.arguments or "{}")
+            except Exception:
+                args = {}
+            if not isinstance(args, dict):
+                args = {}
+            try:
+                result = _voice_tool_dispatch(db, tc.function.name, args)
+            except Exception as e:
+                print(f"⚠️ VAPI-TOOL {tc.function.name} crash: {e}", flush=True)
+                result = "That hit a snag — the team will follow up by text."
+            messages.append({"role": "tool", "tool_call_id": tc.id, "content": str(result)})
+    return "Let me pass this to the team to get you squared away — they'll follow up by text."
+
+
+def _vapi_sse_response(text: str, model: str, completion_id: str) -> StreamingResponse:
+    """Stream assistant text back to Vapi as OpenAI-format SSE chunks."""
+    def gen():
+        created = int(time.time())
+        for word in (text + " ").split(" "):
+            chunk = {
+                "id": completion_id,
+                "object": "chat.completion.chunk",
+                "created": created,
+                "model": model,
+                "choices": [{"index": 0, "delta": {"content": word + " "},
+                             "logprobs": None, "finish_reason": None}],
+            }
+            yield f"data: {json.dumps(chunk)}\n\n"
+        done = {
+            "id": completion_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": model,
+            "choices": [{"index": 0, "delta": {}, "logprobs": None, "finish_reason": "stop"}],
+        }
+        yield f"data: {json.dumps(done)}\n\n"
+        yield "data: [DONE]\n\n"
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "Connection": "keep-alive"})
+
+
 @app.api_route("/vapi/llm", methods=["POST"])
+@app.api_route("/vapi/llm/chat/completions", methods=["POST"])
 async def vapi_llm(request: Request, db=Depends(get_db)):
     """OpenAI-compatible chat completion served to Vapi's customLLM provider.
 
@@ -2350,33 +2848,21 @@ async def vapi_llm(request: Request, db=Depends(get_db)):
     messages = _vapi_messages_to_openai(payload)
     tools = _voice_openai_tools() or None
 
-    for _ in range(6):
-        resp = client.chat.completions.create(model=model, messages=messages, tools=tools, temperature=0.7)
-        msg = resp.choices[0].message
-        tool_calls = getattr(msg, "tool_calls", None)
-        if not tool_calls:
-            text = (msg.content or "").strip()
-            return {"choices": [{"message": {"role": "assistant", "content": text or "One moment — let me check that for you."}}]}
-        calls = []
-        for tc in tool_calls:
-            calls.append({"id": tc.id, "type": "function",
-                          "function": {"name": tc.function.name, "arguments": tc.function.arguments}})
-        messages.append({"role": "assistant", "content": msg.content or "", "tool_calls": calls})
-        for tc in tool_calls:
-            try:
-                args = json.loads(tc.function.arguments or "{}")
-            except Exception:
-                args = {}
-            if not isinstance(args, dict):
-                args = {}
-            try:
-                result = _voice_tool_dispatch(db, tc.function.name, args)
-            except Exception as e:
-                print(f"⚠️ VAPI-TOOL {tc.function.name} crash: {e}", flush=True)
-                result = "That hit a snag — the team will follow up by text."
-            messages.append({"role": "tool", "tool_call_id": tc.id, "content": str(result)})
-
-    return {"choices": [{"message": {"role": "assistant", "content": "Let me pass this to the team to get you squared away — they'll follow up by text."}}]}
+    text = _vapi_assistant_text(client, model, messages, tools, db)
+    completion_id = "chatcmpl-" + str(uuid.uuid4()).replace("-", "")
+    if payload.get("stream"):
+        return _vapi_sse_response(text, model, completion_id)
+    created = int(time.time())
+    return {
+        "id": completion_id,
+        "object": "chat.completion",
+        "created": created,
+        "model": model,
+        "choices": [{"index": 0,
+                     "message": {"role": "assistant", "content": text},
+                     "logprobs": None,
+                     "finish_reason": "stop"}],
+    }
 
 
 VOICE_ALLOWED_TOOLS = {
@@ -2386,6 +2872,7 @@ VOICE_ALLOWED_TOOLS = {
     "send_email_message",
     "estimate_materials",
     "get_material_price",
+    "search_materials",
     "create_deposit_link",
     "list_leads",
     "update_lead_status",
@@ -2396,6 +2883,13 @@ VOICE_ALLOWED_TOOLS = {
     "get_business_summary",
     "sister_business_summary",
     "make_outbound_call",
+    "lookup_property",
+    "quote_project",
+    "get_inventory",
+    "update_inventory",
+    "reorder_report",
+    "find_people",
+    "navigation_guide",
 }
 
 
@@ -2428,6 +2922,30 @@ def _swaig_tool_response_text(name: str, result) -> str:
         if result.get("ok"):
             return f"{result.get('sku')} is about ${result.get('price_dollars'):,.2f}."
         return str(result.get("error") or "I couldn't find that material.")
+    if name == "search_materials":
+        items = result.get("items") or []
+        if not items:
+            return "I don't have that exact product in the catalog yet, but the builder gives exact brands and item numbers on the free in-person quote."
+        spoken = []
+        for it in items[:5]:
+            name = it.get("brand") or ""
+            model = it.get("model") or ""
+            color = it.get("color") or ""
+            sku = it.get("sku") or ""
+            how = f" (item {sku})" if sku else f" (model {model})" if model else ""
+            if it.get("unit") == "sqft":
+                if it.get("price_high_dollars"):
+                    spoken.append(f"{name} {it.get('name', '')} {color} at roughly ${it.get('price_dollars'):.0f} to ${it.get('price_high_dollars'):.0f} per square foot{how}")
+                else:
+                    spoken.append(f"{name} {it.get('name', '')} {color} at about ${it.get('price_dollars'):.2f} per square foot{how}")
+            else:
+                if it.get("price_high_dollars"):
+                    spoken.append(f"{name} {it.get('name', '')} {color} roughly ${it.get('price_dollars'):,.0f} to ${it.get('price_high_dollars'):,.0f} each{how}")
+                else:
+                    spoken.append(f"{name} {it.get('name', '')} {color} about ${it.get('price_dollars'):,.2f} each{how}")
+        return "; next, ".join(spoken[:3]) + (
+            f". Available at {items[0].get('store')}." if items and items[0].get("store") else ""
+        ) + (" Tell me the style or brand you want and I'll check more." if len(items) > 3 else "")
     if name == "create_deposit_link":
         if result.get("ok"):
             return f"Deposit link ready: {result.get('url')}."
@@ -2478,6 +2996,61 @@ def _swaig_tool_response_text(name: str, result) -> str:
         if result.get("ok"):
             return f"I'm calling {result.get('to')} now."
         return str(result.get("error") or "I couldn't place that call right now.")
+    if name == "lookup_property":
+        if not result.get("ok"):
+            if result.get("configured") is False:
+                return "I don't have property records hooked up yet — could you tell me the approximate square footage instead?"
+            return str(result.get("error") or "I couldn't pull that property right now.")
+        parts = [f"{result.get('address') or 'That property'}"]
+        if result.get("sqft"):
+            parts.append(f"about {result['sqft']:,.0f} square feet")
+        if result.get("beds"):
+            parts.append(f"{result['beds']:,.0f} bedrooms")
+        if result.get("baths"):
+            parts.append(f"{result['baths']:,.0f} baths")
+        if result.get("year_built"):
+            parts.append(f"built {result['year_built']:,.0f}")
+        return ". ".join(parts) + "."
+    if name == "quote_project":
+        if not result.get("ok"):
+            return str(result.get("error") or "I couldn't pull that quote right now.")
+        words = [f"Ballpark for {result.get('label') or result.get('project_type')}"]
+        words.append(f"({result.get('quantifier') or 'project'})")
+        words.append(f"is ${result.get('low_est', 0):,.0f} to ${result.get('high_est', 0):,.0f}")
+        if result.get("material_notes"):
+            words.append("based on " + ", ".join(result["material_notes"]))
+        if result.get("assumed_sqft"):
+            words.append("— I assumed a typical ~1,750 square foot home since I didn't have the property size")
+        if result.get("needs_sqft"):
+            words.append("If you can give me the approximate square footage I'll tighten that range right away.")
+        words.append("Final price comes from a free on-site walkthrough.")
+        return " ".join(words)
+    if name == "get_inventory":
+        items = result.get("items") or []
+        if not items:
+            return f"No {result.get('company', '')} inventory on record."
+        lines = [f"{i.get('item_name')}: {i.get('qty_on_hand'):g} {i.get('unit') or ''} on hand" + (" (reorder!)" if i.get("low") else "") for i in items[:10]]
+        return f"{result.get('company')} supplies — " + "; ".join(lines)
+    if name == "update_inventory":
+        if result.get("ok"):
+            return f"{result.get('item')} is now {result.get('qty_on_hand'):g}" + (" — at reorder level, time to restock" if result.get("low") else "") + "."
+        return str(result.get("error") or "Couldn't update inventory.")
+    if name == "reorder_report":
+        items = result.get("items") or []
+        if not items:
+            return "Nothing's at the reorder line right now."
+        lines = [f"{i.get('item_name')}: {i.get('qty_on_hand'):g} {i.get('unit') or ''} (reorder at {i.get('reorder_level'):g})" for i in items[:10]]
+        return "Restock list: " + "; ".join(lines)
+    if name == "find_people":
+        if not result.get("ok"):
+            return str(result.get("error") or "No one found.")
+        lines = [f"{p.get('name')} — {p.get('kind')} ({p.get('company')})" + (f" — {p.get('phone')}" if p.get("phone") else "") for p in result["people"][:6]]
+        return "Found: " + "; ".join(lines)
+    if name == "navigation_guide":
+        pages = result.get("pages") or []
+        if not pages:
+            return "I can walk you through any of our sites — what would you like?"
+        return "Here's how to get around: " + " ".join(pages[:4])
     return json.dumps(result, default=str, ensure_ascii=False)
 
 
@@ -2772,7 +3345,7 @@ async def get_started_submit(
     )
     if os.getenv("OWNER_SMS_ENABLED", "0").lower() in ("1", "true", "yes"):
         try:
-            signalwire.send_sms(company()["phone_e164"], summary[:1500])
+            signalwire.send_sms(os.getenv("SIGNALWIRE_PHONE", "+17578469275"), summary[:1500])
             with db.cursor() as cur:
                 cur.execute(
                     "INSERT INTO comms_logs (direction, channel, sender, recipient, message_body) "

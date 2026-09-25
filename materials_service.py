@@ -25,7 +25,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 from urllib.parse import urlencode
 
-__all__ = ["BusinessMaterialsService", "PRICE_BOOK", "DEFAULT_ESTIMATE_UNITS"]
+__all__ = ["BusinessMaterialsService", "PRICE_BOOK", "DEFAULT_ESTIMATE_UNITS", "BRAND_CATALOG"]
 
 # ---------------------------------------------------------------------------
 # Price book (cents). 2026-era ballparks seeded from recent supplier invoices.
@@ -33,9 +33,11 @@ __all__ = ["BusinessMaterialsService", "PRICE_BOOK", "DEFAULT_ESTIMATE_UNITS"]
 PRICE_BOOK: dict = {
     # --- Lumber / framing (MBF = thousand board feet) -------------------------
     "lumber_per_mbf_est": 98000,      # framing lumber, ~$980/MBF national index est.
+    "lumber_premium_per_mbf_est": 112700, # premium/select lumber, +15% over standard
     "stud_2x4x8": 545,                # ~$5.45 ea (SPF #2)
     "stud_2x4x10": 685,
     "stud_2x6x8": 820,
+    "lumber_engineered_per_mbf_est": 117600, # engineered LVL/I-joist, +20% over standard
     "drywall_sheet_1/2": 1444,        # ~$14.44/sheet 4x8
     "drywall_sheet_5/8_type_x": 1690,
     "drywall_mud_5gal": 1890,
@@ -43,6 +45,10 @@ PRICE_BOOK: dict = {
     "paint_gallon_exterior": 4650,
     # --- Roofing (per 100 sq ft "square") ------------------------------------
     "shingles_per_square": 9358,      # ~$93.58/sq (architectural, asphalt)
+    "shingles_3tab_per_square": 7490, # ~$74.90/sq (3-tab, 25yr)
+    "shingles_arch_per_square": 9358, # ~$93.58/sq (architectural, 30yr)
+    "shingles_prem_per_square": 10980,# ~$109.80/sq (premium architectural, 40yr/50yr)
+    "metal_roof_per_square": 32100,   # ~$321/sq (standing-seam metal)
     "roofing_felt_roll": 1850,
     "ice_water_shield_roll": 2650,
     "roof_nails_30lb": 2850,
@@ -71,6 +77,11 @@ PRICE_BOOK: dict = {
     "lvp_sqft": 359,
     "laminate_sqft": 245,
     "carpet_sqft": 320,
+    # --- Countertops (per sq ft) ---------------------------------------------
+    "countertop_laminate_sqft": 1090,
+    "countertop_quartz_sqft": 4650,
+    "countertop_granite_sqft": 4100,
+    "countertop_marble_sqft": 6900,
     # --- Concrete / masonry -----------------------------------------------------
     "concrete_ready_mix_cuyd": 16400,  # ~$164/cy delivered
     "concrete_bag_80lb": 630,
@@ -88,11 +99,16 @@ PRICE_BOOK: dict = {
 # Units used by the default estimate builder (key -> human unit label).
 DEFAULT_ESTIMATE_UNITS: dict = {
     "lumber_per_mbf_est": "MBF",
+    "lumber_premium_per_mbf_est": "MBF",
+    "lumber_engineered_per_mbf_est": "MBF",
     "stud_2x4x8": "ea", "stud_2x4x10": "ea", "stud_2x6x8": "ea",
     "drywall_sheet_1/2": "sheets", "drywall_sheet_5/8_type_x": "sheets",
     "drywall_mud_5gal": "buckets",
     "paint_gallon_interior": "gal", "paint_gallon_exterior": "gal",
-    "shingles_per_square": "sq", "roofing_felt_roll": "rolls",
+    "shingles_per_square": "sq", "shingles_3tab_per_square": "sq",
+    "shingles_arch_per_square": "sq", "shingles_prem_per_square": "sq",
+    "metal_roof_per_square": "sq",
+    "roofing_felt_roll": "rolls",
     "ice_water_shield_roll": "rolls", "roof_nails_30lb": "boxes",
     "copper_wire_per_lb": "lb", "romex_12_2_250ft": "roll",
     "romex_14_2_250ft": "roll", "breaker_20a_bolt_on": "ea",
@@ -105,12 +121,123 @@ DEFAULT_ESTIMATE_UNITS: dict = {
     "tile_ceramic_sqft": "sqft", "tile_porcelain_sqft": "sqft",
     "grout_25lb": "bags", "thinset_50lb": "bags",
     "lvp_sqft": "sqft", "laminate_sqft": "sqft", "carpet_sqft": "sqft",
+    "countertop_laminate_sqft": "sqft", "countertop_quartz_sqft": "sqft",
+    "countertop_granite_sqft": "sqft", "countertop_marble_sqft": "sqft",
     "concrete_ready_mix_cuyd": "cuyd", "concrete_bag_80lb": "bags",
     "rebar_#4_per_ft": "ft", "masonry_block_8in": "pcs",
     "framing_nails_30lb": "boxes", "deck_screw_galv_10lb": "boxes",
     "drywall_screw_5lb": "boxes", "construction_adhesive_tube": "tubes",
     "painters_tape_roll": "rolls", "caulk_silicone_tube": "tubes",
 }
+
+
+# ---------------------------------------------------------------------------
+# Brand catalog (2026 retail ballparks). Real brands + styles + store item/SKU
+# numbers so the assistant can name specific products when it quotes. Prices are
+# conservative retail ballparks pulled from store listings and marked as such;
+# the owner can fine-tune / add rows in the `materials_catalog` table, and a
+# live-API seam (above) can override by sku when configured.
+#
+# Fields: store, brand, category, name, model, sku, style, color, unit,
+#         price_cents (optional price_high_cents for ranges).
+# ---------------------------------------------------------------------------
+BRAND_CATALOG: list = [
+    # --- Kitchen / bath cabinets (Home Depot, Hampton Bay) ------------------
+    {"store": "Home Depot", "brand": "Hampton Bay", "category": "cabinets",
+     "name": "Designer Series Elgin 36x24x34.5 Assembled Corner Base Cabinet",
+     "model": "BEZ36-ELWH", "sku": "305842616", "style": "Raised Panel",
+     "color": "White", "unit": "each", "price_cents": 34800,
+     "notes": "2026 retail ballpark; in-stock/assembled."},
+    {"store": "Home Depot", "brand": "Hampton Bay", "category": "cabinets",
+     "name": "Shaker 36x24x34.5 Ready-to-Assemble Corner Sink Base Cabinet",
+     "model": "KCSB36-SSW", "sku": "", "style": "Shaker", "color": "Satin White",
+     "unit": "each", "price_cents": 18900,
+     "notes": "2026 retail ballpark; RTA."},
+    {"store": "Home Depot", "brand": "Hampton Bay", "category": "cabinets",
+     "name": "Shaker 36x24x34.5 Ready-to-Assemble Corner Sink Base Cabinet",
+     "model": "KCSB36-SDV", "sku": "", "style": "Shaker", "color": "Dove Gray",
+     "unit": "each", "price_cents": 19900,
+     "notes": "2026 retail ballpark; RTA."},
+    # --- Roofing (GAF, Home Depot + Lowe's) ---------------------------------
+    {"store": "Home Depot", "brand": "GAF", "category": "roofing",
+     "name": "Royal Sovereign 3-Tab Roofing Shingles (33.33 sq ft/bundle)",
+     "model": "0201180", "sku": "", "style": "3-Tab", "color": "Charcoal",
+     "unit": "bundle", "price_cents": 3597,
+     "notes": "2026 retail ballpark; 3 bundles per square."},
+    {"store": "Home Depot", "brand": "GAF", "category": "roofing",
+     "name": "Royal Sovereign 3-Tab Roofing Shingles (33.33 sq ft/bundle)",
+     "model": "0202880", "sku": "", "style": "3-Tab", "color": "Weathered Gray",
+     "unit": "bundle", "price_cents": 3597,
+     "notes": "2026 retail ballpark."},
+    {"store": "Home Depot", "brand": "GAF", "category": "roofing",
+     "name": "Timberline HDZ Architectural Laminated Shingles (33.33 sq ft/bundle)",
+     "model": "0489180", "sku": "", "style": "Architectural", "color": "Charcoal",
+     "unit": "bundle", "price_cents": 4697,
+     "notes": "2026 retail ballpark; America's #1 architectural shingle."},
+    {"store": "Home Depot", "brand": "GAF", "category": "roofing",
+     "name": "Timberline HDZ Architectural Laminated Shingles (33.33 sq ft/bundle)",
+     "model": "0489258", "sku": "", "style": "Architectural", "color": "Driftwood",
+     "unit": "bundle", "price_cents": 4437,
+     "notes": "2026 retail ballpark."},
+    {"store": "Home Depot", "brand": "GAF", "category": "roofing",
+     "name": "Timberline UHDZ Ultra-Manatee Laminated Shingles (pro, special order)",
+     "model": "0582900", "sku": "1015001911", "style": "Architectural",
+     "color": "Weathered Wood", "unit": "bundle", "price_cents": 6788,
+     "notes": "2026 retail ballpark; UL Class-4 impact."},
+    {"store": "Lowe's", "brand": "GAF", "category": "roofing",
+     "name": "Timberline HDZ Architectural Roof Shingles (33.33 sq ft/bundle)",
+     "model": "0489180", "sku": "1439810", "style": "Architectural",
+     "color": "Charcoal", "unit": "bundle", "price_cents": 4948,
+     "notes": "2026 retail ballpark."},
+    # --- Flooring (LVP, Home Depot) ------------------------------------------
+    {"store": "Home Depot", "brand": "TrafficMaster", "category": "flooring",
+     "name": "Bighorn Trail Oak Rigid-Lock Waterproof LVP (7.2x48 in)",
+     "model": "TM2151", "sku": "", "style": "LVP", "color": "Trail Oak",
+     "unit": "sqft", "price_cents": 239,
+     "notes": "2026 retail ballpark; ~28.84 sqft/case."},
+    {"store": "Home Depot", "brand": "A&A Surfaces", "category": "flooring",
+     "name": "Acorn Hill Luxury Vinyl Plank Flooring",
+     "model": "HD-LVR6550-0012", "sku": "", "style": "LVP", "color": "Acorn Hill",
+     "unit": "sqft", "price_cents": 199,
+     "notes": "2026 retail ballpark."},
+    {"store": "Home Depot", "brand": "Shaw", "category": "flooring",
+     "name": "Camden Mindful Luxury Vinyl Plank Flooring",
+     "model": "HD94500295", "sku": "", "style": "LVP", "color": "Camden Mindful",
+     "unit": "sqft", "price_cents": 299,
+     "notes": "2026 retail ballpark."},
+    # --- Fixtures (Home Depot) ------------------------------------------------
+    {"store": "Home Depot", "brand": "MOEN", "category": "fixtures",
+     "name": "Genta 4in Centerset Double-Handle Bathroom Faucet w/ Drain",
+     "model": "84764BL", "sku": "1012308602", "style": "Centerset",
+     "color": "Matte Black", "unit": "each", "price_cents": 12900,
+     "notes": "2026 retail ballpark; WaterSense."},
+    {"store": "Home Depot", "brand": "MOEN", "category": "fixtures",
+     "name": "Chateau Single-Handle Fixed Kitchen Faucet w/ Side Sprayer",
+     "model": "7430", "sku": "", "style": "Single-Handle", "color": "Chrome",
+     "unit": "each", "price_cents": 11132,
+     "notes": "2026 retail ballpark."},
+    {"store": "Home Depot", "brand": "Delta", "category": "fixtures",
+     "name": "Foundations Single-Handle 1-Spray Tub & Shower Faucet (valve incl.)",
+     "model": "B114900C", "sku": "", "style": "Tub/Shower", "color": "Chrome",
+     "unit": "each", "price_cents": 8900,
+     "notes": "2026 retail ballpark."},
+    # --- Countertops (typical retail range; verified on-site) -----------------
+    {"store": "Home Depot / Lowe's", "brand": "Engineered Quartz", "category": "countertops",
+     "name": "Engineered quartz countertop (slab, standard grade)",
+     "model": "", "sku": "", "style": "Quartz", "color": "any",
+     "unit": "sqft", "price_cents": 4000, "price_high_cents": 7500,
+     "notes": "2026 typical retail range by grade; final slab price verified on-site."},
+    {"store": "Home Depot / Lowe's", "brand": "Granite", "category": "countertops",
+     "name": "Granite countertop (slab, standard grade)",
+     "model": "", "sku": "", "style": "Granite", "color": "any",
+     "unit": "sqft", "price_cents": 4100, "price_high_cents": 6000,
+     "notes": "2026 typical retail range by slab; verified on-site."},
+]
+
+
+# Catalog rows loaded from the shared `materials_catalog` table (owner-editable
+# superset of BRAND_CATALOG). Seeded + refreshed from the app startup hook.
+_catalog_rows: list = []
 
 
 def _cents(x) -> int:
@@ -123,6 +250,152 @@ def _cents(x) -> int:
 def include_bool(include: list, key: str) -> bool:
     """True when `include` contains key (casing-insensitive), else False."""
     return any(str(k).strip().lower() == key for k in (include or []))
+
+
+# --- Brand catalog: DB persistence + search --------------------------------
+def _cat_dollar(row: dict) -> float:
+    return round(_cents(row.get("price_cents")) / 100, 2)
+
+
+def catalog() -> list:
+    """Active catalog: owner rows from DB when loaded, else the seeded book."""
+    return _catalog_rows if _catalog_rows else BRAND_CATALOG
+
+
+def seed_materials_catalog(conn) -> int:
+    """Create `materials_catalog` and seed BRAND_CATALOG when the table is empty."""
+    if conn is None:
+        return 0
+    with conn.cursor() as cur:
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS materials_catalog (
+            id SERIAL PRIMARY KEY,
+            store VARCHAR(120) NOT NULL DEFAULT '',
+            brand VARCHAR(120) NOT NULL DEFAULT '',
+            category VARCHAR(80) NOT NULL DEFAULT '',
+            name TEXT NOT NULL DEFAULT '',
+            model VARCHAR(120) NOT NULL DEFAULT '',
+            sku VARCHAR(120) NOT NULL DEFAULT '',
+            style VARCHAR(80) NOT NULL DEFAULT '',
+            color VARCHAR(80) NOT NULL DEFAULT '',
+            unit VARCHAR(40) NOT NULL DEFAULT 'each',
+            price_cents INTEGER NOT NULL DEFAULT 0,
+            price_high_cents INTEGER,
+            notes TEXT NOT NULL DEFAULT '',
+            enabled BOOLEAN NOT NULL DEFAULT TRUE,
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_materials_catalog_cat ON materials_catalog (category, brand, enabled);")
+        cur.execute("SELECT COUNT(*) AS c FROM materials_catalog;")
+        row = cur.fetchone()
+        count = row["c"] if isinstance(row, dict) else (row[0] if row else 0)
+        if count == 0:
+            for r in BRAND_CATALOG:
+                cur.execute(
+                    """INSERT INTO materials_catalog
+                       (store, brand, category, name, model, sku, style, color, unit,
+                        price_cents, price_high_cents, notes)
+                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s);""",
+                    (
+                        r.get("store", ""), r.get("brand", ""), r.get("category", ""),
+                        r.get("name", ""), r.get("model", ""), r.get("sku", ""),
+                        r.get("style", ""), r.get("color", ""), r.get("unit", "each"),
+                        _cents(r.get("price_cents")), r.get("price_high_cents"),
+                        r.get("notes", ""),
+                    ),
+                )
+        conn.commit()
+        cur.execute("SELECT COUNT(*) AS c FROM materials_catalog;")
+        row = cur.fetchone()
+        return row["c"] if isinstance(row, dict) else (row[0] if row else 0)
+
+
+def refresh_catalog(conn) -> int:
+    """Load the owner-editable catalog rows into the active catalog cache."""
+    global _catalog_rows
+    _catalog_rows = [
+        {
+            "store": r["store"], "brand": r["brand"], "category": r["category"],
+            "name": r["name"], "model": r["model"], "sku": r["sku"],
+            "style": r["style"], "color": r["color"], "unit": r["unit"],
+            "price_cents": int(r["price_cents"] or 0),
+            "price_high_cents": int(r["price_high_cents"]) if r.get("price_high_cents") else None,
+            "notes": r["notes"],
+        }
+        for r in _catalog_rows_from_db(conn) if r.get("enabled", True)
+    ]
+    return len(_catalog_rows)
+
+
+def _catalog_rows_from_db(conn) -> list:
+    if conn is None:
+        return []
+    try:
+        seed_materials_catalog(conn)
+    except Exception as e:
+        print(f"⚠️ materials_catalog ensure/seed failed: {e}")
+        return []
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT * FROM materials_catalog WHERE enabled = TRUE "
+            "ORDER BY category, brand, model, id;"
+        )
+        rows = cur.fetchall()
+        if not rows:
+            return []
+        first = rows[0]
+        if isinstance(first, dict):
+            return rows
+        cols = [d.name for d in cur.description]
+        return [dict(zip(cols, r)) for r in rows]
+
+
+def search_materials(
+    category: str = "",
+    brand: str = "",
+    query: str = "",
+    store: str = "",
+    limit: int = 8,
+) -> dict:
+    """Search the brand catalog (owner-editable) by category/brand/store/text.
+
+    Returns matches with dollars fields, ready to speak. Never fabricate a brand
+    or SKU — only what's in the catalog.
+    """
+    q = (query or "").strip().lower()
+    want_cat = [c.lower() for c in _split(category)]
+    want_brand = [b.lower() for b in _split(brand)]
+    want_store = [s.lower() for s in _split(store)]
+    hits = []
+    for row in catalog():
+        hay = " ".join(
+            str(row.get(k) or "") for k in ("brand", "name", "model", "sku", "style", "color", "store", "notes")
+        ).lower()
+        if want_cat and not any(c in hay for c in want_cat):
+            continue
+        if want_brand and not any(b in hay for b in want_brand):
+            continue
+        if want_store and not any(s in hay for s in want_store):
+            continue
+        if q not in hay:
+            continue
+        out = dict(row)
+        out["price_dollars"] = _cat_dollar(row)
+        out["price_high_dollars"] = (
+            round(_cents(row.get("price_high_cents")) / 100, 2)
+            if row.get("price_high_cents") else None
+        )
+        hits.append(out)
+    hits.sort(key=lambda r: _cents(r.get("price_cents")) or 0)
+    if limit and isinstance(limit, int) and limit > 0:
+        hits = hits[:limit]
+    return {"ok": True, "count": len(hits), "items": hits,
+            "source": "materials-catalog"}
+
+
+def _split(text: str) -> list:
+    return [p for p in str(text or "").replace(",", " ").split() if p]
 
 
 class BusinessMaterialsService:
@@ -171,6 +444,16 @@ class BusinessMaterialsService:
                 self._cache_until = time.time() + self._cache_seconds()
         except Exception as e:  # degrade gracefully to price book
             print(f"⚠️ materials API unavailable ({e}); using price book.")
+
+    # --- Brand catalog (owner-editable; seeded from BRAND_CATALOG) ----------
+    def refresh_from_db(self, conn) -> int:
+        """Reload the active catalog from the shared materials_catalog table."""
+        return refresh_catalog(conn)
+
+    def search_materials(self, category="", brand="", query="", store="", limit=8) -> dict:
+        """Search the owner-editable brand catalog (brands, styles, SKUs)."""
+        return search_materials(category=category, brand=brand, query=query,
+                                store=store, limit=limit)
 
     # --- Estimate builder ------------------------------------------------------
     def estimate_materials(
