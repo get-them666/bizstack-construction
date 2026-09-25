@@ -370,7 +370,7 @@ def search_materials(
     hits = []
     for row in catalog():
         hay = " ".join(
-            str(row.get(k) or "") for k in ("brand", "name", "model", "sku", "style", "color", "store", "notes")
+            str(row.get(k) or "") for k in ("category", "brand", "name", "model", "sku", "style", "color", "store", "notes")
         ).lower()
         if want_cat and not any(c in hay for c in want_cat):
             continue
@@ -378,7 +378,7 @@ def search_materials(
             continue
         if want_store and not any(s in hay for s in want_store):
             continue
-        if q not in hay:
+        if q and q not in hay:
             continue
         out = dict(row)
         out["price_dollars"] = _cat_dollar(row)

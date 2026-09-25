@@ -2770,11 +2770,60 @@ def _vapi_messages_to_openai(payload: dict) -> list:
     return conversation
 
 
-def _vapi_assistant_text(client, model, messages, tools, db) -> str:
+_CATALOG_CATEGORY_KEYWORDS = {
+    "cabinets": ("cabinet", "cabinets", "cabinetry"),
+    "countertops": ("counter", "counters", "countertop", "countertops"),
+    "flooring": ("flooring", "floor", "floors", "hardwood", "vinyl plank", "lvp", "carpet"),
+    "fixtures": ("fixture", "fixtures", "faucet", "faucets", "shower", "toilet", "sink"),
+    "roofing": ("roof", "roofing", "shingle", "shingles"),
+}
+
+_CATALOG_PLAN_CONTEXT_TURNS = 4
+
+
+def _vapi_catalog_search_plan(messages):
+    """Work out which material categories this turn is really asking about.
+
+    The model tends to answer brand/price questions straight from memory instead
+    of calling search_materials, which is how it starts quoting item numbers that
+    aren't in the catalog. Scanning the recent conversation for actual category
+    words gives the caller something concrete to force a real catalog lookup on.
+    System turns are skipped on purpose: the voice prompt always lists the whole
+    catalog, so it would match every single question.
+    """
+    if not messages:
+        return None
+    recent = [m for m in messages if isinstance(m, dict) and m.get("role") != "system"]
+    recent = recent[-_CATALOG_PLAN_CONTEXT_TURNS:]
+    found = []
+    for message in recent:
+        content = str(message.get("content") or "").lower()
+        if not content:
+            continue
+        for category, words in _CATALOG_CATEGORY_KEYWORDS.items():
+            if category in found:
+                continue
+            if any(word in content for word in words):
+                found.append(category)
+    return found or None
+
+
+def _vapi_assistant_text(client, model, messages, tools, db,
+                         tool_choice=None, material_categories=None) -> str:
     """Run the voice conversation through OpenAI, executing allowed tools, and
-    return the final assistant text. Mirrors the SWML tool loop."""
-    for _ in range(6):
-        resp = client.chat.completions.create(model=model, messages=messages, tools=tools, temperature=0.7)
+    return the final assistant text. Mirrors the SWML tool loop.
+
+    tool_choice forces one tool call on the opening turn (used to pin
+    search_materials), and material_categories rewrites that first lookup so the
+    model's own brand/store picks can't filter the catalog down to nothing.
+    """
+    material_categories = list(material_categories or [])
+    material_categories = [c for c in material_categories if c]
+    for turn in range(6):
+        call_kwargs = {"model": model, "messages": messages, "tools": tools, "temperature": 0.7}
+        if turn == 0 and tool_choice:
+            call_kwargs["tool_choice"] = tool_choice
+        resp = client.chat.completions.create(**call_kwargs)
         msg = resp.choices[0].message
         tool_calls = getattr(msg, "tool_calls", None)
         if not tool_calls:
@@ -2791,6 +2840,12 @@ def _vapi_assistant_text(client, model, messages, tools, db) -> str:
                 args = {}
             if not isinstance(args, dict):
                 args = {}
+            if turn == 0 and material_categories and tc.function.name == "search_materials":
+                args.pop("brand", None)
+                args.pop("store", None)
+                args["category"] = " ".join(material_categories)
+                args["query"] = ""
+                args["limit"] = 9
             try:
                 result = _voice_tool_dispatch(db, tc.function.name, args)
             except Exception as e:
@@ -2848,7 +2903,13 @@ async def vapi_llm(request: Request, db=Depends(get_db)):
     messages = _vapi_messages_to_openai(payload)
     tools = _voice_openai_tools() or None
 
-    text = _vapi_assistant_text(client, model, messages, tools, db)
+    material_categories = _vapi_catalog_search_plan(messages)
+    forced_choice = None
+    if material_categories:
+        forced_choice = {"type": "function", "function": {"name": "search_materials"}}
+    text = _vapi_assistant_text(client, model, messages, tools, db,
+                                tool_choice=forced_choice,
+                                material_categories=material_categories)
     completion_id = "chatcmpl-" + str(uuid.uuid4()).replace("-", "")
     if payload.get("stream"):
         return _vapi_sse_response(text, model, completion_id)
@@ -2926,23 +2987,47 @@ def _swaig_tool_response_text(name: str, result) -> str:
         items = result.get("items") or []
         if not items:
             return "I don't have that exact product in the catalog yet, but the builder gives exact brands and item numbers on the free in-person quote."
-        spoken = []
-        for it in items[:5]:
-            name = it.get("brand") or ""
+
+        def _describe_material(it):
+            brand = it.get("brand") or ""
             model = it.get("model") or ""
             color = it.get("color") or ""
             sku = it.get("sku") or ""
             how = f" (item {sku})" if sku else f" (model {model})" if model else ""
             if it.get("unit") == "sqft":
                 if it.get("price_high_dollars"):
-                    spoken.append(f"{name} {it.get('name', '')} {color} at roughly ${it.get('price_dollars'):.0f} to ${it.get('price_high_dollars'):.0f} per square foot{how}")
-                else:
-                    spoken.append(f"{name} {it.get('name', '')} {color} at about ${it.get('price_dollars'):.2f} per square foot{how}")
-            else:
-                if it.get("price_high_dollars"):
-                    spoken.append(f"{name} {it.get('name', '')} {color} roughly ${it.get('price_dollars'):,.0f} to ${it.get('price_high_dollars'):,.0f} each{how}")
-                else:
-                    spoken.append(f"{name} {it.get('name', '')} {color} about ${it.get('price_dollars'):,.2f} each{how}")
+                    return f"{brand} {it.get('name', '')} {color} at roughly ${it.get('price_dollars'):.0f} to ${it.get('price_high_dollars'):.0f} per square foot{how}"
+                return f"{brand} {it.get('name', '')} {color} at about ${it.get('price_dollars'):.2f} per square foot{how}"
+            if it.get("price_high_dollars"):
+                return f"{brand} {it.get('name', '')} {color} roughly ${it.get('price_dollars'):,.0f} to ${it.get('price_high_dollars'):,.0f} each{how}"
+            return f"{brand} {it.get('name', '')} {color} about ${it.get('price_dollars'):,.2f} each{how}"
+
+        def _category_of(it):
+            return str(it.get("category") or "").strip().lower()
+
+        categories = []
+        for it in items:
+            cat = _category_of(it)
+            if cat and cat not in categories:
+                categories.append(cat)
+
+        if len(categories) > 1:
+            spoken = []
+            for cat in categories:
+                first = next(it for it in items if _category_of(it) == cat)
+                spoken.append(f"{cat.title()} option, {_describe_material(first)}")
+            retailers = []
+            for it in items:
+                for part in str(it.get("store") or "").split("/"):
+                    part = part.strip()
+                    if part and part not in retailers:
+                        retailers.append(part)
+            out = "; next, ".join(spoken)
+            if retailers:
+                out += f". Available at {' and '.join(retailers)}."
+            return out + " Tell me the style or brand you want and I'll check more."
+
+        spoken = [_describe_material(it) for it in items[:5]]
         return "; next, ".join(spoken[:3]) + (
             f". Available at {items[0].get('store')}." if items and items[0].get("store") else ""
         ) + (" Tell me the style or brand you want and I'll check more." if len(items) > 3 else "")
