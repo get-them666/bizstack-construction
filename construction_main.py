@@ -1479,7 +1479,7 @@ async def robots_txt(request: Request):
 async def sitemap_xml(request: Request):
     base = _site_base(request)
     today = date.today().isoformat()
-    pages = ["/", "/services", "/portfolio", "/about", "/quote", "/instant-quote", "/get-started", "/contact", "/legal"]
+    pages = ["/", "/services", "/portfolio", "/about", "/quote", "/contact", "/legal"]
     urls = "".join(
         f'  <url><loc>{base}{p}</loc><lastmod>{today}</lastmod><changefreq>weekly</changefreq><priority>{"1.0" if p == "/" else "0.8"}</priority></url>\n'
         for p in pages
@@ -2320,7 +2320,6 @@ HOW TO QUOTE CONSTRUCTION WORK (real numbers, right on the call):
 5. quote_project saves the lead stamped with the range if you provide the caller's name and phone. Confirm their name and best number, pass them through, and offer the free on-site walkthrough for the exact written price.
 6. If the caller wants to move forward on the spot, create the deposit payment link with create_deposit_link (after registering the lead) and text it to them mid-call with send_sms_message so they can lock in the project and the slot today.
 - The range from quote_project is a ballpark to qualify, never a firm bid — the written fixed price always comes from the free on-site walkthrough.
-- For product, brand, item-number, SKU, model-number, standard-material, or cheapest-material questions, search the material catalog before answering. For multiple materials, search every named category. Never invent product names or numbers, and never say item numbers are unavailable when catalog results contain them.
 - We give a clear written scope, a fixed price (not open-ended time and materials), and a schedule.
 
 GENERAL
@@ -2737,97 +2736,6 @@ def _voice_tool_dispatch(db, name: str, args: dict) -> str:
     return _swaig_tool_response_text(name, result)
 
 
-_CATALOG_REQUEST_TERMS = (
-    "brand",
-    "item number",
-    "item numbers",
-    "sku",
-    "model number",
-    "product number",
-    "product",
-    "specific material",
-    "standard material",
-    "cheapest",
-    "material option",
-    "catalog",
-    "what do you use",
-    "what do you carry",
-    "what do you sell",
-)
-_CATALOG_CONTEXT_TERMS = (
-    "buildstack",
-    "construction",
-    "remodel",
-    "renovation",
-    "kitchen",
-    "bath",
-    "cabinet",
-    "countertop",
-    "floor",
-    "tile",
-    "roof",
-    "shingle",
-    "drywall",
-    "material",
-    "marble",
-    "granite",
-    "quartz",
-    "lvp",
-    "faucet",
-    "sink",
-    "vanity",
-)
-_CATALOG_EXCLUSION_TERMS = ("cleaning", "cleaner", "turnover", "booking", "co-hosting", "cohosting", "linen")
-_CATALOG_CATEGORY_TERMS = (
-    ("cabinets", ("cabinet", "cupboard")),
-    ("countertops", ("countertop", "counter top", "marble", "granite", "quartz")),
-    ("flooring", ("flooring", "floor", "tile", "lvp", "laminate", "carpet")),
-    ("roofing", ("roofing", "roof", "shingle")),
-    ("fixtures", ("fixture", "faucet", "sink", "vanity", "toilet", "shower")),
-)
-_CATALOG_BRAND_CATEGORIES = {
-    "hampton bay": "cabinets",
-    "gaf": "roofing",
-    "trafficmaster": "flooring",
-    "shaw": "flooring",
-    "moen": "fixtures",
-    "delta": "fixtures",
-}
-
-
-def _vapi_catalog_search_plan(messages: list) -> list | None:
-    user_messages = [
-        str(message.get("content") or "")
-        for message in messages
-        if message.get("role") == "user" and message.get("content")
-    ]
-    if not user_messages:
-        return None
-    latest = user_messages[-1].lower()
-    if not any(term in latest for term in _CATALOG_REQUEST_TERMS):
-        return None
-    if any(term in latest for term in _CATALOG_EXCLUSION_TERMS):
-        return None
-    conversation = " ".join(
-        str(message.get("content") or "")
-        for message in messages
-        if message.get("role") in ("user", "assistant") and message.get("content")
-    ).lower()
-    user_conversation = " ".join(user_messages).lower()
-    has_context = any(term in conversation for term in _CATALOG_CONTEXT_TERMS)
-    has_brand = any(brand in user_conversation for brand in _CATALOG_BRAND_CATEGORIES)
-    if not has_context and not has_brand:
-        return None
-    categories = []
-    for category, terms in _CATALOG_CATEGORY_TERMS:
-        if any(term in conversation for term in terms) and category not in categories:
-            categories.append(category)
-    for brand, category in _CATALOG_BRAND_CATEGORIES.items():
-        if brand in user_conversation and category not in categories:
-            categories.append(category)
-    return categories
-
-
 def _vapi_messages_to_openai(payload: dict) -> list:
     """Convert Vapi customLLM messages into OpenAI-format messages with our voice prompt.
 
@@ -2862,24 +2770,20 @@ def _vapi_messages_to_openai(payload: dict) -> list:
     return conversation
 
 
-def _vapi_assistant_text(client, model, messages, tools, db, tool_choice=None, material_categories=None) -> str:
+def _vapi_assistant_text(client, model, messages, tools, db) -> str:
     """Run the voice conversation through OpenAI, executing allowed tools, and
     return the final assistant text. Mirrors the SWML tool loop."""
-    for iteration in range(6):
-        request = {
-            "model": model,
-            "messages": messages,
-            "tools": tools,
-            "temperature": 0.7,
-        }
-        if iteration == 0 and tool_choice:
-            request["tool_choice"] = tool_choice
-        resp = client.chat.completions.create(**request)
+    for _ in range(6):
+        resp = client.chat.completions.create(model=model, messages=messages, tools=tools, temperature=0.7)
         msg = resp.choices[0].message
         tool_calls = getattr(msg, "tool_calls", None)
         if not tool_calls:
             return (msg.content or "").strip() or "One moment — let me check that for you."
-        parsed_calls = []
+        calls = []
+        for tc in tool_calls:
+            calls.append({"id": tc.id, "type": "function",
+                          "function": {"name": tc.function.name, "arguments": tc.function.arguments}})
+        messages.append({"role": "assistant", "content": msg.content or "", "tool_calls": calls})
         for tc in tool_calls:
             try:
                 args = json.loads(tc.function.arguments or "{}")
@@ -2887,27 +2791,6 @@ def _vapi_assistant_text(client, model, messages, tools, db, tool_choice=None, m
                 args = {}
             if not isinstance(args, dict):
                 args = {}
-            if tc.function.name == "search_materials" and material_categories is not None:
-                args["category"] = " ".join(material_categories)
-                args["query"] = ""
-                args.pop("brand", None)
-                args.pop("store", None)
-                try:
-                    requested_limit = int(args.get("limit") or 0)
-                except (TypeError, ValueError):
-                    requested_limit = 0
-                args["limit"] = max(requested_limit, 8, len(material_categories) * 3)
-            parsed_calls.append((tc, args))
-        calls = [
-            {
-                "id": tc.id,
-                "type": "function",
-                "function": {"name": tc.function.name, "arguments": json.dumps(args)},
-            }
-            for tc, args in parsed_calls
-        ]
-        messages.append({"role": "assistant", "content": msg.content or "", "tool_calls": calls})
-        for tc, args in parsed_calls:
             try:
                 result = _voice_tool_dispatch(db, tc.function.name, args)
             except Exception as e:
@@ -2964,26 +2847,8 @@ async def vapi_llm(request: Request, db=Depends(get_db)):
     model = os.getenv("OPENAI_VOICE_MODEL", "gpt-4o-mini")
     messages = _vapi_messages_to_openai(payload)
     tools = _voice_openai_tools() or None
-    catalog_categories = _vapi_catalog_search_plan(messages)
-    has_search_materials = any(
-        isinstance(tool, dict) and (tool.get("function") or {}).get("name") == "search_materials"
-        for tool in (tools or [])
-    )
-    tool_choice = (
-        {"type": "function", "function": {"name": "search_materials"}}
-        if catalog_categories is not None and has_search_materials
-        else None
-    )
 
-    text = _vapi_assistant_text(
-        client,
-        model,
-        messages,
-        tools,
-        db,
-        tool_choice=tool_choice,
-        material_categories=catalog_categories,
-    )
+    text = _vapi_assistant_text(client, model, messages, tools, db)
     completion_id = "chatcmpl-" + str(uuid.uuid4()).replace("-", "")
     if payload.get("stream"):
         return _vapi_sse_response(text, model, completion_id)
@@ -3028,25 +2893,6 @@ VOICE_ALLOWED_TOOLS = {
 }
 
 
-def _voice_catalog_spoken_items(items: list, limit: int = 5) -> list:
-    categories = []
-    for item in items:
-        category = str(item.get("category") or "")
-        if category and category not in categories:
-            categories.append(category)
-    selected = []
-    if len(categories) > 1:
-        for category in categories:
-            selected.append(next(item for item in items if str(item.get("category") or "") == category))
-        return selected[:limit]
-    for item in items:
-        if item not in selected:
-            selected.append(item)
-        if len(selected) >= limit:
-            break
-    return selected[:limit]
-
-
 def _swaig_tool_response_text(name: str, result) -> str:
     if isinstance(result, dict) and result.get("ok") is False:
         return str(result.get("error") or result.get("message") or "That didn't work — the team will follow up.")
@@ -3080,10 +2926,8 @@ def _swaig_tool_response_text(name: str, result) -> str:
         items = result.get("items") or []
         if not items:
             return "I don't have that exact product in the catalog yet, but the builder gives exact brands and item numbers on the free in-person quote."
-        selected_items = _voice_catalog_spoken_items(items)
         spoken = []
-        for it in selected_items:
-            category = str(it.get("category") or "material").title()
+        for it in items[:5]:
             name = it.get("brand") or ""
             model = it.get("model") or ""
             color = it.get("color") or ""
@@ -3091,19 +2935,17 @@ def _swaig_tool_response_text(name: str, result) -> str:
             how = f" (item {sku})" if sku else f" (model {model})" if model else ""
             if it.get("unit") == "sqft":
                 if it.get("price_high_dollars"):
-                    spoken.append(f"{category} option: {name} {it.get('name', '')} {color} at roughly ${it.get('price_dollars'):.0f} to ${it.get('price_high_dollars'):.0f} per square foot{how}")
+                    spoken.append(f"{name} {it.get('name', '')} {color} at roughly ${it.get('price_dollars'):.0f} to ${it.get('price_high_dollars'):.0f} per square foot{how}")
                 else:
-                    spoken.append(f"{category} option: {name} {it.get('name', '')} {color} at about ${it.get('price_dollars'):.2f} per square foot{how}")
+                    spoken.append(f"{name} {it.get('name', '')} {color} at about ${it.get('price_dollars'):.2f} per square foot{how}")
             else:
                 if it.get("price_high_dollars"):
-                    spoken.append(f"{category} option: {name} {it.get('name', '')} {color} roughly ${it.get('price_dollars'):,.0f} to ${it.get('price_high_dollars'):,.0f} each{how}")
+                    spoken.append(f"{name} {it.get('name', '')} {color} roughly ${it.get('price_dollars'):,.0f} to ${it.get('price_high_dollars'):,.0f} each{how}")
                 else:
-                    spoken.append(f"{category} option: {name} {it.get('name', '')} {color} about ${it.get('price_dollars'):,.2f} each{how}")
-        stores = list(dict.fromkeys(str(it.get("store")) for it in selected_items if it.get("store")))
-        store_text = f" Catalog retailers: {', '.join(stores)}." if stores else ""
-        return "; next, ".join(spoken) + store_text + (
-            " Tell me the style or brand you want and I'll check more." if len(items) > len(selected_items) else ""
-        )
+                    spoken.append(f"{name} {it.get('name', '')} {color} about ${it.get('price_dollars'):,.2f} each{how}")
+        return "; next, ".join(spoken[:3]) + (
+            f". Available at {items[0].get('store')}." if items and items[0].get("store") else ""
+        ) + (" Tell me the style or brand you want and I'll check more." if len(items) > 3 else "")
     if name == "create_deposit_link":
         if result.get("ok"):
             return f"Deposit link ready: {result.get('url')}."
@@ -3317,8 +3159,6 @@ async def instant_quote_page(request: Request):
         "error": request.query_params.get("error"),
         "address": request.query_params.get("address", ""),
         "project_type": request.query_params.get("project_type", ""),
-        "source": request.query_params.get("src", "instant_quote"),
-        "campaign": request.query_params.get("camp", ""),
         "quote": None, "prop": None, "api_configured": property_service.is_configured(),
     })
 
@@ -3340,18 +3180,12 @@ async def instant_quote_submit(
     address: str = Form(""),
     project_type: str = Form(""),
     sqft: str = Form(""),
-    source: str = Form(""),
-    campaign: str = Form(""),
     db=Depends(get_db),
 ):
-    channel = "".join(ch for ch in (source or "").lower() if ch.isalnum() or ch in "_-")[:40] or "instant_quote"
-    campaign = "".join(ch for ch in (campaign or "").lower() if ch.isalnum() or ch in "_-")[:40]
-    src = f"{channel}-{campaign}" if campaign else channel
     ctx = {
         "project_types": INSTANT_PROJECT_TYPES,
         "address": address, "project_type": project_type,
         "name": name, "phone": phone, "email": email, "sqft": sqft,
-        "source": channel, "campaign": campaign,
         "error": None, "quote": None, "prop": None, "api_configured": property_service.is_configured(),
     }
     email = (email or "").strip()
@@ -3380,12 +3214,11 @@ async def instant_quote_submit(
         with db.cursor() as cur:
             cur.execute(
                 "INSERT INTO leads (name, phone, email, project_type, address, description, source, status, "
-                 "property_sqft, estimate_low_cents, estimate_high_cents, estimate_json, company) "
-                 "VALUES (%s, %s, %s, %s, %s, %s, %s, 'new', %s, %s, %s, %s, 'construction') RETURNING id;",
-                 (name, phone, email, project_type, address,
-                  f"Instant ballpark {est['label']} on a {est['sqft']:,} sq ft property.", src,
-                  est["sqft"] or None, est["low_cents"], est["high_cents"], json.dumps(est)),
-
+                "property_sqft, estimate_low_cents, estimate_high_cents, estimate_json, company) "
+                "VALUES (%s, %s, %s, %s, %s, %s, 'instant_quote', 'new', %s, %s, %s, %s, 'construction') RETURNING id;",
+                (name, phone, email, project_type, address,
+                 f"Instant ballpark {est['label']} on a {est['sqft']:,} sq ft property.",
+                 est["sqft"] or None, est["low_cents"], est["high_cents"], json.dumps(est)),
             )
             lead_id = cur.fetchone()["id"]
             db.commit()
@@ -3395,7 +3228,7 @@ async def instant_quote_submit(
     try:
         auto_reply.notify_owner_email(
             "construction", lead_id=lead_id, name=name, phone=phone, email=email,
-            service=project_type, address=address, source=src,
+            service=project_type, address=address, source="instant_quote",
         )
     except Exception as e:
         print(f"⚠️ instant quote owner notify failed: {e}", flush=True)
@@ -3405,7 +3238,7 @@ async def instant_quote_submit(
             db, "construction", name=name, phone=phone, email=email,
             service=project_type, address=address,
             message=f"Instant ballpark {est['label']} on a {est['sqft']:,} sq ft property.",
-            source=src, sqft=est.get("sqft"), lead_id=lead_id,
+            source="instant_quote", sqft=est.get("sqft"), lead_id=lead_id,
         )
     except Exception as e:
         print(f"⚠️ instant quote auto-reply failed: {e}", flush=True)

@@ -4,23 +4,17 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}{{ co.name }} | General Contractor — Hampton Roads, VA{% endblock %}</title>
+    <title>{% block title %}{{ co.name }} | Licensed General Contractor — Hampton Roads, VA{% endblock %}</title>
     {% block meta %}
-    <meta name="description" content="General contractor for whole-home renovations, kitchens, baths, drywall, roofing, plumbing, electrical, carpentry, tile, flooring, decks and fences across {{ co.service_area }}. Request a free on-site estimate.">
+    <meta name="description" content="Licensed, insured general contractor for whole-home renovations, kitchens, baths, drywall, roofing, plumbing, electrical, carpentry, tile, flooring, decks and fences across {{ co.service_area }}. Free on-site estimates.">
     <meta name="robots" content="index, follow">
     {% endblock %}
-    <link rel="canonical" href="https://{{ co.domain }}{{ request.url.path }}">
+    <link rel="canonical" href="{{ request.base_url }}">
     <meta name="theme-color" content="#1d4ed8">
     <meta property="og:type" content="website">
     <meta property="og:site_name" content="{{ co.name }}">
-    <meta property="og:title" content="{{ co.name }} | Renovation & Repair Contractor">
-    <meta property="og:description" content="General contractor for renovations, repairs, kitchens, baths, roofing, flooring, decks, and fences across {{ co.service_area }}.">
-    <meta property="og:url" content="https://{{ co.domain }}{{ request.url.path }}">
-    <meta property="og:image" content="https://{{ co.domain }}/static/og.png">
-    <meta name="twitter:card" content="summary_large_image">
-    <meta name="twitter:title" content="{{ co.name }} | Renovation & Repair Contractor">
-    <meta name="twitter:description" content="Free on-site estimates for renovations and repairs across {{ co.service_area }}.">
-    <meta name="twitter:image" content="https://{{ co.domain }}/static/og.png">
+    <meta property="og:title" content="{{ co.name }} | Licensed Renovation & Repair Contractor">
+    <meta property="og:url" content="{{ request.base_url }}">
     <link rel="icon" href="/static/construction_favicon.svg" type="image/svg+xml">
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
@@ -33,7 +27,8 @@
       "email": "{{ co.email }}",
       "url": "https://{{ co.domain }}",
       "areaServed": "{{ co.service_area }}",
-      "description": "General contractor for whole-home renovations and repairs."
+      "priceRange": "$$",
+      "description": "Licensed, insured general contractor for whole-home renovations and repairs."
     }
     </script>
     <style>
@@ -187,7 +182,7 @@
                     <span class="text-xl">🔨</span>
                     <span class="text-white font-bold text-lg">{{ co.name }}</span>
                 </div>
-                <p class="text-slate-400 max-w-md">General contractor serving {{ co.service_area }}. Whole-home renovations, additions, and repairs — done right the first time.</p>
+                <p class="text-slate-400 max-w-md">Licensed, bonded &amp; insured general contractor serving {{ co.service_area }}. Whole-home renovations, additions, and repairs — done right the first time.</p>
                 {% if co.license %}<p class="mt-2 text-xs text-slate-500">VA Contractor License #{{ co.license }}</p>{% endif %}
                 <p class="mt-4 text-slate-400">
                     <a href="tel:{{ co.phone_e164 }}" class="font-semibold text-white hover:text-indigo-300">{{ co.phone }}</a> ·

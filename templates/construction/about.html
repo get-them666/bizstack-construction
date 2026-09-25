@@ -1,15 +1,14 @@
 {% extends "base.html" %}
 {% set co = company() %}
-{% block title %}About | {{ co.name }} — Local General Contractor{% endblock %}
-{% block meta %}<meta name="description" content="Buildstack Construction Co. is a general contractor serving {{ co.service_area }}. Meet the project team and our standards.">{% endblock %}
+{% block title %}About | {{ co.name }} — Licensed Local General Contractor{% endblock %}
+{% block meta %}<meta name="description" content="Buildstack Construction Co. is a licensed, insured general contractor serving {{ co.service_area }}. Meet the crew and our standards.">{% endblock %}
 
 {% block content %}
 <section class="bg-gradient-to-br from-slate-900 to-indigo-900 text-white">
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16 lg:py-20">
         <p class="text-sm font-bold text-indigo-300 uppercase tracking-widest">About us</p>
         <h1 class="text-4xl sm:text-5xl font-black tracking-tight mt-3 max-w-3xl">A local crew that treats your home like our own.</h1>
-         <p class="mt-5 text-lg text-slate-300 max-w-2xl">{{ co.name }} is a general contractor built on one idea: do the whole job right, communicate clearly, and stand behind the work.</p>
-
+        <p class="mt-5 text-lg text-slate-300 max-w-2xl">{{ co.name }} is a licensed, bonded, and insured general contractor built on one idea: do the whole job right, communicate clearly, and stand behind the work.</p>
     </div>
 </section>
 
@@ -18,15 +17,13 @@
         <div class="lg:col-span-2 space-y-6 text-slate-700 leading-relaxed">
             <h2 class="text-2xl font-black text-slate-900">Built to end the contractor runaround.</h2>
             <p>Most homeowners don't struggle to find someone with a hammer — they struggle to find someone who shows up, stays on schedule, gives a straight price, and finishes. We started {{ co.name }} to be that company. We scope jobs properly, put the price in writing, and keep one crew responsible from demolition to final walkthrough.</p>
-             <p>We handle the trades that make a project actually work — plumbing, electrical, roofing, carpentry, drywall, tile, and flooring — and we manage permitting and inspections so nothing stalls at the counter. When a specialty trade is outside our team, we can bring in vetted partners, and we still own the result.</p>
-
+            <p>We handle the trades that make a project actually work — plumbing, electrical, roofing, carpentry, drywall, tile, and flooring — and we manage permitting and inspections so nothing stalls at the counter. When a specialty trade is outside our team, we bring in vetted, insured partners we've worked with for years, and we still own the result.</p>
             <p>We're also part of a family of companies. Our sister business, <a href="https://bizstackperks.com" class="font-semibold text-indigo-600 hover:text-indigo-700">Broom Service</a>, handles short-term rental cleaning and co-hosting — which means if you're renovating to list, or listing and need turnover help, you've found both sides of the job under one roof.</p>
             <h2 class="text-2xl font-black text-slate-900 pt-4">Our standards</h2>
             <ul class="space-y-3">
                 <li class="flex gap-3">✅ <span><strong>Written scope and fixed price.</strong> No open-ended billing, no surprise change orders without your sign-off.</span></li>
                 <li class="flex gap-3">✅ <span><strong>Clean, safe jobsites.</strong> We protect your floors and furniture and haul debris away.</span></li>
-                 <li class="flex gap-3">✅ <span><strong>Credentials on request.</strong> Ask for current license and insurance documentation before hiring.</span></li>
-
+                <li class="flex gap-3">✅ <span><strong>Licensed and insured.</strong> Coverage documents available on request.</span></li>
                 <li class="flex gap-3">✅ <span><strong>Real communication.</strong> You get updates and photos — not silence.</span></li>
                 <li class="flex gap-3">✅ <span><strong>We finish.</strong> Punch list closed, walkthrough done, work backed by our warranty.</span></li>
             </ul>
@@ -38,9 +35,8 @@
                 <dl class="text-sm space-y-3">
                     <div class="flex justify-between gap-4"><dt class="text-slate-500">Founded</dt><dd class="font-semibold text-slate-800">{{ co.founded }}</dd></div>
                     <div class="flex justify-between gap-4"><dt class="text-slate-500">Category</dt><dd class="font-semibold text-slate-800 text-right">General Contractor</dd></div>
-                     {% if co.license %}<div class="flex justify-between gap-4"><dt class="text-slate-500">License</dt><dd class="font-semibold text-slate-800 text-right">#{{ co.license }}</dd></div>{% endif %}
-                     <div class="flex justify-between gap-4"><dt class="text-slate-500">Credentials</dt><dd class="font-semibold text-slate-800 text-right">Ask for current documentation</dd></div>
-
+                    <div class="flex justify-between gap-4"><dt class="text-slate-500">Licensed</dt><dd class="font-semibold text-slate-800 text-right">{% if co.license %}#{{ co.license }}{% else %}Yes{% endif %}</dd></div>
+                    <div class="flex justify-between gap-4"><dt class="text-slate-500">Insured</dt><dd class="font-semibold text-slate-800">Liability &amp; workers' comp</dd></div>
                     <div class="flex justify-between gap-4"><dt class="text-slate-500">Phone</dt><dd class="font-semibold text-slate-800"><a href="tel:{{ co.phone_e164 }}" class="hover:text-indigo-600">{{ co.phone }}</a></dd></div>
                     <div class="flex justify-between gap-4"><dt class="text-slate-500">Email</dt><dd class="font-semibold text-slate-800 text-right break-all"><a href="mailto:{{ co.email }}" class="hover:text-indigo-600">{{ co.email }}</a></dd></div>
                 </dl>

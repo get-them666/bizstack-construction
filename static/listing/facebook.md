@@ -1,83 +1,58 @@
-# Buildstack Construction Co. — Free Local Advertising Kit
+# Broom Service — Facebook Page Launch Kit
 
-## 1. Business identity
+## 1. Page setup
 | Field | Value |
 |---|---|
-| Business name | Buildstack Construction Co. |
-| Primary category | General contractor |
-| Website | https://construction.bizstackperks.com |
+| Category | Cleaning Service (secondary: Home Improvement) |
 | Phone | (757) 908-7121 |
-| Email | hello@bizstackperks.com |
+| Website | https://bizstackperks.com |
+| Hours | Open 24 hours |
 | Service area | Williamsburg–Hampton Roads, VA · Currituck County & Elizabeth City, NC |
-| Hours | Confirm before publishing |
-| Public street address | Confirm; otherwise use service-area-only listings |
+| Handle | facebook.com/bizstackhosts |
 
-## 2. Short description
-General contractor for renovations, kitchens, baths, roofing, flooring, decks, fences, and all trade work. Request a free on-site estimate across Hampton Roads, Williamsburg, Currituck County, and Elizabeth City.
+## 2. Intro (short bio, <=150 chars)
+5-star short-term rental turnover cleaning & co-hosting. Guest-funded turnovers across Hampton Roads, VA. Text or call 24/7: (757) 908-7121
 
-## 3. Google Business Profile and Bing Places
-- Create one profile for Buildstack Construction Co.; do not create a duplicate Broom Service profile.
-- Use the construction website and construction phone number.
-- Select general contractor and the relevant trade categories supported by each platform.
-- Use a service-area business if the company does not have a customer-facing street address.
-- Add the confirmed service cities and counties, business hours, photos, and a short description.
-- Do not publish a made-up address, license number, review, or rating.
-- Verify the profile with the normal Google or Bing verification process.
+## 3. About -> Long Description
+Broom Service keeps short-term rental operators in the Hampton Roads area at 5-star service levels with professional turnover cleaning, deep cleaning, linen restock, and digital co-hosting — all built on an automated operations layer that dispatches and tracks your crew in real time.
 
-## 4. Yelp
-- Claim or create the business listing under Buildstack Construction Co.
-- Use the construction website, phone, service area, categories, and confirmed hours.
-- Do not duplicate the Broom Service listing or publish a residential address without permission.
+Here's what separates us from a typical cleaning service:
+- **Guest-funded turnovers.** The cleaning fee is integrated into the guest's booking check-out — hosts never pay out-of-pocket and never take on loans or financing for cleaning operations.
+- **Verified every time.** Crew members check in via location-verified app, submit time-stamped room-by-room photos, and pass our staged-hygiene inspection before the stay is released.
+- **True co-hosting, not lock-in.** Pick standalone turnovers, digital co-hosting (10–15% of gross), or full-service management (20–30%). No all-or-nothing contracts — unbundle exactly what you need and keep control of your listing.
+- **24/7 AI phone coverage.** Guests and owners can call or text anytime; our AI assistant answers questions, handles early check-outs, and can send secure check-in links mid-call.
 
-## 5. Facebook
-### Suggested page fields
-- Page name: Buildstack Construction Co.
-- Website: https://construction.bizstackperks.com
-- Phone: (757) 908-7121
-- Email: hello@bizstackperks.com
-- Service area: Williamsburg–Hampton Roads, VA · Currituck County & Elizabeth City, NC
-- Call to action: Get a Free Estimate
+Serving Airbnb, Vrbo, and direct-booking hosts across Williamsburg–Hampton Roads, VA (Virginia Beach, Norfolk, Chesapeake, Newport News), plus Currituck County and Elizabeth City, NC. Call or text us today: (757) 908-7121, or start at bizstackperks.com.
 
-### First three posts
-**Post 1 — Free estimate**
+## 4. Services (with prices)
+- Turnover cleaning — $160
+- Deep cleaning — $275
+- Linen restock — $70
+- Inspection — $95
+- Co-hosting (digital, 10–15%) & Full-Service Management (20–30%)
 
-Planning a renovation, repair, or addition? Buildstack Construction Co. provides general contracting across Hampton Roads, Williamsburg, Currituck County, and Elizabeth City. Request a free on-site estimate: https://construction.bizstackperks.com/quote?src=facebook&camp=free-estimate
+## 5. Uploads
+- Profile -> static/listing/facebook-profile.png
+- Cover -> static/listing/facebook-cover.png
 
-**Post 2 — Fast starting point**
+## 6. First 3 posts
+**Post 1 (intro + booking)**
+New page! Broom Service does 5-star STR turnover cleaning for Airbnb & Vrbo across Hampton Roads. The kicker: your guests fund the turnover fee at booking — zero out-of-pocket for hosts. Book at bizstackperks.com/book or text (757) 908-7121.
 
-Get a quick project range in minutes with our instant quote tool, then schedule a free walkthrough for an accurate written scope and fixed price. Start here: https://construction.bizstackperks.com/instant-quote?src=facebook&camp=instant-quote
+**Post 2 (verified angle)**
+Every clean is photo-verified, time-stamped, and location-checked — no blind cleaning. Hosts see the proof before the next guest walks in. Turnover $160 · Deep $275 · Linen $70 · Inspection $95.
 
-**Post 3 — Services**
+**Post 3 (offer — First Clean Free, code FIRSTCLEAN)**
+First clean on us ($0) for new hosts. One-time offer, guest-funded turnovers after that. DM us or book at bizstackperks.com/book.
 
-Kitchens, baths, whole-home renovations, roofing and siding, drywall and paint, flooring, tile, decks, fences, plumbing, electrical, carpentry, and more. Tell us what your project needs: https://construction.bizstackperks.com/?src=facebook&camp=services
-
-## 6. Nextdoor
-Post in the neighborhoods that match the confirmed service area. Keep the post specific and avoid claiming emergency availability, licensing details, or prices that have not been confirmed.
-
-**Neighborhood post**
-
-Need a dependable local contractor for a renovation, repair, or addition? Buildstack Construction Co. serves homeowners across Williamsburg–Hampton Roads and nearby Currituck County communities. We handle kitchens, baths, roofing, flooring, drywall, decks, fences, and all-trade projects. Request a free on-site estimate: https://construction.bizstackperks.com/quote?src=nextdoor&camp=neighborhood
-
-Ask for the specific project type and neighborhood before sharing a range. Direct booking and detailed pricing happen after the walkthrough.
-
-## 7. Tracking links
-- Facebook: `?src=facebook&camp=<post-name>`
-- Nextdoor: `?src=nextdoor&camp=<neighborhood-or-post-name>`
-- Other organic campaigns: `?src=<channel>&camp=<campaign>`
-
-The construction quote form records the sanitized channel and campaign in the lead source.
-
-## 8. Publishing checklist
-- [ ] Confirm public address or service-area-only status
-- [ ] Confirm hours, categories, and service communities
-- [ ] Confirm license and insurance details before adding them
-- [ ] Confirm the free-estimate offer and service terms before adding them
-- [ ] Confirm the correct phone number on both websites
-- [ ] Create or claim Google Business Profile
-- [ ] Create or claim Bing Places
-- [ ] Create or claim Yelp
-- [ ] Update the existing Facebook Business Page
-- [ ] Identify the correct Nextdoor neighborhoods
-- [ ] Upload current project and crew photos
-- [ ] Publish the three posts with tracking links
-- [ ] Record verification status and listing URLs
+## 7. Checklist
+- [ ] Page created (facebook.com/pages/create)
+- [ ] Name, phone, website, hours, service area entered
+- [ ] Intro pasted
+- [ ] Long description pasted
+- [ ] Services + prices added
+- [ ] Profile picture uploaded
+- [ ] Cover photo uploaded
+- [ ] Messenger on, Book Now button -> bizstackperks.com/book
+- [ ] Post 1 published
+- [ ] Keep personal profile private (friends only); all business on the Page

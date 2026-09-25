@@ -1,22 +1,19 @@
 {% extends "base.html" %}
 {% set co = company() %}
 {% block title %}Financing | {{ co.name }}{% endblock %}
-{% block meta %}<meta name="description" content="Ask about project financing options for your home renovation, addition, or repair with {{ co.name }}. Approval and terms are subject to the provider."><meta name="robots" content="noindex, follow">{% endblock %}
+{% block meta %}<meta name="description" content="Apply for financing for your home renovation, addition, or repair with {{ co.name }}. No obligation — we connect you with options and an estimator."><meta name="robots" content="index, follow">{% endblock %}
 {% block content %}
 <section class="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-16">
     <div class="text-center mb-12">
-         <span class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-50 text-indigo-700 text-xs font-semibold border border-indigo-100">Financing questions welcome</span>
-
-         <h1 class="mt-4 text-4xl sm:text-5xl font-extrabold tracking-tight text-slate-900">Ask About Project Financing</h1>
-         <p class="mt-4 text-lg text-slate-600 max-w-xl mx-auto">Tell us what you need done and we can share the available next steps. Approval and terms are subject to the financing provider.</p>
-
+        <span class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-50 text-indigo-700 text-xs font-semibold border border-indigo-100">Project financing available</span>
+        <h1 class="mt-4 text-4xl sm:text-5xl font-extrabold tracking-tight text-slate-900">Apply for Financing</h1>
+        <p class="mt-4 text-lg text-slate-600 max-w-xl mx-auto">Don't let budget hold up your project. Tell us what you need done, and we'll help you find financing so you can start right away.</p>
     </div>
 
     {% if request.query_params.get("sent") %}
     <div class="rounded-2xl border border-emerald-200 bg-emerald-50 p-6 text-center mb-8">
-         <p class="text-lg font-bold text-emerald-800">Inquiry received!</p>
-         <p class="mt-1 text-emerald-700">A team member will follow up with the next steps. Urgent?</p>
-
+        <p class="text-lg font-bold text-emerald-800">Application received!</p>
+        <p class="mt-1 text-emerald-700">An estimator and financing team will reach out within one business day. Urgent?</p>
         <a href="tel:{{ co.phone_e164 }}" class="mt-2 inline-block text-sm font-semibold text-indigo-600 hover:text-indigo-700">Call or text {{ co.phone }}</a>
     </div>
     {% elif request.query_params.get("error") %}
@@ -73,9 +70,8 @@
             <label for="message" class="block text-sm font-semibold text-slate-700 mb-1.5">Describe your project</label>
             <textarea id="message" name="message" rows="4" placeholder="What are you looking to get done, and how would financing help?" class="w-full px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">{{ request.query_params.get('message','') }}</textarea>
         </div>
-     <button type="submit" class="w-full inline-flex items-center justify-center px-6 py-4 text-base font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition-all shadow-sm shadow-indigo-200">Submit financing inquiry</button>
-     <p class="text-xs text-slate-400 text-center">Submitting an inquiry is not a financing application and does not commit you to a loan.</p>
-
+        <button type="submit" class="w-full inline-flex items-center justify-center px-6 py-4 text-base font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition-all shadow-sm shadow-indigo-200">Submit financing application</button>
+        <p class="text-xs text-slate-400 text-center">No obligation. Applying does not affect your credit, and we'll only reach out to discuss options.</p>
     </form>
 </section>
 {% endblock %}
