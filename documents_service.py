@@ -630,12 +630,19 @@ async def send_email(cfg: dict, to: str, subject: str, body: str, attachment: by
     # never consumes the Resend quota, so route it there first and keep Resend
     # for external prospects.
     internal_recipient = bool(_domain(cfg.get("SMTP_FROM")) and _domain(cfg.get("SMTP_FROM")) == _domain(to))
-    fallback_on_quota = (os_getenv("EMAIL_FALLBACK_SES_ON_QUOTA", "") or "").strip().lower() in (
+    # Resend's daily quota is shared by every consumer in the project, and the
+    # lead auto-reply bot can exhaust it on its own. Hard-stopping all external
+    # sends in that case silently disabled the business-critical lender
+    # sequence for the rest of the day, so quota exhaustion now degrades to the
+    # SES/SMTP ladder instead. Set EMAIL_FALLBACK_SES_ON_QUOTA=0 to opt out and
+    # restore the old hard stop.
+    fallback_on_quota = (os_getenv("EMAIL_FALLBACK_SES_ON_QUOTA", "1") or "").strip().lower() in (
         "1",
         "true",
         "yes",
         "on",
     )
+    degraded_to_fallback = False
 
     # Cloud hosts (Railway) frequently block outbound SMTP egress entirely.
     # Prefer the Resend HTTPS REST API when a key is available, then fall back
@@ -645,27 +652,35 @@ async def send_email(cfg: dict, to: str, subject: str, body: str, attachment: by
             print("[EMAIL] Resend paused for the day (daily quota); skipping Resend attempt", flush=True)
             if not fallback_on_quota:
                 return False
+            degraded_to_fallback = True
         else:
             try:
                 sent_ok = await _send_via_resend_api(cfg, to, subject, body, physical, resend_key, cc)
                 if sent_ok:
                     return True
             except EmailQuotaExhausted as e:
-                # The sandbox SES identity and firewalled SMTP can't reach
-                # external recipients, and retrying only burns quota: stop for
-                # the day unless explicitly told to try SES anyway.
                 print(f"[EMAIL] {e}", flush=True)
                 if not fallback_on_quota:
                     print("[EMAIL] Stopping external sends for the day", flush=True)
                     return False
+                # Quota died mid-flight: deliver this message anyway rather than
+                # dropping it on the floor.
+                degraded_to_fallback = True
             except Exception as e:
                 print(f"[EMAIL] Resend API attempt failed: {e}")
 
     # AWS SES over HTTPS (443): works from cloud hosts whose SMTP egress is
-    # firewalled. When creds are present SES is authoritative, so a failure is
-    # surfaced immediately rather than burning time on unreachable SMTP ports.
+    # firewalled. A failure is no longer terminal -- the SES identity is a
+    # sandbox identity that rejects unverified external recipients, so falling
+    # through to the SMTP ladder is what actually delivers. The previous
+    # unconditional return here stranded those messages as silent failures.
     if ses_configured() and (cfg.get("SMTP_FROM") or ""):
-        return await asyncio.to_thread(_send_via_ses, cfg, to, msg.as_bytes(), cc)
+        try:
+            if await asyncio.to_thread(_send_via_ses, cfg, to, msg.as_bytes(), cc):
+                return True
+            print("[EMAIL] SES returned no MessageId; falling through to SMTP", flush=True)
+        except Exception as e:
+            print(f"[EMAIL] SES attempt failed ({type(e).__name__}); falling through to SMTP: {e}", flush=True)
 
     # Build a retry ladder of (port, mode) candidates. Namecheap and other
     # providers intermittently drop cloud-host egress, so we race STARTTLS
@@ -685,6 +700,20 @@ async def send_email(cfg: dict, to: str, subject: str, body: str, attachment: by
         ladder.remove(tail[0])
         ladder.insert(0, (port, tls if tls in ("ssl", "starttls") else "starttls"))
 
+    # Every send is awaited in a loop, so a degraded send that walks the whole
+    # ladder (5 candidates plus the IPv4 sweep, ~15s each) would serialise the
+    # entire outbound queue behind it for minutes. When we are here only because
+    # Resend is out of quota, try just the configured port and 587 and skip the
+    # slow sweeps: the goal is to salvage business-critical mail, not to spend a
+    # minute per message proving the network is down.
+    if degraded_to_fallback:
+        connect_timeout = int(os_getenv("SMTP_FALLBACK_CONNECT_TIMEOUT", "10") or 10)
+        keep = [c for c in ladder if c[0] in (port, 587)]
+        if keep:
+            ladder = keep[:2]
+        else:
+            ladder = ladder[:1]
+
     async def _try(port: int, mode: str, ip: str | None = None):
         kwargs = dict(hostname=ip or host, port=port, validate_certs=False, timeout=connect_timeout)
         if ip:
@@ -702,13 +731,14 @@ async def send_email(cfg: dict, to: str, subject: str, body: str, attachment: by
     # if the hostname attempts fail, retry each candidate against a literal
     # IPv4 address (SNI kept via server_hostname).
     ipv4_addresses: list[str] = []
-    try:
-        import socket
+    if not degraded_to_fallback:
+        try:
+            import socket
 
-        infos = await asyncio.getaddrinfo(host, port, family=socket.AF_INET, type=socket.SOCK_STREAM)
-        ipv4_addresses = list(dict.fromkeys(i[4][0] for i in infos))
-    except Exception:
-        pass
+            infos = await asyncio.getaddrinfo(host, port, family=socket.AF_INET, type=socket.SOCK_STREAM)
+            ipv4_addresses = list(dict.fromkeys(i[4][0] for i in infos))
+        except Exception:
+            pass
 
     # Try the candidates in priority order and stop at the first success.
     # Racing with FIRST_EXCEPTION was unreliable: a fast refusal (e.g. closed
