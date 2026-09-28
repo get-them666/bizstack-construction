@@ -507,7 +507,9 @@ def _mark_resend_quota_exhausted() -> None:
     print(f"[EMAIL] Resend daily quota exhausted; pausing Resend until {reset.isoformat()}", flush=True)
 
 
-async def _send_via_resend_api(cfg: dict, to: str, subject: str, body: str, physical: str, api_key: str) -> bool:
+async def _send_via_resend_api(
+    cfg: dict, to: str, subject: str, body: str, physical: str, api_key: str, cc: str = ""
+) -> bool:
     import asyncio
     import json as _json
     import urllib.request
@@ -522,8 +524,15 @@ async def _send_via_resend_api(cfg: dict, to: str, subject: str, body: str, phys
     frm = cfg.get("SMTP_FROM") or ""
     name = (cfg.get("SMTP_NAME") or "").strip()
     sender = f"{name} <{frm}>" if name else frm
+    recipients = [to] + ([cc] if cc else [])
     payload = _json.dumps(
-        {"from": sender, "to": [to], "subject": subject, "text": text_body, "html": html_body}
+        {
+            "from": sender,
+            "to": recipients,
+            "subject": subject,
+            "text": text_body,
+            "html": html_body,
+        }
     ).encode()
 
     def _post() -> bool:
@@ -569,7 +578,7 @@ def ses_configured() -> bool:
     )
 
 
-def _send_via_ses(cfg: dict, to: str, raw: bytes) -> bool:
+def _send_via_ses(cfg: dict, to: str, raw: bytes, cc: str = "") -> bool:
     import boto3
     from botocore.config import Config as BotoConfig
 
@@ -585,17 +594,19 @@ def _send_via_ses(cfg: dict, to: str, raw: bytes) -> bool:
     )
     resp = client.send_raw_email(
         Source=formataddr((cfg.get("SMTP_NAME", ""), cfg.get("SMTP_FROM", ""))),
-        Destinations=[to],
+        Destinations=[d for d in (to, cc) if d],
         RawMessage={"Data": raw},
     )
     return bool(resp.get("MessageId"))
 
 
-async def send_email(cfg: dict, to: str, subject: str, body: str, attachment: bytes = None, filename: str = ""):
+async def send_email(cfg: dict, to: str, subject: str, body: str, attachment: bytes = None, filename: str = "", cc: str = ""):
     msg = EmailMessage()
     msg["Subject"] = subject
     msg["From"] = formataddr((cfg.get("SMTP_NAME", ""), cfg.get("SMTP_FROM", "")))
     msg["To"] = to
+    if cc:
+        msg["Cc"] = cc
     physical = (os_getenv("SENDER_PHYSICAL_ADDRESS", "")).strip()
     msg.set_content(body + ("\n\n" + physical if physical else ""))
     if attachment and filename:
@@ -636,7 +647,7 @@ async def send_email(cfg: dict, to: str, subject: str, body: str, attachment: by
                 return False
         else:
             try:
-                sent_ok = await _send_via_resend_api(cfg, to, subject, body, physical, resend_key)
+                sent_ok = await _send_via_resend_api(cfg, to, subject, body, physical, resend_key, cc)
                 if sent_ok:
                     return True
             except EmailQuotaExhausted as e:
@@ -654,7 +665,7 @@ async def send_email(cfg: dict, to: str, subject: str, body: str, attachment: by
     # firewalled. When creds are present SES is authoritative, so a failure is
     # surfaced immediately rather than burning time on unreachable SMTP ports.
     if ses_configured() and (cfg.get("SMTP_FROM") or ""):
-        return await asyncio.to_thread(_send_via_ses, cfg, to, msg.as_bytes())
+        return await asyncio.to_thread(_send_via_ses, cfg, to, msg.as_bytes(), cc)
 
     # Build a retry ladder of (port, mode) candidates. Namecheap and other
     # providers intermittently drop cloud-host egress, so we race STARTTLS
