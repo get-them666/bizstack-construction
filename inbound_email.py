@@ -91,26 +91,51 @@ def _body_text(msg):
     return text.strip()[:8000]
 
 
-def _ensure_schema(cur):
-    cur.execute("ALTER TABLE comms_logs ADD COLUMN IF NOT EXISTS external_id VARCHAR(255);")
-    cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_comms_logs_external_id ON comms_logs(external_id);")
-    cur.execute("ALTER TABLE comms_logs ADD COLUMN IF NOT EXISTS lead_id INTEGER;")
-    cur.execute("ALTER TABLE comms_logs ADD COLUMN IF NOT EXISTS sent_at TIMESTAMP WITH TIME ZONE;")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_comms_recipient ON comms_logs(LOWER(recipient));")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_comms_direction_channel_created "
-                "ON comms_logs(direction, channel, created_at);")
-    # Runs before `leads` exists on a fresh database; a SAVEPOINT (not
-    # connection.rollback()) so the ALTERs above still commit.
-    try:
-        cur.execute("SAVEPOINT ensure_leads_schema;")
-        cur.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS last_reply_at TIMESTAMP WITH TIME ZONE;")
-        cur.execute("UPDATE leads SET email = NULLIF(rtrim(email, '.'), '') WHERE email LIKE '%.';")
-        cur.execute("RELEASE SAVEPOINT ensure_leads_schema;")
-    except Exception:
+def _safe_ddl(cur, statements, label=""):
+    """Run DDL in its own savepoint, retrying once on lock contention.
+
+    CREATE INDEX needs an AccessExclusiveLock, which deadlocks against the
+    scheduler threads already writing to `leads`. Without this the whole startup
+    transaction aborts and the tables after this point are never created. A
+    savepoint keeps the failure local so the rest of startup still commits."""
+    for attempt in range(2):
+        sp = f"safe_ddl_{label or 'x'}"
         try:
-            cur.execute("ROLLBACK TO SAVEPOINT ensure_leads_schema;")
-        except Exception:
-            pass
+            cur.execute(f"SAVEPOINT {sp};")
+            cur.execute("SET LOCAL lock_timeout = '5s';")
+            for stmt in statements:
+                cur.execute(stmt)
+            cur.execute(f"RELEASE SAVEPOINT {sp};")
+            return True
+        except Exception as exc:
+            try:
+                cur.execute(f"ROLLBACK TO SAVEPOINT {sp};")
+            except Exception:
+                pass
+            if attempt == 0 and ("deadlock" in str(exc).lower() or "lock" in str(exc).lower()):
+                time.sleep(1.0)
+                continue
+            print(f"[email-inbound] schema step '{label}' skipped: {exc}", flush=True)
+            return False
+    return False
+
+
+def _ensure_schema(cur):
+    _safe_ddl(cur, [
+        "ALTER TABLE comms_logs ADD COLUMN IF NOT EXISTS external_id VARCHAR(255);",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_comms_logs_external_id ON comms_logs(external_id);",
+        "ALTER TABLE comms_logs ADD COLUMN IF NOT EXISTS lead_id INTEGER;",
+        "ALTER TABLE comms_logs ADD COLUMN IF NOT EXISTS sent_at TIMESTAMP WITH TIME ZONE;",
+        "CREATE INDEX IF NOT EXISTS idx_comms_recipient ON comms_logs(LOWER(recipient));",
+        "CREATE INDEX IF NOT EXISTS idx_comms_direction_channel_created "
+        "ON comms_logs(direction, channel, created_at);",
+    ], "comms")
+    # This runs before `leads` is created on a fresh database; do not abort the
+    # whole startup transaction if it is not there yet.
+    _safe_ddl(cur, [
+        "ALTER TABLE leads ADD COLUMN IF NOT EXISTS last_reply_at TIMESTAMP WITH TIME ZONE;",
+        "UPDATE leads SET email = NULLIF(rtrim(email, '.'), '') WHERE email LIKE '%.';",
+    ], "leads")
 
 
 def _ingest(db, company_key, msgs, mailbox_from):
