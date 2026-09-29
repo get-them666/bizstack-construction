@@ -1,0 +1,39 @@
+# Without this, `COPY . .` in the Dockerfile pulls in the local venv/ (1.3GB,
+# wrong Python version) plus caches and agent state. The image still builds but
+# containers are killed on deploy, and every `railway up` takes minutes.
+.git
+.railwayignore
+.github
+
+# virtualenvs — 1.3GB, and a different Python than the image
+venv/
+.venv/
+myenv/
+
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+.DS_Store
+.env
+.env.*
+!.env.example
+
+# agent harness state — not part of the app
+.opencode/
+.opencode.json
+skills-lock.json
+
+# uploaded/generated
+uploads/
+*.log
+
+# credential files must never enter an image
+calendar-sa.json
+*-sa.json
+token.json
+credentials.json
+service-account*.json
