@@ -1,0 +1,268 @@
+"""Google Maps Platform integration for BizStack.
+Geocoding, Places Autocomplete, Distance Matrix.
+"""
+
+import os
+import json
+import urllib.parse
+import urllib.request
+from typing import Optional, List, Dict, Any
+
+
+MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY", "")
+GEOCODING_BASE = "https://maps.googleapis.com/maps/api/geocode/json"
+PLACES_BASE = "https://maps.googleapis.com/maps/api/place/autocomplete/json"
+PLACES_DETAILS_BASE = "https://maps.googleapis.com/maps/api/place/details/json"
+DISTANCE_BASE = "https://maps.googleapis.com/maps/api/distancematrix/json"
+
+
+# ──────────────────────────────────────────────
+# Geocoding
+# ──────────────────────────────────────────────
+
+def geocode_address(address: str) -> Optional[Dict[str, Any]]:
+    """Convert address to lat/lng."""
+    if not MAPS_API_KEY:
+        return None
+    params = {
+        "address": address,
+        "key": MAPS_API_KEY,
+    }
+    url = GEOCODING_BASE + "?" + urllib.parse.urlencode(params)
+    with urllib.request.urlopen(url) as resp:
+        data = json.loads(resp.read().decode())
+    if data["status"] != "OK" or not data["results"]:
+        return None
+    result = data["results"][0]
+    loc = result["geometry"]["location"]
+    return {
+        "lat": loc["lat"],
+        "lng": loc["lng"],
+        "formatted_address": result["formatted_address"],
+        "place_id": result.get("place_id"),
+        "address_components": result.get("address_components", []),
+    }
+
+
+def reverse_geocode(lat: float, lng: float) -> Optional[str]:
+    """Convert lat/lng to formatted address."""
+    if not MAPS_API_KEY:
+        return None
+    params = {
+        "latlng": f"{lat},{lng}",
+        "key": MAPS_API_KEY,
+    }
+    url = GEOCODING_BASE + "?" + urllib.parse.urlencode(params)
+    with urllib.request.urlopen(url) as resp:
+        data = json.loads(resp.read().decode())
+    if data["status"] != "OK" or not data["results"]:
+        return None
+    return data["results"][0]["formatted_address"]
+
+
+# ──────────────────────────────────────────────
+# Places Autocomplete
+# ──────────────────────────────────────────────
+
+def places_autocomplete(input_text: str, session_token: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Get place predictions for autocomplete."""
+    if not MAPS_API_KEY:
+        return []
+    params = {
+        "input": input_text,
+        "key": MAPS_API_KEY,
+        "types": "address",
+        "components": "country:us",
+    }
+    if session_token:
+        params["sessiontoken"] = session_token
+    url = PLACES_BASE + "?" + urllib.parse.urlencode(params)
+    with urllib.request.urlopen(url) as resp:
+        data = json.loads(resp.read().decode())
+    if data["status"] != "OK":
+        return []
+    return [
+        {
+            "place_id": p["place_id"],
+            "description": p["description"],
+            "structured_formatting": p.get("structured_formatting", {}),
+        }
+        for p in data["predictions"]
+    ]
+
+
+def place_details(place_id: str, fields: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Get detailed place info including lat/lng and contact info.
+    
+    fields: Comma-separated list of fields to return. Default includes contact info.
+    See: https://developers.google.com/maps/documentation/places/web-service/place-details
+    """
+    if not MAPS_API_KEY:
+        return None
+    if fields is None:
+        fields = (
+            "formatted_address,geometry,name,place_id,address_component,"
+            "formatted_phone_number,international_phone_number,website,"
+            "url,rating,user_ratings_total,opening_hours,business_status,"
+            "type,price_level,editorial_summary"
+        )
+    params = {
+        "place_id": place_id,
+        "key": MAPS_API_KEY,
+        "fields": fields,
+    }
+    url = PLACES_DETAILS_BASE + "?" + urllib.parse.urlencode(params)
+    with urllib.request.urlopen(url) as resp:
+        data = json.loads(resp.read().decode())
+    if data["status"] != "OK":
+        return None
+    result = data["result"]
+    loc = result.get("geometry", {}).get("location", {})
+    return {
+        "place_id": result["place_id"],
+        "name": result.get("name"),
+        "formatted_address": result.get("formatted_address"),
+        "lat": loc.get("lat"),
+        "lng": loc.get("lng"),
+        "address_components": result.get("address_components", []),
+        "phone": result.get("formatted_phone_number"),
+        "phone_international": result.get("international_phone_number"),
+        "website": result.get("website"),
+        "google_maps_url": result.get("url"),
+        "rating": result.get("rating"),
+        "reviews_count": result.get("user_ratings_total"),
+        "opening_hours": result.get("opening_hours"),
+        "business_status": result.get("business_status"),
+        "types": result.get("types", []),
+        "price_level": result.get("price_level"),
+        "description": result.get("editorial_summary", {}).get("overview"),
+    }
+
+
+def find_place_by_name_and_address(name: str, address: str = "") -> Optional[Dict[str, Any]]:
+    """Find a place by name and optional address, return full details with contact info.
+    
+    Uses Places Text Search (requires Places API enabled).
+    Returns None gracefully if API not enabled or fails.
+    """
+    if not MAPS_API_KEY:
+        return None
+    query = name
+    if address:
+        query += f" {address}"
+    params = {
+        "query": query,
+        "key": MAPS_API_KEY,
+        "fields": "place_id",
+    }
+    url = "https://maps.googleapis.com/maps/api/place/textsearch/json?" + urllib.parse.urlencode(params)
+    try:
+        with urllib.request.urlopen(url, timeout=10) as resp:
+            data = json.loads(resp.read().decode())
+    except Exception:
+        return None
+    if data.get("status") != "OK" or not data.get("results"):
+        return None
+    place_id = data["results"][0]["place_id"]
+    return place_details(place_id)
+
+
+def enrich_lead_contact_info(lead: Dict[str, Any]) -> Dict[str, Any]:
+    """Enrich a lead dict with contact info from Google Places.
+    
+    Expects lead dict with: name, address, phone (optional).
+    Returns enriched dict with: phone, website, google_maps_url, rating, etc.
+    Gracefully returns original lead if API unavailable.
+    """
+    name = lead.get("name") or lead.get("company_name") or ""
+    address = lead.get("address") or lead.get("property_address") or ""
+    if not name:
+        return lead
+    
+    # Try to find place by name + address
+    place = find_place_by_name_and_address(name, address)
+    if not place:
+        return lead
+    
+    # Merge contact info (don't overwrite existing)
+    enriched = lead.copy()
+    if place.get("phone") and not enriched.get("phone"):
+        enriched["phone"] = place["phone"]
+    if place.get("phone_international") and not enriched.get("phone_international"):
+        enriched["phone_international"] = place["phone_international"]
+    if place.get("website") and not enriched.get("website"):
+        enriched["website"] = place["website"]
+    if place.get("google_maps_url") and not enriched.get("google_maps_url"):
+        enriched["google_maps_url"] = place["google_maps_url"]
+    if place.get("rating") and not enriched.get("rating"):
+        enriched["rating"] = place["rating"]
+    if place.get("reviews_count") and not enriched.get("reviews_count"):
+        enriched["reviews_count"] = place["reviews_count"]
+    if place.get("formatted_address") and not enriched.get("address"):
+        enriched["address"] = place["formatted_address"]
+    if place.get("types"):
+        enriched["place_types"] = place["types"]
+    if place.get("business_status"):
+        enriched["business_status"] = place["business_status"]
+    
+    return enriched
+
+
+# ──────────────────────────────────────────────
+# Distance Matrix
+# ──────────────────────────────────────────────
+
+def distance_matrix(
+    origins: List[str],
+    destinations: List[str],
+    mode: str = "driving",
+    departure_time: Optional[int] = None,
+) -> Optional[Dict[str, Any]]:
+    """Get travel distance/time between origins and destinations.
+    origins/destinations: list of "lat,lng" or addresses.
+    """
+    if not MAPS_API_KEY:
+        return None
+    params = {
+        "origins": "|".join(origins),
+        "destinations": "|".join(destinations),
+        "mode": mode,
+        "key": MAPS_API_KEY,
+    }
+    if departure_time:
+        params["departure_time"] = departure_time
+    url = DISTANCE_BASE + "?" + urllib.parse.urlencode(params)
+    with urllib.request.urlopen(url) as resp:
+        data = json.loads(resp.read().decode())
+    if data["status"] != "OK":
+        return None
+    return data
+
+
+def travel_time_minutes(origin_lat: float, origin_lng: float, dest_lat: float, dest_lng: float) -> Optional[int]:
+    """Get driving time in minutes between two points."""
+    result = distance_matrix(
+        [f"{origin_lat},{origin_lng}"],
+        [f"{dest_lat},{dest_lng}"],
+        mode="driving",
+    )
+    if not result or not result["rows"]:
+        return None
+    element = result["rows"][0]["elements"][0]
+    if element["status"] != "OK":
+        return None
+    return int(element["duration"]["value"] / 60)
+
+
+# ──────────────────────────────────────────────
+# Embed URLs (for iframes)
+# ──────────────────────────────────────────────
+
+def maps_embed_url(lat: float, lng: float, zoom: int = 16) -> str:
+    """Generate Google Maps embed URL."""
+    return f"https://www.google.com/maps/embed/v1/place?key={MAPS_API_KEY}&q={lat},{lng}&zoom={str(zoom)}"
+
+
+def maps_directions_url(origin_lat: float, origin_lng: float, dest_lat: float, dest_lng: float) -> str:
+    """Generate Google Maps directions URL."""
+    return f"https://www.google.com/maps/dir/?api=1&origin={origin_lat},{origin_lng}&destination={dest_lat},{dest_lng}&travelmode=driving"

@@ -54,11 +54,15 @@ import materials_service
 import training_service
 import lead_sources
 import inbound_email
+import google_oauth
 
 db_url = os.getenv("DATABASE_URL", "postgresql://shaun:secret@localhost:5432/buildstack")
 templates = Jinja2Templates(directory="templates/construction")
 stripe_svc = StripeService()
 signalwire = SignalWireService()
+# The number inbound calls/texts arrive from, i.e. the "recipient" for an inbound
+# row. It used to be the literal string 'system', making inbound unattributable.
+SIGNALWIRE_NUMBER = os.getenv("SIGNALWIRE_PHONE", "") or "system"
 vapi = vapi_service.VapiService(default_base="https://construction.bizstackperks.com")
 APP_TZ = ZoneInfo(os.getenv("APP_TIMEZONE", "America/New_York"))
 
@@ -1648,6 +1652,92 @@ async def api_logout():
     return response
 
 
+@app.get("/api/auth/logout")
+async def api_logout():
+    response = RedirectResponse(url="/", status_code=status.HTTP_303_SEE_OTHER)
+    response.delete_cookie(auth_service.SESSION_COOKIE)
+    response.delete_cookie("user_email")
+    response.delete_cookie("user_name")
+    return response
+
+
+# --- GOOGLE OAUTH ---
+
+@app.get("/auth/google")
+async def google_oauth_start(request: Request, service: str = "construction"):
+    """Initiate Google OAuth flow."""
+    if service not in ("broom", "construction"):
+        return RedirectResponse(url="/login?error=Invalid+service", status_code=status.HTTP_303_SEE_OTHER)
+    auth_url, state = google_oauth.start_google_oauth(service)
+    resp = RedirectResponse(url=auth_url, status_code=status.HTTP_303_SEE_OTHER)
+    resp.set_cookie("google_oauth_state", state, httponly=True, samesite="lax", secure=_secure_cookies(), max_age=600)
+    resp.set_cookie("google_oauth_service", service, httponly=True, samesite="lax", secure=_secure_cookies(), max_age=600)
+    return resp
+
+
+@app.get("/auth/google/callback")
+async def google_oauth_callback(request: Request, code: str = None, error: str = None, db=Depends(get_db)):
+    """Handle Google OAuth callback."""
+    state = request.cookies.get("google_oauth_state")
+    service = request.cookies.get("google_oauth_service", "construction")
+    if error:
+        return RedirectResponse(url=f"/login?error=Google+OAuth+cancelled%3A+{error}", status_code=status.HTTP_303_SEE_OTHER)
+    if not code:
+        return RedirectResponse(url="/login?error=No+authorization+code+from+Google", status_code=status.HTTP_303_SEE_OTHER)
+    try:
+        user = google_oauth.handle_google_callback(service, code, state)
+        user_email = user["user_email"]
+        user_name = user["user_name"]
+        # Resolve or create local account
+        actor = None
+        if service == "construction":
+            with db.cursor() as cur:
+                cur.execute("SELECT * FROM users WHERE email ILIKE %s;", (user_email,))
+                actor = cur.fetchone()
+            if not actor:
+                admin_email = os.getenv("ADMIN_EMAIL", "").lower()
+                role = "admin" if user_email == admin_email else "worker"
+                with db.cursor() as cur:
+                    cur.execute("""
+                        INSERT INTO users (email, name, role, created_at)
+                        VALUES (%s, %s, %s, NOW()) RETURNING *;
+                    """, (user_email, user_name, role))
+                    actor = cur.fetchone()
+                    db.commit()
+        else:
+            # Broom - check crew table
+            with db.cursor() as cur:
+                cur.execute("SELECT * FROM crew WHERE email ILIKE %s;", (user_email,))
+                actor = cur.fetchone()
+            if not actor:
+                with db.cursor() as cur:
+                    cur.execute("""
+                        INSERT INTO crew (email, name, is_active, created_at)
+                        VALUES (%s, %s, TRUE, NOW()) RETURNING *;
+                    """, (user_email, user_name))
+                    actor = cur.fetchone()
+                    db.commit()
+        if not actor:
+            return RedirectResponse(url="/login?error=Failed+to+create+account", status_code=status.HTTP_303_SEE_OTHER)
+        role = actor.get("role", "worker")
+        actor_dict = {"role": role, "id": actor["id"], "email": user_email, "name": user_name}
+        return _finish_login(actor_dict, request)
+    except Exception as e:
+        print(f"[GOOGLE OAUTH] Callback error: {e}")
+        return RedirectResponse(url=f"/login?error=Google+sign-in+failed", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/api/google/revoke")
+async def google_revoke_access(request: Request, db=Depends(get_db)):
+    """Revoke Google access for current user."""
+    actor = auth_service.actor_from_token(request.cookies.get(auth_service.SESSION_COOKIE))
+    if not actor:
+        return JSONResponse({"status": "error", "message": "Not logged in"}, status_code=401)
+    service = "construction" if actor.get("role") == "admin" and request.query_params.get("service") == "construction" else "broom"
+    google_oauth.revoke_google_access(service, actor["email"])
+    return JSONResponse({"status": "success", "message": "Google access revoked"})
+
+
 # --- Admin: dashboard + leads ----------------------------------------------
 @app.get("/dashboard", response_class=HTMLResponse)
 async def read_dashboard(request: Request, db=Depends(get_db)):
@@ -2058,8 +2148,12 @@ async def voice_transcribe(request: Request, db=Depends(get_db)):
             ai_reply = "Thank you for your call. Our team will follow up shortly."
 
         with db.cursor() as cur:
-            cur.execute("INSERT INTO comms_logs (direction, channel, sender, recipient, message_body) VALUES ('inbound', 'voice-transcription', %s, 'system', %s);", (From, TranscriptionText))
-            cur.execute("INSERT INTO comms_logs (direction, channel, sender, recipient, message_body) VALUES ('outbound', 'sms', 'system', %s, %s);", (From, ai_reply))
+            # channel is VARCHAR(10); 'voice-transcription' is 19 chars and raised
+            # StringDataRightTruncation, 500-ing this endpoint and aborting the
+            # reply insert. Use 'voice', and log the reply as the voice channel
+            # it is (it was mislabelled 'sms').
+            cur.execute("INSERT INTO comms_logs (direction, channel, sender, recipient, message_body) VALUES ('inbound', 'voice', %s, %s, %s);", (From, SIGNALWIRE_NUMBER, TranscriptionText))
+            cur.execute("INSERT INTO comms_logs (direction, channel, sender, recipient, message_body) VALUES ('outbound', 'voice', %s, %s, %s);", (SIGNALWIRE_NUMBER, From, ai_reply))
             db.commit()
 
     return Response(content="", status_code=204)
@@ -2191,7 +2285,7 @@ def _outbound_turn(db, sid, to, text, turns):
     context = _bot_lead_context(lead)
     if text:
         with db.cursor() as cur:
-            cur.execute("INSERT INTO comms_logs (direction, channel, sender, recipient, message_body) VALUES ('inbound', 'voice-transcription', %s, 'system', %s);", (sid, text))
+            cur.execute("INSERT INTO comms_logs (direction, channel, sender, recipient, message_body) VALUES ('inbound', 'voice', %s, %s, %s);", (sid, SIGNALWIRE_NUMBER, text))
             db.commit()
         try:
             agent = BusinessAIAgent(knowledge_path="construction_knowledge.md", tool_handlers=build_tool_handlers(db, stripe_svc))
@@ -3819,8 +3913,18 @@ def _start_lead_source_scheduler():
 async def email_inbound_webhook(request: Request):
     secret = (os.getenv("INBOUND_EMAIL_SECRET", "") or "").strip()
     if secret:
-        given = request.query_params.get("secret") or ""
-        if not hmac.compare_digest(given, secret):
+        # Accept the shared secret however the provider carries it. Resend signs
+        # with Svix and sends `svix-signature`; the old check only looked at a
+        # `?secret=` query param, so every genuine delivery 401'd and inbound
+        # email was never ingested.
+        candidates = [
+            request.query_params.get("secret"),
+            request.headers.get("X-Webhook-Secret"),
+            request.headers.get("X-Resend-Secret"),
+            request.headers.get("X-Resend-Signature"),
+            (request.headers.get("svix-signature") or "").split(" ")[0] or None,
+        ]
+        if not any(g and hmac.compare_digest(g.strip(), secret) for g in candidates):
             return JSONResponse(content={"ok": False, "error": "unauthorized"}, status_code=401)
     try:
         body = await request.json()

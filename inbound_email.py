@@ -94,13 +94,28 @@ def _body_text(msg):
 def _ensure_schema(cur):
     cur.execute("ALTER TABLE comms_logs ADD COLUMN IF NOT EXISTS external_id VARCHAR(255);")
     cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_comms_logs_external_id ON comms_logs(external_id);")
-    cur.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS last_reply_at TIMESTAMP WITH TIME ZONE;")
-    cur.execute("UPDATE leads SET email = NULLIF(rtrim(email, '.'), '') WHERE email LIKE '%.';")
+    cur.execute("ALTER TABLE comms_logs ADD COLUMN IF NOT EXISTS lead_id INTEGER;")
+    cur.execute("ALTER TABLE comms_logs ADD COLUMN IF NOT EXISTS sent_at TIMESTAMP WITH TIME ZONE;")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_comms_recipient ON comms_logs(LOWER(recipient));")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_comms_direction_channel_created "
+                "ON comms_logs(direction, channel, created_at);")
+    # Runs before `leads` exists on a fresh database; a SAVEPOINT (not
+    # connection.rollback()) so the ALTERs above still commit.
+    try:
+        cur.execute("SAVEPOINT ensure_leads_schema;")
+        cur.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS last_reply_at TIMESTAMP WITH TIME ZONE;")
+        cur.execute("UPDATE leads SET email = NULLIF(rtrim(email, '.'), '') WHERE email LIKE '%.';")
+        cur.execute("RELEASE SAVEPOINT ensure_leads_schema;")
+    except Exception:
+        try:
+            cur.execute("ROLLBACK TO SAVEPOINT ensure_leads_schema;")
+        except Exception:
+            pass
 
 
 def _ingest(db, company_key, msgs, mailbox_from):
     """Insert inbound email comms rows. Returns match/insert/dedup counts."""
-    matched = inserted = deduped = skipped = 0
+    matched = inserted = deduped = skipped = unmatched = 0
     with db.cursor() as cur:
         _ensure_schema(cur)
         for m in msgs:
@@ -114,9 +129,6 @@ def _ingest(db, company_key, msgs, mailbox_from):
                 (_norm(sender), company_key),
             )
             lead = cur.fetchone()
-            if not lead:
-                skipped += 1
-                continue
             text = (m.get("text") or "").strip()
             subject = (m.get("subject") or "").strip() or "(no subject)"
             ext_id = (m.get("external_id") or "").strip() or _make_ext_id(sender, subject, m.get("date") or "")
@@ -134,6 +146,13 @@ def _ingest(db, company_key, msgs, mailbox_from):
                 deduped += 1
                 continue
             inserted += 1
+            if not lead:
+                # Still recorded in comms_logs above, but there is no lead row to
+                # hang the reply note on. Previously this `continue`d and the
+                # message was never recorded at all.
+                unmatched += 1
+                db.commit()
+                continue
             matched += 1
             lead_id = lead["id"]
             cur.execute("SELECT id, email, name, notes, status, phone FROM leads WHERE id = %s;", (lead_id,))
@@ -149,6 +168,9 @@ def _ingest(db, company_key, msgs, mailbox_from):
                 "WHERE id = %s;",
                 (notes, lead_id),
             )
+            # Commit the inbound row + reply note before any AI work, so a slow or
+            # failing draft call can never roll the recorded reply away.
+            db.commit()
             try:
                 import auto_reply
                 auto_reply.ensure_lead_reply(
@@ -165,7 +187,8 @@ def _ingest(db, company_key, msgs, mailbox_from):
             except Exception as exc:
                 print(f"[email-inbound] auto-reply failed for lead {lead_id}: {exc}", flush=True)
         db.commit()
-    return {"matched": matched, "inserted": inserted, "deduped": deduped, "skipped": skipped}
+    return {"matched": matched, "inserted": inserted, "deduped": deduped,
+            "skipped": skipped, "unmatched": unmatched}
 
 
 def _make_ext_id(sender, subject, date):
@@ -283,7 +306,13 @@ def handle_webhook_payload(payload, company_key, mailbox_from):
             "subject": rec.get("subject") or "",
             "date": rec.get("created_at") or rec.get("date") or "",
             "text": text,
-            "external_id": "wh|" + str(email_id) or "",
+            # Operator precedence bug: `"wh|" + str(x) or ""` is
+            # `("wh|" + str(x)) or ""`, so an id-less payload collapsed onto the
+            # constant "wh|" and every later one was silently deduped away.
+            "external_id": (f"wh|{email_id}" if email_id
+                            else _make_ext_id(rec.get("from") or "",
+                                              rec.get("subject") or "",
+                                              rec.get("created_at") or rec.get("date") or "")),
         })
     db = psycopg.connect(os.getenv("DATABASE_URL", ""), row_factory=dict_row)
     db.autocommit = False

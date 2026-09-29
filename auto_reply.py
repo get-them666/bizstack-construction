@@ -279,8 +279,51 @@ def _outbound_sent_today(db, channel: str) -> int:
             )
             row = cur.fetchone()
         return int(row["c"] if isinstance(row, dict) else (row[0] if row else 0))
+    except Exception as exc:
+        print(f"[auto-reply] outbound count failed for {channel}; assuming cap reached: {exc}", flush=True)
+        return _outbound_cap(channel)
+
+
+def _recipient_recently_sent(db, recipient: str, channel: str, days: int) -> bool:
+    """True if we already sent `channel` to this recipient within `days`.
+
+    Fail-closed: if the lookup errors we return True (treat as already sent) so a
+    broken query can never turn into a duplicate blast."""
+    if not recipient or db is None:
+        return False
+    try:
+        with db.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM comms_logs WHERE direction = 'outbound' AND channel = %s "
+                "AND LOWER(recipient) = LOWER(%s) "
+                "AND created_at > now() - make_interval(days => %s) LIMIT 1;",
+                (channel, recipient, int(days)),
+            )
+            return cur.fetchone() is not None
+    except Exception as exc:
+        print(f"[auto-reply] suppression lookup failed for {recipient} ({channel}); treating as sent: {exc}", flush=True)
+        return True
+
+
+def _lead_replied(db, lead_id) -> bool:
+    """True if this lead has replied since we last contacted them. A reply ends
+    the automated cadence until the owner restarts it."""
+    if not lead_id or db is None:
+        return False
+    try:
+        with db.cursor() as cur:
+            cur.execute("SELECT last_reply_at FROM leads WHERE id = %s;", (lead_id,))
+            row = cur.fetchone()
+        return bool(row and (row.get("last_reply_at") if isinstance(row, dict) else row[0]))
     except Exception:
-        return 0
+        return False
+
+
+def _suppression_days() -> int:
+    try:
+        return max(0, int(os.getenv("LEAD_SUPPRESSION_DAYS", "30")))
+    except (TypeError, ValueError):
+        return 30
 
 
 def _channel_allowed(db, channel: str) -> tuple:
@@ -343,7 +386,7 @@ def _fire_sent_effect(db, lead_id, company_key, channel, recipient, body):
             notes = (_strip_draft_marker(notes))[:6000] if notes else ""
             cur.execute(
                 "UPDATE leads SET notes = %s, draft_reply = NULL, status = 'contacted' "
-                "WHERE id = %s AND status = 'new';",
+                "WHERE id = %s;",
                 (notes, lead_id),
             )
             cur.execute(
@@ -402,7 +445,7 @@ def ensure_lead_reply(db, company_key, *, name="", phone="", email="", service="
 
     sent = staged = False
 
-    if email and _smoke_recipient_email(email):
+    if email and _smoke_recipient_email(email) and not _recipient_recently_sent(db, email, "email", _suppression_days()):
         try:
             cfg = documents_service.smtp_config_from_env()
             has_smtp = documents_service.smtp_configured(cfg)
@@ -427,6 +470,10 @@ def ensure_lead_reply(db, company_key, *, name="", phone="", email="", service="
 
     if _valid_phone(phone) and not sent:
         to = _phone_e164(phone)
+        if _recipient_recently_sent(db, to, "text", _suppression_days()):
+            print(f"[auto-reply {company_key}] already texted {to} within {_suppression_days()}d; skipping", flush=True)
+            to = ""
+    if to and not sent:
         try:
             import signalwire_service
             sw = signalwire_service.SignalWireService()
@@ -472,9 +519,19 @@ def fire_lead_draft(db, company_key, lead_id, *, force=False):
             result["why"] = "lead not found"
             return result
         draft = (lead.get("draft_reply") or "").strip()
+        if not draft:
+            result["why"] = "no draft staged"
+            return result
         body = draft.split("\n", 1)[1] if "\n" in draft else draft
         candidate_channel = "text" if draft.startswith("[BOT DRAFT REPLY – text") else "email"
         candidate_channels = ["text", "email"] if candidate_channel == "text" else ["email", "text"]
+        # A lead who has replied is out of the automated cadence; the owner
+        # restarts it manually.
+        if not force and _lead_replied(db, lead_id):
+            result["why"] = "lead has replied — manual send required"
+            print(f"[auto-reply {company_key}] lead #{lead_id} replied; auto-flush skipping", flush=True)
+            return result
+        supp = _suppression_days()
         for channel in candidate_channels:
             if channel == "email":
                 recipient = (lead.get("email") or "").strip()
@@ -484,6 +541,10 @@ def fire_lead_draft(db, company_key, lead_id, *, force=False):
                 recipient = _phone_e164(lead.get("phone"))
                 if not _valid_phone(recipient):
                     continue
+            if not force and _recipient_recently_sent(db, recipient, channel, supp):
+                result["why"] = f"already sent {channel} to {recipient} within {supp}d"
+                print(f"[auto-reply {company_key}] lead #{lead_id} {channel} suppressed", flush=True)
+                continue
             if not force:
                 ok, why = _channel_allowed(db, "text" if channel == "text" else "email")
                 if not ok:
@@ -849,14 +910,33 @@ def bot_health(db):
     result = {"sent_today": 0, "staged": 0, "caps": {}, "error": ""}
     try:
         with db.cursor() as cur:
+            # There is no `outbound_log` table in this schema, so this query
+            # always raised and the owner dashboard always showed
+            # "relation outbound_log does not exist". comms_logs is the real
+            # outbound record; created_at is the insert time.
             cur.execute(
                 "SELECT COALESCE(SUM(CASE WHEN channel = 'email' THEN 1 ELSE 0 END), 0) AS email, "
-                "COALESCE(SUM(CASE WHEN channel = 'text' THEN 1 ELSE 0 END), 0) AS text "
-                "FROM outbound_log WHERE sent_at::date = CURRENT_DATE;",
+                "COALESCE(SUM(CASE WHEN channel IN ('text','sms') THEN 1 ELSE 0 END), 0) AS text "
+                "FROM comms_logs WHERE direction = 'outbound' "
+                "AND created_at >= date_trunc('day', now());",
             )
             row = cur.fetchone() or {}
             result["sent_today"] = (row.get("email") or 0) + (row.get("text") or 0)
             result["caps"] = {"email": row.get("email") or 0, "text": row.get("text") or 0}
+            # Surface the repeat-send risk directly: any address contacted more
+            # than once in the suppression window is a bug, not a lead.
+            supp = _suppression_days()
+            cur.execute(
+                "SELECT recipient, channel, COUNT(*) AS n FROM comms_logs "
+                "WHERE direction = 'outbound' "
+                "AND created_at > now() - make_interval(days => %s) "
+                "GROUP BY 1,2 HAVING COUNT(*) > 1 ORDER BY n DESC LIMIT 10;",
+                (supp,),
+            )
+            result["repeat_sends"] = [
+                {"recipient": r.get("recipient"), "channel": r.get("channel"), "count": r.get("n")}
+                for r in (cur.fetchall() or [])
+            ]
             cur.execute(
                 "SELECT COUNT(*) AS n FROM leads WHERE draft_reply IS NOT NULL "
                 "AND LOWER(COALESCE(draft_reply, '')) <> '';",
