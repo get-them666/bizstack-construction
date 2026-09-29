@@ -3851,6 +3851,29 @@ def pipeline_digest():
         return {"error": str(exc)[:400]}
 
 
+def _gmail_inbound_loop():
+    """Collect lead replies from the connected Google mailbox via the Gmail API.
+
+    Mail is on Google now. The Zoho IMAP account is disabled server-side
+    ("You are yet to enable IMAP"), so the old IMAP poller could never run and
+    inbound recorded nothing."""
+    interval = max(120, int(os.getenv("GMAIL_INBOUND_INTERVAL_SECONDS", "900") or 900))
+    while True:
+        try:
+            with psycopg.connect(db_url, row_factory=dict_row) as conn:
+                res = inbound_email.poll_gmail_inbox(
+                    conn, "construction", "construction",
+                    os.getenv("SMTP_FROM", "") or "hello@bizstackperks.com",
+                )
+            if res.get("error"):
+                print(f"[gmail-inbound] {res['error']}", flush=True)
+            elif res.get("inserted"):
+                print(f"[gmail-inbound] {res}", flush=True)
+        except Exception as exc:
+            print(f"[gmail-inbound] poll failed: {exc}", flush=True)
+        time.sleep(interval)
+
+
 def _start_lead_source_scheduler():
     try:
         interval_h = max(0.5, float(os.getenv("LEAD_SCAN_INTERVAL_HOURS", "6") or 6))
@@ -3860,6 +3883,10 @@ def _start_lead_source_scheduler():
     poll_on = (os.getenv("INBOUND_POLL", "") or "").strip().lower() in ("1", "true", "yes", "on")
     if poll_on:
         threading.Thread(target=inbound_email.poll_loop, daemon=True).start()
+    gmail_inbound = (os.getenv("GMAIL_INBOUND", "") or "").strip().lower() in ("1", "true", "yes", "on")
+    if gmail_inbound:
+        threading.Thread(target=_gmail_inbound_loop, daemon=True).start()
+        print("[gmail-inbound] loop started", flush=True)
 
     def _runner():
         print(f"[lead-source] scheduler started (every {interval_h:g}h)", flush=True)

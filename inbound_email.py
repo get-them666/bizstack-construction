@@ -257,6 +257,70 @@ def _fetch_imap_messages(host, user, password, ssl_flag=True):
     return msgs
 
 
+def poll_gmail_inbox(db, service: str, company_key: str, mailbox_from: str,
+                     user_email: str = "", max_results: int = 25) -> dict:
+    """Poll the connected Google mailbox for lead replies via the Gmail API.
+
+    This is the primary inbound path now that mail is on Google. It reads
+    `google_tokens` for a refresh token, lists unread/recent inbox messages,
+    converts them to the same shape `_ingest` consumes, and lets the existing
+    `external_id` dedup make re-polling harmless.
+
+    Gmail is append-only per message id, so re-reading the same window is safe:
+    duplicates are deduped on the `gmail|<id>` external_id.
+    """
+    import google_gmail
+    import google_oauth
+
+    owner = (user_email or os.getenv("GMAIL_OWNER", "") or os.getenv("SMTP_FROM", "")
+             or "hello@bizstackperks.com").strip()
+    try:
+        tokens = google_oauth.get_google_tokens(service, owner)
+    except Exception as exc:
+        return {"error": f"token lookup failed: {exc}"}
+    if not tokens or not tokens.get("refresh_token"):
+        return {"error": f"no Google refresh token for {service}/{owner} — sign in with Google first"}
+
+    # Only look at unread mail we have not already triaged. `is:unread` plus a
+    # recency window keeps each poll cheap; dedup handles any overlap.
+    query = os.getenv("GMAIL_INBOUND_QUERY", "in:inbox is:unread newer_than:7d")
+    try:
+        listing = google_gmail.list_messages(service, owner, query=query, max_results=max_results)
+    except Exception as exc:
+        return {"error": f"Gmail list failed: {exc}"}
+
+    stubs = listing.get("messages") or []
+    if not stubs:
+        return {"matched": 0, "inserted": 0, "deduped": 0, "skipped": 0,
+                "unmatched": 0, "checked": 0}
+
+    msgs = []
+    for stub in stubs:
+        mid = stub.get("id")
+        if not mid:
+            continue
+        try:
+            full = google_gmail.get_message(service, owner, mid, format="full")
+        except Exception as exc:
+            print(f"[gmail-inbound] fetch {mid} failed: {exc}", flush=True)
+            continue
+        parsed = google_gmail._parse_message(full)
+        msgs.append({
+            "from": parsed.get("from") or "",
+            "to": parsed.get("to") or "",
+            "subject": parsed.get("subject") or "",
+            "date": parsed.get("date") or "",
+            "text": parsed.get("body_text") or parsed.get("snippet") or "",
+            "external_id": f"gmail|{mid}",
+        })
+    if not msgs:
+        return {"matched": 0, "inserted": 0, "deduped": 0, "skipped": 0,
+                "unmatched": 0, "checked": 0}
+    result = _ingest(db, company_key, msgs, mailbox_from)
+    result["checked"] = len(msgs)
+    return result
+
+
 def poll_inbox():
     """Poll the configured business mailbox once for lead replies; returns ingest results.
 
