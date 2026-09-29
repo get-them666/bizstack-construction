@@ -10,6 +10,9 @@ venv/
 .venv/
 myenv/
 
+# vendored SDK checkout — the package is already in requirements.txt
+signalwire-python/
+
 __pycache__/
 *.py[cod]
 *.pyo
