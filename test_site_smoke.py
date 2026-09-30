@@ -138,6 +138,15 @@ check("unknown stream is rejected", r.status_code == 400, f"got {r.status_code}"
 r = client.get("/pipeline?q=Board Test")
 check("board search finds the card", r.status_code == 200 and "Board Test" in r.text, f"got {r.status_code}")
 
+# Regression: the board used require_admin(), which raises a bare 401 and left a
+# signed-out user on a dead end. Every other owner page redirects to /login.
+signed_out = TestClient(m.app, raise_server_exceptions=False)
+r = signed_out.get("/pipeline", follow_redirects=False)
+check("signed-out board redirects to login, not 401",
+      r.status_code == 303 and "/login" in (r.headers.get("location") or ""),
+      f"got {r.status_code} -> {r.headers.get('location')}")
+signed_out.close()
+
 # Regression: backlog rows are source='backlog' and have their own board
 # stream. The leads query used to include them too, so every back-logged job
 # rendered twice and was double-counted in the header totals.

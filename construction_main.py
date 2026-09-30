@@ -1991,7 +1991,12 @@ async def pipeline_board(
     db=Depends(get_db),
 ):
     """Kanban of everything in the sales pipeline, newest work first per column."""
-    require_admin(request)
+    # Redirect to /login like the other owner pages. require_admin() raises a
+    # bare 401, which showed the signed-out user a dead end instead of a login.
+    is_authed, user_email = require_auth(request)
+    if not is_authed:
+        return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
+    actor = current_actor(request) or {}
 
     streams = [s for s in (stream or "").split(",") if s in PIPELINE_STREAMS] or list(PIPELINE_STREAMS)
     cols: dict[str, list[dict]] = {}
@@ -2100,7 +2105,7 @@ async def pipeline_board(
     total_value = sum(c["value"] for v in cols.values() for c in v)
 
     return templates.TemplateResponse(request=request, name="pipeline.html", context={
-        "user": {"email": owner or (current_actor(request) or {}).get("email", "")},
+        "user": {"email": user_email or owner or actor.get("email", "")},
         "groups": groups,
         "streams": list(PIPELINE_STREAMS),
         "active_streams": streams,
