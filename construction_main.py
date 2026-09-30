@@ -4176,10 +4176,14 @@ def ingest_permits(conn, permits):
                 "contractor_name": p["contractor_name"], "value": est_val, "source": "permits",
             })
             cur.execute(
-                "INSERT INTO leads (name, email, listing_url, status, source, referral_code, campaign, analysis_json, company) "
-                "VALUES (%s, %s, %s, 'new', %s, %s, 'permit-radar', %s, 'construction') RETURNING id;",
+                "INSERT INTO leads (name, phone, email, listing_url, status, source, referral_code, campaign, analysis_json, company) "
+                "VALUES (%s, %s, %s, %s, 'new', %s, %s, 'permit-radar', %s, 'construction') RETURNING id;",
                 (
                     f"Permit · {p['property_address'] or p['city'] or 'Hampton Roads'}",
+                    # leads.phone is NOT NULL, but no permit source publishes a
+                    # homeowner phone number. These leads are address-based and
+                    # worked as canvass/direct-mail targets, not call targets.
+                    p.get("phone") or "",
                     f"con-permit-{digest[:15]}@lead.local",
                     listing,
                     "permit_finder",

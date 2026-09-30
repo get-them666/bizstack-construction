@@ -1,8 +1,20 @@
 """Building-permit job finder.
 
-Primary provider: Shovels.ai API v2 (https://api.shovels.ai/v2). Without a key,
-we seed realistic demo permits so the admin UX works during development and
-smoke tests are deterministic.
+Providers, in priority order:
+
+1. Shovels.ai API v2 (https://api.shovels.ai/v2). Needs SHOVELS_API_KEY. Without
+   a key this path returns nothing.
+2. Municipal open data, which needs no key and is published for reuse:
+     - Virginia Beach: ArcGIS FeatureServer (Building Permits Applications)
+     - Norfolk: Socrata dataset fahm-yuh4
+   These are the reliable defaults, so the pipeline works with zero config.
+3. With neither available we seed demo permits so the admin UX still renders.
+
+Neither the open feeds nor Shovels publish applicant phone/email: the cities
+pseudonymize the applicant (Virginia Beach exposes `CreatedBy` as an opaque
+`PUBLICUSER<n>` account id). Owner name + mailing address for a permit address
+comes from each city's public property-tax search, which refuses direct API
+access -- see docs/records-request.md for the public-records route instead.
 
 Service area defaults to Chesapeake / Virginia Beach / Norfolk (Hampton Roads).
 """
@@ -262,20 +274,34 @@ def search_permits(geo_ids=None, days: int = 21, per_geo: int = 4):
 def fetch_permits(city: str, state: str = "", days: int = 21, limit: int = 25):
     """Fetch recent permits for the service area. Returns a list of permit dicts.
 
-    Without a Shovels key this seeds demo permits so the admin UI still works."""
+    Order: Shovels when configured, else the city's open data feed. Demo permits
+    are only a last resort, so a missing Shovels key still yields real leads.
+    """
     city = (city or "").strip().title()
-    if not city or not is_configured():
-        return _seed_demo(city or "Chesapeake", state or "VA")
-    per_geo = 4
-    try:
-        per_geo = min(int(limit or 4), 10)
-    except (TypeError, ValueError):
-        pass
-    return search_permits(
-        geo_ids=_geo_ids_for(city),
-        days=max(int(days or 21), 1),
-        per_geo=max(per_geo, 1),
-    )
+    if not city:
+        return []
+
+    if is_configured():
+        per_geo = 4
+        try:
+            per_geo = min(int(limit or 4), 10)
+        except (TypeError, ValueError):
+            pass
+        rows = search_permits(
+            geo_ids=_geo_ids_for(city),
+            days=max(int(days or 21), 1),
+            per_geo=max(per_geo, 1),
+        )
+        if rows:
+            return rows
+
+    # Municipal open data is keyless and published for reuse, so prefer it over
+    # seeding demo rows: real permits beat fake ones even if a key is missing.
+    open_rows = fetch_open_data(city, days=max(int(days or 21), 1), limit=max(int(limit or 25), 25) * 4)
+    if open_rows:
+        return open_rows
+
+    return _seed_demo(city, state or "VA")
 
 
 def _seed_demo(city: str, state: str):
@@ -288,3 +314,188 @@ def _seed_demo(city: str, state: str):
         row["_demo"] = True
         seeded.append(row)
     return seeded
+
+
+# --- Municipal open data ----------------------------------------------------
+# Both of these are public datasets published for reuse and need no key or
+# registration, so they are the default source when Shovels is unconfigured.
+
+# City of Virginia Beach -- "Building Permits Applications", ArcGIS FeatureServer.
+# https://data.virginiabeach.gov/datasets/VBgov::building-permits-applications-
+VB_FS = ("https://services2.arcgis.com/CyVvlIiUfRBmMQuu/arcgis/rest/services/"
+         "Building_Permits_Applications_view/FeatureServer/0")
+
+# City of Norfolk -- "Permits" (Planning DSC), Socrata dataset fahm-yuh4.
+NORFOLK_SOCRATA = "https://data.norfolk.gov/resource/fahm-yuh4.json"
+
+_USER_AGENT = "bizstack-construction/1.0 (permit lead research)"
+
+
+def _http_json(url: str, params: dict | None = None, timeout: int = 30):
+    """GET a JSON endpoint. Raises on transport/HTTP failure."""
+    if params:
+        url = f"{url}?{urllib.parse.urlencode(params)}"
+    req = urllib.request.Request(url, headers={
+        "Accept": "application/json",
+        "User-Agent": _USER_AGENT,
+    })
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _iso_date(v) -> str:
+    """Normalise the several date shapes these feeds use to YYYY-MM-DD."""
+    s = str(v or "").strip()
+    if not s:
+        return ""
+    m = re.match(r"(\d{4})[/-](\d{1,2})[/-](\d{1,2})", s)
+    if m:
+        return f"{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+    return s
+
+
+def _norm_record(
+    permit_number="", address="", city="", state="", zip_code="",
+    work_type="", description="", contractor="", issue_date="",
+    value=0.0, property_type="", source="",
+) -> dict:
+    """Build a permit dict in the same shape _normalize() produces."""
+    address = (address or "").strip()
+    city = (city or "").strip().title()
+    state = (state or "VA").strip().upper()
+    full = address
+    if address and city:
+        full = f"{address}, {city}, {state} {zip_code}".strip()
+    return {
+        "permit_number": (permit_number or "").strip(),
+        "property_address": full,
+        "city": city,
+        "state": state,
+        "work_type": (work_type or "").strip(),
+        "job_description": (description or "").strip()[:2000],
+        "contractor_name": (contractor or "").strip(),
+        "issue_date": _iso_date(issue_date),
+        "estimated_value": _as_money(value),
+        "property_type": (property_type or "").strip(),
+        "tags": [],
+        "_id": "",
+        "_geo": zip_code,
+        "_source": source,
+        "_demo": False,
+    }
+
+
+def fetch_virginia_beach(days: int = 45, limit: int = 200) -> list:
+    """Recent VB building permits from the city's ArcGIS FeatureServer.
+
+    IssueDate is published as a 'YYYY/MM/DD' string, so a server-side range
+    filter compares wrongly (and would silently return nothing). The feed is
+    ordered newest-first, so we pull a bounded page and filter locally.
+    """
+    since = (date.today() - timedelta(days=max(int(days or 45), 1))).isoformat()
+    params = {
+        # The layer rejects a query with no where clause. A real date range
+        # would be wrong here (IssueDate is 'YYYY/MM/DD', so a lexical compare
+        # against 'YYYY-MM-DD' misbehaves), so bound the page and filter below.
+        "where": "1=1",
+        "outFields": ("PermitNumber,PermitType,ConstructionType,WorkType,ApplicationDate,"
+                      "IssueDate,Status,WorkDesc,GPIN,StreetAddress,AddressUnit,City,State,Zip"),
+        "orderByFields": "IssueDate DESC",
+        "resultRecordCount": max(1, min(int(limit or 200), 2000)),
+        "returnGeometry": "false",
+        "f": "json",
+    }
+    data = _http_json(f"{VB_FS}/query", params)
+    if isinstance(data, dict) and data.get("error"):
+        raise RuntimeError(f"VB ArcGIS error: {data['error']}")
+
+    out = []
+    for feat in (data or {}).get("features", []):
+        a = feat.get("attributes") or {}
+        issued = _iso_date(a.get("IssueDate") or a.get("ApplicationDate"))
+        if issued and issued < since:
+            continue
+        addr = (str(a.get("StreetAddress") or "")).strip()
+        unit = (str(a.get("AddressUnit") or "")).strip()
+        if unit and not re.search(re.escape(unit), addr, re.I):
+            addr = f"{addr} {unit}".strip()
+        out.append(_norm_record(
+            permit_number=str(a.get("PermitNumber") or ""),
+            address=addr,
+            city=str(a.get("City") or ""),
+            state=str(a.get("State") or "VA"),
+            zip_code=str(a.get("Zip") or ""),
+            work_type=str(a.get("WorkType") or a.get("PermitType") or a.get("ConstructionType") or ""),
+            description=str(a.get("WorkDesc") or ""),
+            # CreatedBy is an opaque portal account (PUBLICUSER<n>), never a
+            # person. Treating it as a contractor name would make every row look
+            # "already engaged", so it is deliberately not mapped here.
+            contractor="",
+            issue_date=issued,
+            value=0.0,  # VB publishes no declared value on this layer
+            property_type=str(a.get("ConstructionType") or ""),
+            source="vb_open_data",
+        ))
+    return out
+
+
+def fetch_norfolk(days: int = 45, limit: int = 200) -> list:
+    """Recent Norfolk permits from the city's Socrata dataset."""
+    since = (date.today() - timedelta(days=max(int(days or 45), 1))).isoformat()
+    params = {
+        "$select": ("permit_number,address,type,use_class,work_type,use_type,structure,"
+                    "status,application_date,square_footage"),
+        "$where": f"application_date >= '{since}T00:00:00'",
+        "$order": "application_date DESC",
+        "$limit": max(1, min(int(limit or 200), 50000)),
+    }
+    rows = _http_json(NORFOLK_SOCRATA, params)
+    out = []
+    for r in rows or []:
+        out.append(_norm_record(
+            permit_number=str(r.get("permit_number") or ""),
+            address=(str(r.get("address") or "")).split(" : ")[0].strip(),
+            city="Norfolk",
+            state="VA",
+            work_type=str(r.get("work_type") or r.get("use_type") or r.get("type") or ""),
+            description=str(r.get("use_type") or r.get("type") or ""),
+            contractor="",  # this feed publishes no contractor field
+            issue_date=str(r.get("application_date") or ""),
+            value=0.0,
+            property_type=str(r.get("use_class") or ""),
+            source="norfolk_open_data",
+        ))
+    return out
+
+
+OPEN_DATA_SOURCES = {
+    "virginia beach": [fetch_virginia_beach],
+    "norfolk": [fetch_norfolk],
+    # Chesapeake is deliberately absent. Its ArcGIS "Development Tracking" layer
+    # looks like a permit feed but is land-use actions (use permits,
+    # subdivisions, rezoning), newest entry April 2022, no applicant fields --
+    # and its Parcels/Address Points layers carry no owner name. Importing it
+    # would fill /leads with 2019 rezoning records that look like live jobs.
+    # Chesapeake building permits live in eBUILD (Accela), behind session-only
+    # access; the records request in docs/records-request.md is the way in.
+    "chesapeake": [],
+}
+
+
+def fetch_open_data(city: str = "", days: int = 45, limit: int = 200) -> list:
+    """Fetch permits from municipal open data for the given city.
+
+    Returns [] for cities with no open feed rather than raising, so a single
+    bad source cannot take down the whole scan.
+    """
+    city = (city or "").strip().lower()
+    fetchers = OPEN_DATA_SOURCES.get(city)
+    if not fetchers:
+        return []
+    out = []
+    for fn in fetchers:
+        try:
+            out.extend(fn(days=days, limit=limit))
+        except Exception as exc:
+            print(f"[permit-scan] open data {fn.__name__} ({city}): {exc}"[:200], flush=True)
+    return out
