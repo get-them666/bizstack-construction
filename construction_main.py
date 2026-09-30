@@ -4220,8 +4220,18 @@ def ingest_permits(conn, permits):
 
 
 def run_permit_import():
-    if not permit_service.is_configured():
-        print("[permit-scan] SHOVELS_API_KEY not set — skipping auto-import", flush=True)
+    # is_configured() only reports a Shovels key, but the municipal open-data
+    # feeds need no key. Gating on it here meant the whole importer was skipped
+    # in production, where Shovels has never been configured, so /leads?lane=permits
+    # only ever held demo rows.
+    cities = [c.strip() for c in (os.getenv("PERMIT_CITIES", "Virginia Beach,Norfolk") or "").split(",")]
+    cities = [c for c in cities if c] or ["Virginia Beach", "Norfolk"]
+    # OPEN_DATA_SOURCES is keyed lowercase; normalise so PERMIT_CITIES="Virginia Beach"
+    # resolves. Check truthiness of the fetcher list, not key presence: a city
+    # with no feed is present but empty on purpose.
+    have_open = any(permit_service.OPEN_DATA_SOURCES.get(c.strip().lower()) for c in cities)
+    if not permit_service.is_configured() and not have_open:
+        print("[permit-scan] no permit source configured (set SHOVELS_API_KEY or add an open-data city)", flush=True)
         return
     global _permit_backfilled
     started = datetime.utcnow()
@@ -4237,8 +4247,13 @@ def run_permit_import():
         except (TypeError, ValueError):
             incremental = 2
         days = backfill if not _permit_backfilled else incremental
+        permits = []
+        for city in cities:
+            # fetch_permits prefers Shovels when configured, else the city's
+            # open-data feed, and only then seeds demo rows. Demo rows carry
+            # _demo and ingest_permits() skips them for lead promotion.
+            permits.extend(permit_service.fetch_permits(city, "VA", days=days, limit=200))
         with psycopg.connect(db_url, row_factory=dict_row) as conn:
-            permits = permit_service.search_permits(days=days)
             added, leads = ingest_permits(conn, permits)
         _permit_backfilled = True
     except Exception as exc:
