@@ -238,8 +238,22 @@ def scan_sam_gov(preset=None):
     return {"matches": list(matches.values()), "errors": errors}
 
 
+def enabled():
+    """Whether the federal (SAM.gov) source should run at all.
+
+    The operator switched this off for both companies. Set
+    LEAD_SOURCES_SAM_GOV=1 to turn it back on -- the scanner is unchanged, and
+    existing sam-gov leads are hidden rather than deleted, so restoring is a
+    single env var.
+    """
+    return (os.getenv("LEAD_SOURCES_SAM_GOV", "0") or "0").strip().lower() in ("1", "true", "yes", "on")
+
+
 def scan(limit=None, preset=None):
     """Aggregate all enabled public sources."""
+    if not enabled():
+        print("[lead-source] SAM.gov disabled (LEAD_SOURCES_SAM_GOV=0); skipping federal scan", flush=True)
+        return {"matches": [], "errors": [], "disabled": ["sam-gov"]}
     result = scan_sam_gov(preset)
     if limit:
         result["matches"] = result["matches"][:limit]

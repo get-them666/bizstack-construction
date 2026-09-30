@@ -18,6 +18,7 @@
             <nav class="hidden lg:flex items-center gap-0.5 flex-1 min-w-0 justify-center">
                 {% if actor_role == 'admin' %}
                 <a href="/dashboard" class="nav-link {{ act('/dashboard') }}">Dashboard</a>
+                <a href="/pipeline" class="nav-link {{ act('/pipeline') }}">Pipeline</a>
                 <div class="nav-dropdown" tabindex="0">
                     <button class="nav-link nav-dropdown-trigger {{ 'nav-active' if leads_on else '' }}">
                         Leads
@@ -95,6 +96,7 @@
         <p class="mobile-section-label">Overview</p>
         <div class="grid gap-0.5">
             <a href="/dashboard" class="mobile-link {{ act('/dashboard') }}">Dashboard</a>
+            <a href="/pipeline" class="mobile-link {{ act('/pipeline') }}">Pipeline</a>
             <a href="/acquisition" class="mobile-link {{ act('/acquisition') }}">Acquisition</a>
             <a href="/leads" class="mobile-link {{ act('/leads') }}">Leads</a>
             <a href="/job-leads" class="mobile-link {{ act('/job-leads') }}">Job Finder</a>

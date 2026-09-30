@@ -88,6 +88,32 @@ PERMIT_STATUS_COLORS = {
 }
 
 
+# --- Lead source visibility ------------------------------------------------
+# The operator switched the federal (SAM.gov) source off for both companies.
+# Existing sam-gov leads are hidden from every owner-facing view rather than
+# deleted, so nothing is destroyed and the source can come back with one env
+# var (LEAD_SOURCES_SAM_GOV=1).
+def hidden_lead_sources() -> list:
+    """Lead `source` values to exclude from owner-facing lists and counts."""
+    hidden = []
+    if not lead_sources.enabled():
+        hidden.append("sam-gov")
+    return hidden
+
+
+def source_visibility_clause(alias: str = "") -> str:
+    """SQL fragment excluding hidden sources. Returns '' when nothing is hidden."""
+    hidden = hidden_lead_sources()
+    if not hidden:
+        return ""
+    pfx = f"{alias}." if alias else ""
+    return " AND " + " AND ".join(f"COALESCE({pfx}source, '') <> %s" for _ in hidden)
+
+
+def source_visibility_params() -> list:
+    return list(hidden_lead_sources())
+
+
 # --- Company identity (env-driven so both brands stay configurable) ---------
 def company() -> dict:
     return {
@@ -1351,8 +1377,11 @@ def build_tool_handlers(db, stripe_svc):
                     matches.append(r)
             except Exception:
                 pass
-            cur.execute(f"SELECT id, name, phone, email, project_type, 'lead' AS kind FROM leads WHERE {like('name')} OR {like('phone')} OR {like('email')} LIMIT 20;",
-                        (f"%{q}%", f"%{q}%", f"%{q}%"))
+            lead_vis = source_visibility_clause()
+            lead_vis_params = source_visibility_params()
+            cur.execute(f"SELECT id, name, phone, email, project_type, 'lead' AS kind FROM leads "
+                        f"WHERE ({like('name')} OR {like('phone')} OR {like('email')}){lead_vis} LIMIT 20;",
+                        (f"%{q}%", f"%{q}%", f"%{q}%", *lead_vis_params))
             for r in cur.fetchall():
                 r["company"] = r.get("company") or "construction"
                 matches.append(r)
@@ -1753,16 +1782,22 @@ async def read_dashboard(request: Request, db=Depends(get_db)):
     if not is_authed:
         return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
 
+    vis = source_visibility_clause()
+    vis_params = tuple(source_visibility_params())
     with db.cursor() as cur:
-        cur.execute("SELECT COUNT(*) AS c FROM leads WHERE company = 'construction';")
+        cur.execute(f"SELECT COUNT(*) AS c FROM leads WHERE company = 'construction'{vis};", vis_params)
         total_leads = cur.fetchone()["c"]
-        cur.execute("SELECT COUNT(*) AS c FROM leads WHERE status = 'new' AND company = 'construction';")
+        cur.execute("SELECT COUNT(*) AS c FROM leads WHERE status = 'new' AND company = 'construction'"
+                    + vis + ";", vis_params)
         new_leads = cur.fetchone()["c"]
-        cur.execute("SELECT COUNT(*) AS c FROM leads WHERE status IN ('quoted','deposit','in_progress') AND company = 'construction';")
+        cur.execute("SELECT COUNT(*) AS c FROM leads WHERE status IN ('quoted','deposit','in_progress')"
+                    f" AND company = 'construction'{vis};", vis_params)
         active = cur.fetchone()["c"]
         cur.execute("SELECT COUNT(*) AS c, COALESCE(SUM(amount_cents),0) AS amt FROM payments WHERE company = 'construction';")
         pay = cur.fetchone()
-        cur.execute("SELECT id, name, phone, project_type, status, deposit_status, created_at FROM leads WHERE company = 'construction' ORDER BY created_at DESC LIMIT 8;")
+        cur.execute("SELECT id, name, phone, project_type, status, deposit_status, created_at"
+                    f" FROM leads WHERE company = 'construction'{vis} ORDER BY created_at DESC LIMIT 8;",
+                    vis_params)
         recent = cur.fetchall()
 
     return templates.TemplateResponse(request=request, name="dashboard.html", context={
@@ -1795,13 +1830,19 @@ async def leads_page(request: Request, status_filter: str = "", q: str = "", lan
         like = f"%{q.strip()}%"
         params += [like, like, like, like]
     where.append("company = 'construction'")
-    clause = ("WHERE " + " AND ".join(where))
+    vis = source_visibility_clause()
+    vis_params = source_visibility_params()
+    clause = ("WHERE " + " AND ".join(where) + vis)
+    all_params = tuple(params + vis_params)
     with db.cursor() as cur:
-        cur.execute(f"SELECT * FROM leads {clause} ORDER BY created_at DESC LIMIT 500;", tuple(params))
+        cur.execute(f"SELECT * FROM leads {clause} ORDER BY created_at DESC LIMIT 500;", all_params)
         leads = cur.fetchall()
-        cur.execute("SELECT status, COUNT(*) AS c FROM leads WHERE company = 'construction' GROUP BY status;")
+        cur.execute(f"SELECT status, COUNT(*) AS c FROM leads WHERE company = 'construction'{vis} GROUP BY status;",
+                    tuple(vis_params))
         counts = {r["status"]: r["c"] for r in cur.fetchall()}
-        cur.execute("SELECT COUNT(*) AS c FROM leads WHERE company = 'construction' AND draft_reply IS NOT NULL AND LOWER(COALESCE(draft_reply, '')) <> '';")
+        cur.execute("SELECT COUNT(*) AS c FROM leads WHERE company = 'construction'"
+                    " AND draft_reply IS NOT NULL AND LOWER(COALESCE(draft_reply, '')) <> ''"
+                    + vis + ";", tuple(vis_params))
         draft_count = cur.fetchone()["c"]
 
         # Intel lane: permits, which have no phone or email by nature.
@@ -1930,6 +1971,177 @@ async def update_lead_status_route(lead_id: int, request: Request, status_val: s
         cur.execute("UPDATE leads SET status = %s WHERE id = %s;", (status_val, lead_id))
         db.commit()
     return RedirectResponse(url=request.headers.get("referer") or "/leads", status_code=status.HTTP_303_SEE_OTHER)
+
+
+# --- Pipeline board ---------------------------------------------------------
+# One visual board across the three streams the owner actually works:
+# contactable leads, address-only permits, and backlog jobs. Each stream keeps
+# its own status vocabulary (a permit has no phone, so it can never be "quoted"
+# in the lead sense), so the board renders one column set per stream.
+
+PIPELINE_STREAMS = ("leads", "permits", "backlog")
+
+
+@app.get("/pipeline", response_class=HTMLResponse)
+async def pipeline_board(
+    request: Request,
+    stream: str = "",
+    q: str = "",
+    owner: str = "",
+    db=Depends(get_db),
+):
+    """Kanban of everything in the sales pipeline, newest work first per column."""
+    require_admin(request)
+
+    streams = [s for s in (stream or "").split(",") if s in PIPELINE_STREAMS] or list(PIPELINE_STREAMS)
+    cols: dict[str, list[dict]] = {}
+
+    def _search(term: str, *fields: str):
+        """Return (sql_fragment, params) filtering `fields` ILIKE the search term."""
+        term = (term or "").strip()
+        if not term or not fields:
+            return "", []
+        clause = " AND (" + " OR ".join(f"COALESCE({f}, '') ILIKE %s" for f in fields) + ")"
+        return clause, [f"%{term}%"] * len(fields)
+
+    vis = source_visibility_clause()
+    vis_params = source_visibility_params()
+
+    if "leads" in streams:
+        frag, params = _search(q, "name", "phone", "address", "project_type")
+        sql = (
+            # Exclude backlog: those rows are source='backlog' and get their own
+            # stream below. Including them here would double-count every
+            # back-logged job in the board and in the header totals.
+            "SELECT id, name, phone, email, address, project_type, status, source, "
+            "COALESCE(estimate_high_cents, estimate_low_cents, 0) AS value, created_at "
+            "FROM leads WHERE company = 'construction' AND source <> 'backlog'"
+            + frag + vis + " ORDER BY created_at DESC LIMIT 400;"
+        )
+        with db.cursor() as cur:
+            cur.execute(sql, tuple(params + vis_params))
+            rows = cur.fetchall()
+        for r in rows:
+            cols.setdefault(f"leads:{r['status']}", []).append({
+                "id": r["id"], "stream": "leads",
+                "title": r["name"] or "(no name)",
+                "sub": r["address"] or r["project_type"] or "",
+                "meta": [r["source"] or "", (r["phone"] or r["email"] or "")],
+                "value": int(r["value"] or 0),
+                "when": r["created_at"].strftime("%b %d") if r.get("created_at") else "",
+            })
+
+    if "permits" in streams:
+        frag, params = _search(q, "address", "work_type", "permit_number", "contractor_name")
+        sql = (
+            "SELECT id, permit_number, address, work_type, job_description, status, "
+            "estimated_value, found_at FROM job_leads WHERE 1=1"
+            + frag + " ORDER BY found_at DESC LIMIT 400;"
+        )
+        with db.cursor() as cur:
+            cur.execute(sql, tuple(params))
+            rows = cur.fetchall()
+        for r in rows:
+            desc = (r["job_description"] or "").strip()
+            if desc.lower().startswith("<") or len(desc) > 90:
+                desc = ""
+            cols.setdefault(f"permits:{r['status']}", []).append({
+                "id": r["id"], "stream": "permits",
+                "title": r["address"] or "(no address)",
+                "sub": r["work_type"] or desc or r["permit_number"] or "",
+                "meta": [r["permit_number"] or "", r["work_type"] or ""],
+                "value": int(float(r["estimated_value"] or 0)),
+                "when": r["found_at"].strftime("%b %d") if r.get("found_at") else "",
+            })
+
+    if "backlog" in streams:
+        frag, params = _search(q, "name", "address", "project_type")
+        sql = (
+            "SELECT id, name, address, project_type, status, "
+            "COALESCE(estimate_high_cents, estimate_low_cents, 0) AS value, created_at "
+            "FROM leads WHERE source = 'backlog' AND company = 'construction'"
+            + frag + " ORDER BY created_at DESC LIMIT 400;"
+        )
+        with db.cursor() as cur:
+            cur.execute(sql, tuple(params))
+            rows = cur.fetchall()
+        for r in rows:
+            cols.setdefault(f"backlog:{r['status']}", []).append({
+                "id": r["id"], "stream": "backlog",
+                "title": r["name"] or "(unnamed job)",
+                "sub": r["address"] or r["project_type"] or "",
+                "meta": [r["project_type"] or "", ""],
+                "value": int(r["value"] or 0),
+                "when": r["created_at"].strftime("%b %d") if r.get("created_at") else "",
+            })
+
+    groups = []
+    for s in streams:
+        if s == "leads":
+            stages = [(f"leads:{st}", STATUS_LABELS.get(st, st)) for st in LEAD_STATUSES]
+        elif s == "permits":
+            stages = [(f"permits:{st}", PERMIT_STATUS_LABELS.get(st, st)) for st in PERMIT_STATUSES]
+        else:
+            stages = [(f"backlog:{st}", STATUS_LABELS.get(st, st)) for st in LEAD_STATUSES]
+        groups.append({
+            "stream": s,
+            "title": {"leads": "Leads — can call or email",
+                      "permits": "Permits — work the address",
+                      "backlog": "Back-log — jobs you've decided to do"}[s],
+            "columns": [
+                {"key": key, "label": label, "count": len(cols.get(key, [])),
+                 "value": sum(c["value"] for c in cols.get(key, [])),
+                 "cards": cols.get(key, [])[:60]}
+                for key, label in stages
+            ],
+        })
+
+    total_cards = sum(len(v) for v in cols.values())
+    total_value = sum(c["value"] for v in cols.values() for c in v)
+
+    return templates.TemplateResponse(request=request, name="pipeline.html", context={
+        "user": {"email": owner or (current_actor(request) or {}).get("email", "")},
+        "groups": groups,
+        "streams": list(PIPELINE_STREAMS),
+        "active_streams": streams,
+        "q": q,
+        "total_cards": total_cards,
+        "total_value": total_value,
+        "permit_status": _permit_status(),
+    })
+
+
+@app.post("/api/pipeline/move")
+async def pipeline_move(
+    request: Request,
+    stream: str = Form(...),
+    item_id: int = Form(...),
+    status: str = Form(...),
+    db=Depends(get_db),
+):
+    """Move a card between columns. Used by the board's drag/drop."""
+    require_admin(request)
+    if stream == "permits":
+        if status not in PERMIT_STATUSES:
+            raise HTTPException(status_code=400, detail="Unknown permit status")
+        with db.cursor() as cur:
+            cur.execute("UPDATE job_leads SET status = %s WHERE id = %s;", (status, item_id))
+    elif stream == "backlog":
+        if status not in LEAD_STATUSES:
+            raise HTTPException(status_code=400, detail="Unknown status")
+        with db.cursor() as cur:
+            cur.execute("UPDATE leads SET status = %s WHERE id = %s AND source = 'backlog' AND company = 'construction';",
+                        (status, item_id))
+    elif stream == "leads":
+        if status not in LEAD_STATUSES:
+            raise HTTPException(status_code=400, detail="Unknown status")
+        with db.cursor() as cur:
+            cur.execute("UPDATE leads SET status = %s WHERE id = %s AND company = 'construction';",
+                        (status, item_id))
+    else:
+        raise HTTPException(status_code=400, detail="Unknown stream")
+    db.commit()
+    return JSONResponse(content={"ok": True})
 
 
 @app.post("/api/leads/{lead_id}/notes")
@@ -3821,11 +4033,14 @@ def pipeline_digest():
     """Env-gated boot report (LEAD_PIPELINE_DIGEST=1): one JSON print of the
     whole shared lead pipeline across companies."""
     try:
+        vis = source_visibility_clause()
+        vis_params = tuple(source_visibility_params())
         with psycopg.connect(db_url, row_factory=dict_row) as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT source, company, status, COUNT(*) AS c FROM leads "
-                    "GROUP BY 1, 2, 3 ORDER BY 1, 2, 3;"
+                    "SELECT source, company, status, COUNT(*) AS c FROM leads WHERE 1=1"
+                    + vis + " GROUP BY 1, 2, 3 ORDER BY 1, 2, 3;",
+                    vis_params,
                 )
                 by_source = cur.fetchall()
                 cur.execute(
