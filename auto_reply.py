@@ -328,6 +328,7 @@ def _suppression_days() -> int:
 
 
 def _max_touches() -> int:
+    """Touches allowed for a lead who has never responded."""
     try:
         return max(0, int(os.getenv("LEAD_MAX_TOUCHES", "2") or 2))
     except (TypeError, ValueError):
@@ -335,19 +336,32 @@ def _max_touches() -> int:
 
 
 def _retouch_days() -> int:
+    """Days before the one timed follow-up may go out without a response."""
     try:
         return max(0, int(os.getenv("LEAD_RETOUCH_DAYS", "5") or 5))
     except (TypeError, ValueError):
         return 5
 
 
-def contact_policy_allows(db, recipient: str, channel: str, lead_id=None) -> tuple:
-    """The outreach policy: at most two touches, ever.
+def _max_touches_replied() -> int:
+    """Hard ceiling once a lead has responded.
 
-    First touch always goes out. A second is allowed only if the lead replied to
-    the first, or LEAD_RETOUCH_DAYS have passed. After two touches the address
-    is closed to automated contact permanently — this is a count, not a window,
-    so no amount of elapsed time reopens it.
+    A reply unlocks a further follow-up, but only a bounded number of them:
+    _lead_replied() means "ever replied", so without a ceiling one response would
+    leave the address permanently eligible and the sweep would never stop.
+    """
+    try:
+        return max(_max_touches(), int(os.getenv("LEAD_MAX_TOUCHES_REPLIED", "3") or 3))
+    except (TypeError, ValueError):
+        return 3
+
+
+def contact_policy_allows(db, recipient: str, channel: str, lead_id=None) -> tuple:
+    """Contact once. A follow-up may follow a reply, or once 5 days have passed.
+
+    After that lead is never contacted again unless they respond: elapsed time
+    alone buys exactly one timed follow-up and no more. A response reopens the
+    door, bounded by LEAD_MAX_TOUCHES_REPLIED so it cannot become a cadence.
 
     Fail-closed: a failed lookup counts as "do not send".
     """
@@ -370,16 +384,22 @@ def contact_policy_allows(db, recipient: str, channel: str, lead_id=None) -> tup
         print(f"[auto-reply] touch count failed for {recipient} ({channel}); withholding: {exc}", flush=True)
         return False, "touch count unavailable"
 
+    if touches == 0:
+        return True, ""
+    replied = bool(lead_id) and _lead_replied(db, lead_id)
+    if replied:
+        ceiling = _max_touches_replied()
+        if touches >= ceiling:
+            return False, f"already contacted {touches}x after replies (max {ceiling})"
+        return True, f"follow-up allowed: lead replied ({touches} prior touch)"
     if touches >= max_touches:
-        return False, f"already contacted {touches}x (max {max_touches})"
-    if touches == 1:
-        if lead_id and _lead_replied(db, lead_id):
-            return True, "second touch: lead replied"
-        if last_at is not None:
-            last = last_at if last_at.tzinfo else last_at.replace(tzinfo=timezone.utc)
-            waited = (datetime.now(timezone.utc) - last).total_seconds() / 86400.0
-            if waited < _retouch_days():
-                return False, f"second touch waits {_retouch_days() - waited:.1f}d"
+        return False, f"contacted {touches}x with no reply — never again without a response"
+    if last_at is None:
+        return True, ""
+    last = last_at if last_at.tzinfo else last_at.replace(tzinfo=timezone.utc)
+    waited = (datetime.now(timezone.utc) - last).total_seconds() / 86400.0
+    if waited < _retouch_days():
+        return False, f"follow-up waits {_retouch_days() - waited:.1f}d"
     return True, ""
 
 
