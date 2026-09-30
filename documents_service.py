@@ -578,6 +578,50 @@ def ses_configured() -> bool:
     )
 
 
+async def _send_via_gmail(
+    cfg: dict, to: str, subject: str, body: str,
+    cc: str = "", attachment: bytes = None, filename: str = "", physical: str = "",
+) -> bool:
+    """Send through the Gmail API using the stored OAuth token.
+
+    This is the only HTTPS transport that needs no third-party credentials, and
+    it is already authorised for gmail.send because inbound mail runs on the same
+    token. Returns False (never raises) so the caller can fall through to the
+    rest of the ladder.
+    """
+    sender = (cfg.get("SMTP_FROM") or "").strip()
+    if not sender:
+        return False
+    try:
+        import google_gmail
+    except Exception as exc:
+        print(f"[EMAIL] Gmail transport unavailable: {exc}", flush=True)
+        return False
+
+    full_body = body + (("\n\n" + physical) if physical else "")
+    # Every service account with a live token is tried; the sender address on the
+    # matching one wins, otherwise the first that accepts the message.
+    services = os_getenv("GMAIL_SEND_SERVICES", "construction,broom").strip() or "construction"
+    last_err = ""
+    for service in [s.strip() for s in services.split(",") if s.strip()]:
+        try:
+            resp = await asyncio.to_thread(
+                google_gmail.send_email,
+                service, sender, to, subject, full_body,
+                None, cc, "", None,
+            )
+            if resp and (resp.get("id") or resp.get("messageId")):
+                print(f"[EMAIL] sent via Gmail ({service}) to {to}", flush=True)
+                return True
+            last_err = f"{service}: no message id"
+        except Exception as exc:
+            last_err = f"{service}: {exc}"
+            continue
+    if last_err:
+        print(f"[EMAIL] Gmail send failed ({last_err}); falling through", flush=True)
+    return False
+
+
 def _send_via_ses(cfg: dict, to: str, raw: bytes, cc: str = "") -> bool:
     import boto3
     from botocore.config import Config as BotoConfig
@@ -643,6 +687,24 @@ async def send_email(cfg: dict, to: str, subject: str, body: str, attachment: by
         "on",
     )
     degraded_to_fallback = False
+
+    # Gmail is the only transport. The operator retired SES, Resend and Zoho:
+    # SES sits in a sandbox that cannot mail external recipients, Resend's daily
+    # quota is shared with the lead bot and gets exhausted, and Zoho times out
+    # on every port from Railway's egress. The Gmail API is HTTPS and rides the
+    # OAuth token already stored for inbound mail, so it is the one path that
+    # works. EMAIL_TRANSPORT=legacy re-enables the old ladder if ever needed.
+    transport = (os_getenv("EMAIL_TRANSPORT", "gmail") or "gmail").strip().lower()
+    if transport != "legacy":
+        sent_ok = await _send_via_gmail(cfg, to, subject, body, cc=cc,
+                                        attachment=attachment, filename=filename,
+                                        physical=physical)
+        if sent_ok:
+            return True
+        print("[EMAIL] Gmail transport unavailable; no fallback transport is enabled", flush=True)
+        return False
+
+    # --- legacy ladder below, retained behind EMAIL_TRANSPORT=legacy ---
 
     # Cloud hosts (Railway) frequently block outbound SMTP egress entirely.
     # Prefer the Resend HTTPS REST API when a key is available, then fall back

@@ -424,6 +424,12 @@ async def lifecycle(app: FastAPI):
                     found_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
                 );
                 """)
+                # Must come after the CREATE above: an ALTER on a table that does
+                # not exist yet raises and aborts the whole schema init.
+                cur.execute("ALTER TABLE job_leads ADD COLUMN IF NOT EXISTS scope_summary TEXT;")
+                cur.execute("ALTER TABLE job_leads ADD COLUMN IF NOT EXISTS scope_category VARCHAR(60);")
+                cur.execute("ALTER TABLE job_leads ADD COLUMN IF NOT EXISTS scope_confidence VARCHAR(20);")
+                cur.execute("ALTER TABLE job_leads ADD COLUMN IF NOT EXISTS scope_researched_at TIMESTAMP WITH TIME ZONE;")
                 cur.execute("""
                 CREATE TABLE IF NOT EXISTS generated_documents (
                     id SERIAL PRIMARY KEY,

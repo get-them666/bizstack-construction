@@ -66,6 +66,10 @@ def _run(
     )
 
     base_env = {"RESEND_API_KEY": "re_test_key"}
+    # These cases cover the Resend/SES/SMTP ladder, which the operator retired.
+    # It is still reachable behind EMAIL_TRANSPORT=legacy, so pin it explicitly
+    # rather than letting the Gmail-only default short-circuit every test.
+    base_env["EMAIL_TRANSPORT"] = "legacy"
     base_env.update(env or {})
 
     with mock.patch.dict("os.environ", base_env, clear=True), mock.patch.object(
@@ -138,7 +142,9 @@ class SesFallThroughTests(unittest.TestCase):
             raise RuntimeError("Email address is not verified")
 
         cfg = dict(BASE_CFG)
-        with mock.patch.dict("os.environ", {"RESEND_API_KEY": "k"}, clear=True), mock.patch.object(
+        with mock.patch.dict(
+            "os.environ", {"RESEND_API_KEY": "k", "EMAIL_TRANSPORT": "legacy"}, clear=True
+        ), mock.patch.object(
             ds, "_resend_quota_blocked", return_value=True
         ), mock.patch.object(ds, "ses_configured", return_value=True), mock.patch.object(
             ds, "_send_via_ses", new=mock.MagicMock(side_effect=_boom)
@@ -183,6 +189,53 @@ class DegradedLadderBoundTests(unittest.TestCase):
         _, _, smtp = _run(env={"SMTP_FALLBACK_CONNECT_TIMEOUT": "7"}, ses_result=False)
         self.assertTrue(smtp)
         self.assertEqual(smtp[0].get("timeout"), 7)
+
+
+class GmailTransportTests(unittest.TestCase):
+    """The default transport is now Gmail only, since SES/Resend/Zoho are retired."""
+
+    def _call(self, gmail_ok):
+        cfg = dict(BASE_CFG)
+        gmail = mock.AsyncMock(return_value=gmail_ok)
+        with mock.patch.dict("os.environ", {}, clear=True), mock.patch.object(
+            ds, "_send_via_gmail", gmail
+        ), mock.patch.object(ds, "_send_via_resend_api", mock.AsyncMock()) as resend, \
+             mock.patch.object(ds, "_send_via_ses", mock.MagicMock()) as ses, \
+             mock.patch.object(ds.aiosmtplib, "send", mock.AsyncMock()) as smtp:
+            result = asyncio.run(ds.send_email(cfg, TO, "Subject", "Body"))
+        return result, gmail, resend, ses, smtp
+
+    def test_gmail_is_the_default_transport(self):
+        result, gmail, resend, ses, smtp = self._call(True)
+        self.assertTrue(result)
+        gmail.assert_awaited_once()
+        resend.assert_not_awaited()
+        ses.assert_not_called()
+        smtp.assert_not_awaited()
+
+    def test_no_fallback_when_gmail_fails(self):
+        """No retired provider may quietly take over and throttle us again."""
+        result, gmail, resend, ses, smtp = self._call(False)
+        self.assertFalse(result)
+        gmail.assert_awaited_once()
+        resend.assert_not_awaited()
+        ses.assert_not_called()
+        smtp.assert_not_awaited()
+
+    def test_legacy_ladder_still_reachable_explicitly(self):
+        cfg = dict(BASE_CFG)
+        with mock.patch.dict(
+            "os.environ",
+            {"EMAIL_TRANSPORT": "legacy", "RESEND_API_KEY": "k"},
+            clear=True,
+        ), mock.patch.object(ds, "_send_via_gmail", mock.AsyncMock()) as gmail, \
+             mock.patch.object(ds, "_send_via_resend_api", mock.AsyncMock(return_value=True)) as resend, \
+             mock.patch.object(ds, "_send_via_ses", mock.MagicMock()) as ses, \
+             mock.patch.object(ds.aiosmtplib, "send", mock.AsyncMock()):
+            result = asyncio.run(ds.send_email(cfg, TO, "Subject", "Body"))
+        self.assertTrue(result)
+        gmail.assert_not_awaited()
+        resend.assert_awaited_once()
 
 
 class TotalFailureTests(unittest.TestCase):

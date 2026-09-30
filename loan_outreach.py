@@ -10,6 +10,7 @@ the app mailer. All activity is logged to `outreach_touches` / `outreach_replies
 import asyncio
 import datetime as _dt
 import os
+from datetime import datetime, timezone
 from email.utils import parseaddr
 
 import psycopg
@@ -212,6 +213,54 @@ def _campaign_start(conn) -> _dt.date:
     return today
 
 
+def mail_ready() -> bool:
+    """Is there any transport that can actually deliver right now?
+
+    Checked without sending anything. The operator retired SES/Zoho/Resend, so
+    this asks whether a Gmail OAuth token exists for a sender address. A false
+    here means the cadence must not consume touchpoints.
+    """
+    if _MAIL_READY_CACHE.get("value") is not None:
+        return bool(_MAIL_READY_CACHE["value"])
+    ok = False
+    detail = ""
+    try:
+        sender = (FROM_ADDR or "").strip()
+        if not sender:
+            detail = "no SMTP_FROM set"
+        else:
+            import google_oauth
+            services = (os.getenv("GMAIL_SEND_SERVICES", "construction,broom") or "")
+            for svc in [s.strip() for s in services.split(",") if s.strip()]:
+                try:
+                    if google_oauth.get_valid_access_token(svc, sender):
+                        ok = True
+                        detail = f"Gmail token valid for {svc}"
+                        break
+                except Exception as exc:
+                    detail = f"{svc}: {exc}"
+    except Exception as exc:
+        detail = str(exc)
+
+    if not ok and not detail:
+        detail = "no Gmail token for the sender address"
+    _MAIL_READY_CACHE["value"] = ok
+    _MAIL_READY_CACHE["detail"] = detail
+    _MAIL_READY_CACHE["checked_at"] = datetime.now(timezone.utc).isoformat()
+    print(f"[outreach] mail preflight: {'OK' if ok else 'BROKEN'} — {detail}", flush=True)
+    return ok
+
+
+def mail_status() -> dict:
+    """Current deliverability, for the owner-facing campaign panel."""
+    ok = mail_ready()
+    return {
+        "ok": ok,
+        "detail": _MAIL_READY_CACHE.get("detail", ""),
+        "checked_at": _MAIL_READY_CACHE.get("checked_at", ""),
+    }
+
+
 def _record_touch(conn, lender: dict, day: int, spec: dict, status: str, dry: bool = False, body: str = "", subject: str = "") -> None:
     """Upsert one cadence touchpoint. `dry` records a 'missed' row without mail."""
     if dry:
@@ -231,6 +280,9 @@ def _record_touch(conn, lender: dict, day: int, spec: dict, status: str, dry: bo
 # A 'sending' row older than this is assumed to be an abandoned claim (process
 # killed mid-send) and is taken over by the next pass.
 STALE_SENDING_MINUTES = 30
+
+# Deliverability probe result. Refreshed by mail_ready() once per process.
+_MAIL_READY_CACHE: dict = {}
 
 
 def _claim_touch(conn, lender: dict, day: int) -> bool:
@@ -297,7 +349,21 @@ async def _run_cadence(conn) -> None:
             # outside its window is recorded as 'missed' (terminal) so the
             # scheduler stops considering it, rather than mailing a lender
             # "I emailed you yesterday" a week after the fact.
+            #
+            # This must NOT run while mail is undeliverable. `missed` is
+            # terminal, so a dead mail transport used to permanently burn the
+            # whole cadence: every touchpoint got marked missed while nothing
+            # could send, and the campaign then looked healthy in the log
+            # forever while it had in fact already given up. When no transport
+            # can send, leave the touchpoint untouched so the sequence recovers
+            # the moment mail is fixed.
             if not row and elapsed - day > TOUCH_GRACE_DAYS:
+                if not mail_ready():
+                    print(
+                        f"[outreach] mail is undeliverable; day {day} -> {lender['name']} "
+                        f"held open (NOT marked missed) so it can send once mail works"
+                    )
+                    continue
                 _record_touch(conn, lender, day, spec, "missed", dry=True)
                 print(
                     f"[outreach] day {day} -> {lender['name']}: MISSED "

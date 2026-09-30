@@ -5,6 +5,8 @@ Send/receive email via Gmail API (replaces SMTP).
 import os
 import json
 import base64
+import uuid
+import mimetypes
 import urllib.parse
 import urllib.request
 from typing import Optional, List, Dict, Any
@@ -44,6 +46,68 @@ def _api_request(
         return json.loads(resp.read().decode())
 
 
+def _send_with_attachment(
+    service, user_email, to, subject, body_text, body_html,
+    cc, bcc, thread_id, attachment: bytes, filename: str,
+) -> Dict[str, Any]:
+    """Send with one file attached, built as a real MIME multipart message.
+
+    Gmail's raw endpoint takes full RFC-822 bytes, so this assembles the
+    multipart/mixed structure by hand (with a stable boundary) rather than
+    string-templating headers into the body.
+    """
+    boundary = "bz" + uuid.uuid4().hex[:20]
+    alt = "alt" + uuid.uuid4().hex[:16]
+
+    head = [
+        f"To: {to}",
+        f"Subject: {subject}",
+        f"From: {user_email}",
+        "MIME-Version: 1.0",
+    ]
+    if cc:
+        head.append(f"Cc: {cc}")
+    if bcc:
+        head.append(f"Bcc: {bcc}")
+
+    text_block = body_text or ""
+    # Every element below already ends in CRLF, so they concatenate directly.
+    # Joining with "\r\n" instead would double the break after headers and
+    # corrupt the MIME structure.
+    parts = ["\r\n".join(head) + "\r\n"]
+    parts.append(f'Content-Type: multipart/mixed; boundary="{boundary}"\r\n\r\n')
+    parts.append("--" + boundary + "\r\n")
+    if body_html:
+        parts.append(f'Content-Type: multipart/alternative; boundary="{alt}"\r\n\r\n')
+        parts.append("--" + alt + "\r\n")
+        parts.append("Content-Type: text/plain; charset=UTF-8\r\n\r\n")
+        parts.append(text_block + "\r\n")
+        parts.append("--" + alt + "\r\n")
+        parts.append("Content-Type: text/html; charset=UTF-8\r\n\r\n")
+        parts.append(body_html + "\r\n")
+        parts.append("--" + alt + "--\r\n")
+    else:
+        parts.append("Content-Type: text/plain; charset=UTF-8\r\n\r\n")
+        parts.append(text_block + "\r\n")
+
+    ctype, _mimetype = mimetypes.guess_type(filename)
+    maintype, _, subtype = (ctype or "application/octet-stream").partition("/")
+    parts.append("--" + boundary + "\r\n")
+    parts.append(f'Content-Type: {maintype}/{subtype or "octet-stream"}; name="{filename}"\r\n')
+    parts.append("Content-Transfer-Encoding: base64\r\n")
+    parts.append(f'Content-Disposition: attachment; filename="{filename}"\r\n\r\n')
+    encoded = base64.b64encode(attachment).decode()
+    parts.append("\r\n".join(encoded[i:i + 76] for i in range(0, len(encoded), 76)))
+    parts.append("\r\n--" + boundary + "--\r\n")
+
+    raw = "".join(parts)
+    raw_b64 = base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
+    payload: Dict[str, Any] = {"raw": raw_b64}
+    if thread_id:
+        payload["threadId"] = thread_id
+    return _api_request(service, user_email, "POST", "/users/me/messages/send", body=payload)
+
+
 def send_email(
     service: str,
     user_email: str,
@@ -54,8 +118,19 @@ def send_email(
     cc: Optional[str] = None,
     bcc: Optional[str] = None,
     thread_id: Optional[str] = None,
+    attachment: Optional[bytes] = None,
+    filename: str = "document.pdf",
 ) -> Dict[str, Any]:
-    """Send an email via Gmail API."""
+    """Send an email via Gmail API.
+
+    attachment/filename are optional; the lender sequence attaches a one-page
+    pitch PDF, which plain RFC-822 building in this function could not express.
+    """
+    if attachment:
+        return _send_with_attachment(
+            service, user_email, to, subject, body_text, body_html,
+            cc, bcc, thread_id, attachment, filename,
+        )
     # Build MIME message
     lines = [
         f"To: {to}",

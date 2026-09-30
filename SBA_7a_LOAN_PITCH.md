@@ -36,6 +36,11 @@ a live accounting ledger. This loan buys fuel for a machine that's already assem
 Pulled from both Railway databases, with back-logged 2026 work entered on its real dates.
 No invented figures:
 
+> **Updated Sept 30, 2026 — the pipeline gap below is now closed.** The revenue figures
+> in this section are still the Sept 16 verified numbers and have not changed. What
+> changed is the *forward* book, which was the one thing this file said it lacked.
+> See "Pipeline update (Sept 30, 2026)" immediately below.
+
 **Verified 2026 revenue — $32,516.50**
 
 | Line | Date(s) | Amount |
@@ -70,6 +75,44 @@ and a co-host relationship at two properties. The file's strength is now
 **25 years of trade experience + real, dated revenue + a fully built operating platform +
 3 active host relationships**. What it does *not* yet have is **open pipeline** — no live
 quotes or booked future work — so the loan still leans on projections for repayment.
+
+---
+
+## Pipeline update (Sept 30, 2026) — this is the new strength
+
+The gap named directly above ("no open pipeline") is the one thing that has changed, and
+it changed a lot. These are the live counts pulled from the production databases today,
+not projections:
+
+**Forward book under active monitoring**
+
+| Metric | Live number | Sept 16 (before) |
+|---|---|---|
+| Leads under management | **690** (679 new · 6 contacted · 1 quoted · 2 completed · 2 host) | 2 |
+| Building permits monitored | **529** (Virginia Beach + Norfolk open-data feeds) | **0** |
+| Jobs at quoted stage | **1** | 0 |
+| Projects completed | **2** | 2 |
+| Verified 2026 revenue | **$32,516.50** | $32,516.50 |
+
+**What this means for the lender, stated honestly.** You now run a permit-monitoring
+engine across two municipalities that surfaced 529 real residential permits in roughly
+two weeks, and you hold 690 leads in a tracked pipeline. That is a demand book, not
+revenue — and the honest version of the story is *why* it isn't revenue yet:
+
+> Permit data is published by the cities **without homeowner names, phone numbers, or
+> email addresses.** Virginia Beach publishes the applicant only as an opaque account
+> handle. So the pipeline can be *seen* but not *called* — 529 qualified jobs sitting at
+> known addresses, none of them reachable by email today.
+
+That is exactly what working capital buys. The loan is not to fund more lead generation;
+it is to fund **contact and conversion** of a pipeline that already exists: mailing,
+canvassing, phone time, and the crew to execute the work that comes back. It is the most
+fundable version of this file you can have — the marketing is already paid for and
+running.
+
+**Still true, and say it before they do:** 2 closed projects and ~$32.5K is a young file.
+Expect questions on concentration, and lead with the 25 years of trade experience and the
+two documented, insured renovation jobs.
 
 **What a lender will ask for (get these ready):** proof of the work and payment for both
 construction jobs — invoices marked paid, signed receipts, before/after photos, and the

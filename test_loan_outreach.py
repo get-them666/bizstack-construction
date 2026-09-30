@@ -277,12 +277,36 @@ class CadenceTests(unittest.TestCase):
         start = _dt.date.today() - _dt.timedelta(days=20)
         conn = FakeConn(rows=None, rowcount=0)
         with mock.patch.object(lo, "_campaign_start", return_value=start), \
+             mock.patch.object(lo, "mail_ready", return_value=True), \
              mock.patch.object(lo, "send_email", new=mock.AsyncMock(return_value=True)) as send:
             asyncio.run(lo._run_cadence(conn))
         send.assert_not_called()
         statuses = [p[6] for sql, p in conn.store if "INSERT INTO outreach_touches" in sql]
         self.assertTrue(statuses)
         self.assertEqual(set(statuses), {"missed"})
+
+    def test_dead_mail_does_not_burn_the_cadence(self):
+        """Regression: `missed` is terminal, so marking it while mail is
+        undeliverable permanently gave up on the whole campaign while the log
+        still looked healthy. Touchpoints must stay open when nothing can send.
+        """
+        start = _dt.date.today() - _dt.timedelta(days=20)
+        conn = FakeConn(rows=None, rowcount=0)
+        with mock.patch.object(lo, "_campaign_start", return_value=start), \
+             mock.patch.object(lo, "mail_ready", return_value=False), \
+             mock.patch.object(lo, "send_email", new=mock.AsyncMock(return_value=True)) as send:
+            asyncio.run(lo._run_cadence(conn))
+        send.assert_not_called()
+        statuses = [p[6] for sql, p in conn.store if "INSERT INTO outreach_touches" in sql]
+        self.assertEqual(statuses, [], f"touches were burned while mail was dead: {statuses}")
+
+    def test_mail_preflight_reports_broken_without_a_token(self):
+        """The preflight must never raise, even with no Google module or token."""
+        lo._MAIL_READY_CACHE.clear()
+        with mock.patch.object(lo, "FROM_ADDR", "hello@example.com"), \
+             mock.patch.dict(lo.os.environ, {"GMAIL_SEND_SERVICES": "construction"}, clear=False):
+            ok = lo.mail_ready()
+        self.assertIsInstance(ok, bool)
 
     def test_due_touch_is_sent_and_recorded(self):
         start = _dt.date.today() - _dt.timedelta(days=1)

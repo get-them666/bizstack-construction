@@ -1,0 +1,190 @@
+# sessions.md — operating notes for both BizStack sites
+
+**Two brands, one platform.** Every change here ships to both.
+
+| | |
+|---|---|
+| **Buildstack Construction** | `construction.bizstackperks.com` — licensed GC, residential + STR make-readies |
+| **Broom Service** | part of `bizstackperks.com` — STR turnover cleaning, co-hosting, power washing |
+
+Shared codebase in this repo, one database, one Railway service, rows separated by
+`leads.company` (`'construction'` / `'broom'`). Anything phrased as "both sites" means
+both brands move together — do not split them unless asked.
+
+---
+
+## The one-line state of play
+
+**We can see demand but we cannot call it.** 529 building permits and 690 leads are
+tracked, but no permit source publishes a homeowner's name, phone or email, so the
+pipeline is addressable rather than contactable. Working capital is what converts it.
+
+---
+
+## Live numbers (verify against the boot digest before quoting them)
+
+The `[pipeline-digest]` log line is the source of truth. Last read:
+
+| Metric | Value |
+|---|---|
+| Leads under management (construction) | **690** — 679 new · 6 contacted · 1 quoted · 2 completed · 2 host |
+| Permits monitored | **529** (Virginia Beach + Norfolk) |
+| Jobs at quoted stage | **1** |
+| Completed projects | **2** |
+| Verified 2026 revenue | **$32,516.50** |
+| Broom leads | 1 new · 1 host |
+
+Never quote a number that isn't in the digest. Both loan material and lender conversations
+depend on these being defensible.
+
+---
+
+## Email — Gmail only
+
+**Everything outbound goes through the Gmail API.** The other transports are retired
+because they were limiting us, not because they were broken:
+
+| Transport | Status | Why |
+|---|---|---|
+| **Gmail API** | **active, only path** | HTTPS, rides the OAuth token already used for inbound |
+| SES | retired | Sandbox identity, cannot mail external recipients |
+| Resend | retired | Daily quota shared with the lead bot, gets exhausted |
+| Zoho | retired | Times out on 25/587/465 from Railway egress |
+
+Set `EMAIL_TRANSPORT=legacy` to re-enable the old ladder. Don't, unless debugging.
+
+Key vars: `GMAIL_SEND_SERVICES` (default `construction,broom`), `GMAIL_OWNER`,
+`CON_GOOGLE_CLIENT_ID`, `CON_GOOGLE_CLIENT_SECRET`.
+
+Inbound polls every 900s (`GMAIL_INBOUND_INTERVAL_SECONDS`). Confirm with
+`[gmail-inbound]` lines in the log.
+
+---
+
+## Lead sources
+
+| Source | State | Notes |
+|---|---|---|
+| **Virginia Beach permits** | active | ArcGIS FeatureServer, no key |
+| **Norfolk permits** | active | Socrata `fahm-yuh4`, no key |
+| Shovels | configured, unused by default | Open data wins when present |
+| Reddit / LinkedIn / SAM.gov / bid boards | active | `SAM.gov is OFF` — see below |
+| Website + inbound Gmail | active | The only source that yields real contact details |
+
+**SAM.gov is switched off** for both companies (`LEAD_SOURCES_SAM_GOV=0`). The 124
+existing `sam-gov` leads are hidden from every owner view, not deleted. Flip the var to
+`1` to restore. Same switch hides them in the dashboard, lead list, `/pipeline`,
+copilot search, and boot digest.
+
+**Chesapeake** falls back to clearly-marked demo rows on purpose — its open ArcGIS layer
+is land-use actions with a 2022 newest entry and no applicant fields. There is a test
+pinning this. Don't wire it in.
+
+---
+
+## The loan — SBA microloan, $50K
+
+This is the live ask. State of play:
+
+- **The pitch is strong.** `SBA_7a_LOAN_PITCH.md` — the differentiator is 25 years of
+  trade experience, two documented insured renovations, and real dated revenue.
+- **The pipeline gap is closed.** The pitch previously said "no open pipeline." It now
+  carries a Sept 30 update: 690 leads / 529 permits monitored, with the honest
+  explanation that the money funds *contact and conversion*, not more lead generation.
+- **Sending now works via Gmail.** `loan_outreach.py` sends Day 0/1/3/7/14 by email to
+  LISC, VCC and VSBFA, and auto-drafts replies when they answer.
+
+**The bug that hid this for weeks:** `missed` touchpoints are terminal. While mail was
+undeliverable, every touchpoint got marked `missed`, so the cadence gave up permanently
+while the log still read "scheduler started". Fixed — dead mail now leaves touchpoints
+open, and `mail_ready()` preflight logs `BROKEN` or `OK` so this can never look healthy
+again. Check that line before assuming the sequence is live.
+
+Lender contacts are current and verified: `smallbusiness@lisc.org`, `jbarnes@vccva.org`
+(`@vccva.org` is still live for Virginia Community Capital), `VSBFA@sbsd.virginia.gov`.
+`docs/records-request.md` holds ready VFOIA letters for VB, Norfolk and Chesapeake.
+
+---
+
+## The pipeline board
+
+`/pipeline` — primary nav item, three streams as one kanban.
+
+- **Leads** — new → contacted → quoted → deposit → in progress → completed → lost
+- **Permits** — not worked → mailed → knocked → reached them → won → lost → archived
+- **Back-log** — jobs you've decided to do, on the lead status vocabulary
+
+Drag a card to move it. Columns cap at 60 cards and say "+N more" with a search link,
+because a silently truncated column reads as data loss.
+
+Permit cards carry a scope summary and category once researched
+(`job_leads.scope_summary` / `scope_category`). **Not yet wired to the board UI** — the
+schema and `permit_scope.py` exist, the research pass is not triggered.
+
+---
+
+## Google APIs in use vs. idle
+
+| API | State |
+|---|---|
+| Gmail | **active** — inbound polling + all outbound |
+| OAuth | **active** — token storage, refresh |
+| Maps | **idle** — `google_maps.py` has geocode, places, distance matrix, travel time. Nothing imports it. This is the obvious next win: travel-time-from-office on every permit is a real prioritisation signal. |
+| Calendar | **idle** — `google_calendar.py` unused |
+
+---
+
+## Tests
+
+Six files, all expected green. Run against a scratch DB:
+
+```bash
+createdb bz_test
+DATABASE_URL=postgresql://$(whoami)@localhost:5432/bz_test python test_site_smoke.py
+PERMIT_LIVE=1 python test_permit_sources.py   # PERMIT_LIVE=1 hits the real city feeds
+```
+
+| File | Guards |
+|---|---|
+| `test_site_smoke.py` | every template resolves + every page renders <500, pipeline moves, disabled sources hide |
+| `test_permit_sources.py` | open-data normalisation, lead filter, live feed shape |
+| `test_documents_service.py` | Gmail-only transport + the retained legacy ladder |
+| `test_loan_outreach.py` | cadence, allowlist, reply path, dead-mail guard |
+| `test_schema_safety.py` | startup DDL under lock contention |
+| `test_vapi_materials.py` | Vapi materials tools |
+
+---
+
+## Deploying
+
+Railway does **not** auto-deploy on push here. Both steps are required:
+
+```bash
+git push origin main
+railway up --service BizStack-Construction
+```
+
+Confirm the new deployment went SUCCESS, then check the startup lines:
+
+```bash
+railway deployment list --service BizStack-Construction
+railway logs --service BizStack-Construction --deployment <id>
+```
+
+Look for `Application startup complete`, `[outreach] mail preflight: OK`, and no
+`TemplateNotFound`.
+
+Note: unauthenticated `curl` returns **303** to `/login`, never 200. Polling for 200
+cannot detect a broken page — render or authenticate instead.
+
+---
+
+## House rules
+
+- Real beats plausible. A stale or invented number in lender material is worse than a
+  missing one.
+- Prefer keysless open data over scraping anything that refuses programmatic access.
+  Two city systems explicitly reject direct API calls; that is a no, not an obstacle.
+- If a fix touches one brand's logic it almost always touches both. Verify both.
+- Say what you verified and how. Several real bugs here were invisible to logs and only
+  surfaced by rendering or running the code.
