@@ -444,6 +444,7 @@ def ensure_lead_reply(db, company_key, *, name="", phone="", email="", service="
                          budget=budget, timeline=timeline, message=message, source=source, funding=funding)
 
     sent = staged = False
+    to = ""
 
     if email and _smoke_recipient_email(email) and not _recipient_recently_sent(db, email, "email", _suppression_days()):
         try:

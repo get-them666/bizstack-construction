@@ -204,6 +204,8 @@ async def lifecycle(app: FastAPI):
                     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
                 );
                 """)
+                cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS name VARCHAR(255) DEFAULT '';")
+                cur.execute("ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL;")
                 cur.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS property_sqft INTEGER;")
                 cur.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS estimate_low_cents INTEGER;")
                 cur.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS estimate_high_cents INTEGER;")
@@ -1656,15 +1658,6 @@ async def api_resend_otp(request: Request, db=Depends(get_db)):
         httponly=True, samesite="lax", secure=_secure_cookies(), max_age=auth_service.OTP_TTL_SECONDS,
     )
     return resp
-
-
-@app.get("/api/auth/logout")
-async def api_logout():
-    response = RedirectResponse(url="/", status_code=status.HTTP_303_SEE_OTHER)
-    response.delete_cookie(auth_service.SESSION_COOKIE)
-    response.delete_cookie("user_email")
-    response.delete_cookie("user_name")
-    return response
 
 
 @app.get("/api/auth/logout")
