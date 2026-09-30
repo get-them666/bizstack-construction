@@ -4281,23 +4281,6 @@ async def job_leads_page(request: Request, status_filter: str = "", db=Depends(g
 @app.get("/permits", response_class=HTMLResponse)
 async def permits_page(request: Request, status_filter: str = "", db=Depends(get_db)):
     return RedirectResponse(url="/leads?lane=permits", status_code=status.HTTP_303_SEE_OTHER)
-    where, params = [], []
-    if status_filter:
-        where.append("status = %s")
-        params.append(status_filter)
-    clause = ("WHERE " + " AND ".join(where)) if where else ""
-    with db.cursor() as cur:
-        cur.execute(f"SELECT * FROM job_leads {clause} ORDER BY found_at DESC LIMIT 500;", tuple(params))
-        rows = cur.fetchall()
-        cur.execute("SELECT status, COUNT(*) AS c FROM job_leads GROUP BY status;")
-        counts = {r["status"]: r["c"] for r in cur.fetchall()}
-    return templates.TemplateResponse(request=request, name="job_leads.html", context={
-        "user": {"email": require_auth(request)[1]},
-        "leads": rows, "counts": counts, "active_status": status_filter,
-        "shovels_configured": permit_service.is_configured(),
-        "permit_status": _permit_status(),
-    })
-
 
 @app.post("/api/job-leads/refresh")
 async def job_leads_refresh(request: Request, city: str = Form("Chesapeake"), state: str = Form("VA"), db=Depends(get_db)):
