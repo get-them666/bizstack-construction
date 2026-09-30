@@ -3,6 +3,7 @@ import re
 import json
 import threading
 import time
+from datetime import datetime, timezone
 
 import documents_service
 import estimating_service
@@ -326,6 +327,118 @@ def _suppression_days() -> int:
         return 30
 
 
+def _max_touches() -> int:
+    try:
+        return max(0, int(os.getenv("LEAD_MAX_TOUCHES", "2") or 2))
+    except (TypeError, ValueError):
+        return 2
+
+
+def _retouch_days() -> int:
+    try:
+        return max(0, int(os.getenv("LEAD_RETOUCH_DAYS", "5") or 5))
+    except (TypeError, ValueError):
+        return 5
+
+
+def contact_policy_allows(db, recipient: str, channel: str, lead_id=None) -> tuple:
+    """The outreach policy: at most two touches, ever.
+
+    First touch always goes out. A second is allowed only if the lead replied to
+    the first, or LEAD_RETOUCH_DAYS have passed. After two touches the address
+    is closed to automated contact permanently — this is a count, not a window,
+    so no amount of elapsed time reopens it.
+
+    Fail-closed: a failed lookup counts as "do not send".
+    """
+    max_touches = _max_touches()
+    if max_touches <= 0:
+        return False, "automated contact disabled (LEAD_MAX_TOUCHES=0)"
+    if not recipient or db is None:
+        return False, "no recipient"
+    try:
+        with db.cursor() as cur:
+            cur.execute(
+                "SELECT COUNT(*) AS n, MAX(created_at) AS last_at FROM comms_logs "
+                "WHERE direction = 'outbound' AND channel = %s AND LOWER(recipient) = LOWER(%s);",
+                (channel, recipient),
+            )
+            row = cur.fetchone() or {}
+        touches = int(row.get("n") or 0)
+        last_at = row.get("last_at")
+    except Exception as exc:
+        print(f"[auto-reply] touch count failed for {recipient} ({channel}); withholding: {exc}", flush=True)
+        return False, "touch count unavailable"
+
+    if touches >= max_touches:
+        return False, f"already contacted {touches}x (max {max_touches})"
+    if touches == 1:
+        if lead_id and _lead_replied(db, lead_id):
+            return True, "second touch: lead replied"
+        if last_at is not None:
+            last = last_at if last_at.tzinfo else last_at.replace(tzinfo=timezone.utc)
+            waited = (datetime.now(timezone.utc) - last).total_seconds() / 86400.0
+            if waited < _retouch_days():
+                return False, f"second touch waits {_retouch_days() - waited:.1f}d"
+    return True, ""
+
+
+def note_withheld(db, lead_id, reason: str) -> None:
+    """Record why a lead was not contacted, once, so the owner can audit it.
+
+    Written to leads.notes so it is visible in Postico alongside the lead, and
+    guarded by a marker so a 15-minute poll does not append the same line
+    hundreds of times.
+    """
+    if not lead_id or db is None:
+        return
+    marker = "[outreach-policy]"
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
+    try:
+        with db.cursor() as cur:
+            cur.execute("SELECT notes FROM leads WHERE id = %s;", (lead_id,))
+            row = cur.fetchone() or {}
+            notes = row.get("notes") or ""
+            line = f"\n{marker} {stamp} withheld: {reason}"
+            if marker in notes:
+                cur.execute(
+                    "UPDATE leads SET notes = REPLACE(%s, %s, %s) WHERE id = %s;",
+                    (notes + line, marker, marker, lead_id),
+                )
+            else:
+                cur.execute("UPDATE leads SET notes = %s WHERE id = %s;", (notes + line, lead_id))
+            db.commit()
+    except Exception as exc:
+        print(f"[auto-reply] could not record withheld note for lead {lead_id}: {exc}", flush=True)
+
+
+def _blocked_sources() -> set:
+    """Lead sources that must never enter the automated email cadence.
+
+    LEAD_SOURCE_AUTO_EMAIL only stops new ingestion from these sources; it does
+    nothing about rows already in the table.
+    """
+    raw = os.getenv("LEAD_SOURCE_EMAIL_BLOCK", "sam-gov") or ""
+    return {p.strip().lower() for p in raw.split(",") if p.strip()}
+
+
+def blocked_reason(email: str, source: str = "") -> str:
+    """Why this lead/address must not be auto-contacted, or "" if it may be.
+
+    Federal procurement contacts are excluded by default: a .gov/.mil buyer is
+    not a customer lead, and auto-emailing them is the same category of conduct
+    as the original runaway-send incident, at smaller scale.
+    """
+    if (source or "").strip().lower() in _blocked_sources():
+        return f"source '{source}' is blocked from automated email"
+    addr = (email or "").strip().lower()
+    domain = addr.rsplit("@", 1)[-1] if "@" in addr else ""
+    if (os.getenv("BLOCK_GOV_MIL_EMAIL", "1") or "1").lower() in ("1", "true", "yes", "on"):
+        if domain.endswith((".gov", ".mil")):
+            return "federal domain"
+    return ""
+
+
 def _channel_allowed(db, channel: str) -> tuple:
     """Return (ok, reason_or_empty). Enforces the daily outbound caps."""
     cap = _outbound_cap(channel)
@@ -446,7 +559,14 @@ def ensure_lead_reply(db, company_key, *, name="", phone="", email="", service="
     sent = staged = False
     to = ""
 
-    if email and _smoke_recipient_email(email) and not _recipient_recently_sent(db, email, "email", _suppression_days()):
+    may_email = False
+    if email and _smoke_recipient_email(email):
+        may_email, why_email = contact_policy_allows(db, email, "email", lead_id)
+        if not may_email:
+            print(f"[auto-reply {company_key}] not emailing {email} — {why_email}", flush=True)
+            note_withheld(db, lead_id, f"email {why_email}")
+
+    if may_email:
         try:
             cfg = documents_service.smtp_config_from_env()
             has_smtp = documents_service.smtp_configured(cfg)
@@ -471,8 +591,10 @@ def ensure_lead_reply(db, company_key, *, name="", phone="", email="", service="
 
     if _valid_phone(phone) and not sent:
         to = _phone_e164(phone)
-        if _recipient_recently_sent(db, to, "text", _suppression_days()):
-            print(f"[auto-reply {company_key}] already texted {to} within {_suppression_days()}d; skipping", flush=True)
+        may_text, why_text = contact_policy_allows(db, to, "text", lead_id)
+        if not may_text:
+            print(f"[auto-reply {company_key}] not texting {to} — {why_text}", flush=True)
+            note_withheld(db, lead_id, f"text {why_text}")
             to = ""
     if to and not sent:
         try:
@@ -542,10 +664,13 @@ def fire_lead_draft(db, company_key, lead_id, *, force=False):
                 recipient = _phone_e164(lead.get("phone"))
                 if not _valid_phone(recipient):
                     continue
-            if not force and _recipient_recently_sent(db, recipient, channel, supp):
-                result["why"] = f"already sent {channel} to {recipient} within {supp}d"
-                print(f"[auto-reply {company_key}] lead #{lead_id} {channel} suppressed", flush=True)
-                continue
+            if not force:
+                ok, why = contact_policy_allows(db, recipient, channel, lead_id)
+                if not ok:
+                    result["why"] = why
+                    note_withheld(db, lead_id, f"{channel} {why}")
+                    print(f"[auto-reply {company_key}] lead #{lead_id} {channel} withheld — {why}", flush=True)
+                    continue
             if not force:
                 ok, why = _channel_allowed(db, "text" if channel == "text" else "email")
                 if not ok:
@@ -646,6 +771,11 @@ def auto_reply_to_lead(db, company_key, *, name="", phone="", email="", service=
     """Back-compat wrapper around ensure_lead_reply: returns the message text when
     a reply was actually sent, otherwise None (callers treat None as 'not sent')."""
     if os.getenv("AUTO_REPLY_ENABLED", "1").lower() not in ("1", "true", "yes"):
+        return None
+    blocked = blocked_reason(email, source)
+    if blocked:
+        print(f"[auto-reply {company_key}] withheld — {blocked}", flush=True)
+        note_withheld(db, lead_id, blocked)
         return None
     out = ensure_lead_reply(
         db, company_key, name=name, phone=phone, email=email, service=service,
