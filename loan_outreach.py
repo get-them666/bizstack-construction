@@ -323,7 +323,15 @@ async def _run_cadence(conn) -> None:
     start = _campaign_start(conn)
     today = _dt.date.today()
     elapsed = (today - start).days
+
+    # Log deliverability on every pass, before any early return. This preflight
+    # used to live only inside the overdue branch, so on day 0 -- and any day
+    # with nothing due -- it never ran and a dead campaign looked identical to a
+    # healthy one. That silence is what hid the undeliverable mail for weeks.
+    ready = mail_ready()
     if elapsed <= 0:
+        print(f"[outreach] day {elapsed} of campaign; nothing due yet (mail {'ok' if ready else 'BROKEN'})",
+              flush=True)
         return
 
     for lender in LENDERS:
