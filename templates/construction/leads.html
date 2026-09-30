@@ -29,14 +29,14 @@
         </div>
 
         {% if lane == 'permits' %}
-        {% include "construction/_permits_lane.html" %}
+        {% include "_permits_lane.html" %}
         {% else %}
-        {% include "construction/_leads_lane.html" %}
+        {% include "_leads_lane.html" %}
         {% endif %}
     </div>
 </section>
 {% endblock %}
 
 {% block scripts %}
-{% include "construction/_shell_script.html" %}
+{% include "_shell_script.html" %}
 {% endblock %}
