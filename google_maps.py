@@ -1,5 +1,14 @@
 """Google Maps Platform integration for BizStack.
 Geocoding, Places Autocomplete, Distance Matrix.
+
+Transport note: a key restricted to HTTP referrers CANNOT be called from a
+backend -- Google answers `REQUEST_DENIED / API keys with referer restrictions
+cannot be used with this API`. Every call here therefore goes through _api_get,
+which surfaces the real status instead of quietly returning None. That silent
+None is why this module sat unused for months looking merely dormant.
+
+Set GOOGLE_MAPS_SERVER_KEY to an unrestricted or IP-restricted key for
+server-side use; GOOGLE_MAPS_API_KEY remains the browser key.
 """
 
 import os
@@ -9,11 +18,65 @@ import urllib.request
 from typing import Optional, List, Dict, Any
 
 
-MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY", "")
+# Prefer the server-side key. Resolved per call rather than at import so a
+# Railway variable change does not require a redeploy to take effect.
+MAPS_API_KEY = (
+    os.getenv("GOOGLE_MAPS_SERVER_KEY")
+    or os.getenv("GOOGLE_MAPS_API_KEY")
+    or ""
+)
 GEOCODING_BASE = "https://maps.googleapis.com/maps/api/geocode/json"
 PLACES_BASE = "https://maps.googleapis.com/maps/api/place/autocomplete/json"
 PLACES_DETAILS_BASE = "https://maps.googleapis.com/maps/api/place/details/json"
 DISTANCE_BASE = "https://maps.googleapis.com/maps/api/distancematrix/json"
+
+# Distance Matrix hard-caps destinations per request.
+DISTANCE_MAX_DESTINATIONS = 25
+
+_LAST_ERROR = {"endpoint": "", "status": "", "message": ""}
+
+
+def maps_status() -> dict:
+    """Why Maps is or isn't usable. Cheap: no network call.
+
+    The operator hit a real outage where every function returned None and the
+    cause was invisible. Anything integrating this should check this first and
+    surface the message rather than pretending the data does not exist.
+    """
+    key = (os.getenv("GOOGLE_MAPS_SERVER_KEY") or os.getenv("GOOGLE_MAPS_API_KEY") or "").strip()
+    if not key:
+        return {"ok": False, "reason": "no key set",
+                "hint": "set GOOGLE_MAPS_SERVER_KEY to an unrestricted or IP-restricted key"}
+    return {"ok": True, "reason": "key present",
+            "using": "GOOGLE_MAPS_SERVER_KEY" if os.getenv("GOOGLE_MAPS_SERVER_KEY") else "GOOGLE_MAPS_API_KEY",
+            "last_error": _LAST_ERROR or None}
+
+
+def _api_get(url: str, params: dict) -> Dict[str, Any]:
+    """GET a Maps JSON endpoint, recording the real failure reason.
+
+    Raises RuntimeError on transport/permission problems rather than returning
+    None, so callers can distinguish "no data" from "you are not configured".
+    """
+    params = {k: v for k, v in params.items() if v is not None}
+    full = url + "?" + urllib.parse.urlencode(params)
+    try:
+        with urllib.request.urlopen(full, timeout=20) as resp:
+            data = json.loads(resp.read().decode())
+    except Exception as exc:
+        _LAST_ERROR.update({"endpoint": url, "status": "EXC", "message": str(exc)})
+        raise RuntimeError(f"Google Maps call failed ({url}): {exc}") from exc
+
+    status = data.get("status")
+    if status not in ("OK", "ZERO_RESULTS"):
+        _LAST_ERROR.update({"endpoint": url, "status": str(status),
+                            "message": str(data.get("error_message", ""))[:300]})
+        raise RuntimeError(
+            f"Google Maps {url.rsplit('/', 1)[-1]} returned {status}: "
+            f"{data.get('error_message', '')[:200]}"
+        )
+    return data
+
 
 
 # ──────────────────────────────────────────────
@@ -21,17 +84,16 @@ DISTANCE_BASE = "https://maps.googleapis.com/maps/api/distancematrix/json"
 # ──────────────────────────────────────────────
 
 def geocode_address(address: str) -> Optional[Dict[str, Any]]:
-    """Convert address to lat/lng."""
+    """Convert address to lat/lng.
+
+    Raises RuntimeError when Maps is unreachable or the key is refused, so a
+    misconfigured key is never mistaken for "that address could not be found".
+    Returns None only for a genuine ZERO_RESULTS (address not found).
+    """
     if not MAPS_API_KEY:
-        return None
-    params = {
-        "address": address,
-        "key": MAPS_API_KEY,
-    }
-    url = GEOCODING_BASE + "?" + urllib.parse.urlencode(params)
-    with urllib.request.urlopen(url) as resp:
-        data = json.loads(resp.read().decode())
-    if data["status"] != "OK" or not data["results"]:
+        raise RuntimeError("Google Maps not configured: set GOOGLE_MAPS_SERVER_KEY")
+    data = _api_get(GEOCODING_BASE, {"address": address, "key": MAPS_API_KEY})
+    if not data.get("results"):
         return None
     result = data["results"][0]
     loc = result["geometry"]["location"]
@@ -47,15 +109,9 @@ def geocode_address(address: str) -> Optional[Dict[str, Any]]:
 def reverse_geocode(lat: float, lng: float) -> Optional[str]:
     """Convert lat/lng to formatted address."""
     if not MAPS_API_KEY:
-        return None
-    params = {
-        "latlng": f"{lat},{lng}",
-        "key": MAPS_API_KEY,
-    }
-    url = GEOCODING_BASE + "?" + urllib.parse.urlencode(params)
-    with urllib.request.urlopen(url) as resp:
-        data = json.loads(resp.read().decode())
-    if data["status"] != "OK" or not data["results"]:
+        raise RuntimeError("Google Maps not configured: set GOOGLE_MAPS_SERVER_KEY")
+    data = _api_get(GEOCODING_BASE, {"latlng": f"{lat},{lng}", "key": MAPS_API_KEY})
+    if not data.get("results"):
         return None
     return data["results"][0]["formatted_address"]
 
@@ -219,24 +275,58 @@ def distance_matrix(
     departure_time: Optional[int] = None,
 ) -> Optional[Dict[str, Any]]:
     """Get travel distance/time between origins and destinations.
-    origins/destinations: list of "lat,lng" or addresses.
+
+    origins/destinations: list of "lat,lng" or addresses. Raises on failure so
+    a refused key is never read as "no route found".
     """
     if not MAPS_API_KEY:
-        return None
-    params = {
+        raise RuntimeError("Google Maps not configured: set GOOGLE_MAPS_SERVER_KEY")
+    if len(destinations) > DISTANCE_MAX_DESTINATIONS:
+        raise ValueError(
+            f"Distance Matrix takes at most {DISTANCE_MAX_DESTINATIONS} destinations, got "
+            f"{len(destinations)}; use batch_travel_minutes()"
+        )
+    return _api_get(DISTANCE_BASE, {
         "origins": "|".join(origins),
         "destinations": "|".join(destinations),
         "mode": mode,
         "key": MAPS_API_KEY,
-    }
-    if departure_time:
-        params["departure_time"] = departure_time
-    url = DISTANCE_BASE + "?" + urllib.parse.urlencode(params)
-    with urllib.request.urlopen(url) as resp:
-        data = json.loads(resp.read().decode())
-    if data["status"] != "OK":
-        return None
-    return data
+        "departure_time": departure_time,
+    })
+
+
+def batch_travel_minutes(
+    origin: str,
+    destinations: List[str],
+    mode: str = "driving",
+) -> Dict[str, int]:
+    """Driving minutes from one origin to many destinations.
+
+    Distance Matrix caps a request at 25 destinations, so this chunks. Permits
+    arrive in the hundreds, and a single oversized request returns nothing at
+    all rather than a partial result -- which would look like "no jobs nearby".
+    Returns {destination: minutes}; unreachable entries are simply absent.
+    """
+    out: Dict[str, int] = {}
+    if not destinations or not MAPS_API_KEY:
+        return out
+    for i in range(0, len(destinations), DISTANCE_MAX_DESTINATIONS):
+        chunk = destinations[i:i + DISTANCE_MAX_DESTINATIONS]
+        try:
+            data = distance_matrix([origin], chunk, mode=mode)
+        except Exception as exc:
+            print(f"[maps] travel-time batch failed at offset {i}: {exc}", flush=True)
+            continue
+        if not data:
+            continue
+        elements = (data.get("rows") or [{}])[0].get("elements") or []
+        for dest, el in zip(chunk, elements):
+            if el.get("status") == "OK":
+                try:
+                    out[dest] = int(el["duration"]["value"] / 60)
+                except (KeyError, TypeError, ValueError):
+                    continue
+    return out
 
 
 def travel_time_minutes(origin_lat: float, origin_lng: float, dest_lat: float, dest_lng: float) -> Optional[int]:
