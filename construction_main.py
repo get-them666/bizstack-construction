@@ -31,7 +31,7 @@ from contextlib import asynccontextmanager
 import asyncio
 import psycopg
 from psycopg.rows import dict_row
-from fastapi import FastAPI, Request, Form, UploadFile, Response, Depends, HTTPException, status, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, Form, UploadFile, File, Response, Depends, HTTPException, status, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -1525,6 +1525,86 @@ async def contact_page(request: Request):
 @app.get("/legal", response_class=HTMLResponse)
 async def legal_page(request: Request):
     return templates.TemplateResponse(request=request, name="legal.html", context={})
+
+
+VISION_QUOTE_MAX_UPLOAD_BYTES = 12 * 1024 * 1024
+VISION_QUOTE_CACHE_MAX = 200
+VISION_QUOTE_WINDOW_SECONDS = 300
+VISION_QUOTE_MAX_PER_WINDOW = 6
+_vision_quote_cache: dict = {}
+_vision_quote_calls: dict = {}
+
+
+def _client_ip(request: Request) -> str:
+    forwarded = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
+    if forwarded:
+        return forwarded
+    return request.client.host if request.client else "unknown"
+
+
+def _vision_quote_throttled(ip: str) -> bool:
+    now = time.time()
+    calls = [t for t in _vision_quote_calls.get(ip, []) if now - t < VISION_QUOTE_WINDOW_SECONDS]
+    if len(calls) >= VISION_QUOTE_MAX_PER_WINDOW:
+        _vision_quote_calls[ip] = calls
+        return True
+    calls.append(now)
+    _vision_quote_calls[ip] = calls
+    if len(_vision_quote_calls) > 5000:
+        for key in [k for k, v in _vision_quote_calls.items() if not v or now - v[-1] > VISION_QUOTE_WINDOW_SECONDS]:
+            _vision_quote_calls.pop(key, None)
+    return False
+
+
+@app.post("/api/vision/quote", response_class=JSONResponse)
+async def vision_quote_endpoint(
+    request: Request,
+    company: str = Form("construction"),
+    sqft: float | None = Form(None),
+    photo: UploadFile = File(...),
+):
+    """Public photo -> scope -> ballpark.
+
+    Does not create a lead: this is an unauthenticated POST, so wiring it to
+    lead creation should wait until reCAPTCHA gates the public forms. Throttled
+    per IP and cached on the image fingerprint, since each analyze bills three
+    Vision units and a resubmit loop would burn the quota.
+    """
+    import google_vision
+    import vision_quote
+
+    if not vision_quote.is_enabled():
+        return JSONResponse(content={"available": False, "why": "photo quoting disabled"}, status_code=200)
+    ip = _client_ip(request)
+    if _vision_quote_throttled(ip):
+        return JSONResponse(
+            content={"available": False, "why": "too many photo quotes, try again shortly"},
+            status_code=429,
+        )
+    data = await photo.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="Empty file")
+    if len(data) > VISION_QUOTE_MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="Photo too large (max 12 MB)")
+
+    fingerprint = google_vision.image_fingerprint(data)
+    cached = _vision_quote_cache.get(fingerprint)
+    if cached is not None:
+        return JSONResponse(content={**cached, "cached": True})
+
+    vision = google_vision.annotate(data)
+    if not vision:
+        return JSONResponse(
+            content={"available": False, "why": "image analysis unavailable, please send the photo to us directly"},
+            status_code=200,
+        )
+    company_key = "construction" if (company or "").strip().lower() == "construction" else "broom"
+    result = vision_quote.quote_from_vision(vision, company_key, sqft)
+    result["vision"] = vision
+    if len(_vision_quote_cache) >= VISION_QUOTE_CACHE_MAX:
+        _vision_quote_cache.pop(next(iter(_vision_quote_cache)), None)
+    _vision_quote_cache[fingerprint] = result
+    return JSONResponse(content=result)
 
 
 @app.get("/health")
