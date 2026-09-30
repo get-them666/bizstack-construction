@@ -1,0 +1,43 @@
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    document.querySelectorAll('[data-deposit]').forEach(function(btn) {
+        btn.addEventListener('click', async function() {
+            const leadId = btn.dataset.lead;
+            const amtInput = document.getElementById('amt-' + leadId);
+            btn.disabled = true;
+            btn.textContent = 'Creating…';
+            try {
+                const res = await fetch('/api/leads/' + leadId + '/deposit-link?amount=' + encodeURIComponent(amtInput.value || ''));
+                const json = await res.json();
+                if (json.url) {
+                    window.open(json.url, '_blank');
+                    btn.textContent = 'Opened payment link';
+                } else {
+                    btn.textContent = json.error || 'Failed';
+                    btn.disabled = false;
+                    setTimeout(function() { btn.textContent = 'Send deposit link'; }, 4000);
+                }
+            } catch (e) {
+                btn.textContent = 'Network error';
+                btn.disabled = false;
+                setTimeout(function() { btn.textContent = 'Send deposit link'; }, 4000);
+            }
+        });
+    });
+    document.querySelectorAll('form[data-notes]').forEach(function(form) {
+        form.addEventListener('submit', async function(e) {
+            e.preventDefault();
+            const body = new FormData(form);
+            body.set('notes', body.get('notes') || '');
+            try {
+                await fetch(form.action, { method: 'POST', body: body });
+                form.querySelector('input[name="notes"]').style.borderColor = '#10b981';
+                setTimeout(function() { form.querySelector('input[name="notes"]').style.borderColor = ''; }, 1200);
+            } catch (e) {
+                alert('Could not save notes');
+            }
+        });
+    });
+});
+</script>

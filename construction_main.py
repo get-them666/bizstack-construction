@@ -72,6 +72,21 @@ STATUS_LABELS = {
     "in_progress": "In progress", "completed": "Completed", "lost": "Lost",
 }
 
+# Permits carry no phone or email, so they can never move through the pipeline
+# above. They get their own actions instead: work the address, then record the
+# contact you made. "closed" is legacy data from the old permit page and is
+# shown as Archived so it stays visible without cluttering the active flow.
+PERMIT_STATUSES = ["new", "mailed", "knocked", "contacted", "won", "lost", "closed"]
+PERMIT_STATUS_LABELS = {
+    "new": "Not worked", "mailed": "Mailed", "knocked": "Knocked",
+    "contacted": "Reached them", "won": "Won the job", "lost": "Lost",
+    "closed": "Archived",
+}
+PERMIT_STATUS_COLORS = {
+    "new": "amber", "mailed": "sky", "knocked": "violet", "contacted": "blue",
+    "won": "emerald", "lost": "slate", "closed": "slate",
+}
+
 
 # --- Company identity (env-driven so both brands stay configurable) ---------
 def company() -> dict:
@@ -1773,7 +1788,7 @@ async def read_dashboard(request: Request, db=Depends(get_db)):
 
 
 @app.get("/leads", response_class=HTMLResponse)
-async def leads_page(request: Request, status_filter: str = "", q: str = "", db=Depends(get_db)):
+async def leads_page(request: Request, status_filter: str = "", q: str = "", lane: str = "contactable", db=Depends(get_db)):
     is_authed, user_email = require_auth(request)
     if not is_authed:
         return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
@@ -1787,7 +1802,7 @@ async def leads_page(request: Request, status_filter: str = "", q: str = "", db=
         like = f"%{q.strip()}%"
         params += [like, like, like, like]
     where.append("company = 'construction'")
-    clause = ("WHERE " + " AND ".join(where)) if where else ""
+    clause = ("WHERE " + " AND ".join(where))
     with db.cursor() as cur:
         cur.execute(f"SELECT * FROM leads {clause} ORDER BY created_at DESC LIMIT 500;", tuple(params))
         leads = cur.fetchall()
@@ -1795,6 +1810,23 @@ async def leads_page(request: Request, status_filter: str = "", q: str = "", db=
         counts = {r["status"]: r["c"] for r in cur.fetchall()}
         cur.execute("SELECT COUNT(*) AS c FROM leads WHERE company = 'construction' AND draft_reply IS NOT NULL AND LOWER(COALESCE(draft_reply, '')) <> '';")
         draft_count = cur.fetchone()["c"]
+
+        # Intel lane: permits, which have no phone or email by nature.
+        p_where, p_params = [], []
+        if status_filter in PERMIT_STATUSES:
+            p_where.append("status = %s")
+            p_params.append(status_filter)
+        if q.strip():
+            like = f"%{q.strip()}%"
+            p_where.append("(address ILIKE %s OR work_type ILIKE %s OR permit_number ILIKE %s OR contractor_name ILIKE %s)")
+            p_params += [like, like, like, like]
+        p_clause = ("WHERE " + " AND ".join(p_where)) if p_where else ""
+        cur.execute(f"SELECT * FROM job_leads {p_clause} ORDER BY found_at DESC LIMIT 500;", tuple(p_params))
+        permits = cur.fetchall()
+        cur.execute("SELECT status, COUNT(*) AS c FROM job_leads GROUP BY status;")
+        permit_counts = {r["status"]: r["c"] for r in cur.fetchall()}
+        cur.execute("SELECT COUNT(*) AS c FROM job_leads WHERE status NOT IN ('won','lost','closed');")
+        permit_open = cur.fetchone()["c"]
 
     return templates.TemplateResponse(request=request, name="leads.html", context={
         "user": {"email": user_email},
@@ -1806,6 +1838,15 @@ async def leads_page(request: Request, status_filter: str = "", q: str = "", db=
         "q": q,
         "draft_count": draft_count,
         "default_deposit": default_deposit_cents() / 100,
+        "permits": permits,
+        "permit_statuses": PERMIT_STATUSES,
+        "permit_status_labels": PERMIT_STATUS_LABELS,
+        "permit_status_colors": PERMIT_STATUS_COLORS,
+        "permit_counts": permit_counts,
+        "permit_open": permit_open,
+        "shovels_configured": permit_service.is_configured(),
+        "permit_status": _permit_status(),
+        "lane": lane if lane in ("contactable", "permits") else "contactable",
     })
 
 
@@ -4233,7 +4274,13 @@ def _start_permit_importer():
 # --- Job finder (building permits) -----------------------------------------
 @app.get("/job-leads", response_class=HTMLResponse)
 async def job_leads_page(request: Request, status_filter: str = "", db=Depends(get_db)):
-    require_admin(request)
+    """Permits now live in the intel lane of /leads. Keep old links working."""
+    return RedirectResponse(url="/leads?lane=permits", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.get("/permits", response_class=HTMLResponse)
+async def permits_page(request: Request, status_filter: str = "", db=Depends(get_db)):
+    return RedirectResponse(url="/leads?lane=permits", status_code=status.HTTP_303_SEE_OTHER)
     where, params = [], []
     if status_filter:
         where.append("status = %s")
@@ -4257,7 +4304,75 @@ async def job_leads_refresh(request: Request, city: str = Form("Chesapeake"), st
     require_admin(request)
     permits = permit_service.fetch_permits(city, state)
     added, leads = ingest_permits(db, permits)
-    return RedirectResponse(url=f"/job-leads?ok={added} permits + {leads} leads", status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(url=f"/leads?lane=permits&ok={added} permits + {leads} promoted", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/api/job-leads/{job_id}/status")
+async def job_lead_status(
+    job_id: int,
+    request: Request,
+    permit_status: str = Form(...),
+    db=Depends(get_db),
+):
+    require_admin(request)
+    if permit_status not in PERMIT_STATUSES:
+        raise HTTPException(status_code=400, detail="Unknown permit status")
+    with db.cursor() as cur:
+        cur.execute("SELECT id FROM job_leads WHERE id = %s;", (job_id,))
+        if not cur.fetchone():
+            raise HTTPException(status_code=404, detail="Job lead not found")
+        cur.execute("UPDATE job_leads SET status = %s WHERE id = %s;", (permit_status, job_id))
+        db.commit()
+    back = request.headers.get("referer") or "/leads?lane=permits"
+    return RedirectResponse(url=back, status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/api/job-leads/{job_id}/reach")
+async def job_lead_reach(
+    job_id: int,
+    request: Request,
+    name: str = Form(""),
+    phone: str = Form(""),
+    email: str = Form(""),
+    db=Depends(get_db),
+):
+    """You worked a permit and got a real contact. Promote it into the pipeline."""
+    require_admin(request)
+    phone = (phone or "").strip()
+    email = (email or "").strip()
+    if not phone and not email:
+        raise HTTPException(status_code=400, detail="Need a phone or an email to promote a permit")
+    with db.cursor() as cur:
+        cur.execute("SELECT * FROM job_leads WHERE id = %s;", (job_id,))
+        job = cur.fetchone()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job lead not found")
+    contact_name = (name or "").strip() or (job.get("contractor_name") or "") or "Property owner"
+    try:
+        est_val = float(job.get("estimated_value") or 0)
+    except (TypeError, ValueError):
+        est_val = 0
+    with db.cursor() as cur:
+        cur.execute(
+            "INSERT INTO leads (name, phone, email, project_type, address, description, source, status, company) "
+            "VALUES (%s, %s, %s, %s, %s, %s, 'permit_finder', 'contacted', 'construction') RETURNING id;",
+            (
+                contact_name,
+                phone or "",
+                email or "",
+                job.get("work_type") or "Renovation",
+                job.get("address") or "",
+                f"Permit #{job.get('permit_number') or ''}: {job.get('job_description') or ''} "
+                f"(est. value ${est_val:,.0f})",
+            ),
+        )
+        lead_id = cur.fetchone()["id"]
+        cur.execute("UPDATE job_leads SET status = 'contacted' WHERE id = %s;", (job_id,))
+        db.commit()
+    return RedirectResponse(
+        url=f"/leads?status=contacted&q={urllib.parse.quote(contact_name)}",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
 
 
 @app.post("/api/job-leads/{job_id}/convert")
