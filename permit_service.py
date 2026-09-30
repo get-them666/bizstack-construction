@@ -201,6 +201,74 @@ def _permit_text(p: dict) -> str:
     return f"{p.get('work_type') or ''} {p.get('job_description') or ''}"
 
 
+COMMERCIAL_RE = re.compile(
+    r"(commercial|tenant|retail|store|office|warehouse|industrial|restaurant|"
+    r"food|mobile unit|tent|motel|hotel|clinic|medical|school|church|"
+    r"shopping|plaza|mall|business|multi[- ]?tenant|mix(ed)?[- ]use|"
+    # "garage" alone is usually a residential outbuilding, but a repair garage,
+    # car wash or body shop is a business. Commercial is checked first, so these
+    # must be listed here to win over the residential "garage" pattern.
+    r"repair garage|car wash|body shop|service station|gas station|lube|"
+    r"auto (shop|dealer|sales)|restaurant)",
+    re.I,
+)
+RESIDENTIAL_RE = re.compile(
+    r"(residential|one/two family|single family|dwelling|detached|townhouse|"
+    r"condo|apartment|multifamily|adu|basement|garage|shed|"
+    # Norfolk labels STR/homestay permits under work_type, and those are
+    # residential properties even though they operate commercially.
+    r"homestay|short[- ]term rental|\bstr\b|hostel)",
+    re.I,
+)
+
+
+def classify_use(work_type: str = "", description: str = "", property_type: str = "") -> str:
+    """Best-effort residential / commercial / unknown for a permit.
+
+    Used to backfill rows ingested before property_type was persisted. Returns
+    'unknown' rather than guessing, so an unclassifiable permit is visibly
+    unreviewed instead of being quietly filed as a residential lead.
+    """
+    text = " ".join(str(x or "") for x in (property_type, work_type, description))
+    if not text.strip():
+        return "unknown"
+    if COMMERCIAL_RE.search(text):
+        return "commercial"
+    if RESIDENTIAL_RE.search(text):
+        return "residential"
+    return "unknown"
+
+
+def backfill_classification(conn) -> int:
+    """Classify job_leads rows ingested before property_type was stored.
+
+    Idempotent: only touches rows still marked unknown.
+    """
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, work_type, job_description, property_type FROM job_leads "
+                "WHERE COALESCE(use_class, '') = '' LIMIT 2000;"
+            )
+            rows = cur.fetchall()
+            updates = []
+            for r in rows:
+                verdict = classify_use(r.get("work_type"), r.get("job_description"))
+                if verdict and verdict != "unknown":
+                    updates.append((verdict, r["id"]))
+            if updates:
+                cur.executemany(
+                    "UPDATE job_leads SET use_class = %s WHERE id = %s;", updates
+                )
+        conn.commit()
+        if updates:
+            print(f"[permit-scan] classified {len(updates)} permits by use", flush=True)
+        return len(updates)
+    except Exception as exc:
+        print(f"[permit-scan] classification backfill skipped: {exc}", flush=True)
+        return 0
+
+
 def wants_lead(p: dict) -> bool:
     """Heuristic: is this permit a homeowner-driven job worth a follow-up lead?"""
     if p.get("_demo"):
@@ -357,7 +425,7 @@ def _iso_date(v) -> str:
 def _norm_record(
     permit_number="", address="", city="", state="", zip_code="",
     work_type="", description="", contractor="", issue_date="",
-    value=0.0, property_type="", source="",
+    value=0.0, property_type="", source="", postal_code="",
 ) -> dict:
     """Build a permit dict in the same shape _normalize() produces."""
     address = (address or "").strip()
@@ -377,6 +445,7 @@ def _norm_record(
         "issue_date": _iso_date(issue_date),
         "estimated_value": _as_money(value),
         "property_type": (property_type or "").strip(),
+        "postal_code": (postal_code or "").strip()[:10],
         "tags": [],
         "_id": "",
         "_geo": zip_code,
@@ -426,6 +495,7 @@ def fetch_virginia_beach(days: int = 45, limit: int = 200) -> list:
             state=str(a.get("State") or "VA"),
             zip_code=str(a.get("Zip") or ""),
             work_type=str(a.get("WorkType") or a.get("PermitType") or a.get("ConstructionType") or ""),
+            postal_code=str(a.get("Zip") or ""),
             description=str(a.get("WorkDesc") or ""),
             # CreatedBy is an opaque portal account (PUBLICUSER<n>), never a
             # person. Treating it as a contractor name would make every row look

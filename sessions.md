@@ -41,6 +41,10 @@ depend on these being defensible.
 
 ## Email — Gmail only
 
+**Status: working.** `[outreach] mail preflight: OK — Gmail token valid for
+construction`. This is the first time outbound mail has worked in this app's
+history. Confirm it any time with that log line.
+
 **Everything outbound goes through the Gmail API.** The other transports are retired
 because they were limiting us, not because they were broken:
 
@@ -71,6 +75,33 @@ Inbound polls every 900s (`GMAIL_INBOUND_INTERVAL_SECONDS`). Confirm with
 | Reddit / LinkedIn / SAM.gov / bid boards | active | `SAM.gov is OFF` — see below |
 | Website + inbound Gmail | active | The only source that yields real contact details |
 
+### Permit list quality (new — Sept 30)
+
+Both city feeds publish a residential/commercial signal (Norfolk `use_class`,
+Virginia Beach `ConstructionType`). `wants_lead()` read it at ingest and the
+`INSERT` then **dropped it**, so it could never be displayed or re-filtered. Now
+persisted and shown.
+
+- `use_class` — our normalized verdict: `residential` / `commercial` / `unknown`
+- `property_type` — the raw feed value, kept separate (VB packs values like
+  "Roof and or Siding" and "Asbestos" into that column, so overloading it merged
+  two different things and produced mixed-case garbage like `Residential` vs
+  `residential`)
+
+The permits lane shows a "List quality" bar: residential / commercial /
+unreviewed / no-address counts. Commercial work usually already has a contractor,
+so those are knock-wasted.
+
+Measured on a full re-ingest (1,592 permits): **~1,025 residential · 363
+commercial · 204 unreviewed.** Roughly **23% of the list is commercial** — worth
+filtering before spending gas.
+
+`permit_service.classify_use()` is a keyword pass, not a model. Deliberately
+returns `unknown` rather than guessing, so anything it can't place is visibly
+unreviewed rather than silently filed as a lead. 12/12 on the test set,
+including the "detached garage is residential / repair garage is commercial"
+case.
+
 **SAM.gov is switched off** for both companies (`LEAD_SOURCES_SAM_GOV=0`). The 124
 existing `sam-gov` leads are hidden from every owner view, not deleted. Flip the var to
 `1` to restore. Same switch hides them in the dashboard, lead list, `/pipeline`,
@@ -94,17 +125,53 @@ This is the live ask. State of play:
 - **Sending now works via Gmail.** `loan_outreach.py` sends Day 0/1/3/7/14 by email to
   LISC, VCC and VSBFA, and auto-drafts replies when they answer.
 
-**The bug that hid this for weeks:** `missed` touchpoints are terminal. While mail was
-undeliverable, every touchpoint got marked `missed`, so the cadence gave up permanently
-while the log still read "scheduler started". Fixed — dead mail now leaves touchpoints
-open, and `mail_ready()` preflight logs `BROKEN` or `OK` so this can never look healthy
-again. Check that line before assuming the sequence is live.
+**Two bugs hid this for weeks, both worth remembering:**
+
+1. `missed` touchpoints are **terminal**. While mail was undeliverable, every
+   touchpoint got marked `missed`, so the cadence gave up permanently — while the log
+   still read only `scheduler started`, which looks identical to a healthy campaign.
+   Dead mail now leaves touchpoints open so the sequence recovers. Verified both ways
+   against a real database: dead mail preserves all 12 touchpoints; working mail still
+   honours the stale-copy window.
+
+2. The `mail_ready()` preflight itself was silent — it only ran inside the
+   overdue-touchpoint branch, so on day 0 and any day with nothing due it never
+   executed. It now logs on every pass, before any early return. A dead campaign must
+   never again be indistinguishable from a working one.
+
+Check that log line before assuming the sequence is live.
 
 Lender contacts are current and verified: `smallbusiness@lisc.org`, `jbarnes@vccva.org`
 (`@vccva.org` is still live for Virginia Community Capital), `VSBFA@sbsd.virginia.gov`.
 `docs/records-request.md` holds ready VFOIA letters for VB, Norfolk and Chesapeake.
 
 ---
+
+## Still to do — picked up next session
+
+1. **Geocoding pass.** Needs `GOOGLE_MAPS_SERVER_KEY`. Two steps:
+   - Console → Credentials → Create → API key
+   - **No application restriction** (the existing key is browser-referrer only,
+     which Google refuses server-side: `REQUEST_DENIED / API keys with referer
+     restrictions cannot be used with this API`)
+   - API restrictions: Geocoding + Distance Matrix only
+   - Then: `railway variables --set GOOGLE_MAPS_SERVER_KEY=<key>`
+   Fills lat/lng and the missing Norfolk ZIPs (the Socrata feed publishes no ZIP
+   at all), flags addresses that don't resolve. `google_maps.py` already reads
+   `GOOGLE_MAPS_SERVER_KEY` and `batch_travel_minutes()` chunks at 25/request.
+   Degrades to today's behaviour if the key is absent.
+
+2. **Drive time.** Low priority — you said 45 minutes is acceptable, so it
+   filters nothing. Useful only for route ordering within a day. Don't build it
+   before #1.
+
+3. **Permit scope research.** `permit_scope.py` written, schema landed
+   (`scope_summary`, `scope_category`, `scope_confidence`, `scope_researched_at`),
+   nothing calls it yet, and the board doesn't render it. This is what turns an
+   address into "21x15 sunroom, roof replacement".
+
+4. **Google Maps places/calendar/drive** — all idle, all scoped in
+   `google_maps.py` / `google_calendar.py`.
 
 ## The pipeline board
 

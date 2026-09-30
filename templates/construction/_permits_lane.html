@@ -40,13 +40,44 @@
 </div>
 
 {% if permits %}
+<div class="flex flex-wrap items-center gap-2 mb-4 text-xs">
+    <span class="font-bold uppercase tracking-wider text-slate-400">List quality</span>
+    <span class="px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-semibold">
+        {{ permit_use.get('residential', 0) }} residential
+    </span>
+    <span class="px-2.5 py-1 rounded-full bg-slate-100 text-slate-600 border border-slate-200 font-semibold"
+          title="Commercial work already has a contractor. These are rarely worth a knock — filter them out.">
+        {{ permit_use.get('commercial', 0) }} commercial
+    </span>
+    <span class="px-2.5 py-1 rounded-full bg-amber-50 text-amber-700 border border-amber-200 font-semibold"
+          title="Could not tell from the permit text whether this is residential. Needs a human look.">
+        {{ permit_use.get('unknown', 0) }} unreviewed
+    </span>
+    {% if permit_no_address %}
+    <span class="px-2.5 py-1 rounded-full bg-rose-50 text-rose-700 border border-rose-200 font-semibold"
+          title="No street address on file — cannot be knocked or mailed.">
+        {{ permit_no_address }} no address
+    </span>
+    {% endif %}
+</div>
+
 <div class="space-y-3">
     {% for j in permits %}
     {% set tone = permit_status_colors.get(j.status, 'slate') %}
     <details class="group bg-white rounded-2xl border border-slate-200 overflow-hidden">
         <summary class="cursor-pointer list-none px-4 py-3.5 flex flex-wrap items-center gap-x-5 gap-y-2 hover:bg-slate-50">
             <div class="flex-1 min-w-[220px]">
-                <p class="font-bold text-slate-900 text-sm">{{ j.address or j.city or 'Unknown address' }}</p>
+                <div class="flex items-center gap-2">
+                    <p class="font-bold text-slate-900 text-sm">{{ j.address or j.city or 'Unknown address' }}</p>
+                    {% if j.use_class == 'commercial' %}
+                    <span class="shrink-0 text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded bg-slate-200 text-slate-600"
+                          title="Commercial work — usually already has a contractor.">Commercial</span>
+                    {% endif %}
+                    {% if not (j.address or '') %}
+                    <span class="shrink-0 text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded bg-rose-100 text-rose-700"
+                          title="No address on file.">No address</span>
+                    {% endif %}
+                </div>
                 <p class="text-xs text-slate-500 mt-0.5">
                     {{ j.work_type or '—' }}
                     {% if j.estimated_value and j.estimated_value > 0 %} · est. {{ '${:,.0f}'.format(j.estimated_value | float) }}{% endif %}

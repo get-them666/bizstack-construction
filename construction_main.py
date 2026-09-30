@@ -430,6 +430,25 @@ async def lifecycle(app: FastAPI):
                 cur.execute("ALTER TABLE job_leads ADD COLUMN IF NOT EXISTS scope_category VARCHAR(60);")
                 cur.execute("ALTER TABLE job_leads ADD COLUMN IF NOT EXISTS scope_confidence VARCHAR(20);")
                 cur.execute("ALTER TABLE job_leads ADD COLUMN IF NOT EXISTS scope_researched_at TIMESTAMP WITH TIME ZONE;")
+                # Both city feeds publish a residential/commercial signal (Norfolk
+                # use_class, Virginia Beach ConstructionType). wants_lead() read it
+                # at ingest and then the INSERT dropped it, so it could never be
+                # displayed or re-filtered afterwards. Kept now.
+                cur.execute("ALTER TABLE job_leads ADD COLUMN IF NOT EXISTS property_type VARCHAR(120);")
+                # use_class is the normalized verdict ('residential' /
+                # 'commercial' / 'unknown'). Kept separate from property_type,
+                # which holds the raw feed value: Virginia Beach packs values
+                # like 'Roof and or Siding' and 'Asbestos' into that column, so
+                # overloading it destroyed the distinction between source data
+                # and our own classification.
+                cur.execute("ALTER TABLE job_leads ADD COLUMN IF NOT EXISTS use_class VARCHAR(20);")
+                cur.execute("ALTER TABLE job_leads ADD COLUMN IF NOT EXISTS postal_code VARCHAR(10);")
+                # Geocoding results. Nullable: the list must stay fully usable when
+                # Google Maps is unconfigured.
+                cur.execute("ALTER TABLE job_leads ADD COLUMN IF NOT EXISTS lat DOUBLE PRECISION;")
+                cur.execute("ALTER TABLE job_leads ADD COLUMN IF NOT EXISTS lng DOUBLE PRECISION;")
+                cur.execute("ALTER TABLE job_leads ADD COLUMN IF NOT EXISTS geocode_status VARCHAR(30);")
+                cur.execute("ALTER TABLE job_leads ADD COLUMN IF NOT EXISTS geocoded_at TIMESTAMP WITH TIME ZONE;")
                 cur.execute("""
                 CREATE TABLE IF NOT EXISTS generated_documents (
                     id SERIAL PRIMARY KEY,
@@ -1867,6 +1886,15 @@ async def leads_page(request: Request, status_filter: str = "", q: str = "", lan
         permit_counts = {r["status"]: r["c"] for r in cur.fetchall()}
         cur.execute("SELECT COUNT(*) AS c FROM job_leads WHERE status NOT IN ('won','lost','closed');")
         permit_open = cur.fetchone()["c"]
+        # Data-quality tallies, so the owner can see how much of the list is
+        # actually workable instead of discovering it one knock at a time.
+        cur.execute(
+            "SELECT use_class, COUNT(*) AS c FROM job_leads "
+            "GROUP BY 1 ORDER BY 2 DESC;"
+        )
+        permit_use = {r["use_class"] or "unknown": r["c"] for r in cur.fetchall()}
+        cur.execute("SELECT COUNT(*) AS c FROM job_leads WHERE COALESCE(address,'') = '';")
+        permit_no_address = cur.fetchone()["c"]
 
     return templates.TemplateResponse(request=request, name="leads.html", context={
         "user": {"email": user_email},
@@ -1883,6 +1911,8 @@ async def leads_page(request: Request, status_filter: str = "", q: str = "", lan
         "permit_status_labels": PERMIT_STATUS_LABELS,
         "permit_status_colors": PERMIT_STATUS_COLORS,
         "permit_counts": permit_counts,
+        "permit_use": permit_use,
+        "permit_no_address": permit_no_address,
         "permit_open": permit_open,
         "shovels_configured": permit_service.is_configured(),
         "permit_status": _permit_status(),
@@ -4383,11 +4413,13 @@ def ingest_permits(conn, permits):
                 est_val = 0
             cur.execute(
                 "INSERT INTO job_leads (permit_number, address, city, state, work_type, job_description, "
-                "contractor_name, issue_date, estimated_value, source, is_demo) "
-                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,'permits',%s) RETURNING id;",
+                "contractor_name, issue_date, estimated_value, source, is_demo, property_type, postal_code, use_class) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,'permits',%s,%s,%s,%s) RETURNING id;",
                 (p["permit_number"], p["property_address"], p["city"], p["state"], p["work_type"],
                  p["job_description"], p["contractor_name"], p["issue_date"], est_val,
-                 p.get("_demo", False)),
+                 p.get("_demo", False), (p.get("property_type") or "")[:120],
+                 (p.get("postal_code") or "")[:10],
+                 permit_service.classify_use(p["work_type"], p["job_description"], p.get("property_type"))),
             )
             cur.fetchone()
             added += 1
@@ -4481,6 +4513,10 @@ def run_permit_import():
             permits.extend(permit_service.fetch_permits(city, "VA", days=days, limit=200))
         with psycopg.connect(db_url, row_factory=dict_row) as conn:
             added, leads = ingest_permits(conn, permits)
+            # Rows ingested before property_type was persisted still have no use
+            # classification. Fill them in so the owner can filter commercial
+            # work out of the list instead of knocking doors at businesses.
+            permit_service.backfill_classification(conn)
         _permit_backfilled = True
     except Exception as exc:
         err = str(exc)[:300]
