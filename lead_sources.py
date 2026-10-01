@@ -26,6 +26,8 @@ import urllib.parse
 import urllib.request
 from datetime import date, timedelta
 
+import scrap_io
+
 SAM_SEARCH = "https://sam.gov/api/prod/sgs/v1/search/"
 
 USER_AGENT = (
@@ -250,11 +252,31 @@ def enabled():
 
 
 def scan(limit=None, preset=None):
-    """Aggregate all enabled public sources."""
-    if not enabled():
+    """Aggregate all enabled public sources.
+
+    SAM.gov is demand-side (public solicitations); Scrap.io is supply-side
+    (local trade businesses). Each stays off unless its own env var is set, so
+    one misconfigured or depleted source cannot silently stop the other.
+    """
+    matches, errors, disabled = [], [], []
+    if enabled():
+        fed = scan_sam_gov(preset)
+        matches.extend(fed.get("matches") or [])
+        errors.extend(fed.get("errors") or [])
+    else:
         print("[lead-source] SAM.gov disabled (LEAD_SOURCES_SAM_GOV=0); skipping federal scan", flush=True)
-        return {"matches": [], "errors": [], "disabled": ["sam-gov"]}
-    result = scan_sam_gov(preset)
+        disabled.append("sam-gov")
+
+    if scrap_io.enabled():
+        local = scrap_io.scan_scrap_io(preset=preset)
+        matches.extend(local.get("matches") or [])
+        errors.extend(local.get("errors") or [])
+        for d in local.get("disabled") or []:
+            disabled.append(d)
+    else:
+        print("[lead-source] Scrap.io disabled (LEAD_SOURCES_SCRAP_IO=0); skipping maps scan", flush=True)
+        disabled.append("scrap-io")
+
     if limit:
-        result["matches"] = result["matches"][:limit]
-    return result
+        matches = matches[:limit]
+    return {"matches": matches, "errors": errors, "disabled": disabled}
