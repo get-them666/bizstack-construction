@@ -47,6 +47,49 @@ CITY_ZIPS = {
 
 SELF_APPLICANTS = {"self", "owner", "homeowner", "owner-builder", "property owner", "n/a", ""}
 
+# Permit status -> is the job still live?
+#
+# Neither open feed publishes an applicant or contractor name, so "has this
+# homeowner already hired someone" is unknowable from the data. Status is the
+# one free signal that separates work still ahead from work already done, and it
+# was being dropped on the floor: _norm_record() took no status argument, so
+# Final and Expired permits were imported beside Active ones and looked
+# identical. A Final permit is a completed job and cannot be won.
+#
+# The two cities publish different vocabularies (VB: Active/Final/Expired/Void;
+# Norfolk: 35 values including Finaled, C/O Issued, Abandoned, Withdrawn), so
+# both are mapped explicitly rather than pattern-matched -- "cancelled" and
+# "abandoned" read as live to a substring check but are neither.
+PERMIT_DEAD_STATUSES = {
+    # Virginia Beach
+    "final", "expired", "void", "closed", "pre-issuance",
+    # Norfolk
+    "finaled", "final review", "reviews complete", "c/o issued",
+    "completed", "completed 3rd party review", "paid certificate issued",
+    "cancelled", "canceled", "abandoned", "withdrawn", "revoked", "denied",
+    "out of service-decomissioned", "stop work ordered", "expired",
+    "overdue", "incomplete", "partial disapproved -3rd party inspection 1 yr 3",
+}
+
+
+def _permit_status(raw) -> str:
+    """Normalised permit status; '' when the feed publishes none."""
+    s = re.sub(r"\s+", " ", str(raw or "")).strip().lower()
+    return s
+
+
+def permit_is_live(p: dict) -> bool:
+    """True unless the permit is finalised, cancelled or otherwise closed out.
+
+    A permit with no status at all is treated as live: the Shovels path and the
+    demo seed publish none, and refusing to score them would silently drop
+    every row from a source that has no status vocabulary to offer.
+    """
+    status = _permit_status(p.get("status"))
+    if not status:
+        return True
+    return status not in PERMIT_DEAD_STATUSES
+
 TRADE_RE = re.compile(
     r"(roof(ing| repair| replacement)?|siding|exterior( paint| stucco| vinyl)?|window(s)?|door(s)?|"
     r"deck|porch|patio|fence|railing|gutter|kitchen|bath(room)?|remodel|renovat|addition|add.?on|"
@@ -273,6 +316,10 @@ def wants_lead(p: dict) -> bool:
     """Heuristic: is this permit a homeowner-driven job worth a follow-up lead?"""
     if p.get("_demo"):
         return False
+    # A finalised, cancelled or expired permit is a job that is over. This is the
+    # only free proxy for "not already engaged" that the open feeds publish.
+    if not permit_is_live(p):
+        return False
     pt = (p.get("property_type") or "").lower()
     if "commercial" in pt:
         return False
@@ -425,7 +472,7 @@ def _iso_date(v) -> str:
 def _norm_record(
     permit_number="", address="", city="", state="", zip_code="",
     work_type="", description="", contractor="", issue_date="",
-    value=0.0, property_type="", source="", postal_code="",
+    value=0.0, property_type="", source="", postal_code="", status="",
 ) -> dict:
     """Build a permit dict in the same shape _normalize() produces."""
     address = (address or "").strip()
@@ -445,6 +492,7 @@ def _norm_record(
         "issue_date": _iso_date(issue_date),
         "estimated_value": _as_money(value),
         "property_type": (property_type or "").strip(),
+        "status": _permit_status(status),
         "postal_code": (postal_code or "").strip()[:10],
         "tags": [],
         "_id": "",
@@ -467,6 +515,8 @@ def fetch_virginia_beach(days: int = 45, limit: int = 200) -> list:
         # would be wrong here (IssueDate is 'YYYY/MM/DD', so a lexical compare
         # against 'YYYY-MM-DD' misbehaves), so bound the page and filter below.
         "where": "1=1",
+        # Status is requested explicitly. It is present on the layer but was
+        # never read, which is why finalised jobs were imported as live leads.
         "outFields": ("PermitNumber,PermitType,ConstructionType,WorkType,ApplicationDate,"
                       "IssueDate,Status,WorkDesc,GPIN,StreetAddress,AddressUnit,City,State,Zip"),
         "orderByFields": "IssueDate DESC",
@@ -497,6 +547,7 @@ def fetch_virginia_beach(days: int = 45, limit: int = 200) -> list:
             work_type=str(a.get("WorkType") or a.get("PermitType") or a.get("ConstructionType") or ""),
             postal_code=str(a.get("Zip") or ""),
             description=str(a.get("WorkDesc") or ""),
+            status=str(a.get("Status") or ""),
             # CreatedBy is an opaque portal account (PUBLICUSER<n>), never a
             # person. Treating it as a contractor name would make every row look
             # "already engaged", so it is deliberately not mapped here.
@@ -533,6 +584,9 @@ def fetch_norfolk(days: int = 45, limit: int = 200) -> list:
             issue_date=str(r.get("application_date") or ""),
             value=0.0,
             property_type=str(r.get("use_class") or ""),
+            # Norfolk has 35 distinct status values, so this vocabulary matters
+            # more here than in VB: Finaled alone is 79k of the 118k rows.
+            status=str(r.get("status") or ""),
             source="norfolk_open_data",
         ))
     return out

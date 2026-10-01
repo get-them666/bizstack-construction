@@ -79,6 +79,38 @@ combo = ps._norm_record(permit_number="X2", address="3 Elm", city="Norfolk",
                         property_type="Commercial")
 check("commercial is rejected", ps.wants_lead(combo) is False)
 
+print("\n[4b] a finalised or cancelled permit is a job that is over")
+# Neither open feed publishes a contractor, so "already engaged" is unknowable.
+# Status is the one free signal that separates live work from finished work, and
+# it was being dropped entirely: _norm_record() had no status argument, so a
+# Final permit imported beside an Active one and both looked like open leads.
+for dead in ("Final", "Expired", "Void", "finaled", "C/O Issued", "Cancelled",
+             "Abandoned", "Withdrawn", "Denied", "Revoked", "Completed"):
+    row = dict(deck, status=dead)
+    check(f"{dead!r} is not a lead", ps.wants_lead(row) is False)
+
+for live in ("Active", "Issued", "Authorized", "Pending", "New",
+             "Reviews in progress", "Documents submitted"):
+    row = dict(deck, status=live)
+    check(f"{live!r} is still a lead", ps.wants_lead(row) is True)
+
+# A source with no status vocabulary must not be silently dropped: Shovels and
+# the demo seed publish none, and treating absent as dead would empty both.
+check("no status is treated as live", ps.wants_lead(deck) is True)
+check("permit_is_live is True when status is blank", ps.permit_is_live(deck) is True)
+check("permit_is_live is False when finalised",
+      ps.permit_is_live(dict(deck, status="Finaled")) is False)
+# Case and whitespace come from the feed, not from us.
+check("status normalisation is case/space insensitive",
+      ps._permit_status("  C/O   Issued ") == "c/o issued",
+      ps._permit_status("  C/O   Issued "))
+# 'cancelled' and 'abandoned' read as live to a substring check but are not.
+check("cancelled is not caught by an 'active' substring",
+      ps.permit_is_live(dict(deck, status="Cancelled")) is False)
+check("row carries a normalised status",
+      ps._norm_record(permit_number="X3", address="4 Fir", city="Norfolk",
+                      work_type="Deck", status="Active")["status"] == "active")
+
 print("\n[5] Chesapeake is not wired to its stale land-use layer")
 # Its "Development Tracking" ArcGIS layer is land-use actions with a 2022
 # newest entry and no applicant fields. Importing it would fill /leads with
@@ -106,6 +138,13 @@ if os.getenv("PERMIT_LIVE") == "1":
             bad = [r for r in rows if r["permit_number"].lower().startswith("publicuser")]
             check(f"{name} never maps CreatedBy into a permit number", not bad,
                   f"{len(bad)} rows leaked PUBLICUSER")
+            # The status field must survive the fetch, or the new filter is
+            # reading '' everywhere and treating every permit as live.
+            check(f"{name} rows carry a status", all(r.get("status") for r in rows),
+                  f"{sum(1 for r in rows if not r.get('status'))}/{len(rows)} blank")
+            dead = [r for r in leads if not ps.permit_is_live(r)]
+            check(f"{name} yields no dead permits as leads", not dead,
+                  f"{len(dead)} dead: {sorted({r['status'] for r in dead})[:6]}")
         except Exception as e:
             check(f"{name} fetch", False, repr(e))
 else:
