@@ -372,14 +372,44 @@ def contact_policy_allows(db, recipient: str, channel: str, lead_id=None) -> tup
         return False, "no recipient"
     try:
         with db.cursor() as cur:
-            cur.execute(
-                "SELECT COUNT(*) AS n, MAX(created_at) AS last_at FROM comms_logs "
-                "WHERE direction = 'outbound' AND channel = %s AND LOWER(recipient) = LOWER(%s);",
-                (channel, recipient),
-            )
-            row = cur.fetchone() or {}
-        touches = int(row.get("n") or 0)
-        last_at = row.get("last_at")
+            # When the lead is known, count EVERY outbound touch to that lead
+            # across all channels, because the policy is per lead, not per
+            # address: a letter mailed to a lead who has no email must consume
+            # the same single touch an email would, or the lead gets two letters
+            # plus two emails. Older rows have lead_id NULL, so fall back to the
+            # original per-(channel, recipient) count for those and take the
+            # larger of the two -- under-counting here would re-contact a lead
+            # who already ignored us.
+            if lead_id:
+                cur.execute(
+                    "SELECT COUNT(*) AS n, MAX(created_at) AS last_at FROM comms_logs "
+                    "WHERE direction = 'outbound' AND ("
+                    "  lead_id = %s OR (channel = %s AND LOWER(recipient) = LOWER(%s))"
+                    ");",
+                    (lead_id, channel, recipient),
+                )
+                row = cur.fetchone() or {}
+                touches = int(row.get("n") or 0)
+                last_at = row.get("last_at")
+                cur.execute(
+                    "SELECT COUNT(*) AS n, MAX(created_at) AS last_at FROM comms_logs "
+                    "WHERE direction = 'outbound' AND lead_id = %s;",
+                    (lead_id,),
+                )
+                by_lead = cur.fetchone() or {}
+                lead_touches = int(by_lead.get("n") or 0)
+                lead_last = by_lead.get("last_at")
+                if lead_touches > touches:
+                    touches, last_at = lead_touches, lead_last
+            else:
+                cur.execute(
+                    "SELECT COUNT(*) AS n, MAX(created_at) AS last_at FROM comms_logs "
+                    "WHERE direction = 'outbound' AND channel = %s AND LOWER(recipient) = LOWER(%s);",
+                    (channel, recipient),
+                )
+                row = cur.fetchone() or {}
+                touches = int(row.get("n") or 0)
+                last_at = row.get("last_at")
     except Exception as exc:
         print(f"[auto-reply] touch count failed for {recipient} ({channel}); withholding: {exc}", flush=True)
         return False, "touch count unavailable"

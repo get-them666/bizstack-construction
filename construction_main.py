@@ -53,6 +53,7 @@ import construction_radar
 import materials_service
 import training_service
 import lead_sources
+import scrap_io
 import inbound_email
 import google_oauth
 
@@ -94,10 +95,16 @@ PERMIT_STATUS_COLORS = {
 # deleted, so nothing is destroyed and the source can come back with one env
 # var (LEAD_SOURCES_SAM_GOV=1).
 def hidden_lead_sources() -> list:
-    """Lead `source` values to exclude from owner-facing lists and counts."""
+    """Lead `source` values to exclude from owner-facing lists and counts.
+
+    Each source is gated on its own env var, so turning one off hides only its
+    own leads.
+    """
     hidden = []
     if not lead_sources.enabled():
         hidden.append("sam-gov")
+    if not scrap_io.enabled():
+        hidden.append("scrap-io")
     return hidden
 
 
@@ -175,6 +182,20 @@ async def lifecycle(app: FastAPI):
                 cur.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS stripe_session_id VARCHAR(255);")
                 cur.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS notes TEXT;")
                 cur.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS draft_reply TEXT;")
+                # Attribute each outbound touch to the lead it was made for, not
+                # just the address it was sent to. Without this the contact policy
+                # can only count per (channel, recipient), so a lead mailed a
+                # letter on channel 'mail' starts that channel's counter at zero
+                # and could be mailed twice AND emailed twice - four contacts
+                # against a once-then-5-days rule. Nullable on purpose: historical
+                # rows stay NULL and the policy falls back to recipient counting
+                # for them, so this backfills forward instead of resetting.
+                cur.execute("ALTER TABLE comms_logs ADD COLUMN IF NOT EXISTS lead_id INTEGER;")
+                cur.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_comms_logs_lead
+                    ON comms_logs (lead_id, direction, created_at)
+                    WHERE lead_id IS NOT NULL;
+                """)
                 cur.execute("""
                 CREATE TABLE IF NOT EXISTS payments (
                     id SERIAL PRIMARY KEY,

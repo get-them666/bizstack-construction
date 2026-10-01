@@ -147,7 +147,46 @@ def test_contact_policy():
     check("no recipient is not sendable", ok is False, why)
 
     ok, why = auto_reply.contact_policy_allows(PolicyDb(touches=0), "+15551234567", "text", 42)
-    check("policy is per-channel: text starts fresh", ok is True, why)
+    check("a never-touched lead may be texted", ok is True, why)
+
+    # A mailed letter is a real touch: it must consume the same single touch an
+    # email would, or the lead gets two letters AND two emails against a
+    # two-touch rule. CountByLead answers the lead-wide query differently from
+    # the per-(channel, recipient) one, which is what this needs to exercise --
+    # PolicyDb returns the same number for both, so it cannot detect the
+    # regression (this assertion previously read "per-channel: text starts
+    # fresh" and passed vacuously with touches=0).
+    class CountByLead(PolicyDb):
+        """lead_touches is the cross-channel total; touches is this address's own."""
+
+        def __init__(self, lead_touches=0, touches=0, last_at=None, replied=False):
+            super().__init__(touches=touches, last_at=last_at, replied=replied)
+            self.lead_touches = lead_touches
+
+        def answer(self, sql):
+            if "FROM comms_logs" in sql and "channel" not in sql:
+                return {"n": self.lead_touches, "last_at": self.last_at}
+            return super().answer(sql)
+
+    ok, why = auto_reply.contact_policy_allows(
+        CountByLead(lead_touches=1, touches=0, last_at=now), "a@x.com", "email", 42)
+    check("a letter already mailed blocks a same-day email", ok is False, why)
+    check("  and names the 5-day wait", "waits" in why, why)
+
+    ok, why = auto_reply.contact_policy_allows(
+        CountByLead(lead_touches=1, touches=0, last_at=now - timedelta(days=6)), "a@x.com", "email", 42)
+    check("one letter then the single 5-day follow-up is allowed", ok is True, why)
+
+    ok, why = auto_reply.contact_policy_allows(
+        CountByLead(lead_touches=2, touches=0, last_at=now - timedelta(days=3650)), "a@x.com", "email", 42)
+    check("two letters close the lead regardless of elapsed time", ok is False, why)
+
+    # Under-counting is the damaging direction: pre-existing rows have
+    # lead_id NULL, so the lead-wide total must be max()'d against the
+    # recipient count rather than replacing it.
+    ok, why = auto_reply.contact_policy_allows(
+        CountByLead(lead_touches=0, touches=2, last_at=now - timedelta(days=3650)), "a@x.com", "email", 42)
+    check("legacy NULL-lead_id history still counts (max, not replace)", ok is False, why)
 
     os.environ["LEAD_MAX_TOUCHES"] = "0"
     ok, why = auto_reply.contact_policy_allows(PolicyDb(touches=0), "a@x.com", "email")
