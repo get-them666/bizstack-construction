@@ -1001,18 +1001,35 @@ def send_owner_lead_digest(db, company_key, items):
 
 
 def send_bid_inquiry(db, company_key, *, title="", solicitation="", contact_name="", email="",
-                     service="", address="", state="", url="", lead_id=None):
+                     service="", address="", state="", url="", lead_id=None, source=""):
     """Send a professional bid-inquiry email to a public-contract point of contact.
 
     For outbound public-sector opportunities (e.g. SAM.gov). This is NOT the
     inbound auto-reply: the recipient is a buyer, so we express interest and ask
     for the full solicitation package. Email only — never SMS or AI-call a
     government contracting officer.
+
+    `source` is the lead's provenance. It is not defaulted to sam-gov: this
+    function is also the send path for permit and Scrap.io leads, and hardcoding
+    the federal source blocked every recipient including the residential ones
+    this business actually wants.
     """
     company_key = company_key if company_key in COMPANIES else "construction"
     co_name = COMPANIES[company_key]["name"]
     email = (email or "").strip()
     if not email:
+        return False
+    # The federal block has to be enforced HERE, not just on the auto-reply
+    # path. auto_reply_to_lead calls blocked_reason and the emailbot logged
+    # "withheld" correctly, but this function never did -- so SAM.gov leads were
+    # emailed straight to .gov and .mil points of contact anyway, which is the
+    # exact conduct the block exists to prevent. 194,660 of those sends are in
+    # comms_logs. Only auto_reply_to_lead consulted it, so the guard looked
+    # armed from the outside while this path walked straight past it.
+    blocked = blocked_reason(email, source)
+    if blocked:
+        print(f"[bid-inquiry {company_key}] withheld — {blocked}", flush=True)
+        note_withheld(db, lead_id, blocked)
         return False
     if db is not None:
         try:
@@ -1055,7 +1072,16 @@ def send_bid_inquiry(db, company_key, *, title="", solicitation="", contact_name
         if not documents_service.smtp_configured(cfg):
             print(f"[bid-inquiry {company_key}] SMTP not configured; skipped {email}", flush=True)
             return False
-        run_coro(documents_service.send_email(cfg, email, subject, msg.replace("\n", "<br>")))
+        # documents_service.send_email returns False when the Gmail transport is
+        # unavailable, and that return value used to be discarded: the
+        # comms_logs row was written and True returned regardless. That is what
+        # produced 194,660 "sent" rows against 85 distinct recipients, and
+        # because every owner-facing count is a COUNT over comms_logs, the
+        # dashboard reported a bot that had been working when nothing had left
+        # the building. Only a confirmed send may be logged as one.
+        if not run_coro(documents_service.send_email(cfg, email, subject, msg.replace("\n", "<br>"))):
+            print(f"[bid-inquiry {company_key}] send to {email} did not deliver; not logged", flush=True)
+            return False
         if db is not None:
             try:
                 with db.cursor() as cur:
