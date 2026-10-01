@@ -182,12 +182,19 @@ def _owner_names(node) -> list:
 
 def trace_address(addr: dict) -> dict:
     """One address, one credit. Returns owner/phone/email or an error."""
+    # success_criteria is an ENUM, not an object: 'owner-name',
+    # 'owner-contact-any', 'owner-contact-email', 'owner-contact-phone',
+    # 'owner-contact-address'. An unrecognised value does not 400 -- the lookup
+    # simply never reaches the success condition, so the whole request is billed
+    # and returns nothing. 'owner-contact-any' is what we want: an owner with at
+    # least one reachable method, so a name-only match is not paid for.
     payload = {"property_lookups": [{
         "property_address_lookup": {
             "street": addr["street"], "city": addr["city"],
             "state": addr["state"], "zipcode": addr["zipcode"],
         },
-        "success_criteria": {"property_match": "exact"},
+        "success_criteria": "owner-contact-any",
+        "debt_data_best_effort": False,
     }]}
     data = _post("/api/properties", payload)
     if data.get("error"):
