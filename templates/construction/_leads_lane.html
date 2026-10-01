@@ -120,6 +120,19 @@
                         </div>
 
                         <div class="mt-4">
+                            <p class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5">Log a contact you made</p>
+                            <form action="/api/leads/{{ lead.id }}/touch" class="flex flex-wrap gap-2">
+                                <input type="hidden" name="channel" value="letter">
+                                {% for label, chan in [('Mailed a letter', 'letter'), ('Knocked on the door', 'door-knock'), ('Called them', 'phone'), ('Met in person', 'in-person')] %}
+                                <button type="submit" name="channel" value="{{ chan }}"
+                                        class="px-3 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 hover:text-indigo-700 rounded-xl transition-colors">{{ label }}</button>
+                                {% endfor %}
+                                <input type="text" name="detail" placeholder="Note (optional)" class="flex-1 min-w-[10rem] px-3 py-2 text-xs rounded-xl bg-slate-50 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                            </form>
+                            <p class="mt-1.5 text-xs text-slate-500">Counts against the same one-touch budget as the bot, so nobody gets a letter and then an email.</p>
+                        </div>
+
+                        <div class="mt-4">
                             <p class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5">Internal notes</p>
                             <form data-notes action="/api/leads/{{ lead.id }}/notes" class="flex gap-2">
                                 <input type="text" name="notes" value="{{ lead.notes or '' }}" placeholder="Estimate date, permits, contact notes…" class="flex-1 px-4 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">

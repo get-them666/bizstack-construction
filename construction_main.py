@@ -2295,6 +2295,25 @@ async def update_lead_notes(lead_id: int, request: Request, notes: str = Form(""
     return JSONResponse(content={"status": "success"})
 
 
+@app.post("/api/leads/{lead_id}/touch")
+async def record_lead_touch(lead_id: int, request: Request, channel: str = Form(""),
+                            detail: str = Form(""), db=Depends(get_db)):
+    """Log an owner-initiated contact (letter, door knock, phone) as a real touch.
+
+    Without this the lead still reads as untouched to contact_policy_allows, so
+    the email sweep would contact someone the owner has already reached in
+    person. See auto_reply.record_manual_touch.
+    """
+    require_admin(request)
+    result = auto_reply.record_manual_touch(db, lead_id, channel, detail)
+    if result.get("ok") and request.headers.get("hx-request"):
+        return JSONResponse(content=result)
+    if not result.get("ok"):
+        return JSONResponse(content=result, status_code=400)
+    return RedirectResponse(url=request.headers.get("referer") or "/leads",
+                            status_code=status.HTTP_303_SEE_OTHER)
+
+
 @app.post("/api/leads/{lead_id}/fire-draft")
 async def fire_lead_draft_route(lead_id: int, request: Request, db=Depends(get_db)):
     require_admin(request)

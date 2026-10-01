@@ -433,6 +433,62 @@ def contact_policy_allows(db, recipient: str, channel: str, lead_id=None) -> tup
     return True, ""
 
 
+def record_manual_touch(db, lead_id, channel: str, detail: str = "") -> dict:
+    """Record an owner-initiated contact: a letter, a door knock, a phone call.
+
+    The bot only ever sees its own outbound touches, so a lead the owner reached
+    in person still looked untouched and the email sweep would contact them
+    again -- the same person getting a letter and an email against a policy that
+    allows one touch. Writing to comms_logs makes the manual touch count, which
+    is the whole point of the contact policy being per-lead.
+
+    Channels are the bot's own vocabulary plus the physical ones, because the
+    policy counts across every channel:
+
+        letter | door-knock | phone | in-person | other
+
+    The row is attributed to the lead via lead_id, which is the column
+    contact_policy_allows prefers. Without a recipient address, the
+    per-(channel, recipient) half of that query cannot match, so lead_id is what
+    makes this visible to the policy at all.
+    """
+    channel = (channel or "").strip().lower()
+    allowed = {"letter", "door-knock", "phone", "in-person", "other"}
+    if channel not in allowed:
+        return {"ok": False, "error": f"channel must be one of {sorted(allowed)}"}
+    if not lead_id or db is None:
+        return {"ok": False, "error": "lead_id and db are required"}
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
+    note = (detail or "").strip()
+    body = f"[owner {channel} {stamp}]" + (f" {note}" if note else "")
+    try:
+        with db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO comms_logs (direction, channel, sender, recipient, message_body, lead_id) "
+                "VALUES ('outbound', %s, 'owner', %s, %s, %s);",
+                (channel, f"lead:{lead_id}", body, lead_id),
+            )
+            # A manual touch is a first touch for most leads. Marking it
+            # 'contacted' keeps /leads honest; the policy, not this status, is
+            # what decides whether another automated touch may go out.
+            cur.execute(
+                "UPDATE leads SET status = 'contacted' "
+                "WHERE id = %s AND status = 'new';",
+                (lead_id,),
+            )
+            cur.execute(
+                "UPDATE leads SET notes = CASE WHEN COALESCE(notes, '') = '' THEN %s "
+                "ELSE notes || chr(10) || %s END WHERE id = %s;",
+                (body, body, lead_id),
+            )
+            db.commit()
+    except Exception as exc:
+        print(f"[auto-reply] could not record manual touch for lead {lead_id}: {exc}", flush=True)
+        return {"ok": False, "error": str(exc)[:200]}
+    print(f"[auto-reply] recorded owner {channel} on lead {lead_id}", flush=True)
+    return {"ok": True, "channel": channel, "lead_id": lead_id, "at": stamp}
+
+
 def note_withheld(db, lead_id, reason: str) -> None:
     """Record why a lead was not contacted, once, so the owner can audit it.
 
