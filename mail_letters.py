@@ -49,13 +49,38 @@ BRAND = {
 
 SENDER_NAME = os.getenv("LETTER_SENDER_NAME", "Shaun O'Leary")
 
+# City names that stand in for a missing applicant. lead_research and the permit
+# importers both write the city into `name` when the feed publishes no person.
+_PLACE_NAME_RECEIPIENTS = {
+    "virginia beach", "chesapeake", "williamsburg", "norfolk", "newport news",
+    "hampton", "portsmouth", "suffolk", "virginia", "north carolina", "corolla",
+    "elizabeth city", "currituck", "hampton roads", "unknown", "permit",
+    # permit_service._seed_demo writes this as contractor_name, and it can reach
+    # leads.name, where it printed "Dear Self," -- the applicant role, not a
+    # person. Same problem as a city name in the name field.
+    "self", "owner", "homeowner", "owner-builder", "property owner", "n/a",
+}
+
 ADDRESS_ONLY_SQL = """
     SELECT id, name, address, project_type, source, status, notes, created_at
     FROM leads
     WHERE company = %(company)s
-      AND status <> 'archived'
+      -- status = 'new' and not merely <> 'archived'. Completed jobs, the
+      -- owner's own STR properties and already-contacted leads all carry a
+      -- postal address and no email, so they matched the looser filter: the
+      -- first printed batch would have gone to two customers whose work is
+      -- already finished and billed, addressed as if they were cold prospects.
+      AND status = 'new'
+      -- sam-gov rows are solicitation records, not properties. One of them
+      -- carries address "57000, VA, 23551" -- a zip with a stray 57000 in the
+      -- street slot -- which renders as an undeliverable envelope. The owner
+      -- does not want federal solicitations mailed on letterhead at all.
+      AND COALESCE(source, '') <> 'sam-gov'
       AND address IS NOT NULL AND BTRIM(address) <> ''
-      AND (email IS NULL OR BTRIM(email) = '' OR LOWER(email) LIKE '%@lead.local')
+      -- The percent below is doubled for psycopg's paramstyle, where a bare
+      -- one starts a placeholder. The single form raises ProgrammingError on
+      -- every run, and nothing had executed this query, so it shipped silently.
+      AND (email IS NULL OR BTRIM(email) = '' OR LOWER(email) LIKE '%%@lead.local')
       AND (phone IS NULL OR BTRIM(phone) = '' OR phone IN ('unknown', 'n/a', 'N/A'))
     ORDER BY id
 """
@@ -66,15 +91,33 @@ def _clean(value) -> str:
 
 
 def format_recipient(name) -> str:
-    """'Ada Lovelace' -> 'Ada L.'."""
+    """'Ada Lovelace' -> 'Ada L.'. No usable name -> 'the homeowner'.
+
+    The permit feeds publish no applicant, so most of these leads carry a
+    place name in `name` -- "Virginia Beach", "Chesapeake", "Williamsburg".
+    Treating that as a person printed "Dear Virginia Beach," on the letter and
+    "Virginia Beach" as the addressee on the envelope, which is not a person and
+    not deliverable. A real street address on the envelope is what actually gets
+    the letter delivered, so the greeting names the role instead of the city.
+    """
     parts = _clean(name).split()
     if not parts:
-        return "Homeowner"
+        return "the homeowner"
+    # Compare the whole name first, not word-by-word: "Virginia Beach" is two
+    # words, so the abbreviation path below turned it into "V. Beach", and
+    # "NATO Business Opportunity: ... (Norfolk VA)" into "N. VA)".
+    if _clean(name).lower() in _PLACE_NAME_RECEIPIENTS:
+        return "the homeowner"
+    # A solicitation or job title is not a person either, and abbreviating one
+    # produced "N. VA)" as the greeting. A colon, or more than four words, is
+    # the giveaway: no homeowner is named "Fire Alarm Upgrade Replacement".
+    if ":" in _clean(name) or len(parts) > 4:
+        return "the homeowner"
+    if len(parts) == 1:
+        return parts[0]
     first = parts[0]
     if first.lower() in {"mr.", "mr", "mrs.", "mrs", "ms.", "ms", "miss", "dr.", "dr"}:
         return _clean(name)
-    if len(parts) == 1:
-        return first
     return f"{first[0].upper()}. {parts[-1]}"
 
 
@@ -254,8 +297,11 @@ def fetch_leads(company: str, only_ids=None) -> list:
 
 
 def safe_name(lead: dict) -> str:
+    """Filesystem-safe stem. Separators are collapsed and trimmed, not just
+    substituted, so a trailing ')' or '/' cannot leave a name ending in '-'."""
     base = _clean(lead.get("name")) or f"lead-{lead.get('id')}"
-    return re.sub(r"[^A-Za-z0-9._-]+", "-", base)[:60]
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "-", base)[:60]
+    return re.sub(r"-{2,}", "-", stem).strip("-.") or f"lead-{lead.get('id')}"
 
 
 def main() -> int:
