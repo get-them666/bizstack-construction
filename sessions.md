@@ -246,6 +246,95 @@ cannot detect a broken page — render or authenticate instead.
 
 ---
 
+## Printing letters for address-only leads (new — Sept 30)
+
+The permit feeds give us an address and nothing else — no homeowner name, phone or
+email — so those leads have **no channel the email/text bot can use**. They are at
+zero touches, never contacted, because there was nothing to send to.
+
+`mail_letters.py` (construction repo) renders one Letter-format PDF per such lead so
+the owner can print and mail them by hand:
+
+```bash
+python mail_letters.py --list          # who's eligible, writes nothing
+python mail_letters.py --out outbox    # PDFs + manifest.csv
+```
+
+Eligible = has a postal address, no usable email (blank or `@lead.local`), no usable
+phone. Outputs one PDF per lead plus `manifest.csv` (id, name, address, project_type,
+source, status, filename) for the print run.
+
+**It is offline by design.** It reads `leads`, writes PDFs to disk, and never touches
+`comms_logs` — so nothing it does can move a touch count, and the owner keeps the
+decision on every letter. Marking letters as mailed is a separate, deliberate step
+(see below); do not add a send inside this script.
+
+### The letterhead
+
+Brand values come from env, not code. Current defaults:
+
+| Var | Value |
+|---|---|
+| `LETTER_BRAND_NAME` | BizStack |
+| `LETTER_BRAND_LEGAL` | Buildstack Construction |
+| `LETTER_BRAND_PHONE` | 252-665-5891 |
+| `LETTER_BRAND_EMAIL` | hello@bizstackperks.com |
+| `LETTER_BRAND_WEB` | bizstackperks.com |
+| `LETTER_BRAND_STREET` | 701 Dana Dr (owner's home, also the business address) |
+| `LETTER_BRAND_CITYSTATEZIP` | Chesapeake, VA 23321 |
+| `LETTER_BRAND_LICENSE` | *(empty — business ID deliberately not published)* |
+| `LETTER_SENDER_NAME` | Shaun O'Leary |
+
+Phone, email and the return address are printed. **The business ID / license number is
+intentionally withheld** — the owner supplies it themselves if a homeowner chooses to
+hire them. Every letter carries an opt-out line naming only channels that are actually
+printed, plus the return address, which is what makes a bounced letter actionable.
+
+Only a missing **return address** trips the red `DRAFT - letterhead incomplete` warning.
+A blank license is not "incomplete" and must never trip it.
+
+### A mailed letter counts as one touch
+
+This is the rule to hold onto: **the letter is the lead's first touch and consumes the
+same single touch an email would.** If it did not, a lead could get two letters *and*
+two emails — four contacts against a once-then-5-days rule.
+
+`comms_logs` had no `lead_id` and counted only per `(channel, recipient)`, so a letter
+logged as `channel='mail'` opened its own counter at zero. Two changes, mirrored in
+**both repos**:
+
+- `comms_logs.lead_id INTEGER` (nullable) + partial index, added by idempotent
+  `ALTER TABLE ... IF NOT EXISTS`. Nullable on purpose: historical rows stay NULL so
+  this backfills forward instead of resetting anyone's touch history.
+- `contact_policy_allows` now counts every outbound touch to the lead across **all**
+  channels when `lead_id` is known, and takes the **max** of that and the old
+  per-`(channel, recipient)` count. The max matters: older rows have `lead_id = NULL`,
+  so a lead-wide-only count would read them as zero touches and re-contact people who
+  already ignored us.
+
+Behaviour with a letter on file (verified on the hosts copy):
+
+| State | Result |
+|---|---|
+| letter mailed 0d ago | email blocked — `follow-up waits 5.0d` |
+| letter mailed 6d ago | email allowed (the one timed follow-up) |
+| 2 letters, any age | closed permanently — `contacted 2x with no reply` |
+
+`test_contact_policy.py` covers the cross-channel count: a letter blocks a same-day
+email, permits the one 5-day follow-up, closes the lead after two, and legacy
+NULL-`lead_id` history still counts. 22 pass. The suite previously asserted
+`policy is per-channel: text starts fresh`, which passed *vacuously* — the fake DB
+returned the same count for every query, so it could not have detected the
+per-channel bug. Verified the new assertions fail (3 failures) when the
+cross-channel branch is disabled.
+
+### Not verified
+
+The lead query has never run against the production database (no `DATABASE_URL` in the
+dev environment). Run `--list` and eyeball the names and addresses before rendering.
+
+---
+
 ## House rules
 
 - Real beats plausible. A stale or invented number in lender material is worse than a
