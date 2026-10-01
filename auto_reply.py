@@ -285,6 +285,51 @@ def _outbound_sent_today(db, channel: str) -> int:
         return _outbound_cap(channel)
 
 
+def _recent_send_guard(db, recipient: str, channel: str, days: int = 1) -> tuple:
+    """Hard per-recipient cooldown. Returns (ok, reason).
+
+    This is the guard that was missing. _recipient_recently_sent has existed
+    since the two-touch policy landed but nothing ever called it, so the only
+    limit on repeat contact to one address was the daily cap -- which is
+    per-channel across the whole list and therefore never binds a single
+    number that is being re-processed on every pass. The result was 39,222 rows
+    for one phone over six days at roughly 0.25s intervals.
+
+    Fail-closed in both directions: an unknown recipient or a failed lookup is
+    treated as already-sent, so a broken query can never become a blast.
+    """
+    if not recipient or db is None:
+        return False, "no recipient"
+    if _recipient_recently_sent(db, recipient, channel, days):
+        return False, f"already {channel} to {recipient} in the last {days}d"
+    return True, ""
+
+
+def _hard_daily_ceiling(channel: str) -> int:
+    """Absolute floor on the daily cap, so a mistyped env var cannot uncap a channel.
+
+    EMAIL_DAILY_CAP and TEXT_DAILY_CAP are read from the environment on every
+    call. Setting either to 0, -1, an empty string or a nonsense value falls
+    through to a default that permits sending, which is the wrong direction for
+    a safety limit. This clamps the configured value into a sane band.
+    """
+    configured = os.getenv(
+        {"email": "EMAIL_DAILY_CAP", "text": "TEXT_DAILY_CAP", "sms": "TEXT_DAILY_CAP"}.get(channel, ""), "")
+    if not (configured or "").strip():
+        # Unset is not "unlimited" and not "disabled" -- it is the documented
+        # default. _outbound_cap already defaults to 30 per channel; return that
+        # rather than 0, which would read as "no automated contact" and silently
+        # switch the whole bot off.
+        return _outbound_cap(channel, default=30)
+    raw = _outbound_cap(channel, default=30)
+    ceiling = 50 if channel == "email" else 20
+    if raw <= 0:
+        # 0 means "no automated contact" in _channel_allowed, so a non-positive
+        # configured cap must not be reinterpreted as unlimited.
+        return 0
+    return min(raw, ceiling)
+
+
 def _recipient_recently_sent(db, recipient: str, channel: str, days: int) -> bool:
     """True if we already sent `channel` to this recipient within `days`.
 
@@ -580,8 +625,12 @@ def _is_federal_domain(domain: str) -> bool:
 
 
 def _channel_allowed(db, channel: str) -> tuple:
-    """Return (ok, reason_or_empty). Enforces the daily outbound caps."""
-    cap = _outbound_cap(channel)
+    """Return (ok, reason_or_empty). Enforces the daily outbound caps.
+
+    The configured cap is clamped by _hard_daily_ceiling so a mistyped or
+    negative env var cannot silently turn a safety limit into unlimited sends.
+    """
+    cap = _hard_daily_ceiling(channel)
     if cap <= 0:
         return True, ""
     used = _outbound_sent_today(db, channel)
@@ -713,7 +762,8 @@ def ensure_lead_reply(db, company_key, *, name="", phone="", email="", service="
         except Exception:
             has_smtp = False
         if auto and has_smtp:
-            ok, why = _channel_allowed(db, "email")
+            cool, cool_why = _recent_send_guard(db, email, "email", 1)
+            ok, why = _channel_allowed(db, "email") if cool else (False, cool_why)
             if ok:
                 try:
                     subject = f"Thanks for reaching out{f', {_person_first(name)}' if _person_first(name) else ''} — {co_name}"
@@ -745,11 +795,18 @@ def ensure_lead_reply(db, company_key, *, name="", phone="", email="", service="
             sw = None
             has_sw = False
         if auto and has_sw:
-            ok, why = _channel_allowed(db, "text")
+            # Per-recipient cooldown first. The daily cap alone cannot stop this:
+            # it is a whole-list budget, so it never binds a single number that
+            # gets reprocessed on every pass. That gap produced 39,222 rows for
+            # one phone in six days at ~0.25s intervals.
+            cool, cool_why = _recent_send_guard(db, to, "text", 1)
+            ok, why = _channel_allowed(db, "text") if cool else (False, cool_why)
             if ok:
                 try:
                     if sw.send_sms(to, msg):
                         sent = _fire_sent_effect(db, lead_id, company_key, "text", to, msg)
+                    else:
+                        print(f"[auto-reply {company_key}] sms to {to} not delivered (provider returned False); staging draft", flush=True)
                 except Exception as exc:
                     print(f"[auto-reply {company_key}] sms failed for {to}: {exc}", flush=True)
             else:
