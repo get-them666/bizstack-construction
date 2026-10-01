@@ -540,9 +540,43 @@ def blocked_reason(email: str, source: str = "") -> str:
     addr = (email or "").strip().lower()
     domain = addr.rsplit("@", 1)[-1] if "@" in addr else ""
     if (os.getenv("BLOCK_GOV_MIL_EMAIL", "1") or "1").lower() in ("1", "true", "yes", "on"):
-        if domain.endswith((".gov", ".mil")):
+        if _is_federal_domain(domain):
             return "federal domain"
     return ""
+
+
+# Suffix matching on (".gov", ".mil") missed real federal procurement contacts
+# that are still in the leads table: us.af.mil, Wendy_Deleon@nps.gov,
+# mwalker05@fs.fed.us. .mil and .gov still catch the common cases, but the
+# narrower point is that any government domain is a federal buyer regardless of
+# TLD, so this checks the registrable labels rather than a fixed suffix list.
+_FEDERAL_EXACT = {"fed.us", "gov", "mil", "fed"}
+
+
+def _is_federal_domain(domain: str) -> bool:
+    """True for .gov/.mil plus the subdomains and .fed.us that carry them.
+
+    Matching the registrable pair is what catches us.af.mil (labels mil.mil ->
+    not a registrable pair, but the last label is mil) and fs.fed.us.
+
+    'gov' as a *label* only counts when it is the public suffix, i.e. the
+    address ends in .gov. cityofhampton.gov.us has a 'gov' label too, but .us
+    is the public suffix there and that is a Virginia city site, not a federal
+    buyer -- matching it would block a legitimate municipal contact. Nothing in
+    the leads table uses a .gov.us shape, so only .gov, .mil and .fed.us are
+    treated as federal.
+    """
+    d = (domain or "").strip().lower().rstrip(".")
+    if not d:
+        return False
+    # A leading dot is not a domain: '.gov' must not normalise to 'gov' and
+    # then look like the TLD.
+    if d.startswith("."):
+        return False
+    labels = d.split(".")
+    if labels[-1] in ("gov", "mil"):
+        return True
+    return labels[-1] == "us" and len(labels) >= 2 and labels[-2] == "fed"
 
 
 def _channel_allowed(db, channel: str) -> tuple:
