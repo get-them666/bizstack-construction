@@ -129,6 +129,117 @@ pipeline, not just completed work.
 
 ---
 
+## SWaM certification — an access strategy, not a loan requirement
+
+Being straight about this first, because a lender will check: **SBA Microloan
+underwriting does not require or reward SWaM certification.** SWaM is not on the SBA's
+criteria, and no CDFI is going to improve their rate because of it. It is included here
+as a **revenue-access strategy** that the loan helps pay for — and because it forces the
+discipline of producing the same financial documents a lender wants anyway.
+
+**What it is.** SWaM (Small, Woman- and Minority-Owned Business certification) is a
+**Commonwealth of Virginia** program run by the Dept. of Small Business & Supplier
+Diversity. It unlocks set-aside bidding on state-funded projects, and **many Virginia
+localities rely on SWaM certification for their own small-business procurement** — which
+is directly relevant to the permit-monitoring pipeline in this file.
+
+**Where BuildStack qualifies today, per SBSD's published definitions:**
+
+| Designation | SBSD threshold | BuildStack |
+|---|---|---|
+| **Small** | ≥51% owned & controlled by U.S. citizens / legal residents; **≤250 employees OR ≤$10M avg annual gross receipts** (3-yr avg) | **Yes** — single owner, 25 yrs in trade, ~$32.5K documented 2026 revenue |
+| **Micro** *(on top of Small)* | **≤25 employees AND ≤$3M avg annual revenue** (3-yr avg) | **Yes** — headcount of 1; revenue is orders of magnitude under the ceiling |
+| Woman-owned / Minority-owned | ≥51% owned **and** controlled by a woman / minority individual who is a U.S. citizen or legal resident | **Owner-eligibility dependent** — requires your personal confirmation; see below |
+
+**Why it matters for this loan.** The honest growth bottleneck in this file is *not*
+lead generation — it's the 529-permit pipeline with no way to contact the homeowner.
+SWaM opens state and municipal set-aside work, which is a channel that does **not**
+depend on scraping or cold-emailing anyone. That is the same problem the loan solves by
+another route: predictable work that doesn't require a marketing budget.
+
+**Do not overstate it to a lender.** Say *"pursuing SWaM certification to access Virginia
+and municipal set-aside contracting"* — never *"SWaM certified."* Claiming a
+certification you hold is a problem; pursuing one is a plan.
+
+**No three-year receipt history required — this is a new business, and the code says so.**
+Worth stating plainly because it's the reason you're a microloan candidate in the first
+place, and it's a genuine advantage here rather than a gap:
+
+- **§ 2.2-4310** (the SWaM program statute) sets the size test at "$10 million or less in
+  annual gross income ... for up to each of its last three fiscal years **or lesser time
+  period if it has been in existence less than three years**."
+- **SBSD's own document checklist** confirms the practice. It requires three years of
+  returns and four quarters of 941s from *all applicants*, then adds a distinct
+  **"Additional Required Documents for New Businesses"** section requiring **only proof of
+  EIN**. A business that cannot produce three years of receipts is exactly who that
+  section exists for.
+
+**So the tax-return items in the checklist below do not apply to you as filed.** The new
+business path substitutes an **IRS EIN letter** for the 3-year return history. That is the
+single cheapest item on the entire list.
+
+> ⚠️ **One caveat, stated honestly:** the small-business *definition* in § 2.2-1604 says
+> "averaged over the previous three years" without the new-business phrase that appears in
+> § 2.2-4310. In practice you're nowhere near either ceiling — $10M small / $3M micro
+> against ~$32.5K — so the arithmetic isn't in dispute no matter how they average it. But
+> **confirm the exact lookback with SBSD directly at (804) 786-6585** when you file, and
+> get the answer in writing in your portal record. At your revenue level this is a
+> formality, not a risk.
+
+**Owner-eligibility items I could not determine from the file** (these are personal facts
+only you can confirm, and the woman-owned/minority-owned designations depend on them):
+1. Are you a U.S. citizen or permanent resident? *(Required for Small certification regardless.)*
+2. Do you hold Virginia **SWaM Small**, and would you also qualify for **Micro**?
+3. Woman-owned and/or minority-owned designations — applicable to you?
+4. Service-Disabled Veteran status via **Virginia DVS** — free, and can be added to the
+   SWaM profile either before or after certification.
+
+**The paperwork is the real unlock.** SBSD's document checklist overlaps heavily with the
+loan package, so one gathering exercise serves both. This is the pre-stage list — tracked
+in `docs/CHECKLIST.md`:
+
+- **Proof of EIN — IRS letter assigning or confirming your EIN.** ⬅️ For a new business
+  this is what substitutes for three years of tax returns. It is the item that unblocks
+  the whole application, and the IRS issues it in minutes by phone.
+- U.S. citizenship / permanent residency proof for the 51%+ owner: DMV license **plus**
+  passport, birth certificate, or green card
+- **Complete** federal business tax return, most recent year, **plus first page of the two
+  prior years**. *For an established entity. **New business — skip; use the EIN letter.***
+  For a sole proprietorship / single-member LLC filing Schedule C, that means the full
+  **personal** return most recent year plus the 1040 and Schedule C for the two prior years
+- **Form 941 first page for the last four quarters** — or a signed, dated owner letter
+  stating the firm has no employees. *Same: established entities. **New business — skip;
+  the no-employees letter still applies and is worth sending anyway.***
+- Documented proof of your own contribution used to acquire the business: both sides of
+  cancelled checks or receipts. If the business is over 5 years old and those are gone, a
+  signed statement describing the personal investment may be accepted
+- **Resume** of owner/officers — chronological, with every period of ownership or
+  employment and dates
+- Copies of **all professional licenses and permits** held by the business, its owners,
+  and officers, in the trades you're certifying in
+- Entity documents: LLC → Certificate of Organization, Articles, Operating Agreement;
+  corporation → Certificate of Incorporation, bylaws, recent shareholder *and* board
+  minutes, both sides of stock certificates, stock ledger. **Sole proprietorship →
+  current business license + Certificate of Assumed/Fictitious Name**
+- If the fictitious name should appear in the certified directory, submit the Certificate
+  of Fictitious Name
+
+**How to file.** Applications run through the SBSD portal at
+`certification-app.sbsd.virginia.gov/boLogin`; track status at
+`directory.sbsd.virginia.gov/#/status-search`. SBSD reserves the right to request
+additional documentation to resolve ambiguities — so assemble the file together rather
+than piecemeal.
+
+> **Worth flagging to you:** SBSD carries an explicit warning under **Code of Virginia
+> § 18.2-213.1** — knowingly making a false statement to obtain or deny SWaM certification
+> is a **Class 1 misdemeanor.** Every checkbox above has to be true as filed. Because the
+> 3-year gross-receipts lookback and the ownership-contribution proof are the two items
+> most likely to be misjudged on a first pass, take the assembled file to the **Hampton
+> Roads SBDC** (free, `sbdc@hrchamber.com`, (757) 664-2592) for a review pass **before**
+> you submit. Same coach reviewing both this and the loan package.
+
+---
+
 ## The honest picture first
 
 You've told me the real facts: startup, nothing cleared on the books, FICO in the low
