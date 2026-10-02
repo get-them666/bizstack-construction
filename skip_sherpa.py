@@ -44,6 +44,13 @@ from pathlib import Path
 
 API_ROOT = "https://skipsherpa.com"
 
+# Cloudflare fronts this API and answers python-urllib with Error 1010 "Access
+# denied" -- the owner's bot-fingerprint rule. It does not 403 as an auth
+# failure, it looks like one, so the key looks wrong when it is fine. Both
+# failures cost zero credits because the request never reaches the API.
+USER_AGENT = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+              "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
+
 # Hard ceiling per run regardless of --limit. Skip Sherpa is per-lookup
 # billing, so a mistyped limit is the difference between 20 credits and 500.
 DEFAULT_CREDIT_CEILING = 13  # 20 total, 7 already spent by hand
@@ -96,13 +103,18 @@ def parse_address(raw: str) -> dict:
 
 
 def _post(path: str, payload: dict) -> dict:
+    """Skip Sherpa's lookup endpoints are PUT, not POST, and answer 405 to a POST.
+
+    The spec declares every /api/* lookup as put, so this sends PUT throughout.
+    """
     body = json.dumps(payload).encode()
     req = urllib.request.Request(
-        f"{API_ROOT}{path}", data=body,
+        f"{API_ROOT}{path}", data=body, method="PUT",
         headers={"Content-Type": "application/json",
                  "api-key": api_key(),
                  "Authorization": f"Bearer {api_key()}",
-                 "Accept": "application/json"},
+                 "Accept": "application/json",
+                 "User-Agent": USER_AGENT},
     )
     try:
         with urllib.request.urlopen(req, timeout=60) as resp:
@@ -180,6 +192,117 @@ def _owner_names(node) -> list:
     return names
 
 
+def _persons(node) -> list:
+    """Walk the nested person objects out of the response.
+
+    The shape is property_results[].property.owners[].person, with the name under
+    person_name and the contact records under emails / phone_numbers. An earlier
+    version guessed at these paths and returned nothing while the API was
+    returning HTTP 200 with all the data, which looked identical to a miss.
+    """
+    found = []
+    if isinstance(node, dict):
+        if "person" in node and isinstance(node.get("person"), dict):
+            found.append(node["person"])
+        owners = node.get("owners")
+        if isinstance(owners, list):
+            for o in owners:
+                if isinstance(o, dict) and isinstance(o.get("person"), dict):
+                    found.append(o["person"])
+        for k, v in node.items():
+            if k in ("owners", "person"):
+                continue
+            if isinstance(v, (dict, list)):
+                found.extend(_persons(v))
+    elif isinstance(node, list):
+        for item in node:
+            found.extend(_persons(item))
+    return found
+
+
+def _person_name(person: dict) -> str:
+    pn = person.get("person_name") or {}
+    fn = str(pn.get("first_name") or "").strip()
+    ln = str(pn.get("last_name") or "").strip()
+    if fn and ln:
+        return f"{fn.title()} {ln.title()}"
+    full = str(pn.get("full_name") or person.get("display_name") or "").strip()
+    return full or (fn or ln).title()
+
+
+# Whether traced phones are written to the leads table at all.
+#
+# Email-only is the default and should stay that way. Measured on a real
+# Chesapeake owner: 9 phone numbers returned, 7 flagged DNC by the registry, and
+# 2 last confirmed in 2011 and 2012. Those are consumer mobiles belonging to
+# people who registered against being called. Writing them would feed the SMS and
+# AI-voice sweeps, which is the sharpest regulatory exposure in this system --
+# and the numbers add nothing today, because email is the channel that actually
+# produced replies this week.
+#
+# SKIP_SHERPA_WRITE_PHONES=1 opts in, and even then _phone_is_usable() drops DNC
+# entries and anything not confirmed recently.
+WRITE_PHONES = (os.getenv("SKIP_SHERPA_WRITE_PHONES", "0") or "0").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _phone_is_usable(phone_type: str, dnc: bool, last_seen: str) -> bool:
+    """Only for the opt-in path. DNC is never usable; stale numbers are not either."""
+    if dnc:
+        return False
+    if (phone_type or "").lower() in ("landline", ""):
+        return False
+    if last_seen and last_seen < (time.strftime("%Y") + "-01-01"):
+        return False
+    return True
+
+
+def _person_phones(person: dict) -> list:
+    """Phones as (e164, type, is_dnc, last_seen).
+
+    The DNC flag is carried through and NOT filtered here. Whether a
+    do-not-call registry entry blocks outreach depends on whose number it is and
+    which channel is used, so the decision is left visible to the caller rather
+    than silently made in a parser. last_seen matters too: this data returns
+    numbers last confirmed in 2011, and a stale landline is worse than no number.
+    """
+    out = []
+    for p in person.get("phone_numbers") or []:
+        if not isinstance(p, dict):
+            continue
+        e164 = str(p.get("e164_format") or "").strip()
+        digits = re.sub(r"\D", "", e164)
+        # Require a real E.164: '+' alone passes a naive length check on the
+        # non-digit characters, and that empty string was being picked as the
+        # preferred number.
+        if not e164.startswith("+") or not (10 <= len(digits) <= 15):
+            continue
+        dnc = False
+        for st in p.get("dnc_statuses") or []:
+            if isinstance(st, dict) and st.get("is_dnc"):
+                dnc = True
+                break
+        out.append((e164, str(p.get("type") or ""), dnc,
+                    str(p.get("last_seen") or "")))
+    return out
+
+
+def _person_emails(person: dict) -> list:
+    out = []
+    for e in person.get("emails") or []:
+        addr = (e.get("email_address") if isinstance(e, dict) else e) or ""
+        addr = str(addr).strip().lower()
+        if "@" in addr and addr.rsplit("@", 1)[-1] not in _JUNK_EMAIL_DOMAINS:
+            out.append(addr)
+    return out
+
+
+# Disposable/webmail addresses are technically valid and useless for outreach.
+_JUNK_EMAIL_DOMAINS = {
+    "example.com", "domain.com", "email.com", "test.com", "yopmail.com",
+    "mailinator.com", "guerrillamail.com", "tempmail.com", "throwawaymail.com",
+}
+
+
 def trace_address(addr: dict) -> dict:
     """One address, one credit. Returns owner/phone/email or an error."""
     # success_criteria is an ENUM, not an object: 'owner-name',
@@ -200,30 +323,69 @@ def trace_address(addr: dict) -> dict:
     if data.get("error"):
         return {"ok": False, "error": data["error"]}
 
-    results = data.get("property_lookup_results") or data.get("results") or []
+    # The response key is property_results, and a per-item status_code of 200
+    # with the data under a nested `property` key. Reading property_lookup_results
+    # here returned "no result row" while the API was returning complete data.
+    results = data.get("property_results") or data.get("property_lookup_results") or []
     if not results:
         return {"ok": False, "error": "no result row"}
     first = results[0] if isinstance(results[0], dict) else {}
-    props = first.get("properties") or []
-    if not props:
+
+    code = first.get("status_code")
+    if code and int(code) != 200:
+        issues = first.get("issues") or []
+        detail = issues[0].get("detail") if issues and isinstance(issues[0], dict) else ""
+        return {"ok": False, "error": f"no contact ({detail or code})"}
+
+    prop = first.get("property") or {}
+    if not isinstance(prop, dict) or not prop:
         issues = first.get("issues") or []
         return {"ok": False, "error": "no property matched" + (f" ({issues})" if issues else "")}
 
-    prop = props[0] if isinstance(props[0], dict) else {}
-    names = _owner_names(prop)
-    phones = _phones_from(prop) or _phones_from(first)
-    emails = _emails_from(prop) or _emails_from(first)
+    people = _persons(prop)
+    if not people:
+        return {"ok": False, "error": "no owner person returned"}
 
-    # Prefer a mobile: a landline is frequently disconnected and the whole point
-    # is a reachable line.
-    mobile = [p for p, t in phones if "mobile" in t.lower() or "cell" in t.lower()]
-    chosen = (mobile or phones)
+    names, phones, emails = [], [], []
+    for person in people:
+        nm = _person_name(person)
+        if nm and nm not in names:
+            names.append(nm)
+        phones.extend(_person_phones(person))
+        emails.extend(_person_emails(person))
+
+    # Prefer a mobile, then the most recently confirmed number. A landline last
+    # seen in 2011 is almost certainly disconnected, and a bad number burns a
+    # touch the contact policy will not give back.
+    def rank(rec):
+        e164, typ, _dnc, seen = rec
+        is_mobile = "mobile" in typ.lower() or "cell" in typ.lower()
+        return (0 if is_mobile else 1, "" if seen else "9999", seen, e164)
+
+    ordered = sorted(phones, key=rank)
+    chosen = ordered[0] if ordered else ("", "", False, "")
+    usable = [r for r in ordered if _phone_is_usable(r[1], r[2], r[3])]
+    ordered_emails = []
+    for e in emails:
+        if e not in ordered_emails:
+            ordered_emails.append(e)
+    # With WRITE_PHONES off (the default) the phone is returned for reporting but
+    # not written, so the lead cannot enter the SMS or AI-voice sweep.
+    write_phone = chosen[0] if (WRITE_PHONES and usable) else ""
     return {
         "ok": True,
         "owner": names[0] if names else "",
         "all_owners": names[:4],
-        "phone": chosen[0][0] if chosen else "",
-        "phone_type": chosen[0][1] if chosen else "",
+        "phone": write_phone,
+        "phone_raw": chosen[0],
+        "phone_type": chosen[1],
+        "phone_dnc": chosen[2],
+        "phone_last_seen": chosen[3],
+        "phone_usable": bool(usable),
+        "phone_count": len(phones),
+        "all_phones": [f"{e} ({t}{', DNC' if d else ''}{', seen ' + s if s else ''})"
+                       for e, t, d, s in ordered[:5]],
+        "all_emails": ordered_emails[:6],
         "phone_count": len(phones),
         "email": emails[0] if emails else "",
         "value": prop.get("estimated_value"),
@@ -296,9 +458,19 @@ def apply_results(db_url: str, company: str, results: list) -> int:
                 with db.cursor() as cur:
                     cur.execute(
                         "UPDATE leads SET "
-                        "  name = CASE WHEN %s <> '' AND COALESCE(name,'') LIKE 'Permit · %%' "
-                        "            THEN %s ELSE name END, "
-                        "  email = CASE WHEN %s <> '' AND BTRIM(COALESCE(email,'')) IN ('', 'x') "
+                        # Overwrite the placeholder name, whatever shape it has.
+                        # The earlier guard was `name LIKE 'Permit · %'`, but
+                        # permit_finder writes the bare city into `name`
+                        # ("Chesapeake"), so it matched nothing and the traced
+                        # owner was never written. The address is the identity
+                        # here and lead_id is already scoped to it, so replacing
+                        # a placeholder city with a real person's name is safe.
+                        "  name = CASE WHEN %s <> '' THEN %s ELSE name END, "
+                        # Same for the @lead.local placeholders: those are the
+                        # synthetic addresses the schema requires, not a real
+                        # contact, so replacing one is the point.
+                        "  email = CASE WHEN %s <> '' AND ("
+                        "    BTRIM(COALESCE(email,'')) = '' OR LOWER(email) LIKE '%%@lead.local') "
                         "             THEN %s ELSE email END, "
                         "  phone = CASE WHEN %s <> '' AND BTRIM(COALESCE(phone,'')) = '' "
                         "             THEN %s ELSE phone END, "
@@ -426,8 +598,15 @@ def main() -> int:
         if i < len(target):
             time.sleep(0.3)
 
-    hit = [r for r in results if r.get("ok") and (r.get("phone") or r.get("email"))]
-    print(f"\n{len(hit)}/{len(target)} returned a usable contact")
+    hit = [r for r in results if r.get("ok") and r.get("email")]
+    named = [r for r in results if r.get("ok")]
+    suppressed = len(named) - len([r for r in named if r.get("phone")])
+    print(f"\n{len(hit)}/{len(target)} returned a usable EMAIL")
+    if named and suppressed:
+        print(f"{suppressed} result(s) had a phone that was not written "
+              f"(email-only mode; DNC/stale numbers are never usable)")
+    if not WRITE_PHONES:
+        print("phones recorded for reporting but NOT written to leads (SKIP_SHERPA_WRITE_PHONES=0)")
 
     if args.apply and hit:
         n = apply_results(os.environ["DATABASE_URL"], args.company, hit)
