@@ -60,6 +60,37 @@ Outbound TLS from this machine needs `SSL_CERT_FILE=/etc/ssl/cert.pem`; the
 system Python has no CA bundle. The same gap is why commit ff8e842 added
 ca-certificates to the image.
 
+## Lead sourcing is business contacts only
+
+The owner chose the narrow path on 2026-10-02: Copilot researches **business**
+contacts (company site, public business listing, VA SCC entity record, eVA
+vendor data) and does not harvest personal profiles. A roofer or plumber with a
+real business line is the lead; a homeowner is not.
+
+This is enforced in `copilot_ops._BLOCKED_CONTACT_DOMAINS`, which rides in the
+`web_search` tool's `filters.blocked_domains` — not in a prompt. A prompt
+instruction is a preference the model can be talked out of; a blocked domain is a
+boundary. `SEARCH_BLOCKED_DOMAINS` (comma list) overrides it.
+
+Note the two sources Copilot *offered* when search was down — LinkedIn and
+"public records listing property owners" — are exactly the two this blocks. If
+search ever fails again, that offer is the model falling back to the boundary, not
+a workaround.
+
+## OpenAI retired the search-preview models
+
+`gpt-4o-mini-search-preview` / `gpt-4o-search-preview` and the
+`web_search_preview` tool type were **shut down 2026-07-23**. `web_search` on a
+normal model (`gpt-4.1-mini`, `gpt-4.1`, `gpt-5.5`) is the supported path.
+`copilot_ops.build_web_search_tools()` had the dead names hardcoded, so every
+call 404'd and the Copilot reported search as unavailable for weeks. It also
+read `.part` off a message item's `content`, which is a *list* — so citations
+were silently always `[]` even on success.
+
+`OPENAI_SEARCH_MODEL` pins one model. Note `openai` is not installed in either
+repo venv, so this path is only exercisable in production; `test_web_search_tool.py`
+injects a fake client instead.
+
 ## Open threads
 
 - `ATTIC_API_KEY` / `SERVICEKANI_API_KEY` / `REGRID_API_KEY` / `BATCHLEADS_API_KEY`

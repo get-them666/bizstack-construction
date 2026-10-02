@@ -108,58 +108,132 @@ def calculate(expression: str = "") -> dict:
     return {"ok": True, "expression": expression.strip(), "result": value}
 
 
+# Search models, cheapest first. `OPENAI_SEARCH_MODEL` overrides the whole list.
+#
+# `gpt-4o-mini-search-preview` and `web_search_preview` are what this used to
+# call, and both were shut down on 2026-07-23 -- which is why the Copilot spent
+# a stretch telling the owner it "cannot perform a web search." Every model here
+# is a normal model that supports the hosted `web_search` tool.
+_SEARCH_MODELS = ("gpt-4.1-mini", "gpt-4.1", "gpt-5.5")
+
+# Personal-profile and people-search domains, blocked at the search layer.
+#
+# The owner decided lead sourcing is business contacts only: a roofer or plumber
+# with a real business line is the lead, not a homeowner. Putting this in the
+# tool's `filters` rather than in the prompt means the Copilot cannot be talked
+# into it by a conversation -- the results are simply never returned. Prompt
+# instructions are a preference; a blocked domain is a boundary.
+_BLOCKED_CONTACT_DOMAINS = (
+    "facebook.com", "instagram.com", "linkedin.com", "twitter.com", "x.com",
+    "pinterest.com", "tiktok.com", "reddit.com",
+    "whitepages.com", "truepeoplesearch.com", "fastpeoplesearch.com",
+    "spokeo.com", "mylife.com", "beenverified.com", "nuwber.com",
+    "clustrmaps.com", "radaris.com", "locatefamily.com", "lusha.com",
+    "contactout.com", "clearbit.com", "apollo.io", "zoominfo.com",
+    "peoplefinder.com", "usphonebook.com", "thatpeoplesearch.com",
+)
+
+
+def _search_models() -> tuple:
+    override = (os.getenv("OPENAI_SEARCH_MODEL") or "").strip()
+    return (override,) if override else _SEARCH_MODELS
+
+
+def _search_tool() -> dict:
+    """The hosted web_search tool config, including the contact-source blocks."""
+    raw = os.getenv("SEARCH_BLOCKED_DOMAINS")
+    domains = ([d.strip().lower() for d in raw.split(",") if d.strip()]
+               if raw is not None else list(_BLOCKED_CONTACT_DOMAINS))
+    return {
+        "type": "web_search",
+        "search_context_size": "low",
+        "filters": {"blocked_domains": domains},
+    }
+
+
+def _extract_citations(response) -> list:
+    """Pull the cited URLs out of a Responses object.
+
+    `output` is a list of items; a message item's `content` is itself a *list*
+    of parts, and the annotations hang off each part. The previous version
+    looked for a `.part` attribute on `content`, which never exists, so this
+    silently returned an empty list on every successful search -- the tool was
+    working and reporting no sources.
+    """
+    citations = []
+    for item in getattr(response, "output", None) or []:
+        parts = getattr(item, "content", None) or []
+        if not isinstance(parts, (list, tuple)):
+            continue
+        for part in parts:
+            for ann in getattr(part, "annotations", None) or []:
+                url = getattr(ann, "url", None)
+                if url and url not in citations:
+                    citations.append(url)
+    return citations
+
+
 def build_web_search_tools():
     """OpenAI-hosted web search, as a normal tool the existing tool loop can call.
 
     Deliberately isolated. The Copilot's main loop is Chat Completions; this is a
     single self-contained Responses-API call whose result comes back as an
-    ordinary tool message. If the hosted model name is wrong, the key lacks
-    access, or the call fails for any reason, the tool returns a clean error the
-    model can report instead of taking the assistant down.
+    ordinary tool message. If every model is rejected or the call fails for any
+    reason, the tool returns a clean error the model can report instead of taking
+    the assistant down.
 
-    UNVERIFIED against a live key -- there is no OPENAI_API_KEY in the local
-    environment, so this path has not been exercised end to end. Override the
-    model with OPENAI_SEARCH_MODEL if the default is rejected by your account.
+    Tries the model list in order and falls through on a *rejected model*, not on
+    a general failure: a bad query or a rate limit should surface, not silently
+    burn three more billed calls.
     """
 
     def web_search(query: str = "") -> dict:
         """Search the live web. Use for current prices, codes, rules, suppliers,
-        anything that changed after training. Cite what you find."""
+        anything that changed after training. Cite what you find.
+
+        Business contacts only. For finding a company to work with, look for the
+        company's own site and its public business listing -- not personal
+        profiles or people-search sites.
+        """
         if not (query or "").strip():
             return {"ok": False, "error": "No search query given."}
         try:
             from openai import OpenAI
 
-            model = os.getenv("OPENAI_SEARCH_MODEL", "gpt-4o-mini-search-preview")
-            response = OpenAI().responses.create(
-                model=model,
-                tools=[{"type": "web_search_preview"}],
-                input=query.strip(),
-            )
+            client = OpenAI()
         except Exception as e:
-            return {
-                "ok": False,
-                "error": f"Web search unavailable ({type(e).__name__}: {e}). "
-                          f"Tell the owner plainly rather than guessing.",
-            }
+            return {"ok": False,
+                    "error": f"Web search unavailable (client init failed: "
+                              f"{type(e).__name__}: {e})."}
 
-        citations = []
-        try:
-            for item in getattr(response, "output", []) or []:
-                for chunk in getattr(getattr(item, "content", None), "part", None) or []:
-                    ann = getattr(chunk, "annotations", None)
-                    if not ann:
-                        continue
-                    url = getattr(ann, "url", None)
-                    if url and url not in citations:
-                        citations.append(url)
-        except Exception:
-            pass  # citations are a nicety; the answer text is the payload
+        last = ""
+        for model in _search_models():
+            try:
+                response = client.responses.create(
+                    model=model,
+                    # `tool_choice: required` because the whole point of this
+                    # call is the search. Left on auto, the model is free to
+                    # answer from memory and return no sources at all.
+                    tools=[_search_tool()],
+                    tool_choice="required",
+                    input=query.strip(),
+                )
+                break
+            except Exception as e:
+                last = f"{type(e).__name__}: {e}"
+                # Model not found / no access: worth trying the next one.
+                if "model" not in last.lower() and "does not exist" not in last.lower():
+                    return {"ok": False,
+                            "error": f"Web search unavailable ({last}). "
+                                      f"Tell the owner plainly rather than guessing."}
+        else:
+            return {"ok": False, "error": f"Web search unavailable ({last})."}
 
         answer = (getattr(response, "output_text", "") or "").strip()
         if not answer:
             return {"ok": False, "error": "Web search returned nothing."}
-        return {"ok": True, "query": query.strip(), "answer": answer, "citations": citations}
+        return {"ok": True, "query": query.strip(), "answer": answer,
+                "citations": _extract_citations(response)}
 
     return {"web_search": web_search}
 
