@@ -116,11 +116,31 @@ def _valid_phone(phone):
     return 10 <= len(digits) <= 15
 
 
+# City names that stand in for a missing applicant. The permit feeds publish no
+# applicant, so `leads.name` holds the city until a skip trace or a manual touch
+# supplies a real person. Without this list, "Hi Chesapeake" is a plausible
+# first line of an email to a named homeowner, and it did go out that way.
+_NOT_A_PERSON = {
+    "virginia beach", "chesapeake", "williamsburg", "norfolk", "newport news",
+    "hampton", "portsmouth", "suffolk", "virginia", "north carolina", "corolla",
+    "elizabeth city", "currituck", "hampton roads", "unknown", "permit",
+    # permit_service._seed_demo writes this as contractor_name and it reaches
+    # leads.name, where it printed "Hi Self,".
+    "self", "owner", "homeowner", "owner-builder", "property owner", "n/a",
+}
+
+
 def _person_first(name):
-    """First name from a lead name field.
+    """First name from a lead name field, or "" when it is not a person.
 
     SAM.gov leads store name as "{title} · {contact name}", web/inbound
     leads usually as a plain person name. Always prefer the actual person.
+
+    A place name must return "" so the caller falls back to "Hi there" rather
+    than greeting a homeowner by the city they live in. This fired in real
+    sends: the skip-traced leads for 1501 Vance Cir and 925 Longbeeches Ave both
+    opened "Hi Chesapeake," because `leads.name` was the city at the time the
+    message was built.
     """
     if not name:
         return ""
@@ -129,6 +149,8 @@ def _person_first(name):
         raw = raw.rsplit(" · ", 1)[-1].strip()
     raw = raw.strip().strip('"').strip()
     if not raw:
+        return ""
+    if re.sub(r"\s+", " ", raw).strip().lower() in _NOT_A_PERSON:
         return ""
     first = raw.split()[0]
     if len(first) < 2:
