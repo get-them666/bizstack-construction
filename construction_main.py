@@ -867,21 +867,41 @@ def build_tool_handlers(db, stripe_svc):
     def send_email_message(to, subject, body):
         import documents_service
 
+        # Do NOT gate on smtp_configured(): this deployment runs
+        # EMAIL_TRANSPORT=gmail, so SMTP_HOST is legitimately unset while the
+        # Gmail API path works fine. That guard rejected every send with
+        # "SMTP not configured." even though the real transport was available.
+        cfg = documents_service.smtp_config_from_env()
+        if not (cfg.get("SMTP_FROM") or "").strip():
+            return {"ok": False, "error": "No sending address is configured (SMTP_FROM is empty)."}
+
+        # send_email returns False on failure and never raises, so the result has
+        # to be checked. Discarding it logged the message to comms_logs and told
+        # the owner "sent" for mail that was never delivered -- the same phantom
+        # rows that had to be purged from comms_logs before.
         try:
-            cfg = documents_service.smtp_config_from_env()
-            if not documents_service.smtp_configured(cfg):
-                return {"ok": False, "error": "SMTP not configured."}
-            auto_reply.run_coro(documents_service.send_email(cfg, to, subject, body))
-            with db.cursor() as cur:
-                cur.execute(
-                    "INSERT INTO comms_logs (direction, channel, sender, recipient, message_body) "
-                    "VALUES ('outbound', 'email', 'system', %s, %s);",
-                    (to, body),
-                )
-                db.commit()
-            return {"ok": True, "sent_to": to}
+            delivered = auto_reply.run_coro(documents_service.send_email(cfg, to, subject, body))
         except Exception as e:
-            return {"ok": False, "error": str(e)}
+            return {"ok": False, "error": f"Send failed: {e}"}
+
+        if delivered is not True:
+            return {
+                "ok": False,
+                "error": (
+                    "The mail transport did not accept the message. This usually means the "
+                    "Gmail OAuth token is missing or expired for hello@bizstackperks.com. "
+                    "Nothing was sent and nothing was logged."
+                ),
+            }
+
+        with db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO comms_logs (direction, channel, sender, recipient, message_body) "
+                "VALUES ('outbound', 'email', %s, %s, %s);",
+                (cfg.get("SMTP_FROM"), to, body),
+            )
+            db.commit()
+        return {"ok": True, "sent_to": to}
 
     def make_outbound_call(to, notes=""):
         digits = "".join(ch for ch in str(to or "") if ch.isdigit())
