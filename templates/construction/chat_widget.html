@@ -6,14 +6,17 @@
                 <span class="w-8 h-8 rounded-full bg-white/15 flex items-center justify-center text-base">🛠️</span>
                 <div>
                     <p class="text-sm font-bold leading-tight">{{ co.name }} Help</p>
-                    <p class="text-[11px] text-indigo-100 leading-tight">Typically replies instantly</p>
+                    <p class="text-[11px] text-indigo-100 leading-tight">Same assistant as our 24/7 phone line</p>
                 </div>
             </div>
-            <button type="button" id="bsc-chat-close" class="text-white/80 hover:text-white text-lg leading-none w-7 h-7 rounded-full hover:bg-white/10">✕</button>
+            <div class="flex items-center gap-1">
+                <button type="button" id="bsc-chat-clear" title="Start over" class="text-white/70 hover:text-white text-xs font-semibold px-2 py-1.5 rounded-full hover:bg-white/10">New</button>
+                <button type="button" id="bsc-chat-close" class="text-white/80 hover:text-white text-lg leading-none w-7 h-7 rounded-full hover:bg-white/10">✕</button>
+            </div>
         </div>
         <div id="bsc-chat-log" class="h-72 overflow-y-auto px-4 py-4 space-y-3 bg-slate-50 text-sm">
             <div class="max-w-[85%] bg-white rounded-2xl rounded-tl-sm border border-slate-200 px-3.5 py-2.5 text-slate-700">
-                Hi there 👋 Ask me anything — instant ballpark prices, whether you need a permit, timelines, or how to book a free walkthrough.
+                Hi there 👋 Give me a street address and I'll ballpark a price from the real property record, check what permits it needs, or book a free walkthrough.
             </div>
         </div>
         <form id="bsc-chat-form" class="flex items-center gap-2 border-t border-slate-100 px-3 py-3 bg-white">
@@ -37,6 +40,7 @@
     var log = document.getElementById('bsc-chat-log');
     var form = document.getElementById('bsc-chat-form');
     var input = document.getElementById('bsc-chat-input');
+    var clearBtn = document.getElementById('bsc-chat-clear');
 
     function push(text, mine) {
         var div = document.createElement('div');
@@ -48,10 +52,28 @@
         log.scrollTop = log.scrollHeight;
     }
 
+    // Memory is server-side keyed to a visitor cookie, so returning to the page
+    // keeps the thread. Stored 30 days, then swept.
+    function restore() {
+        fetch('/api/chat/history').then(function(r) { return r.json(); }).then(function(json) {
+            var turns = json.messages || [];
+            if (!turns.length || log.children.length > 1) return;
+            log.innerHTML = '';
+            turns.forEach(function(t) { push(t.content, t.role === 'user'); });
+        }).catch(function() { /* keep the greeting */ });
+    }
+
+    clearBtn.addEventListener('click', function() {
+        fetch('/api/chat/reset', { method: 'POST' }).catch(function() {});
+        log.innerHTML = '';
+        push("New conversation — what do you need?", false);
+        input.focus();
+    });
+
     launch.addEventListener('click', function () {
         panel.classList.toggle('hidden');
         launch.classList.toggle('hidden');
-        if (!panel.classList.contains('hidden')) input.focus();
+        if (!panel.classList.contains('hidden')) { restore(); input.focus(); }
     });
     close.addEventListener('click', function () {
         panel.classList.add('hidden');

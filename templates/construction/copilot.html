@@ -9,8 +9,14 @@
         <div class="flex flex-wrap items-end justify-between gap-4 mb-5">
             <div>
                 <p class="text-sm font-bold text-indigo-600 uppercase tracking-widest">Owner portal</p>
-                <h1 class="text-3xl font-black tracking-tight text-slate-900">Copilot</h1>
-                <p class="mt-1 text-sm text-slate-500">Ask anything about your leads, pipeline, or business.</p>
+                <h1 class="flex items-center gap-3 text-3xl font-black tracking-tight text-slate-900">
+                    Copilot
+                    <button type="button" id="copilot-reset"
+                        class="text-xs font-semibold text-slate-500 bg-white border border-slate-200 hover:border-indigo-300 hover:text-indigo-600 rounded-full px-3 py-1.5 transition-colors">
+                        New conversation
+                    </button>
+                </h1>
+                <p class="mt-1 text-sm text-slate-500">Your operator copilot — same brain as the 24/7 phone lines, plus the books, maps, calendar and your task list.</p>
             </div>
             <a href="/dashboard" class="px-4 py-2.5 text-sm font-semibold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 rounded-xl transition-colors">← Dashboard</a>
         </div>
@@ -45,7 +51,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const chat = document.getElementById('chat');
     const form = document.getElementById('copilot-form');
     const msg = document.getElementById('copilot-msg');
-    const MAX = 80;
+    const resetBtn = document.getElementById('copilot-reset');
 
     function addBubble(text, mine) {
         const wrap = document.createElement('div');
@@ -56,6 +62,32 @@ document.addEventListener('DOMContentLoaded', function() {
         wrap.scrollIntoView({ block: 'end', behavior: 'smooth' });
         return wrap;
     }
+
+    function clearLog() { chat.innerHTML = ''; }
+
+    // Conversation memory lives server-side, so a refresh picks the thread back
+    // up instead of dropping the owner into an empty box.
+    (async function restore() {
+        if (chat.children.length > 1) return;   // already rendered something
+        try {
+            const res = await fetch('/api/copilot/history');
+            const json = await res.json();
+            const turns = json.messages || [];
+            if (!turns.length) return;
+            clearLog();
+            turns.forEach(function(t) { addBubble(t.content, t.role === 'user'); });
+        } catch (err) { /* leave the intro bubble in place */ }
+    })();
+
+    resetBtn.addEventListener('click', async function() {
+        if (!confirm('Start a new conversation? Your remembered tasks are kept.')) return;
+        try {
+            await fetch('/api/copilot/reset', { method: 'POST' });
+        } catch (err) { /* clear locally regardless */ }
+        clearLog();
+        addBubble('Fresh start. What do you want to work on?', false);
+        msg.focus();
+    });
 
     form.addEventListener('submit', async function(e) {
         e.preventDefault();
@@ -73,7 +105,6 @@ document.addEventListener('DOMContentLoaded', function() {
         } catch (err) {
             load.firstElementChild.textContent = 'Something went wrong talking to Copilot.';
         }
-        while (chat.children.length > MAX) chat.removeChild(chat.firstChild);
     });
 
     msg.addEventListener('keydown', function(e) {

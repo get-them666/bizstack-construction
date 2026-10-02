@@ -19,3 +19,6 @@ skills-lock.json
 # --- session resume (never commit - may contain secrets) ---
 SESSION_STATE.md
 SESSION_NOTES.md
+
+# generated eVA spend report (regenerate with: python eva_intel.py)
+eva_intel.json

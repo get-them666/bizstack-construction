@@ -40,6 +40,9 @@ from email.message import EmailMessage
 
 from con_ai_agent import BusinessAIAgent
 from loan_outreach import start_outreach_tasks
+import copilot_memory
+import copilot_tasks
+import copilot_ops
 from stripe_service import StripeService, default_deposit_cents
 from signalwire_service import SignalWireService
 import vapi_service
@@ -527,6 +530,22 @@ async def lifecycle(app: FastAPI):
             _start_lead_source_scheduler()
         except Exception as exc:
             print(f"[lead-source] could not start scheduler: {exc}", flush=True)
+
+    # Copilot conversation memory + the one-year task list. Self-initializing, so
+    # this is safe on every boot and on redeploys against an existing database.
+    try:
+        with psycopg.connect(db_url) as conn:
+            copilot_memory._ensure_schema(conn)
+            copilot_tasks._ensure_schema(conn)
+            swept_msgs = copilot_memory.purge_expired(conn)
+            swept_tasks = copilot_tasks.purge_expired(conn)
+        print(
+            f"🧠 Copilot memory ready (swept {swept_msgs} expired messages, "
+            f"{swept_tasks} expired tasks)",
+            flush=True,
+        )
+    except Exception as exc:
+        print(f"⚠️ copilot memory init skipped: {exc}", flush=True)
 
     yield
 
@@ -1510,6 +1529,24 @@ def build_tool_handlers(db, stripe_svc):
         "find_people": find_people,
         "navigation_guide": navigation_guide,
     }
+
+
+def build_copilot_handlers(db, owner_email: str):
+    """Everything `build_tool_handlers` offers, plus the operator-only tier.
+
+    Copilot-only, never handed to the public widget: calculate, search_comms,
+    maps, calendar, and the durable task list. `search_comms` is how Copilot
+    reads the 24/7 phone assistant's calls and texts -- straight from
+    comms_logs, rather than by having a conversation with the voice agent.
+    """
+    handlers = build_tool_handlers(db, stripe_svc)
+    handlers.update(copilot_ops.build_comms_log_tools(db))
+    handlers.update(copilot_ops.build_maps_tools(db))
+    handlers.update(copilot_ops.build_calendar_tools(db))
+    handlers.update(copilot_ops.build_task_tools(db, owner_email))
+    handlers.update(copilot_ops.build_web_search_tools())
+    handlers["calculate"] = copilot_ops.calculate
+    return handlers
 
 
 # --- Public marketing pages -------------------------------------------------
@@ -4496,11 +4533,77 @@ async def acquisition_scan_linkedin(request: Request):
 
 
 # --- Public web chat (same AI agent as the phones) --------------------------
+WEBCHAT_COOKIE = "bsc_webchat"
+WEBCHAT_COOKIE_MAX_AGE = 60 * 60 * 24 * 31  # 31 days, cookie only
+
+
+def _webchat_session(request: Request) -> tuple:
+    """Return (session_key, is_new) for this visitor.
+
+    The key is a conversation bucket, not an auth token -- it grants access to
+    nothing but that visitor's own transcript. 192 bits of randomness, so one
+    visitor cannot guess another's.
+    """
+    existing = request.cookies.get(WEBCHAT_COOKIE)
+    if existing and len(existing) >= 32:
+        return existing, False
+    return secrets.token_urlsafe(24), True
+
+
+def _with_webchat_cookie(response: Response, session_key: str) -> Response:
+    response.set_cookie(
+        WEBCHAT_COOKIE, session_key, max_age=WEBCHAT_COOKIE_MAX_AGE,
+        httponly=True, samesite="lax", path="/",
+    )
+    return response
+
+
 @app.post("/api/chat")
-async def web_chat(message: str = Form(...), db=Depends(get_db)):
-    agent = BusinessAIAgent(knowledge_path="construction_knowledge.md", tool_handlers=build_tool_handlers(db, stripe_svc), subset="guest")
-    reply = agent.process_inbound_text(f"Website chat: {message}")
-    return JSONResponse(content={"reply": reply})
+async def web_chat(
+    request: Request,
+    response: Response,
+    message: str = Form(...),
+    db=Depends(get_db),
+):
+    session_key, _ = _webchat_session(request)
+    history = copilot_memory.load_history(db, "webchat", session_key)
+    agent = BusinessAIAgent(
+        knowledge_path="construction_knowledge.md",
+        tool_handlers=build_tool_handlers(db, stripe_svc),
+        subset="guest",
+    )
+    reply = agent.process_conversation(history, message)
+    copilot_memory.append_turn(db, "webchat", session_key, "user", message)
+    copilot_memory.append_turn(db, "webchat", session_key, "assistant", reply)
+    # Visitor transcripts carry home addresses and phone numbers; enforce the
+    # retention window on the write path so it holds without a restart.
+    copilot_memory.purge_expired(db)
+    return _with_webchat_cookie(
+        JSONResponse(content={"reply": reply}), session_key
+    )
+
+
+@app.get("/api/chat/history")
+async def web_chat_history(request: Request, response: Response, db=Depends(get_db)):
+    session_key, _ = _webchat_session(request)
+    return _with_webchat_cookie(
+        JSONResponse(content={
+            "messages": copilot_memory.load_history(db, "webchat", session_key, limit=200)
+        }),
+        session_key,
+    )
+
+
+@app.post("/api/chat/reset")
+async def web_chat_reset(request: Request, response: Response, db=Depends(get_db)):
+    session_key, _ = _webchat_session(request)
+    return _with_webchat_cookie(
+        JSONResponse(content={
+            "ok": True,
+            "cleared": copilot_memory.clear_history(db, "webchat", session_key),
+        }),
+        session_key,
+    )
 
 
 # --- Permit radar (Shovels.ai) ---------------------------------------------
@@ -6191,12 +6294,44 @@ async def copilot_page(request: Request, db=Depends(get_db)):
     return templates.TemplateResponse(request=request, name="copilot.html", context={"user": {"email": user_email}})
 
 
+def _copilot_owner_email(request: Request) -> str:
+    """Require an admin session and return its email as the memory scope key."""
+    require_admin(request)
+    email = str((current_actor(request) or {}).get("email") or "").strip()
+    if not email:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No owner email on session")
+    return email
+
+
 @app.post("/api/copilot")
 async def copilot_chat(request: Request, message: str = Form(...), db=Depends(get_db)):
-    require_admin(request)
-    agent = BusinessAIAgent(knowledge_path="construction_knowledge.md", tool_handlers=build_tool_handlers(db, stripe_svc), subset="copilot")
-    reply = agent.process_inbound_text(message)
+    owner_email = _copilot_owner_email(request)
+    history = copilot_memory.load_history(db, "copilot", owner_email)
+    agent = BusinessAIAgent(
+        knowledge_path="construction_knowledge.md",
+        tool_handlers=build_copilot_handlers(db, owner_email),
+        subset="copilot",
+    )
+    reply = agent.process_conversation(history, message)
+    copilot_memory.append_turn(db, "copilot", owner_email, "user", message)
+    copilot_memory.append_turn(db, "copilot", owner_email, "assistant", reply)
     return JSONResponse(content={"reply": reply})
+
+
+@app.get("/api/copilot/history")
+async def copilot_history(request: Request, db=Depends(get_db)):
+    """Replay the stored conversation so a refresh doesn't lose the thread."""
+    owner_email = _copilot_owner_email(request)
+    return JSONResponse(
+        content={"messages": copilot_memory.load_history(db, "copilot", owner_email, limit=200)}
+    )
+
+
+@app.post("/api/copilot/reset")
+async def copilot_reset(request: Request, db=Depends(get_db)):
+    """Forget this conversation. Stored tasks are untouched."""
+    owner_email = _copilot_owner_email(request)
+    return JSONResponse(content={"ok": True, "cleared": copilot_memory.clear_history(db, "copilot", owner_email)})
 
 
 # --- Training deck downloads (PPTX served from generated_documents) ----------

@@ -1,6 +1,7 @@
 import json
 import os
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 from openai import OpenAI
@@ -48,72 +49,146 @@ class BusinessAIAgent:
             self._client = OpenAI(api_key=api_key)
         return self._client
 
+    # --- Brain assembly ----------------------------------------------------
+    # Assembled at request time (like _voice_prompt()) so editing the knowledge
+    # .md files changes behaviour with no code change.
+    _KNOWLEDGE_FILES = [
+        Path(__file__).resolve().parent / "bot_knowledge.md",
+        Path(__file__).resolve().parent / "construction_knowledge.md",
+    ]
+
+    @classmethod
+    def _knowledge_manual(cls) -> str:
+        parts = []
+        for path in cls._KNOWLEDGE_FILES:
+            try:
+                text = path.read_text(encoding="utf-8").strip()
+            except OSError:
+                continue
+            if text:
+                parts.append("## OPERATING MANUAL — " + path.name + "\n" + text)
+        return "\n\n".join(parts)
+
+    @staticmethod
+    def _conversation_rules() -> str:
+        """The rules that make this read as one continuous conversation."""
+        return """CONVERSATION MEMORY — these rules are the difference between a useful
+assistant and a robot that forgets:
+- You are given the FULL transcript of this conversation. Treat every earlier
+  message as established fact about what has already been said.
+- Never ask the user to repeat something they already told you. If they say
+  "that one", "it", "them", "same address", or "what you just said", resolve it
+  from the transcript — do NOT ask "what are you talking about?" That answer is
+  always wrong.
+- Carry forward details across turns without being asked: the address, project
+  type, material grade, name and phone number a visitor has already given.
+- If you asked a question and the visitor answered it, act on the answer. Do not
+  re-ask it.
+- It is fine to be mid-task. Keep working from where the conversation actually
+  left off rather than restarting or re-summarising.
+- If the transcript genuinely does not contain what is needed, say precisely what
+  is missing ("I don't have that address yet — what's the street address?"),
+  never a vague non-sequitur."""
+
+    @staticmethod
+    def _quoting_playbook() -> str:
+        """The real-phone quoting flow, ported from the voice assistant.
+
+        The phone bot has been quoting from live property records for months;
+        this is the same procedure, spelled out for text.
+        """
+        return """HOW TO QUOTE WORK (real numbers, no guessing):
+1. Get the property street address FIRST, then run lookup_property to pull real
+   square footage, beds, baths and year built. Ground the estimate in the actual
+   home.
+2. Ask what they want done in plain words (kitchen, bath, whole-home, roof...)
+   and WHAT MATERIAL they have in mind. Ask directly — roof: "3-tab,
+   architectural, or architectural 30- or 40-year? any metal?"; counters:
+   "laminate, quartz, granite or marble?"; framing/deck: "standard, premium or
+   engineered lumber?". For siding, flooring, tile, windows and cabinets ask the
+   style/brand they're considering. They may not know — offer the standard/entry
+   choice as the default and say what upgrading does to the price.
+3. Call quote_project with project_type + address (+ materials text combining
+   their answers) for a range computed from the real property and chosen grades.
+   State the range plainly: "for an architectural 30-year shingle roof on a
+   ~1,800 sq ft home, ballpark is about $19,000 to $33,000".
+4. If lookup_property finds the address but returns NO square footage, ask for
+   approximate size (or "small, medium, large") and pass it to quote_project via
+   the sqft field. Only when they truly cannot give any size, rely on the assumed
+   size — and tell them the estimate is based on an assumed home size.
+5. quote_project saves the lead with the range when you pass name and phone.
+   Confirm their name and best number, pass them through, and offer the free
+   on-site walkthrough for the exact written price.
+- The range is a ballpark to qualify, NEVER a firm bid. The written fixed price
+  always comes from the free on-site walkthrough. Never invent a price outside
+  quote_project's range.
+- We give a clear written scope, a fixed price (not open-ended time and
+  materials), and a schedule."""
+
     def _build_system_prompt(self) -> str:
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        knowledge = self._knowledge or (
-            "You are the automated representative for Buildstack Construction Co., "
-            "a licensed general contractor doing whole-home renovations and repairs. "
-            "Be concise and professional."
+        manual = self._knowledge_manual()
+        memory = self._conversation_rules()
+        voice = (
+            "Speak naturally, warmly and concisely: contractions, short sentences, "
+            "conversational rhythm. Never robotic, canned or scripted. One thought "
+            "per message. Be warm with personality, but never overstate anything."
         )
+
         if self._subset == "copilot":
             identity = (
-                "You are the Buildstack Construction OPERATOR COPILOT for the owner.\n"
-                "You act with full authority over the owner's business database. You can "
-                "review and update the lead pipeline, summarize business performance, run "
-                "payroll + direct deposit, look up permits & city codes, estimate materials, "
-                "review accounting, and summarize the sister company (Broom Service).\n"
-                "Rule: READs are free. Before any database CHANGE, restate the change in "
-                "one short line and confirm with the owner first.\n"
-                "You also track crew safety + skills training (OSHA-10 safety orientation and "
-                "trade tests). Use training_status to report who has and hasn't completed "
-                "their training, and remind_crew_training to text reminders to workers who "
-                "haven't passed the safety orientation yet (that is a send — were the owner "
-                "to ask you to text every outstanding worker, do it without re-confirming).\n"
-                "You also know about Broom Service (bizstackperks.com) — the sister "
-                "short-term-rental turnover-cleaning company. Use sister_business_summary "
-                "to report on it. Never expose tenant or guest data to the public assistant."
+                "You are the Buildstack Construction OPERATOR COPILOT — the owner's "
+                "private right-hand assistant, running alongside the phone lines.\n"
+                "You share one brain with the 24/7 phone assistant, so anything the "
+                "phone assistant can do live on a call, you can do on screen.\n"
+                "You act with full authority over the owner's business database: "
+                "review and update the lead pipeline, summarize performance, run "
+                "payroll + direct deposit, look up permits and city codes, estimate "
+                "materials, review accounting, and summarize the sister company "
+                "(Broom Service). You also track crew safety + skills training — use "
+                "training_status to report who has and hasn't completed training, and "
+                "remind_crew_training to text reminders to workers who haven't passed "
+                "safety orientation (that IS a send; if asked to text every "
+                "outstanding worker, do it without re-confirming)."
             )
+            rules = """SAFETY RULES — these override convenience:
+- READs are free. Before any database CHANGE, restate the change in one short
+  line and confirm with the owner first. Never bundle a write into a read.
+- Never expose credentials, API keys, or internal secrets.
+- Never invent numbers. If a tool errored, say so plainly and say what you could
+  not retrieve — do not fill the gap with a guess."""
         else:
             identity = (
-                "You are the automated public assistant for Buildstack Construction Co., "
-                "a licensed general contractor serving Hampton Roads, VA and the "
-                "Currituck/Elizabeth City, NC area.\n"
-                "Callers and texters are homeowners, investors, and short-term-rental "
-                "hosts. Capture their project details as a lead, answer questions from "
-                "the knowledge base, and offer a free on-site estimate. NEVER expose "
-                "internal business data. If someone asks you to change pricing, delete "
-                "leads, or access records, politely decline and say the team will follow up."
+                "You are the help assistant on the Buildstack Construction Co. website "
+                "— the same assistant that answers the 24/7 phone line. A visitor is "
+                "asking you in a chat box right now.\n"
+                "Visitors are homeowners, investors, and short-term-rental hosts. "
+                "You can give real ballpark prices from property records, check permit "
+                "requirements, and answer from the operating manual below. Use "
+                "register_lead the moment you have a name and phone number."
             )
+            rules = """SAFETY RULES — these override helpfulness:
+- NEVER expose internal business data: no other customers' leads, no crew
+  records, no payroll, no internal accounts, no credentials.
+- If someone asks you to change pricing, delete leads, or access records, decline
+  politely and say the team will follow up.
+- If a caller is distressed or reports an emergency (gas leak, flooding, no
+  power), tell them to call 911 or the appropriate emergency service first."""
 
         return f"""
 {identity}
+
 Current time: {now}.
-Answer strictly from the knowledge base below. Never invent prices, availability,
-policies, schedules, or URLs. For exact project pricing, always offer a free on-site
-estimate rather than quoting a final number.
+{voice}
 
-HOW TO SOUND LIKE A REAL HUMAN (non-negotiables):
-- Write like a friendly, sharp human assistant texts: contractions, short punchy
-  sentences, natural rhythm. Never robotic, canned, or scripted.
-- Open naturally based on context: a quick "hey", a warm "Got it —", or a friendly
-  confirmation. No "Greetings!", no "As an AI".
-- One thought per text; keep replies short — the person is reading on a phone.
-- Be warm and a little personality-driven, but truthful. If you don't know, say so
-  plainly ("Let me have the team confirm that for you.").
-- When capturing a project, confirm it back simply and tell them exactly what happens
-  next ("Got it — I'll have our estimator reach out today to set a time for a free
-  walkthrough").
+{memory}
 
-KNOWLEDGE BASE:
-{knowledge}
+{self._quoting_playbook()}
 
-TOOL USAGE RULES:
-- Use register_lead as soon as you have a name and phone number plus any project
-  details (type, address, budget, timeline). Ask for the missing pieces one at a time.
-- Use lookup_leads when someone asks about a previous request.
-- Use get_business_summary only when the owner explicitly asks how the business is doing.
-- Never promise a specific start date or final price. Offer the free on-site estimate.
-- If a tool returns an error, respond helpfully and tell them the team will follow up.
+{rules}
+
+OPERATING MANUAL:
+{manual or "(none loaded)"}
 """
 
     # --- Tool schemas -----------------------------------------------------
@@ -172,6 +247,234 @@ TOOL USAGE RULES:
                     "parameters": {"type": "object", "properties": {}},
                 },
             },
+            {
+                "type": "function",
+                "function": {
+                    "name": "lookup_property",
+                    "description": (
+                        "Look up real property records for a street address — square "
+                        "footage, beds, baths, year built. Run this BEFORE quoting so the "
+                        "estimate is grounded in the actual home rather than a guess."
+                    ),
+                    "parameters": self._props(
+                        {"address": "string"}, ["address"], "Full street address."
+                    ),
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "quote_project",
+                    "description": (
+                        "Ballpark price range for a project, computed from the real property "
+                        "and the material grade chosen. Also saves the lead with the range "
+                        "when a name and phone are supplied."
+                    ),
+                    "parameters": self._props(
+                        {
+                            "project_type": "string",
+                            "address": "string",
+                            "sqft": "integer",
+                            "materials": "string",
+                            "name": "string",
+                            "phone": "string",
+                            "notes": "string",
+                        },
+                        ["project_type"],
+                        "project_type e.g. Whole-Home Renovation, Kitchen, Bath, Roofing, "
+                        "Deck, Flooring, Drywall, Plumbing, Electrical, Carpentry, Tile, "
+                        "Fence, STR Turnover Make-Ready. sqft only if lookup_property could "
+                        "not find it. materials describes the grade chosen, e.g. "
+                        "'architectural 30-year shingle, 3-tab'.",
+                    ),
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "lookup_permits",
+                    "description": (
+                        "Pull city/county permit info for an address or parcel, or show "
+                        "which cities issue new permits."
+                    ),
+                    "parameters": self._props(
+                        {"city": "string", "address": "string"},
+                        [],
+                        "Optional city (e.g. Williamsburg, Newport News, Elizabeth City) "
+                        "or an address for an exact permit lookup.",
+                    ),
+                },
+            },
+        ]
+
+    def _operator_tools(self) -> list:
+        """Copilot-only: math, maps, calendar, phone logs, and durable tasks.
+
+        None of these are exposed to the public widget. ``search_comms`` is the
+        one to reach for instead of asking the voice assistant -- the call and
+        text transcripts are already in Postgres.
+        """
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": "web_search",
+                    "description": (
+                        "Search the live web. Use for anything current: material and "
+                        "equipment prices, building codes, permit rules, suppliers, "
+                        "financing terms. Your training data has a cutoff -- when the "
+                        "answer depends on something recent, search instead of guessing."
+                    ),
+                    "parameters": self._props(
+                        {"query": "string"}, ["query"], "A specific search query.",
+                    ),
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "calculate",
+                    "description": (
+                        "Evaluate an arithmetic expression exactly. Use this for EVERY "
+                        "computed figure -- quote totals, payroll sums, markups, material "
+                        "quantities, percentages. Do not do arithmetic in your head."
+                    ),
+                    "parameters": self._props(
+                        {"expression": "string"}, ["expression"],
+                        "e.g. '(1800*8.75)*1.15' or 'round(32516.50/4, 2)'",
+                    ),
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "search_comms",
+                    "description": (
+                        "Search the 24/7 phone lines -- inbound and outbound calls, texts "
+                        "and emails, with transcripts. This reads the logs directly; do not "
+                        "ask the voice assistant for them."
+                    ),
+                    "parameters": self._props(
+                        {"query": "string", "channel": "string", "days": "integer", "limit": "integer"},
+                        [],
+                        "query matches sender, recipient or message text. channel: voice, "
+                        "sms or email (blank = all). days: how far back, default 30.",
+                    ),
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "maps_geocode",
+                    "description": "Get latitude/longitude and a normalized address for a street address.",
+                    "parameters": self._props({"address": "string"}, ["address"], "Full street address."),
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "maps_find_place",
+                    "description": (
+                        "Find a business by name near an address -- supplier, rental yard, "
+                        "hardware store, inspector. Returns phone and website."
+                    ),
+                    "parameters": self._props(
+                        {"name": "string", "address": "string"}, ["name"],
+                        "Business name; address narrows the search area.",
+                    ),
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "maps_directions",
+                    "description": "Driving distance and minutes between two addresses, plus a directions link.",
+                    "parameters": self._props(
+                        {"origin": "string", "destination": "string"},
+                        ["origin", "destination"], "Both as plain street addresses.",
+                    ),
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "list_calendar_events",
+                    "description": "Read the owner's Google Calendar over a date window.",
+                    "parameters": self._props(
+                        {"start": "string", "end": "string", "days": "integer"}, [],
+                        "ISO 8601 start/end, or just `days` for the next N days (default 7).",
+                    ),
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "schedule_event",
+                    "description": (
+                        "Put something on the owner's calendar: a walkthrough, crew shift, "
+                        "host turnover or training session. This WRITES -- confirm the "
+                        "title, date and time with the owner before calling it."
+                    ),
+                    "parameters": self._props(
+                        {
+                            "summary": "string", "start": "string", "end": "string",
+                            "description": "string", "attendees": "string", "location": "string",
+                        },
+                        ["summary", "start"],
+                        "start/end ISO 8601. attendees: comma-separated emails.",
+                    ),
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "cancel_event",
+                    "description": "Delete a calendar event by its id.",
+                    "parameters": self._props({"event_id": "string"}, ["event_id"], ""),
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "add_task",
+                    "description": (
+                        "Remember something the owner wants chased or done. Retained for a "
+                        "year, so use it for anything the owner asks you to keep in mind "
+                        "-- follow-ups, documents to send, someone to call back."
+                    ),
+                    "parameters": self._props(
+                        {
+                            "title": "string", "detail": "string", "category": "string",
+                            "due_at": "string", "entity_type": "string", "entity_id": "string",
+                        },
+                        ["title"],
+                        "due_at ISO 8601 if there is a deadline. category e.g. followup, "
+                        "documents, billing, site.",
+                    ),
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "list_tasks",
+                    "description": "List remembered tasks. Check this before promising anything is already handled.",
+                    "parameters": self._props(
+                        {"status": "string", "category": "string"}, [],
+                        "status: open (default), done, dropped or all.",
+                    ),
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "complete_task",
+                    "description": "Close out a task by id.",
+                    "parameters": self._props(
+                        {"task_id": "string", "result": "string", "status": "string"}, ["task_id"],
+                        "status: done (default) or dropped. result records the outcome.",
+                    ),
+                },
+            },
         ]
 
     def _full_tools(self) -> list:
@@ -228,18 +531,6 @@ TOOL USAGE RULES:
                     "description": "Create a Stripe deposit checkout link for a lead (reserves the project).",
                     "parameters": self._props(
                         {"lead_id": "integer"}, ["lead_id"], "Existing lead id."
-                    ),
-                },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "lookup_permits",
-                    "description": "Look up a permit by address/parcel, pull city + county permit info from the job-leads / permit record, or search which cities issue new permits (Shovels feed).",
-                    "parameters": self._props(
-                        {"city": "string", "address": "string"},
-                        [],
-                        "Optional city filter (e.g. Williamsburg, Newport News, Elizabeth City) or address for an exact permit lookup.",
                     ),
                 },
             },
@@ -382,6 +673,7 @@ TOOL USAGE RULES:
                 },
             },
         ]
+        tools += self._operator_tools()
         return tools
 
     def _tools(self) -> list:
@@ -405,14 +697,93 @@ TOOL USAGE RULES:
             return json.dumps({"ok": False, "error": str(e)})
 
     # --- Conversation loop ------------------------------------------------
+    def process_conversation(self, history: list, message: str) -> str:
+        """Reply with the full transcript in context.
+
+        This is the memory fix. `process_inbound_text` builds a bare
+        `[system, user]` pair, so every turn arrived with no recollection of the
+        previous one -- the model would ask something, get the answer, then ask
+        what the conversation was about. Here the caller supplies the prior
+        turns and they are replayed verbatim, so pronouns and follow-ups resolve
+        against what was actually said.
+        """
+        fallback = "Message received. Our team will follow up with you shortly."
+        if not os.getenv("OPENAI_API_KEY"):
+            return fallback
+
+        messages: list = [{"role": "system", "content": self._build_system_prompt()}]
+        for turn in history or []:
+            role = (turn or {}).get("role")
+            content = (turn or {}).get("content") or ""
+            if role in ("user", "assistant") and content.strip():
+                messages.append({"role": role, "content": content})
+        messages.append({"role": "user", "content": message})
+
+        if not self._tool_handlers:
+            return self._simple_reply(messages)
+
+        max_tokens = 800 if self._subset == "copilot" else 300
+        try:
+            for _ in range(6):
+                response = self.client.chat.completions.create(
+                    model=self._model,
+                    messages=messages,
+                    tools=self._tools(),
+                    tool_choice="auto",
+                    max_tokens=max_tokens,
+                    temperature=0.7,
+                )
+                message_obj = response.choices[0].message
+                if not message_obj.tool_calls:
+                    return (message_obj.content or "").strip() or fallback
+
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": message_obj.content or "",
+                        "tool_calls": [
+                            {
+                                "id": tc.id,
+                                "type": "function",
+                                "function": {
+                                    "name": tc.function.name,
+                                    "arguments": tc.function.arguments,
+                                },
+                            }
+                            for tc in message_obj.tool_calls
+                        ],
+                    }
+                )
+                for tc in message_obj.tool_calls:
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "content": self._execute_tool(tc.function.name, tc.function.arguments),
+                        }
+                    )
+            return fallback
+        except Exception as e:
+            print(f"⚠️ AI agent fallback triggered: {e}")
+            return fallback
+
     def process_inbound_text(self, context_stream: str) -> str:
-        """Handle an inbound SMS/voice message end-to-end (with tool calling if wired)."""
+        """Handle an inbound SMS/voice message end-to-end (with tool calling if wired).
+
+        Stateless by design: SMS and voice callers arrive as isolated messages.
+        The Copilot and the web widget use `process_conversation` instead.
+        """
         fallback = "Message received. Our team will follow up with you shortly."
         if not os.getenv("OPENAI_API_KEY"):
             return fallback
 
         if not self._tool_handlers:
-            return self._simple_reply(context_stream)
+            return self._simple_reply(
+                [
+                    {"role": "system", "content": self._build_system_prompt()},
+                    {"role": "user", "content": context_stream},
+                ]
+            )
 
         messages: list = [
             {"role": "system", "content": self._build_system_prompt()},
@@ -465,15 +836,13 @@ TOOL USAGE RULES:
             print(f"⚠️ AI agent fallback triggered: {e}")
             return fallback
 
-    def _simple_reply(self, context_stream: str) -> str:
+    def _simple_reply(self, messages: list) -> str:
+        """No tools wired: single model call over the prepared message list."""
         fallback = "Message received. Our team will follow up with you shortly."
         try:
             response = self.client.chat.completions.create(
                 model=self._model,
-                messages=[
-                    {"role": "system", "content": self._build_system_prompt()},
-                    {"role": "user", "content": context_stream},
-                ],
+                messages=messages,
                 max_tokens=800 if self._subset == "copilot" else 300,
                 temperature=0.7,
             )
