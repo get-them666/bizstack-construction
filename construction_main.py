@@ -888,9 +888,9 @@ def build_tool_handlers(db, stripe_svc):
             return {
                 "ok": False,
                 "error": (
-                    "The mail transport did not accept the message. This usually means the "
-                    "Gmail OAuth token is missing or expired for hello@bizstackperks.com. "
-                    "Nothing was sent and nothing was logged."
+f"The mail transport did not accept the message. This usually means the "
+                f"Gmail OAuth token is missing or expired for {cfg.get('SMTP_FROM') or 'the sending address'}. "
+                f"Nothing was sent and nothing was logged."
                 ),
             }
 
@@ -1558,8 +1558,25 @@ def build_copilot_handlers(db, owner_email: str):
     maps, calendar, and the durable task list. `search_comms` is how Copilot
     reads the 24/7 phone assistant's calls and texts -- straight from
     comms_logs, rather than by having a conversation with the voice agent.
+
+    send_email_message is DELIBERATELY WITHHELD from the Copilot as of
+    2026-10-03. It was the one unrestricted send path in the build: no rate
+    limit, no per-recipient dedupe, no allowlist, and no require-confirmation.
+    Asked to research property owners, the Copilot looped on it and sent three
+    identical emails within ~30 seconds to real@norfolk.gov and
+    real.estate@norfolk.gov asking a public office to hand over the personal
+    ownership records of specific homeowners. Those are real sent messages and
+    cannot be recalled.
+
+    The handler still exists in build_tool_handlers and is untouched -- it is
+    used by paths that already enforce contact_policy_allows. Restoring it here
+    is a one-line change, but it should not come back without a cooldown, a
+    dedupe check, and a recipient allowlist. Note that the handler's own
+    docstring never claimed to be safe for arbitrary recipients; the mistake was
+    treating "the owner asked for it" as sufficient authorization to send.
     """
     handlers = build_tool_handlers(db, stripe_svc)
+    handlers.pop("send_email_message", None)
     handlers.update(copilot_ops.build_comms_log_tools(db))
     handlers.update(copilot_ops.build_maps_tools(db))
     handlers.update(copilot_ops.build_calendar_tools(db))
