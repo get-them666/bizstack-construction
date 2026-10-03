@@ -7,6 +7,14 @@
                     <button type="submit" class="px-4 py-2.5 text-sm font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl transition-colors">Fire all drafts</button>
                 </form>
 
+    {# CSV of every lead with a street address, for mailing and for working the
+       list offline. first_row_for_address marks one row per door, because the
+       permit feeds emit a row per permit. #}
+    <a href="/api/leads/addresses.csv?company=construction"
+       class="px-4 py-2.5 text-sm font-semibold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 rounded-xl transition-colors">
+        Export addresses CSV
+    </a>
+
     {# Runs the owner lookup across every address-only lead and writes the owner
        name onto the lead card. The assessor record has a name and no email, so
        this is what turns "Chesapeake" in the name field into a real person. #}

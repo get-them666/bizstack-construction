@@ -6551,6 +6551,109 @@ async def payroll_run_finalize(run_id: int, request: Request, db=Depends(get_db)
     return RedirectResponse(url=request.headers.get("referer") or "/payroll", status_code=status.HTTP_303_SEE_OTHER)
 
 
+@app.get("/api/leads/addresses.csv")
+async def leads_addresses_csv(request: Request, company: str = "construction",
+                              db=Depends(get_db)):
+    """Every lead that has a street address, as CSV. Admin-only.
+
+    This is the working list for mail: the permit-derived leads publish an
+    address and no applicant, so `name` holds a city for most of them. Two
+    things are worth knowing before using the file.
+
+    First, DUPLICATES. The permit feeds emit one row per permit, so several
+    rows share one address -- 177 leads covered only 58 distinct doors in the
+    September batch. The `distinct_addresses` column marks the first row seen
+    for each address so a mailing run can filter on it rather than paying twice
+    for the same person.
+
+    Second, `has_contact` marks whether the lead already has a usable phone or
+    email. Those do not need chasing; they are already contactable and appear in
+    the contactable lane instead.
+
+    Sorted by address so related rows sit together, and the export is capped at
+    5000 rows: past that a spreadsheet stops being usable and a paginated
+    export is the right answer.
+    """
+    require_admin(request)
+    co = company if company in ("construction", "broom") else "construction"
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT id, name, address, city, state, zip, email, phone, status, source, "
+            "       project_type, created_at "
+            "FROM leads "
+            "WHERE company = %(company)s AND address IS NOT NULL AND BTRIM(address) <> '' "
+            "ORDER BY LOWER(BTRIM(address)), id "
+            "LIMIT 5000;",
+            {"company": co},
+        )
+        rows = cur.fetchall()
+
+    def has_contact(r):
+        email = (r.get("email") or "").strip()
+        phone = (r.get("phone") or "").strip().lower()
+        if email and "@lead.local" not in email.lower():
+            return True
+        return bool(phone and phone not in ("unknown", "n/a", "-", "none"))
+
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow([
+        "lead_id", "name", "address", "city", "state", "zip",
+        "email", "phone", "has_contact", "status", "source",
+        "project_type", "first_row_for_address", "distinct_addresses", "created_at",
+    ])
+
+    def addr_key(value):
+        # Collapse whitespace and case so one house is one key. "  8494  Lynn
+        # River ROAD " and "8494 Lynn River Road" are the same door.
+        return " ".join((value or "").split()).strip().lower()
+
+    totals = {}
+    for r in rows:
+        key = addr_key(r.get("address"))
+        totals[key] = totals.get(key, 0) + 1
+
+    # `first_row_for_address` marks the first row SEEN for each address, so a
+    # mailing run can filter to one row per door. Comparing against the total
+    # instead would mark every row of a duplicated address as "no" and leave
+    # nothing to filter on.
+    first_seen = set()
+    written = 0
+    for r in rows:
+        key = addr_key(r.get("address"))
+        first = key not in first_seen
+        first_seen.add(key)
+        w.writerow([
+            r.get("id"),
+            (r.get("name") or "").strip(),
+            (r.get("address") or "").strip(),
+            (r.get("city") or "").strip(),
+            (r.get("state") or "").strip(),
+            (r.get("zip") or "").strip(),
+            (r.get("email") or "").strip(),
+            (r.get("phone") or "").strip(),
+            "yes" if has_contact(r) else "no",
+            (r.get("status") or "").strip(),
+            (r.get("source") or "").strip(),
+            (r.get("project_type") or "").strip(),
+            "yes" if first else "no",
+            totals[key],
+            r.get("created_at").isoformat() if r.get("created_at") else "",
+        ])
+        written += 1
+
+    buf.seek(0)
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f'attachment; filename="{co}-leads-with-addresses.csv"',
+            "X-Row-Count": str(written),
+            "X-Distinct-Addresses": str(len(totals)),
+        },
+    )
+
+
 @app.get("/api/payroll/run/{run_id}/csv")
 async def payroll_run_csv(run_id: int, request: Request, db=Depends(get_db)):
     require_admin(request)
