@@ -17,10 +17,14 @@ gets wrong.
 
 CURRENTLY BLOCKED: as of 2026-10-03 the configured key returns
 401 "You do not have an active subscription or are not authorized to access this
-endpoint" on every endpoint. The key itself is recognised (a wrong key returns
-"License key is required"), so it is the ACCOUNT that needs the subscription or
-trial activated. Until then every call here returns an error shape and spends
-nothing. See MEMORY.md.
+endpoint" on every endpoint.
+
+It is NOT knowable from outside whether that is a bad key or a valid key with
+no subscription: a deliberately invalid key returns the identical body, verified
+by sending all-zeros and getting the same message. So this module cannot
+distinguish them, and does not try to. Until the key or the subscription is
+sorted out in the Accurate Append portal, every call here returns an error
+shape and spends nothing. See MEMORY.md.
 
 Credentials come from the environment only:
 

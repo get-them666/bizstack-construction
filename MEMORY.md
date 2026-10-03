@@ -129,16 +129,24 @@ or a phone number.** A name is not a contact. This is the same conclusion the
 a limitation of a particular tool — county assessors, deeds and court records
 publish ownership, never contact details.
 
-**Blocked as of 2026-10-03.** The key `2e900471…` is *recognised* — a wrong key
-returns `"License key is required"`, and this returns a different 401 — but both
-`AppendEmail` and `AppendPhone/SBMMobile` answer:
+**Blocked as of 2026-10-03.** Both `AppendEmail` and `AppendPhone/SBMMobile`
+answer 401:
 
 > You do not have an active subscription or are not authorized to access this
 > endpoint. Please contact customer support.
 
-So it is the **account**, not the key. Trial or subscription must be activated in
-the Accurate Append portal. The owner believes there are 100 free lookups a
-month available; that is not currently active on this account. Until it is,
+**It is not knowable from outside whether the key is valid.** A deliberately
+invalid key returns the *identical* 401 — verified by sending
+`00000000-0000-0000-0000-000000000000` and getting the same body. So this could
+be a bad key OR a valid key with no active subscription, and the API gives no
+way to tell them apart. An earlier note here claimed the key was recognised
+because the error was not `"License key is required"`; that inference was wrong
+and has been tested and retracted.
+
+To resolve: confirm `2e900471…` appears as the License Key at
+`clients.accurateappend.com`. If it does, the trial/subscription needs
+activating — the owner believes 100 free lookups a month are available, and they
+are not currently on this account. Until then
 `POST /api/leads/{id}/enrich-contact` returns the provider's message and spends
 nothing.
 
