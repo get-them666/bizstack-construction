@@ -119,6 +119,42 @@ the addresses that most needed a fallback were exactly the ones that threw.
 That was the reported "works sometimes, otherwise errors". Any new provider
 layer must return `NOT_FOUND` for both.
 
+## Accurate Append — the contact step, currently blocked on billing
+
+`accurate_append.py` turns a name + address into an email and a phone. It exists
+because the skip trace structurally cannot: RentCast returns an owner NAME from
+the assessor record, and **no public record in the US contains an email address
+or a phone number.** A name is not a contact. This is the same conclusion the
+"going to the source" idea reached, and it is a fact about registries rather than
+a limitation of a particular tool — county assessors, deeds and court records
+publish ownership, never contact details.
+
+**Blocked as of 2026-10-03.** The key `2e900471…` is *recognised* — a wrong key
+returns `"License key is required"`, and this returns a different 401 — but both
+`AppendEmail` and `AppendPhone/SBMMobile` answer:
+
+> You do not have an active subscription or are not authorized to access this
+> endpoint. Please contact customer support.
+
+So it is the **account**, not the key. Trial or subscription must be activated in
+the Accurate Append portal. The owner believes there are 100 free lookups a
+month available; that is not currently active on this account. Until it is,
+`POST /api/leads/{id}/enrich-contact` returns the provider's message and spends
+nothing.
+
+Two design points that matter when it is switched on:
+
+- **B1/B2 match levels are rejected.** Household-level matches are frequently a
+  different adult at the same address. Attaching one of those numbers to a named
+  lead means cold-calling a stranger who believes they are a customer. They are
+  counted in `rejected_weak`, not silently dropped.
+- **Phones are recorded, never dialled.** These are residential numbers. A DNC
+  check is a legal requirement before calling or texting, not a preference.
+
+`SKIP_SHERPA_API_KEY` remains unset and remains the other route to the same data.
+Accurate Append at 100/month is roughly twice Skip Sherpa's free allowance, so
+prefer it first and keep Skip Sherpa as the fallback.
+
 ## Open threads
 
 - `ATTIC_API_KEY` / `SERVICEKANI_API_KEY` / `REGRID_API_KEY` / `BATCHLEADS_API_KEY`
