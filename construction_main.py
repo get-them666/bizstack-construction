@@ -2540,8 +2540,15 @@ async def permit_skiptrace(permit_id: int, request: Request, db=Depends(get_db))
 
 @app.post("/api/skiptrace/enrich")
 async def skiptrace_enrich(request: Request, company: str = Form("construction"),
+                           source: str = Form("permit_finder"),
                            db=Depends(get_db)):
     """Fill in the owner name on every address-only lead, from the cache first.
+
+    Defaults to source='permit_finder'. The first version ran unfiltered over
+    every address-only lead, spent 25 of the 50 monthly calls and updated
+    nothing: the loose population is mostly completed jobs and the owner's own
+    STR properties, which RentCast has no record of. Pass source= for the old
+    behaviour.
 
     Bounded per run because RentCast allows 50 calls per MONTH and that budget is
     shared with instant-quote. Repeat runs are free: a cached address is a table

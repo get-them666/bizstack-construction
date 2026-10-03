@@ -557,8 +557,20 @@ _CITY_WORDS = {
 }
 
 
-def enrich_address_only_leads(cur, company: str = "construction", cap: int = None) -> dict:
+def enrich_address_only_leads(cur, company: str = "construction", cap: int = None,
+                              source: str = "permit_finder") -> dict:
     """Fill in the owner name on leads that have an address and no contact.
+
+    `source` defaults to 'permit_finder', and that default matters. The first
+    version ran over every address-only lead and spent 25 of the 50 monthly
+    calls to update nothing, because the loose population is mostly completed
+    jobs and the owner's own STR properties -- addresses RentCast has no record
+    of. The permit-derived leads are the ones that genuinely lack a name and do
+    resolve; pass source='' for the old unfiltered behaviour.
+
+    Deliberately NOT job_leads. Its only name column is contractor_name, which
+    renders on the card as "Contractor on permit". Writing a skip-traced owner
+    there would claim that person applied for a permit they never applied for.
 
     Returns a summary: {examined, traced, cached, updated, skipped, spent,
     cap, notes}. `spent` is the number of billable provider calls, which is the
@@ -569,7 +581,8 @@ def enrich_address_only_leads(cur, company: str = "construction", cap: int = Non
     """
     limit = enrich_cap() if cap is None else max(0, int(cap))
     summary = {"examined": 0, "traced": 0, "cached": 0, "updated": 0,
-               "skipped": 0, "spent": 0, "cap": limit, "notes": []}
+               "skipped": 0, "spent": 0, "cap": limit, "source": source or "(any)",
+               "notes": []}
     if limit <= 0:
         summary["notes"].append("enrichment disabled (SKIPTRACE_ENRICH_MAX=0)")
         return summary
@@ -578,13 +591,13 @@ def enrich_address_only_leads(cur, company: str = "construction", cap: int = Non
     cur.execute(
         "SELECT id, name, address FROM leads "
         "WHERE company = %(company)s AND status = 'new' "
-        "  AND COALESCE(source, '') <> 'sam-gov' "
+        "  AND (%(source)s = '' OR COALESCE(source, '') = %(source)s) "
         "  AND address IS NOT NULL AND BTRIM(address) <> '' "
         "  AND (email IS NULL OR BTRIM(email) = '' OR LOWER(email) LIKE '%%@lead.local') "
         "  AND (phone IS NULL OR BTRIM(phone) = '' "
         "       OR LOWER(BTRIM(phone)) IN ('unknown','n/a','none','-')) "
         "ORDER BY id;",
-        {"company": company},
+        {"company": company, "source": source or ""},
     )
     rows = cur.fetchall()
     summary["examined"] = len(rows)
