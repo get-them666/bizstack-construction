@@ -632,8 +632,7 @@ async def _outreach_loop() -> None:
 
 async def _reply_loop() -> None:
     """Retries failed sends. Lender replies themselves arrive on the webhook
-    (see handle_inbound); the old IMAP poller could not run because IMAP is
-    disabled on the mailbox, so nothing ever reached it."""
+    (see handle_inbound)."""
     print("[outreach] reply retry loop started")
     while True:
         try:

@@ -1,8 +1,9 @@
 """Inbound email ingestion for lead replies.
 
 Two paths feed this:
-1. IMAP poller (env INBOUND_POLL=on): reads the owner mailbox and matches
-   sender addresses against leads. Marked messages are ingested once.
+1. Gmail API poller (env GMAIL_INBOUND=on): reads the connected Google mailbox
+   and matches sender addresses against leads. This is the live path -- mail is
+   on Google, and outbound is the Gmail API too.
 2. Resend-style webhook (POST /api/email/inbound): idempotent via external_id.
 
 Every ingested reply writes a comms_logs row, flags the lead (status new ->
@@ -10,7 +11,6 @@ contacted, last_reply_at set) and appends the message to the lead notes.
 """
 
 import hashlib
-import imaplib
 import json
 import os
 import re
@@ -18,7 +18,6 @@ import time
 import urllib.request
 import urllib.error
 from email.header import decode_header
-from email.parser import BytesParser
 from email.utils import parseaddr
 
 import psycopg
@@ -156,7 +155,7 @@ def _ingest(db, company_key, msgs, mailbox_from):
             lead = cur.fetchone()
             text = (m.get("text") or "").strip()
             subject = (m.get("subject") or "").strip() or "(no subject)"
-            ext_id = (m.get("external_id") or "").strip() or _make_ext_id(sender, subject, m.get("date") or "")
+            ext_id = (m.get("external_id") or "").strip() or _make_content_id(sender, subject, m.get("date") or "")
             body = subject
             if text:
                 body = f"{subject}\n\n{text[:7000]}"
@@ -216,45 +215,17 @@ def _ingest(db, company_key, msgs, mailbox_from):
             "skipped": skipped, "unmatched": unmatched}
 
 
-def _make_ext_id(sender, subject, date):
+def _make_content_id(sender, subject, date):
+    """Stable synthetic id for a message that carries none of its own.
+
+    Used as a last-resort dedup key, so it must be derived from content rather
+    than arrival time -- the same message arriving twice has to hash the same
+    way or dedup fails. Prefixed `content|` so it cannot collide with the
+    `gmail|`, `wh|`, or `raw|` namespaces used by the paths that do have a real
+    provider id.
+    """
     h = hashlib.sha1(f"{sender}|{subject}|{date}".encode("utf-8", "replace")).hexdigest()[:24]
-    return f"imap|{h}"
-
-
-def _fetch_imap_messages(host, user, password, ssl_flag=True):
-    msgs = []
-    if ssl_flag:
-        M = imaplib.IMAP4_SSL(host, 993, timeout=30)
-    else:
-        M = imaplib.IMAP4(host, 143, timeout=30)
-    try:
-        M.login(user, password)
-        M.select("INBOX")
-        typ, data = M.search(None, "UNSEEN")
-        ids = (data[0] or b"").split()
-        for b in ids[-200:]:
-            raw_id = b.decode("ascii") or "0"
-            t, mdata = M.fetch(raw_id, "(RFC822)")
-            if not mdata or not mdata[0] or not isinstance(mdata[0], tuple):
-                continue
-            msg = BytesParser().parsebytes(mdata[0][1])
-            mid = msg.get("Message-ID") or ""
-            ext = ("raw|" + mid) if mid else _make_ext_id(
-                msg.get("From") or "", msg.get("Subject") or "", msg.get("Date") or "")
-            msgs.append({
-                "from": msg.get("From") or "",
-                "to": msg.get("To") or "",
-                "subject": _subject_header(msg.get("Subject")),
-                "date": msg.get("Date") or "",
-                "text": _body_text(msg),
-                "external_id": ext,
-            })
-    finally:
-        try:
-            M.logout()
-        except Exception:
-            pass
-    return msgs
+    return f"content|{h}"
 
 
 def poll_gmail_inbox(db, service: str, company_key: str, mailbox_from: str,
@@ -321,54 +292,6 @@ def poll_gmail_inbox(db, service: str, company_key: str, mailbox_from: str,
     return result
 
 
-def poll_inbox():
-    """Poll the configured business mailbox once for lead replies; returns ingest results.
-
-    Only runs against an explicit INBOUND_IMAP_HOST/USER/PASS mailbox. Never
-    falls back to personal credentials."""
-    host = (os.getenv("INBOUND_IMAP_HOST", "") or "").strip() or "imap.privateemail.com"
-    user = (os.getenv("INBOUND_IMAP_USER", "") or "").strip()
-    password = (os.getenv("INBOUND_IMAP_PASS", "") or "").strip()
-    company_key = (os.getenv("INBOUND_COMPANY_KEY", "") or "").strip() or "construction"
-    mailbox_from = (os.getenv("SMTP_FROM", "") or "").strip() or "hello@bizstackperks.com"
-    if not user or not password:
-        return {"error": "no INBOUND_IMAP_USER/PASS configured - polling disabled"}
-    msgs = _fetch_imap_messages(host, user, password)
-    if not msgs:
-        return {"matched": 0, "inserted": 0, "deduped": 0, "skipped": 0, "checked": 0}
-    db = psycopg.connect(os.getenv("DATABASE_URL", ""), row_factory=dict_row)
-    db.autocommit = False
-    try:
-        result = _ingest(db, company_key, msgs, mailbox_from)
-        result["checked"] = len(msgs)
-        return result
-    finally:
-        try:
-            db.close()
-        except Exception:
-            pass
-
-
-def poll_loop():
-    """Daemon loop. Runs every INBOUND_POLL_SECONDS while INBOUND_POLL is on."""
-    if not (os.getenv("INBOUND_IMAP_USER", "") or "").strip() or not (os.getenv("INBOUND_IMAP_PASS", "") or "").strip():
-        print("[email-inbound] INBOUND_POLL=on but INBOUND_IMAP_USER/PASS not set - not polling", flush=True)
-        return
-    interval = 180
-    try:
-        interval = max(30, int(os.getenv("INBOUND_POLL_SECONDS", "180") or 180))
-    except (TypeError, ValueError):
-        interval = 180
-    print(f"[email-inbound] poller started (every {interval}s)", flush=True)
-    while True:
-        try:
-            result = poll_inbox()
-            print(f"[email-inbound] polled: {result}", flush=True)
-        except Exception as exc:
-            print(f"[email-inbound] poll error: {exc}", flush=True)
-        time.sleep(interval)
-
-
 def handle_webhook_payload(payload, company_key, mailbox_from):
     """Ingest a Resend-style 'email.received' array or a single object.
 
@@ -399,7 +322,7 @@ def handle_webhook_payload(payload, company_key, mailbox_from):
             # `("wh|" + str(x)) or ""`, so an id-less payload collapsed onto the
             # constant "wh|" and every later one was silently deduped away.
             "external_id": (f"wh|{email_id}" if email_id
-                            else _make_ext_id(rec.get("from") or "",
+                            else _make_content_id(rec.get("from") or "",
                                               rec.get("subject") or "",
                                               rec.get("created_at") or rec.get("date") or "")),
         })
@@ -441,4 +364,13 @@ def _resend_fetch_body(email_id):
 
 
 if __name__ == "__main__":
-    print(json.dumps(poll_inbox()), flush=True)
+    # One-shot poll of the Google mailbox. Polling on a schedule is the
+    # construction_main._gmail_inbound_loop thread's job, gated on GMAIL_INBOUND.
+    import psycopg
+    from psycopg.rows import dict_row
+
+    _company = (os.getenv("INBOUND_COMPANY_KEY", "") or "").strip() or "construction"
+    _mailbox = (os.getenv("SMTP_FROM", "") or "").strip() or "hello@bizstackperks.com"
+    with psycopg.connect(os.getenv("DATABASE_URL", ""), row_factory=dict_row) as _db:
+        _db.autocommit = False
+        print(json.dumps(poll_gmail_inbox(_db, _company, _company, _mailbox)), flush=True)

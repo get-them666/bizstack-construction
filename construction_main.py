@@ -4387,11 +4387,7 @@ def pipeline_digest():
 
 
 def _gmail_inbound_loop():
-    """Collect lead replies from the connected Google mailbox via the Gmail API.
-
-    Mail is on Google now. The Zoho IMAP account is disabled server-side
-    ("You are yet to enable IMAP"), so the old IMAP poller could never run and
-    inbound recorded nothing."""
+    """Collect lead replies from the connected Google mailbox via the Gmail API."""
     interval = max(120, int(os.getenv("GMAIL_INBOUND_INTERVAL_SECONDS", "900") or 900))
     while True:
         try:
@@ -4415,9 +4411,9 @@ def _start_lead_source_scheduler():
     except (TypeError, ValueError):
         interval_h = 6
 
-    poll_on = (os.getenv("INBOUND_POLL", "") or "").strip().lower() in ("1", "true", "yes", "on")
-    if poll_on:
-        threading.Thread(target=inbound_email.poll_loop, daemon=True).start()
+    # Only the Gmail path remains. The IMAP poller is gone: mail is on Google,
+    # and the old Zoho account answered "You are yet to enable IMAP" so it
+    # could never run -- INBOUND_POLL was a flag that did nothing.
     gmail_inbound = (os.getenv("GMAIL_INBOUND", "") or "").strip().lower() in ("1", "true", "yes", "on")
     if gmail_inbound:
         threading.Thread(target=_gmail_inbound_loop, daemon=True).start()
