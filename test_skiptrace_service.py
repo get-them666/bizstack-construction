@@ -78,10 +78,21 @@ def test_parse_address_zip_plus_four():
     assert svc.parse_address("1 A St, Norfolk, VA 23510-1234")["zipcode"] == "23510-1234"
 
 
-def test_parse_address_missing_zip_is_reported_not_raised():
+def test_parse_address_missing_zip_is_allowed():
+    """217 of 500 permit rows have no ZIP and RentCast resolves them anyway.
+
+    Rejecting these would discard 43% of the permits for nothing.
+    """
     p = svc.parse_address("1501 VANCE CIR, Chesapeake, VA")
-    assert p["ok"] is False
-    assert p["why"] == "no ZIP"
+    assert p["ok"] is True
+    assert p["zipcode"] == ""
+    assert p["no_zip"] is True
+
+
+def test_parse_address_with_zip_is_not_flagged():
+    p = svc.parse_address("1501 VANCE CIR, Chesapeake, VA 23320")
+    assert p["ok"] is True
+    assert p["no_zip"] is False
 
 
 def test_parse_address_missing_state_is_reported():

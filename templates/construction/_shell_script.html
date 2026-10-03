@@ -97,6 +97,9 @@ document.addEventListener('DOMContentLoaded', function() {
             html += '<span class="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-slate-100 text-slate-500">cached — no lookup spent</span>';
         }
         html += '</div>';
+        if (d.no_zip) {
+            html += '<p class="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1">No ZIP on this permit, so this is a city-level match — confirm the street before mailing anything.</p>';
+        }
         html += '<dl class="grid grid-cols-2 md:grid-cols-3 gap-2 text-xs">';
         rows.forEach(function(r) {
             html += '<div><dt class="text-slate-500">' + escapeHtml(r[0]) + '</dt>' +

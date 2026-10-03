@@ -140,10 +140,12 @@ def parse_address(raw: str) -> dict:
             zipcode = zipcode or (m.group(3) or "")
     if not state:
         return {"ok": False, "why": "no state"}
-    if not zipcode:
-        return {"ok": False, "why": "no ZIP"}
+    # A missing ZIP is NOT a failure. 217 of 500 permit rows have no ZIP, and
+    # RentCast resolves street+city+state on its own (verified live: "201 OAK
+    # GROVE ROAD, Norfolk, VA" returns an owner). Rejecting those would throw
+    # away 43% of the permits for no reason.
     return {"ok": True, "street": street, "city": city.upper(), "state": state,
-            "zipcode": zipcode}
+            "zipcode": zipcode, "no_zip": not zipcode}
 
 
 def normalize_address(street: str, city: str, state: str, zip_code: str = "") -> str:
@@ -315,6 +317,13 @@ def trace_address(street: str, city: str, state: str, zip_code: str = "") -> dic
     # need keys that are unset, so only RentCast is live here. A missing key is
     # a skip, not a failure -- the caller still gets a clean "no record".
     got = fetch_rentcast(address)
+    if got is not None and got is not NOT_FOUND:
+        got["no_zip"] = not zip_code
+        if not zip_code:
+            # Without a ZIP the provider falls back to a city-level match, so
+            # the owner may belong to a different house on the same street.
+            # Carried in the payload (not a `_` key) so it survives the cache.
+            got["_low_confidence"] = True
 
     if got is None:
         attempted.append("rentcast: RENTCAST_API_KEY not set, skipped")
@@ -325,7 +334,8 @@ def trace_address(street: str, city: str, state: str, zip_code: str = "") -> dic
 
     if record is None:
         return {"found": False, "layers_tried": attempted,
-                "address": address, "checked_at": time.strftime("%Y-%m-%d %H:%M:%S")}
+                "address": address, "no_zip": not zip_code,
+                "checked_at": time.strftime("%Y-%m-%d %H:%M:%S")}
 
     owner = record.get("owner_name")
     is_entity = looks_like_entity(owner)
@@ -343,6 +353,8 @@ def trace_address(street: str, city: str, state: str, zip_code: str = "") -> dic
         "owner_is_entity": is_entity,
         # The business-contacts-only exception, made visible in the data.
         "is_residential": not is_entity,
+        # True when there was no ZIP, so the match may be a neighbouring house.
+        "no_zip": not zip_code,
         "registered_agent": agent or None,
         "property": record,
         "layers_tried": attempted,

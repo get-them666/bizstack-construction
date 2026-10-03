@@ -2469,6 +2469,9 @@ async def permit_skiptrace(permit_id: int, request: Request, db=Depends(get_db))
         raise HTTPException(status_code=400,
                             detail=f"Cannot read that address ({parsed['why']}). "
                                    f"Edit it on the permit first.")
+    # parsed["zipcode"] is legitimately empty: 217 of 500 permit rows have no
+    # ZIP and the provider still resolves them. The response flags that case as
+    # low confidence rather than hiding it.
 
     key = skiptrace_service.normalize_address(parsed["street"], parsed["city"],
                                               parsed["state"], parsed["zipcode"])
