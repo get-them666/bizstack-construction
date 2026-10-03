@@ -1575,6 +1575,15 @@ def build_copilot_handlers(db, owner_email: str):
     dedupe check, and a recipient allowlist. Note that the handler's own
     docstring never claimed to be safe for arbitrary recipients; the mistake was
     treating "the owner asked for it" as sufficient authorization to send.
+
+    What the Copilot DOES get is skip_trace_owner and save_contact, which
+    complete the pipeline the owner needs without giving it a way to transmit:
+    address -> owner name (cached), name -> email (its own bounded web_search),
+    then persist the result onto the lead. Contacts used to be reported in chat
+    and evaporate, so there was no lead row and no dedupe. Writing a contact is
+    recoverable -- the owner sees a wrong address on the leads page -- whereas
+    emailing one is not. That asymmetry is why these are here and the send tool
+    is not.
     """
     handlers = build_tool_handlers(db, stripe_svc)
     handlers.pop("send_email_message", None)
@@ -1583,6 +1592,7 @@ def build_copilot_handlers(db, owner_email: str):
     handlers.update(copilot_ops.build_calendar_tools(db))
     handlers.update(copilot_ops.build_task_tools(db, owner_email))
     handlers.update(copilot_ops.build_web_search_tools())
+    handlers.update(copilot_ops.build_contact_tools(db, owner_email))
     handlers["calculate"] = copilot_ops.calculate
     return handlers
 

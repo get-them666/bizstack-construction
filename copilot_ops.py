@@ -502,3 +502,108 @@ def build_task_tools(db, owner_email: str):
         return {"ok": True, "message": f"Task #{task_id} marked {status}."}
 
     return {"add_task": add_task, "list_tasks": list_tasks, "complete_task": complete_task}
+
+# --- Skip trace + contact capture -------------------------------------------
+# The pipeline the owner actually needs, in two halves that were both missing:
+#   address -> owner NAME   (skiptrace_service, cached)
+#   name   -> email         (the model's own web_search, bounded by the blocklist)
+# and then a way to PERSIST the result, which is what never happened. Contacts
+# used to be reported in chat and evaporate, so there was no lead row, no dedupe
+# and no touch history, and the same research had to be redone every session.
+def build_contact_tools(db, owner_email: str):
+    """Owner-scoped. These WRITE to leads but CANNOT send anything.
+
+    send_email_message stays withheld from the Copilot. A tool that records a
+    contact is far less dangerous than one that transmits: a wrong address
+    written to a lead is a bug the owner sees on the leads page, whereas a wrong
+    address emailed is unsendable. That asymmetry is the whole reason these two
+    are here and the send tool is not.
+    """
+
+    def skip_trace_owner(address: str = "") -> dict:
+        """Look up the owner of record for a street address, from the public assessor record.
+
+        Returns a NAME and property facts -- it does NOT return an email or a
+        phone, because the underlying public record does not contain them.
+        Results are cached per address, so a repeat costs nothing.
+        """
+        import skiptrace_service as sts
+
+        raw = (address or "").strip()
+        if not raw:
+            return {"ok": False, "error": "Need an address, e.g. '8494 Lynn River Road, Norfolk, VA'."}
+        parsed = sts.parse_address(raw)
+        if not parsed["ok"]:
+            return {"ok": False, "error": f"Could not read that address: {parsed['why']}."}
+
+        key = sts.normalize_address(parsed["street"], parsed["city"], parsed["state"], parsed["zipcode"])
+        try:
+            with db.cursor() as cur:
+                sts.ensure_schema(cur)
+                cached = sts.cache_get(cur, key)
+            if cached is not None:
+                cached["found"] = bool(cached.get("found"))
+                with db.cursor() as cur:
+                    sts.audit(cur, owner_email, key, cached, cached=True)
+                db.commit()
+                return {"ok": True, "cached": True, **cached}
+
+            result = sts.trace_address(parsed["street"], parsed["city"], parsed["state"], parsed["zipcode"])
+            with db.cursor() as cur:
+                sts.cache_put(cur, key, result)
+                sts.audit(cur, owner_email, key, result, cached=False)
+            db.commit()
+            return {"ok": True, "cached": False, **result}
+        except sts.ProviderError as e:
+            db.rollback()
+            return {"ok": False, "error": e.message, "status": e.status}
+
+    def save_contact(lead_id: str = "", email: str = "", name: str = "", phone: str = "") -> dict:
+        """Attach a researched email (and optionally a name/phone) to an existing lead.
+
+        Email-only by design. Phones are recorded but NOT dialled: a cold call to
+        a residential number is TCPA territory, and this lead source is
+        homeowners. The phone is stored so a human can decide, never auto-dialed.
+
+        Existing real values are never overwritten -- a placeholder like an
+        @lead.local address is replaced, a real one is kept.
+        """
+        email = (email or "").strip()
+        name = (name or "").strip()
+        phone = (phone or "").strip()
+        if not lead_id:
+            return {"ok": False, "error": "Need the lead id to save onto."}
+        if not email and not phone:
+            return {"ok": False, "error": "Need at least an email or a phone."}
+        try:
+            lid = int(lead_id)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": f"Lead id must be a number, got {lead_id!r}."}
+
+        with db.cursor() as cur:
+            cur.execute("SELECT id, name, email, phone FROM leads WHERE id = %s;", (lid,))
+            lead = cur.fetchone()
+            if not lead:
+                return {"ok": False, "error": f"No lead #{lid}. Check the id -- do not invent one."}
+            cur.execute(
+                "UPDATE leads SET "
+                "  name  = CASE WHEN %s <> '' THEN %s ELSE name END, "
+                "  email = CASE WHEN %s <> '' AND (BTRIM(COALESCE(email,'')) = '' "
+                "                OR LOWER(email) LIKE '%%@lead.local') THEN %s ELSE email END, "
+                "  phone = CASE WHEN %s <> '' AND BTRIM(COALESCE(phone,'')) = '' THEN %s ELSE phone END "
+                "WHERE id = %s RETURNING id, name, email, phone;",
+                (name, name, email, email, phone, phone, lid),
+            )
+            saved = cur.fetchone()
+            db.commit()
+
+        return {
+            "ok": True,
+            "lead_id": lid,
+            "saved_name": saved.get("name"),
+            "saved_email": saved.get("email"),
+            "saved_phone": saved.get("phone"),
+            "note": "Nothing was sent. The owner reviews and sends from the leads page.",
+        }
+
+    return {"skip_trace_owner": skip_trace_owner, "save_contact": save_contact}
