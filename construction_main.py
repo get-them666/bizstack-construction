@@ -2439,6 +2439,64 @@ async def record_lead_touch(lead_id: int, request: Request, channel: str = Form(
                             status_code=status.HTTP_303_SEE_OTHER)
 
 
+@app.post("/api/job-leads/{permit_id}/skiptrace")
+async def permit_skiptrace(permit_id: int, request: Request, db=Depends(get_db)):
+    """Look up the owner of record for a permit's address. Admin-only, cache-first.
+
+    The address is read from the permit row rather than posted by the browser.
+    The permit feeds never publish an applicant name, so this is the only way a
+    permit lead gets one -- and reading the address server-side keeps it out of
+    the browser's hands entirely.
+
+    Does not write to the permit. Resolving who owns the house is not the same
+    as reaching them, and auto-filling contractor_name here would make an
+    unverified owner look like an applied-for permit.
+    """
+    require_admin(request)
+    _, user_email = require_auth(request)
+
+    with db.cursor() as cur:
+        cur.execute("SELECT address FROM job_leads WHERE id = %s;", (permit_id,))
+        row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="No such permit")
+    raw = (row["address"] or "").strip()
+    if not raw:
+        raise HTTPException(status_code=400, detail="This permit has no address to look up")
+
+    parsed = skiptrace_service.parse_address(raw)
+    if not parsed["ok"]:
+        raise HTTPException(status_code=400,
+                            detail=f"Cannot read that address ({parsed['why']}). "
+                                   f"Edit it on the permit first.")
+
+    key = skiptrace_service.normalize_address(parsed["street"], parsed["city"],
+                                              parsed["state"], parsed["zipcode"])
+    with db.cursor() as cur:
+        skiptrace_service.ensure_schema(cur)
+        cached = skiptrace_service.cache_get(cur, key)
+    if cached is not None:
+        cached["found"] = bool(cached.get("found"))
+        with db.cursor() as cur:
+            skiptrace_service.audit(cur, user_email, key, cached, cached=True)
+        db.commit()
+        return JSONResponse(content=cached)
+
+    try:
+        result = await asyncio.to_thread(
+            skiptrace_service.trace_address,
+            parsed["street"], parsed["city"], parsed["state"], parsed["zipcode"])
+    except skiptrace_service.ProviderError as exc:
+        db.rollback()
+        return JSONResponse(status_code=exc.status, content={"detail": exc.message})
+
+    with db.cursor() as cur:
+        skiptrace_service.cache_put(cur, key, result)
+        skiptrace_service.audit(cur, user_email, key, result, cached=False)
+    db.commit()
+    return JSONResponse(content=result)
+
+
 @app.post("/api/leads/{lead_id}/fire-draft")
 async def fire_lead_draft_route(lead_id: int, request: Request, db=Depends(get_db)):
     require_admin(request)

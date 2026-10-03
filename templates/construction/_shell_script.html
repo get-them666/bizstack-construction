@@ -25,6 +25,90 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
     });
+    document.querySelectorAll('.skiptrace-btn').forEach(function(btn) {
+        btn.addEventListener('click', async function() {
+            const id = btn.dataset.permitId;
+            const out = document.querySelector('.skiptrace-out[data-permit-id="' + id + '"]');
+            if (!out) return;
+            btn.disabled = true;
+            out.classList.remove('hidden');
+            out.innerHTML = '<p class="text-slate-500">Looking up the assessor record…</p>';
+            try {
+                const res = await fetch('/api/job-leads/' + id + '/skiptrace', { method: 'POST' });
+                const text = await res.text();
+                let json;
+                try { json = JSON.parse(text); }
+                catch (e) {
+                    // An HTML body means something upstream failed before our
+                    // JSON, which is a different problem from a lookup miss.
+                    out.innerHTML = '<p class="text-rose-700 text-xs">Server error — check the logs.</p>';
+                    btn.disabled = false;
+                    return;
+                }
+                if (!res.ok) {
+                    out.innerHTML = '<p class="text-amber-700 text-xs">' +
+                        escapeHtml(json.detail || 'Lookup failed') + '</p>';
+                    btn.disabled = false;
+                    return;
+                }
+                out.innerHTML = renderSkiptrace(json);
+                btn.disabled = false;
+            } catch (e) {
+                out.innerHTML = '<p class="text-rose-700 text-xs">Network error.</p>';
+                btn.disabled = false;
+            }
+        });
+    });
+
+    function escapeHtml(s) {
+        // The owner name comes from a third-party record and is attacker-
+        // influenceable. textContent would be safer, but this builds markup, so
+        // every interpolated value has to be escaped.
+        return String(s == null ? '' : s)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+
+    function renderSkiptrace(d) {
+        if (d.detail) {
+            return '<p class="text-amber-700 text-xs">' + escapeHtml(d.detail) + '</p>';
+        }
+        if (!d.found) {
+            return '<p class="text-slate-600 text-xs">No owner of record in the assessor data for this address. ' +
+                   'Try the county assessor directly — RentCast covers most but not all of Virginia.</p>';
+        }
+        const p = d.property || {};
+        const rows = [
+            ['Owner of record', d.owner_of_record],
+            ['Registered agent', d.registered_agent],
+            ['Assessed value', p.assessed_value != null ? '$' + Number(p.assessed_value).toLocaleString() : null],
+            ['Year built', p.year_built],
+            ['Size', p.square_footage ? Number(p.square_footage).toLocaleString() + ' sqft' : null],
+            ['Last sale', p.last_sale_date ? String(p.last_sale_date).slice(0, 10) + (p.last_sale_price ? ' · $' + Number(p.last_sale_price).toLocaleString() : '') : null]
+        ].filter(function(r) { return r[1]; });
+
+        let html = '<div class="space-y-2">';
+        html += '<div class="flex flex-wrap items-center gap-2">';
+        html += '<p class="font-bold text-slate-900">' + escapeHtml(d.owner_of_record) + '</p>';
+        html += d.owner_is_entity
+            ? '<span class="text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded bg-violet-100 text-violet-700">Business</span>'
+            : '<span class="text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded bg-sky-100 text-sky-700" title="Individual homeowner, not a company. Public assessor record.">Homeowner</span>';
+        if (d._cached) {
+            html += '<span class="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-slate-100 text-slate-500">cached — no lookup spent</span>';
+        }
+        html += '</div>';
+        html += '<dl class="grid grid-cols-2 md:grid-cols-3 gap-2 text-xs">';
+        rows.forEach(function(r) {
+            html += '<div><dt class="text-slate-500">' + escapeHtml(r[0]) + '</dt>' +
+                    '<dd class="font-semibold text-slate-800">' + escapeHtml(r[1]) + '</dd></div>';
+        });
+        html += '</dl>';
+        html += '<p class="text-[11px] text-slate-400 pt-1 border-t border-slate-100">Public assessor record. ' +
+                'This tells you who owns the house, not that anyone has been contacted. A phone number still needs a DNC check before you dial.</p>';
+        html += '</div>';
+        return html;
+    }
+
     document.querySelectorAll('form[data-notes]').forEach(function(form) {
         form.addEventListener('submit', async function(e) {
             e.preventDefault();

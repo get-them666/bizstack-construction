@@ -70,6 +70,82 @@ class ProviderError(Exception):
         self.spendable = spendable
 
 
+_STATE_ZIP = re.compile(r"^(.*?),\s*([A-Za-z]{2})\s*(\d{5}(?:-\d{4})?)?$")
+
+
+def parse_address(raw: str) -> dict:
+    """'1501 VANCE CIR, Chesapeake, VA 23320' -> the four parts the APIs want.
+
+    Lives here rather than in a caller because the string form is the only
+    thing stored on a permit or property row, so anything that wants to trace
+    one has to break it apart. Providers reject a malformed address with a 400,
+    which is indistinguishable from a real miss unless it is parsed first.
+
+    Returns {"ok": False, "why": ...} rather than raising, so a bad row is a
+    reported reason and not a failed request.
+    """
+    text = str(raw or "").replace("\r\n", " ").replace("\r", " ").replace("\n", ", ")
+    text = re.sub(r"\s+", " ", text).strip()
+    if not text:
+        return {"ok": False, "why": "empty address"}
+
+    # Peel a trailing "... VA 23320" off the end before splitting on commas.
+    # Permit feeds sometimes emit one unbroken token ("1 A ST NORFOLK VA 23510"),
+    # where comma-splitting puts the city and state inside the street and the
+    # address then looks like it has no state at all.
+    tail = re.search(r"\s+([A-Za-z]{2})\s+(\d{5}(?:-\d{4})?)\s*$", text)
+    peeled_state = peeled_zip = ""
+    if tail:
+        peeled_state, peeled_zip = tail.group(1).upper(), tail.group(2)
+        text = text[:tail.start()].strip(" ,")
+
+    parts = [p.strip() for p in text.split(",") if p.strip()]
+    if not parts:
+        return {"ok": False, "why": "empty address"}
+
+    street = parts[0]
+    city, state, zipcode = "", peeled_state, peeled_zip
+    for chunk in parts[1:]:
+        if re.fullmatch(r"[A-Za-z]{2}", chunk.strip()):
+            state = state or chunk.strip().upper()
+            continue
+        found = re.search(r"\b\d{5}(?:-\d{4})?\b", chunk)
+        if found:
+            zipcode = zipcode or found.group(0)
+            rest = chunk.replace(found.group(0), "").strip(" ,")
+            # A 2-letter leftover is the state, never a city name. Without
+            # this, "1501 VANCE CIR, VA 23320" parses with city="VA" and the
+            # lookup goes out as "VA, VA 23320" -- a miss indistinguishable
+            # from the property not being in the database.
+            if re.fullmatch(r"[A-Za-z]{2}", rest):
+                state = state or rest.upper()
+            else:
+                # "Chesapeake VA" -- city with the state still glued on.
+                glued = re.fullmatch(r"(.+?)\s+([A-Za-z]{2})", rest)
+                if glued:
+                    if not city:
+                        city = glued.group(1).strip()
+                    state = state or glued.group(2).upper()
+                elif rest and not city:
+                    city = rest
+            continue
+        if not city:
+            city = chunk
+
+    # Last resort: the state/ZIP may have arrived glued to the last chunk.
+    if not state:
+        m = _STATE_ZIP.search(text)
+        if m:
+            state = m.group(2).upper()
+            zipcode = zipcode or (m.group(3) or "")
+    if not state:
+        return {"ok": False, "why": "no state"}
+    if not zipcode:
+        return {"ok": False, "why": "no ZIP"}
+    return {"ok": True, "street": street, "city": city.upper(), "state": state,
+            "zipcode": zipcode}
+
+
 def normalize_address(street: str, city: str, state: str, zip_code: str = "") -> str:
     """Collapse an address to a stable cache key.
 

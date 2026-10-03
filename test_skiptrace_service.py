@@ -35,6 +35,71 @@ class FakeCursor:
         return [sql for sql, _ in self.executed if fragment in sql]
 
 
+# --- parse_address ------------------------------------------------------------
+
+def test_parse_address_full():
+    p = svc.parse_address("1501 VANCE CIR, Chesapeake, VA 23320")
+    assert p["ok"] is True
+    assert p["street"] == "1501 VANCE CIR"
+    assert p["state"] == "VA"
+    assert p["zipcode"] == "23320"
+
+
+def test_parse_address_glued_state_zip():
+    """'Chesapeake VA 23320' as one chunk -- common in permit feeds."""
+    p = svc.parse_address("1501 VANCE CIR, Chesapeake VA 23320")
+    assert p["ok"] is True
+    assert p["city"] == "CHESAPEAKE"
+    assert p["state"] == "VA"
+    assert p["zipcode"] == "23320"
+
+
+def test_parse_address_bare_state_chunk_is_not_the_city():
+    """'1 VANCE CIR, VA 23320' must not resolve to city='VA'.
+
+    Sending 'VA, VA 23320' returns a miss that looks identical to the property
+    not being in the database, which is how a whole address quietly disappears.
+    """
+    p = svc.parse_address("1501 VANCE CIR, VA 23320")
+    assert p["ok"] is True
+    assert p["city"] == ""
+    assert p["state"] == "VA"
+
+
+def test_parse_address_no_commas_at_all():
+    p = svc.parse_address("1 A ST NORFOLK VA 23510")
+    assert p["ok"] is True
+    assert p["state"] == "VA"
+    assert p["zipcode"] == "23510"
+    assert "NORFOLK" in p["street"]
+
+
+def test_parse_address_zip_plus_four():
+    assert svc.parse_address("1 A St, Norfolk, VA 23510-1234")["zipcode"] == "23510-1234"
+
+
+def test_parse_address_missing_zip_is_reported_not_raised():
+    p = svc.parse_address("1501 VANCE CIR, Chesapeake, VA")
+    assert p["ok"] is False
+    assert p["why"] == "no ZIP"
+
+
+def test_parse_address_missing_state_is_reported():
+    p = svc.parse_address("1501 VANCE CIR, Chesapeake, 23320")
+    assert p["ok"] is False
+    assert p["why"] == "no state"
+
+
+def test_parse_address_empty():
+    assert svc.parse_address("")["ok"] is False
+    assert svc.parse_address(None)["ok"] is False
+
+
+def test_parse_address_normalizes_newlines():
+    p = svc.parse_address("1501 VANCE CIR\nChesapeake, VA 23320")
+    assert p["ok"] is True
+
+
 # --- normalize_address: the cache key ---------------------------------------
 
 def test_normalize_collapses_case_punctuation_and_spacing():
