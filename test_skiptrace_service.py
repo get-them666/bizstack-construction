@@ -311,6 +311,61 @@ def test_cache_caches_misses_too():
     assert params[1] is False, "a miss must be stored with found=False"
 
 
+# --- is_placeholder_name: the overwrite guard --------------------------------
+# The enrichment writes a traced owner onto leads.name. If this returns True for
+# a real person, that name is destroyed and replaced by an assessor inference.
+
+def test_city_in_name_is_a_placeholder():
+    # permit_finder writes the bare CITY into leads.name.
+    for city in ("Chesapeake", "Virginia Beach", "Newport News", "Norfolk"):
+        assert svc.is_placeholder_name(city) is True, city
+
+
+def test_source_slug_is_a_placeholder():
+    # \bword\b does not match these -- "_" is a word character -- so an earlier
+    # word-boundary version silently missed every slug and overwrote them.
+    for slug in ("permit_finder", "instant_quote", "lead.local", "sam-gov"):
+        assert svc.is_placeholder_name(slug) is True, slug
+
+
+def test_zip_and_empty_are_placeholders():
+    assert svc.is_placeholder_name("23320") is True
+    assert svc.is_placeholder_name("") is True
+    assert svc.is_placeholder_name(None) is True
+
+
+def test_real_person_name_is_never_a_placeholder():
+    """The regression that matters: a short token matched inside a real name."""
+    for name in ("Sheryl L. Farmer", "Leonard G Barlow Jr", "Ada Lovelace",
+                 "Bayside Holdings LLC", "Robert A Vandyke", "Maria de la Cruz"):
+        assert svc.is_placeholder_name(name) is False, name
+
+
+def test_leonard_is_not_matched_by_a_short_token():
+    # "na" is a substring of "Leo-nar-d". Short tokens must not be used at all.
+    assert svc.is_placeholder_name("Leonard G Barlow Jr") is False
+
+
+# --- enrichment bounds -------------------------------------------------------
+
+def test_enrich_is_disabled_at_zero(monkeypatch):
+    monkeypatch.setenv("SKIPTRACE_ENRICH_MAX", "0")
+    assert svc.enrich_cap() == 0
+
+
+def test_enrich_cap_falls_back_on_garbage(monkeypatch):
+    monkeypatch.setenv("SKIPTRACE_ENRICH_MAX", "not-a-number")
+    assert svc.enrich_cap() == svc.ENRICH_DEFAULT_CAP
+
+
+def test_enrich_reports_when_disabled():
+    class Cur:
+        def execute(self, *a, **k): raise AssertionError("must not query when disabled")
+    out = svc.enrich_address_only_leads(Cur(), "construction", cap=0)
+    assert out["examined"] == 0
+    assert out["notes"], "a disabled run must say so rather than silently doing nothing"
+
+
 def test_ensure_schema_creates_both_tables():
     cur = FakeCursor()
     svc._SCHEMA_READY = False  # the once-per-process guard would skip the DDL

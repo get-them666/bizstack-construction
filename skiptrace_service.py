@@ -487,3 +487,167 @@ def lookup(cur, street: str, city: str, state: str, zip_code: str = "",
     cache_put(cur, key, result)
     audit(cur, requested_by, key, result, cached=False)
     return result
+
+
+# --- batch enrichment of address-only leads ----------------------------------
+# Every lead that arrives with a postal address and no contact is run through
+# the lookup and written back. Two facts shape this entirely:
+#
+# 1. RentCast allows 50 calls per MONTH. So this is bounded by a hard per-run
+#    cap, and it consults the cache before spending anything. A repeat run over
+#    the same addresses is free, which is what makes a scheduler safe to leave
+#    on. Dedupe is on the normalized address because the permit feeds emit one
+#    row per permit: 177 leads covered only 58 distinct doors, so per-lead work
+#    would spend the whole monthly quota on about 15 real addresses.
+#
+# 2. The assessor record contains a NAME and no phone or email. So this fills in
+#    the one field that is genuinely empty and truthful. It does not fabricate
+#    contact details, and it never overwrites a name that is already a person.
+ENRICH_DEFAULT_CAP = 25  # per run; the monthly quota is the real ceiling
+
+
+def enrich_cap() -> int:
+    try:
+        return max(0, int(os.getenv("SKIPTRACE_ENRICH_MAX", ENRICH_DEFAULT_CAP) or 0))
+    except (TypeError, ValueError):
+        return ENRICH_DEFAULT_CAP
+
+
+_PLACEHOLDER_TOKENS = (
+    "permit", "city", "unknown", "homeowner", "owner", "test", "asleep",
+    "morning", "lead.local", "backlog", "instant_quote", "reddit", "website",
+    "linkedin", "shovels", "sam-gov", "n/a", "not available", "tbd",
+)
+
+
+def is_placeholder_name(name: str) -> bool:
+    """True when leads.name holds something that is not a person.
+
+    permit_finder writes the bare CITY into name ("Chesapeake"), so most
+    address-only leads carry a place where a name belongs. Overwriting one of
+    those with a real owner is the whole point; overwriting a real person is
+    data loss.
+
+    Substring matching, not \\bword\\b -- "permit_finder" has no word boundary
+    after "permit" because "_" is a word character, so a \\b pattern silently
+    misses every source slug. The tokens are all long enough that a substring
+    hit is meaningful: an earlier version included "na" and matched "Leonard".
+    """
+    cleaned = re.sub(r"\s+", " ", str(name or "")).strip().lower()
+    if not cleaned:
+        return True
+    if any(token in cleaned for token in _PLACEHOLDER_TOKENS):
+        return True
+    # A bare ZIP, or a "City, ST" pair.
+    if re.fullmatch(r"\d{5}(-\d{4})?", cleaned):
+        return True
+    if "," in cleaned:
+        return True
+    # Every word is a known place word: "Virginia Beach", "Newport News".
+    words = [w for w in re.split(r"[^a-z']+", cleaned) if w]
+    if words and all(w in _CITY_WORDS for w in words):
+        return True
+    return False
+
+
+_CITY_WORDS = {
+    "virginia", "beach", "chesapeake", "norfolk", "newport", "news", "hampton",
+    "portsmouth", "suffolk", "williamsburg", "va", "yorktown", "poquoson",
+    "hampton", "vbsb", "vb", "suffolk", "chuckatuck", "cbf", "nnd",
+}
+
+
+def enrich_address_only_leads(cur, company: str = "construction", cap: int = None) -> dict:
+    """Fill in the owner name on leads that have an address and no contact.
+
+    Returns a summary: {examined, traced, cached, updated, skipped, spent,
+    cap, notes}. `spent` is the number of billable provider calls, which is the
+    number that matters against a 50/month plan.
+
+    Fails soft throughout. A provider outage leaves every lead untouched and is
+    reported, never written with a half-answer.
+    """
+    limit = enrich_cap() if cap is None else max(0, int(cap))
+    summary = {"examined": 0, "traced": 0, "cached": 0, "updated": 0,
+               "skipped": 0, "spent": 0, "cap": limit, "notes": []}
+    if limit <= 0:
+        summary["notes"].append("enrichment disabled (SKIPTRACE_ENRICH_MAX=0)")
+        return summary
+
+    ensure_schema(cur)
+    cur.execute(
+        "SELECT id, name, address FROM leads "
+        "WHERE company = %(company)s AND status = 'new' "
+        "  AND COALESCE(source, '') <> 'sam-gov' "
+        "  AND address IS NOT NULL AND BTRIM(address) <> '' "
+        "  AND (email IS NULL OR BTRIM(email) = '' OR LOWER(email) LIKE '%%@lead.local') "
+        "  AND (phone IS NULL OR BTRIM(phone) = '' "
+        "       OR LOWER(BTRIM(phone)) IN ('unknown','n/a','none','-')) "
+        "ORDER BY id;",
+        {"company": company},
+    )
+    rows = cur.fetchall()
+    summary["examined"] = len(rows)
+    if not rows:
+        return summary
+
+    by_key, key_to_leads = {}, {}
+    for row in rows:
+        parsed = parse_address(row.get("address"))
+        if not parsed["ok"]:
+            summary["skipped"] += 1
+            continue
+        key = normalize_address(parsed["street"], parsed["city"], parsed["state"], parsed["zipcode"])
+        # One lookup per door. Every permit on the same house shares the result.
+        key_to_leads.setdefault(key, []).append((row["id"], row.get("name")))
+        by_key[key] = parsed
+
+    spent = 0
+    for key, leads in key_to_leads.items():
+        if spent >= limit:
+            summary["notes"].append(f"hit the {limit}-call run cap; "
+                                    f"{len(key_to_leads) - spent} address(es) deferred to the next run")
+            break
+
+        cached = cache_get(cur, key)
+        if cached is not None:
+            summary["cached"] += 1
+            result = cached
+        else:
+            parsed = by_key[key]
+            try:
+                result = trace_address(parsed["street"], parsed["city"],
+                                       parsed["state"], parsed["zipcode"])
+            except ProviderError as exc:
+                # Stop rather than skip ahead: a 429 means the month is gone and
+                # every remaining address would fail the same way.
+                summary["notes"].append(f"provider stopped the run ({exc.status}: {exc.message})")
+                break
+            spent += 1
+            summary["traced"] += 1
+            cache_put(cur, key, result)
+
+        audit(cur, "enrichment", key, result, cached=cached is not None)
+
+        owner = (result.get("owner_of_record") or "").strip() if result.get("found") else ""
+        if not owner:
+            summary["skipped"] += len(leads)
+            continue
+
+        touched = 0
+        for lead_id, current_name in leads:
+            if not is_placeholder_name(current_name):
+                summary["skipped"] += 1
+                continue
+            cur.execute(
+                "UPDATE leads SET name = %s WHERE id = %s AND ("
+                "  name IS NULL OR BTRIM(name) = '' "
+                "  OR LOWER(name) LIKE '%%@lead.local' "
+                ") RETURNING id;",
+                (owner, lead_id),
+            )
+            touched += cur.rowcount or 0
+        summary["updated"] += touched
+
+    summary["spent"] = spent
+    return summary

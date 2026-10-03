@@ -25,6 +25,74 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
     });
+    document.querySelectorAll('.draft-btn').forEach(function(btn) {
+        btn.addEventListener('click', async function() {
+            const id = btn.dataset.leadId;
+            btn.disabled = true;
+            btn.textContent = 'Drafting…';
+            try {
+                const res = await fetch('/api/leads/' + id + '/draft-email', { method: 'POST' });
+                const json = await res.json();
+                if (!res.ok) {
+                    btn.textContent = json.detail || 'Could not draft';
+                    btn.disabled = false;
+                    return;
+                }
+                // Reload so the card renders the real staged draft with the
+                // existing review-and-send panel, rather than duplicating it here.
+                window.location.reload();
+            } catch (e) {
+                btn.textContent = 'Network error';
+                btn.disabled = false;
+            }
+        });
+    });
+
+    const enrichBtn = document.getElementById('enrich-btn');
+    if (enrichBtn) {
+        enrichBtn.addEventListener('click', async function() {
+            const out = document.getElementById('enrich-out');
+            enrichBtn.disabled = true;
+            enrichBtn.textContent = 'Looking up…';
+            out.classList.remove('hidden');
+            out.innerHTML = '<p class="text-slate-500">Tracing address-only leads. Cached addresses are free; new ones use the monthly quota.</p>';
+            try {
+                const body = new FormData();
+                body.set('company', 'construction');
+                const res = await fetch('/api/skiptrace/enrich', { method: 'POST', body: body });
+                const json = await res.json();
+                if (!res.ok) {
+                    out.innerHTML = '<p class="text-rose-700 text-xs">' + escapeHtml(json.detail || 'Failed') + '</p>';
+                    enrichBtn.disabled = false;
+                    enrichBtn.textContent = 'Run owner lookup on address-only leads';
+                    return;
+                }
+                const notes = (json.notes || []).map(function(n) {
+                    return '<li>' + escapeHtml(n) + '</li>';
+                }).join('');
+                out.innerHTML = '<div class="text-xs space-y-1">'
+                    + '<p><b>' + json.examined + '</b> address-only lead(s) · '
+                    + '<b>' + json.updated + '</b> name(s) filled in</p>'
+                    + '<p>' + json.spent + ' provider call(s) spent this run · '
+                    + json.cached + ' already cached · '
+                    + json.skipped + ' skipped</p>'
+                    + (notes ? '<ul class="list-disc pl-4 text-amber-700">' + notes + '</ul>' : '')
+                    + '<p class="text-slate-400 pt-1">The free plan allows 50 calls per month, '
+                    + 'shared with instant-quote. Repeat runs are free.</p>'
+                    + '<button type="button" id="enrich-reload" class="mt-2 px-3 py-1.5 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg">Refresh the list</button>'
+                    + '</div>';
+                document.getElementById('enrich-reload').addEventListener('click', function() {
+                    window.location.reload();
+                });
+                enrichBtn.textContent = 'Done';
+            } catch (e) {
+                out.innerHTML = '<p class="text-rose-700 text-xs">Network error.</p>';
+                enrichBtn.disabled = false;
+                enrichBtn.textContent = 'Run owner lookup on address-only leads';
+            }
+        });
+    }
+
     document.querySelectorAll('.skiptrace-btn').forEach(function(btn) {
         btn.addEventListener('click', async function() {
             const id = btn.dataset.permitId;

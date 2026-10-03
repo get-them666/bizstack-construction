@@ -2538,6 +2538,77 @@ async def permit_skiptrace(permit_id: int, request: Request, db=Depends(get_db))
     return JSONResponse(content=result)
 
 
+@app.post("/api/skiptrace/enrich")
+async def skiptrace_enrich(request: Request, company: str = Form("construction"),
+                           db=Depends(get_db)):
+    """Fill in the owner name on every address-only lead, from the cache first.
+
+    Bounded per run because RentCast allows 50 calls per MONTH and that budget is
+    shared with instant-quote. Repeat runs are free: a cached address is a table
+    read, and a cached MISS is cached too, so a known-empty address is never
+    re-spent on.
+    """
+    require_admin(request)
+
+    def run(cur):
+        return skiptrace_service.enrich_address_only_leads(cur, company)
+
+    summary = await asyncio.to_thread(run_with_cursor, db, run)
+    db.commit()
+    return JSONResponse(content=summary)
+
+
+def run_with_cursor(db, fn):
+    """Run fn(cur) on a fresh cursor and return its result.
+
+    The trace blocks on urllib, so it cannot run on the event loop; the cursor
+    is created here because a psycopg connection is not safe to share across
+    threads.
+    """
+    with db.cursor() as cur:
+        return fn(cur)
+
+
+@app.post("/api/leads/{lead_id}/draft-email")
+async def draft_email_route(lead_id: int, request: Request, db=Depends(get_db)):
+    """Stage a ready-to-send draft on a lead, using its traced owner name.
+
+    Staging only -- it does not send. Pressing send is a separate, explicit call
+    to send-once, because a draft that sends itself on generation is one more
+    step from the three-emails-in-thirty-seconds incident in 76d6a01.
+    """
+    require_admin(request)
+    with db.cursor() as cur:
+        cur.execute("SELECT id, name, email, address FROM leads WHERE id = %s;", (lead_id,))
+        lead = cur.fetchone()
+    if not lead:
+        raise HTTPException(status_code=404, detail="No such lead")
+    if not (lead.get("email") or "").strip():
+        raise HTTPException(status_code=400,
+                            detail="This lead has no email address yet. Add one before drafting.")
+
+    owner = (lead.get("name") or "").strip() or "there"
+    first = owner.split()[0] if owner else "there"
+    subject = "Hello from Buildstack Construction"
+    body = (
+        f"Hi {first},\n\n"
+        f"I hope this message finds you well! I'm reaching out from Buildstack "
+        f"Construction, as we noticed your property at {lead.get('address') or ''}. "
+        f"If you're considering any renovations or improvements, we'd love to help "
+        f"you with your project.\n\n"
+        f"Feel free to reply to this email or give us a call at "
+        f"+1 (757) 908-7121 to discuss your ideas!\n\n"
+        f"Best regards,\n"
+        f"Buildstack Construction"
+    )
+    with db.cursor() as cur:
+        cur.execute("UPDATE leads SET draft_reply = %s WHERE id = %s;",
+                    (f"{subject}\n{body}", lead_id))
+        db.commit()
+    return JSONResponse(content={"ok": True, "staged": True, "lead_id": lead_id,
+                                 "subject": subject, "to": lead.get("email")})
+
+
 @app.post("/api/leads/{lead_id}/clear-draft")
 async def clear_draft_route(lead_id: int, request: Request, db=Depends(get_db)):
     """Discard a staged draft without sending it.

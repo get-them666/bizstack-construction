@@ -1,10 +1,23 @@
 {# Contactable lane: leads with a real phone or email. #}
-<form method="POST" action="/api/leads/fire-all-drafts" onsubmit="this.querySelector('button').disabled = true; this.querySelector('button').textContent = 'Firing…';" class="flex items-center gap-2">
+<div class="flex flex-wrap items-start gap-3 mb-4">
+    <form method="POST" action="/api/leads/fire-all-drafts" onsubmit="this.querySelector('button').disabled = true; this.querySelector('button').textContent = 'Firing…';" class="flex items-center gap-2">
                     {% if draft_count %}
                     <span class="text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-2.5 py-1.5 rounded-full">{{ draft_count }} draft{{ 's' if draft_count != 1 }} ready</span>
                     {% endif %}
                     <button type="submit" class="px-4 py-2.5 text-sm font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl transition-colors">Fire all drafts</button>
                 </form>
+
+    {# Runs the owner lookup across every address-only lead and writes the owner
+       name onto the lead card. The assessor record has a name and no email, so
+       this is what turns "Chesapeake" in the name field into a real person. #}
+    <div class="flex-1 min-w-[280px]">
+        <button type="button" id="enrich-btn"
+                class="px-4 py-2.5 text-sm font-bold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 rounded-xl transition-colors">
+            Run owner lookup on address-only leads
+        </button>
+        <div id="enrich-out" class="hidden mt-2 bg-white rounded-xl border border-slate-200 p-3"></div>
+    </div>
+</div>
 
         <!-- Filters -->
         <form method="get" action="/leads?lane=contactable" class="bg-white rounded-3xl border border-slate-200 p-4 mb-6 flex flex-wrap items-center gap-3">
@@ -152,6 +165,26 @@
                                 </form>
                                 <a href="mailto:{{ lead.email }}?subject=Your%20{{ lead.project_type or 'project' }}%20inquiry&body={{ (lead.draft_reply or '').replace(' ', '%20')[:1000] }}" class="px-3 py-2 text-sm font-semibold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 rounded-xl transition-colors">Open in email</a>
                             </div>
+                        </div>
+                        {% else %}
+                        {# No draft yet. Offers to write one from the traced owner name,
+                           then press send. Drafting and sending are separate calls on
+                           purpose: a draft that sends itself on generation is one more
+                           step from the 76d6a01 incident. #}
+                        <div class="mt-4 bg-slate-50 border border-slate-200 rounded-xl p-4">
+                            <p class="text-xs font-bold text-slate-600 uppercase tracking-wider">Reach out</p>
+                            {% if lead.email and lead.email != '' and 'lead.local' not in lead.email %}
+                                <div class="mt-2 flex flex-wrap items-center gap-2">
+                                    <button type="button" class="draft-btn px-3 py-2 text-sm font-semibold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 rounded-xl transition-colors"
+                                            data-lead-id="{{ lead.id }}">Draft an email</button>
+                                    <span class="text-xs text-slate-500">to {{ lead.email }}</span>
+                                </div>
+                            {% else %}
+                                <p class="mt-2 text-sm text-slate-600">
+                                    No email on this lead yet. Add one, or run the owner lookup
+                                    to get a name for the letter.
+                                </p>
+                            {% endif %}
                         </div>
                         {% endif %}
                     </div>
