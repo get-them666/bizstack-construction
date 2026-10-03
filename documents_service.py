@@ -474,7 +474,32 @@ def os_getenv(key, default=""):
 
 
 def smtp_configured(cfg: dict) -> bool:
-    return bool(cfg.get("SMTP_HOST") and cfg.get("SMTP_FROM"))
+    """True when there is enough configuration to attempt a send at all.
+
+    This used to require both SMTP_HOST and SMTP_FROM, which is wrong for this
+    deployment. EMAIL_TRANSPORT=gmail sends through the Gmail API, which
+    authenticates with the stored OAuth token and never touches an SMTP host --
+    so SMTP_HOST is legitimately unset. Requiring it made this guard reject
+    every send with "email not configured" while the working transport sat
+    right behind it.
+
+    That was already diagnosed once, for send_email_message, and worked around
+    by simply not calling this function. The other five call sites kept calling
+    it, so the reply bot, the lead sweep, and manual draft firing were all dead
+    while the Copilot path worked. Fixing it here fixes all of them at once and
+    retires the workaround.
+
+    The only thing genuinely required on any transport is a sending address:
+    without it the message has no From, and _send_via_gmail cannot pick a
+    mailbox to send as.
+    """
+    if not (cfg.get("SMTP_FROM") or "").strip():
+        return False
+    transport = (os_getenv("EMAIL_TRANSPORT", "gmail") or "gmail").strip().lower()
+    if transport != "legacy":
+        # Gmail/API transports carry their own credentials.
+        return True
+    return bool((cfg.get("SMTP_HOST") or "").strip())
 
 def mime_type(filename: str):
     if filename.endswith(".docx"):

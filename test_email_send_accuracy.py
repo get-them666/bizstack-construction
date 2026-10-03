@@ -185,11 +185,27 @@ def test_no_smtp_gate_under_gmail_transport():
     cfg = real_ds.smtp_config_from_env()
     cfg["SMTP_FROM"] = "hello@bizstackperks.com"   # the only mail var actually set
 
-    # This is the guard that produced "SMTP not configured." on every send.
-    check("old smtp_configured() would have refused the send",
+    # The guard that produced "SMTP not configured." on every send, because it
+    # demanded an SMTP_HOST the Gmail transport never uses.
+    check("SMTP_HOST is unset, which is correct for the Gmail transport",
+          not cfg.get("SMTP_HOST"), cfg)
+    check("smtp_configured() now accepts the Gmail transport",
+          real_ds.smtp_configured(cfg), cfg)
+
+    # It must still refuse when there is genuinely nothing to send from --
+    # otherwise this becomes a guard that never fires.
+    no_from = dict(cfg, SMTP_FROM="")
+    check("but a missing sending address is still refused",
+          not real_ds.smtp_configured(no_from), no_from)
+
+    # And the legacy ladder still needs its host.
+    os.environ["EMAIL_TRANSPORT"] = "legacy"
+    check("legacy transport still requires SMTP_HOST",
           not real_ds.smtp_configured(cfg), cfg)
-    check("but SMTP_FROM is set, so the Gmail path is still usable",
-          bool(cfg.get("SMTP_FROM")), cfg)
+    cfg["SMTP_HOST"] = "smtp.example.com"
+    check("legacy transport accepts a host when present",
+          real_ds.smtp_configured(cfg), cfg)
+    os.environ["EMAIL_TRANSPORT"] = "gmail"
 
 
 if __name__ == "__main__":
