@@ -49,7 +49,7 @@ needs paper proof below.
 |---|---|---|
 | 2025 tax return (if any) | ☐ | Show history |
 | Prior 1099 / W-2 (construction, Shipyard) | ☐ | Optional: corroborates 25 yrs experience |
-| EIN letter / business registration | ☐ | |
+| EIN letter / business registration | ✅ | IRS EIN **20-1755044** — assignment letter on file |
 | License & insurance certificates | ☐ | |
 | Photo ID | ☐ | |
 
@@ -94,7 +94,7 @@ Statuses below are SBSD's requirement, **not** a claim about what you have on ha
 ### Entity & tax
 | Item | Status | Notes |
 |---|---|---|
-| **Proof of EIN** (IRS assignment letter) | ☐ | ⭐ **This is the one that unblocks everything** — for a new business it *replaces* the 3-year return history. IRS issues these in minutes by phone. Also needed for the loan |
+| **Proof of EIN** (IRS assignment letter) | ✅ | EIN **20-1755044** — assignment letter on file. For a new business this *replaces* the 3-year return history, so it also satisfies the loan package |
 | Current **business license** | ☐ | Sole prop requirement |
 | **Certificate of Assumed/Fictitious Name** | ☐ | Required to appear in the certified directory under your DBA |
 | LLC: Certificate of Organization, Articles, Operating Agreement | ☐ | Only if the entity is an LLC, not a sole prop |
@@ -119,7 +119,7 @@ Statuses below are SBSD's requirement, **not** a claim about what you have on ha
 > **Class 1 misdemeanor.** Everything checked here has to be true as filed. Don't guess at
 > ownership percentages or receipt figures — have SBDC read the file over first.
 
-**Fastest path from here:** get the **IRS EIN letter** (phone the IRS, minutes) → write the
+**Fastest path from here:** ~~get the IRS EIN letter~~ ✅ done → write the
 **no-employees letter** (five minutes) → confirm the new-business lookback with SBSD at
 (804) 786-6585 → SBDC review → file. Two of those four are same-day and one is a phone
 call.

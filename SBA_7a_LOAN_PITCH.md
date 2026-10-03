@@ -198,9 +198,9 @@ only you can confirm, and the woman-owned/minority-owned designations depend on 
 loan package, so one gathering exercise serves both. This is the pre-stage list — tracked
 in `docs/CHECKLIST.md`:
 
-- **Proof of EIN — IRS letter assigning or confirming your EIN.** ⬅️ For a new business
-  this is what substitutes for three years of tax returns. It is the item that unblocks
-  the whole application, and the IRS issues it in minutes by phone.
+- **Proof of EIN — IRS letter assigning or confirming your EIN.** ✅ **On file.** EIN
+  **20-1755044**. For a new business this is what substitutes for three years of tax
+  returns, so it serves both the loan package and the SBSD file.
 - U.S. citizenship / permanent residency proof for the 51%+ owner: DMV license **plus**
   passport, birth certificate, or green card
 - **Complete** federal business tax return, most recent year, **plus first page of the two
