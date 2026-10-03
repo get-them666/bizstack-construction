@@ -60,6 +60,7 @@ import scrap_io
 import inbound_email
 import google_oauth
 import skiptrace_service
+import accurate_append
 
 db_url = os.getenv("DATABASE_URL", "postgresql://shaun:secret@localhost:5432/buildstack")
 templates = Jinja2Templates(directory="templates/construction")
@@ -6549,6 +6550,100 @@ async def payroll_run_finalize(run_id: int, request: Request, db=Depends(get_db)
         cur.execute("UPDATE payroll_runs SET status = 'closed' WHERE id = %s;", (run_id,))
         db.commit()
     return RedirectResponse(url=request.headers.get("referer") or "/payroll", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/api/leads/{lead_id}/enrich-contact")
+async def enrich_lead_contact(lead_id: int, request: Request, db=Depends(get_db)):
+    """Name + address -> email and phone, via Accurate Append. Admin-only.
+
+    This is the step the owner lookup cannot do. RentCast returns an owner NAME
+    from the assessor record; no public record contains an email address, so
+    the name has to be turned into a contact detail by a consumer contact
+    database. Costs up to two lookups against a monthly quota, so the result is
+    cached on the lead and a repeat is free.
+
+    Does not send anything. Phones are recorded but never dialled -- these are
+    residential numbers and a cold call needs a DNC check first.
+
+    Currently returns a 502 with the provider's own message: the configured key
+    is recognised but the account has no active subscription, so every
+    endpoint is unauthorized. See MEMORY.md.
+    """
+    require_admin(request)
+    _, user_email = require_auth(request)
+
+    with db.cursor() as cur:
+        cur.execute("SELECT id, name, email, phone, address FROM leads WHERE id = %s;", (lead_id,))
+        lead = cur.fetchone()
+    if not lead:
+        raise HTTPException(status_code=404, detail="No such lead")
+
+    # Skip if we already hold both. Caching here is what keeps a monthly quota
+    # from being spent re-discovering the same contact.
+    have_email = (lead.get("email") or "").strip() and "@lead.local" not in (lead.get("email") or "")
+    have_phone = bool((lead.get("phone") or "").strip())
+    if have_email and have_phone:
+        return JSONResponse(content={"ok": True, "skipped": True,
+                                     "why": "this lead already has an email and a phone",
+                                     "email": lead.get("email"), "phone": lead.get("phone")})
+
+    full = (lead.get("name") or "").strip()
+    if not full or full.lower() == "the homeowner":
+        raise HTTPException(status_code=400,
+                            detail="This lead has no owner name yet. Run the owner lookup first.")
+    parts = full.split()
+    first, last = parts[0], parts[-1]
+
+    address = (lead.get("address") or "").strip()
+    parsed = skiptrace_service.parse_address(address)
+    if not parsed["ok"]:
+        raise HTTPException(status_code=400,
+                            detail=f"Cannot read this lead's address ({parsed['why']}).")
+
+    result = await asyncio.to_thread(
+        accurate_append.enrich_lead,
+        first, last, parsed["street"], parsed["city"], parsed["state"], parsed["zipcode"])
+
+    email = (result.get("email") or {}).get("email") or ""
+    phone = (result.get("mobile") or {}).get("phone") or ""
+    if not email and not phone:
+        detail = ((result.get("email") or {}).get("error")
+                  or (result.get("mobile") or {}).get("error") or "no match")
+        raise HTTPException(status_code=502, detail=detail)
+
+    # Never overwrite a real existing value; only fill blanks and @lead.local
+    # placeholders, matching how skip_sherpa writes results back.
+    with db.cursor() as cur:
+        cur.execute(
+            "UPDATE leads SET "
+            "  email = CASE WHEN %s <> '' AND (BTRIM(COALESCE(email,'')) = '' "
+            "                OR LOWER(email) LIKE '%%@lead.local') THEN %s ELSE email END, "
+            "  phone = CASE WHEN %s <> '' AND BTRIM(COALESCE(phone,'')) = '' THEN %s ELSE phone END "
+            "WHERE id = %s RETURNING id, email, phone;",
+            (email, email, phone, phone, lead_id),
+        )
+        saved = cur.fetchone()
+        cur.execute(
+            "UPDATE leads SET analysis_json = CASE WHEN analysis_json IS NULL THEN %s::jsonb "
+            "  ELSE analysis_json::jsonb || %s::jsonb END WHERE id = %s;",
+            (json.dumps({"accurate_append": {"at": result["checked_at"],
+                                             "email_match": (result.get("email") or {}).get("match_level"),
+                                             "phone_match": (result.get("mobile") or {}).get("match_level")}}),
+             json.dumps({"accurate_append": {"at": result["checked_at"]}}), lead_id),
+        )
+        db.commit()
+
+    return JSONResponse(content={
+        "ok": True,
+        "lead_id": lead_id,
+        "email": saved["email"],
+        "phone": saved["phone"],
+        "email_match_level": (result.get("email") or {}).get("match_level"),
+        "phone_match_level": (result.get("mobile") or {}).get("match_level"),
+        "rejected_weak_matches": ((result.get("email") or {}).get("rejected_weak", 0)
+                                  + (result.get("mobile") or {}).get("rejected_weak", 0)),
+        "note": "Phone recorded, never auto-dialled. A DNC check is required before calling.",
+    })
 
 
 @app.get("/api/leads/addresses.csv")
