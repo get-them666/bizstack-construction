@@ -2106,6 +2106,21 @@ async def leads_page(request: Request, status_filter: str = "", q: str = "", lan
     })
 
 
+@app.get("/photo-quote", response_class=HTMLResponse)
+async def photo_quote_page(request: Request):
+    """Photo -> scope -> ballpark. Behind login.
+
+    /api/vision/quote has existed since it was written but nothing in the
+    templates referenced it, so it was reachable only by curl. The endpoint is
+    left public on purpose -- its original design was a public upload, and
+    gating it would remove a capability rather than add one.
+    """
+    is_authed, _ = require_auth(request)
+    if not is_authed:
+        return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
+    return templates.TemplateResponse(request=request, name="photo_quote.html", context={})
+
+
 @app.get("/skiptrace", response_class=HTMLResponse)
 async def skiptrace_page(request: Request):
     """Standalone owner-of-record lookup.

@@ -1,0 +1,224 @@
+{% extends "base.html" %}
+
+{# Photo -> scope -> ballpark.
+
+   Wraps POST /api/vision/quote, which has existed as an API since it was
+   written but had no UI anywhere in the templates -- so it was reachable only by
+   curl. This page is behind login; the endpoint itself is left public, because
+   the original design intent was a public upload and gating it would remove a
+   capability rather than add one.
+
+   Three Vision features are billed per image, so the endpoint caches on the
+   image fingerprint: submitting the same photo twice is free. The page says so
+   rather than leaving people to wonder. #}
+
+{% block content %}
+<section class="max-w-3xl mx-auto px-4 py-10">
+    <h1 class="text-3xl font-extrabold text-slate-900">Photo Quote</h1>
+    <p class="mt-2 text-slate-600">
+        Upload a photo and get a rough scope and a ballpark price, before anyone
+        drives out. Google Vision reads the room and the objects in it; the
+        result is a planning aid, never a bid.
+    </p>
+
+    <form id="vq-form" class="mt-6 bg-white rounded-2xl border border-slate-200 p-5 space-y-4">
+        <div>
+            <label class="block text-xs font-semibold text-slate-600 mb-1">Photo</label>
+            <input type="file" id="vq-photo" accept="image/*" required
+                   class="w-full px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 text-sm">
+            <p class="mt-1 text-xs text-slate-500">Max 12 MB. A clear shot of the room works best.</p>
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+                <label class="block text-xs font-semibold text-slate-600 mb-1">Price as</label>
+                <select id="vq-company"
+                        class="w-full px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 text-sm">
+                    <option value="construction">Construction — project estimate</option>
+                    <option value="broom">Cleaning — labour hours</option>
+                </select>
+            </div>
+            <div>
+                <label class="block text-xs font-semibold text-slate-600 mb-1">
+                    Square footage <span class="font-normal text-slate-400">(construction only, optional)</span>
+                </label>
+                <input type="number" id="vq-sqft" min="0" step="1" placeholder="e.g. 240"
+                       class="w-full px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 text-sm">
+            </div>
+        </div>
+
+        <button type="submit" id="vq-go"
+                class="px-6 py-3 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition-colors">
+            Analyse photo
+        </button>
+    </form>
+
+    <div id="vq-out" class="mt-5"></div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const form = document.getElementById('vq-form');
+    const out = document.getElementById('vq-out');
+    const go = document.getElementById('vq-go');
+
+    function esc(s) {
+        return String(s == null ? '' : s)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+    function money(cents) {
+        return '$' + (Number(cents) / 100).toLocaleString(undefined, { maximumFractionDigits: 0 });
+    }
+
+    function pills(items, cls) {
+        if (!items || !items.length) return '';
+        return '<div class="flex flex-wrap gap-1.5">' + items.map(function(i) {
+            return '<span class="text-[11px] font-semibold px-2 py-0.5 rounded ' + cls + '">'
+                 + esc(typeof i === 'string' ? i : i.label) + '</span>';
+        }).join('') + '</div>';
+    }
+
+    function renderQuote(q) {
+        if (!q || q.available !== true) {
+            return '<div class="rounded-2xl bg-amber-50 border border-amber-200 p-5">'
+                 + '<p class="font-bold text-amber-900">No quote from this photo</p>'
+                 + '<p class="mt-1 text-sm text-amber-800">'
+                 + esc((q && q.why) || 'Nothing priceable was recognised.') + '</p></div>';
+        }
+        let h = '<div class="rounded-2xl bg-white border border-slate-200 overflow-hidden">';
+
+        if (q.estimate) {
+            const e = q.estimate;
+            h += '<div class="px-5 py-4 border-b border-slate-100">';
+            h += '<p class="text-xs font-semibold text-slate-500">' + esc(q.project_type || '') + '</p>';
+            h += '<p class="text-2xl font-extrabold text-slate-900 mt-0.5">'
+               + esc(e.label || 'Estimate') + '</p>';
+            if (e.low_cents != null && e.high_cents != null && e.low_cents !== e.high_cents) {
+                h += '<p class="text-sm font-semibold text-emerald-700 mt-1">'
+                   + money(e.low_cents) + ' – ' + money(e.high_cents) + '</p>';
+            }
+            if (e.assumptions && e.assumptions.length) {
+                h += '<ul class="mt-2 text-xs text-slate-500 list-disc pl-4">'
+                   + e.assumptions.slice(0, 4).map(a => '<li>' + esc(a) + '</li>').join('') + '</ul>';
+            }
+            h += '</div>';
+        } else if (q.hours) {
+            h += '<div class="px-5 py-4 border-b border-slate-100">';
+            h += '<p class="text-xs font-semibold text-slate-500">' + esc(q.room || '') + ' — cleaning</p>';
+            h += '<p class="text-2xl font-extrabold text-slate-900 mt-0.5">'
+               + esc(q.hours.low) + '–' + esc(q.hours.high) + ' hrs</p>';
+            if (q.price) {
+                h += '<p class="text-sm font-semibold text-emerald-700 mt-1">'
+                   + money(q.price.low_cents) + ' – ' + money(q.price.high_cents) + '</p>';
+            } else {
+                h += '<p class="text-xs text-slate-500 mt-1">Hours only — set CLEAN_HOURLY_LOW/HIGH '
+                   + 'in the environment to get a price out of this.</p>';
+            }
+            h += '</div>';
+        }
+
+        const bits = [];
+        if (q.adders && q.adders.length) {
+            bits.push('<p class="text-xs font-bold text-slate-500 uppercase tracking-wide mt-3">Adders</p>');
+            bits.push(pills(q.adders.map(a => a.item + ' +' + a.minutes + 'm'), 'bg-slate-100 text-slate-600'));
+        }
+        if (q.condition_multiplier && q.condition_multiplier !== 1) {
+            bits.push('<p class="text-xs font-bold text-slate-500 uppercase tracking-wide mt-3">Condition</p>');
+            bits.push('<p class="text-sm text-slate-700">×' + esc(q.condition_multiplier)
+                   + ' — heavier than a standard clean</p>');
+        }
+        if (bits.length) h += '<div class="px-5 py-3">' + bits.join('') + '</div>';
+
+        h += '</div>';
+        return h;
+    }
+
+    function render(d) {
+        if (d.detail) {
+            return '<div class="rounded-2xl bg-rose-50 border border-rose-200 p-5 text-rose-700">'
+                 + esc(d.detail) + '</div>';
+        }
+        if (d.available === false && !d.scope) {
+            return '<div class="rounded-2xl bg-amber-50 border border-amber-200 p-5">'
+                 + '<p class="font-bold text-amber-900">Unavailable</p>'
+                 + '<p class="mt-1 text-sm text-amber-800">'
+                 + esc(d.why || 'Photo quoting is not turned on.') + '</p></div>';
+        }
+
+        const s = d.scope || {};
+        let h = '';
+        if (s.room) {
+            const pct = Math.round((s.confidence || 0) * 100);
+            h += '<div class="rounded-2xl bg-white border border-slate-200 p-5 mb-4">';
+            h += '<div class="flex flex-wrap items-center gap-2">';
+            h += '<span class="text-lg font-extrabold text-slate-900">' + esc(s.room.replace('_', ' ')) + '</span>';
+            h += '<span class="text-[11px] font-semibold px-2 py-0.5 rounded '
+               + (pct >= 60 ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700') + '">'
+               + pct + '% confidence</span>';
+            if (d.cached) {
+                h += '<span class="text-[11px] font-semibold px-2 py-0.5 rounded bg-slate-100 text-slate-500">'
+                   + 'cached — not re-analysed</span>';
+            }
+            h += '</div>';
+            if (s.rooms && s.rooms.length > 1) {
+                h += '<p class="mt-3 text-xs font-bold text-slate-500 uppercase tracking-wide">Also considered</p>';
+                h += pills(s.rooms.slice(1, 5).map(r => r.room.replace('_', ' ') + ' ' + Math.round(r.score * 100)),
+                           'bg-slate-100 text-slate-600');
+            }
+            if (s.items && s.items.length) {
+                h += '<p class="mt-3 text-xs font-bold text-slate-500 uppercase tracking-wide">Spotted</p>';
+                h += pills(s.items.slice(0, 12).map(i => i.name), 'bg-slate-100 text-slate-700');
+            }
+            if (s.condition && s.condition.length) {
+                h += '<p class="mt-3 text-xs font-bold text-slate-500 uppercase tracking-wide">Condition cues</p>';
+                h += pills(s.condition.map(c => c.cue), 'bg-amber-100 text-amber-700');
+            }
+            if (s.text) {
+                h += '<p class="mt-3 text-xs text-slate-500"><span class="font-bold uppercase tracking-wide">Text in photo</span> — '
+                   + esc(s.text) + '</p>';
+            }
+            h += '</div>';
+        }
+        h += renderQuote(d.quote);
+        if (d.disclaimer) {
+            h += '<p class="mt-3 text-xs text-slate-400">' + esc(d.disclaimer) + '</p>';
+        }
+        return h;
+    }
+
+    form.addEventListener('submit', async function(e) {
+        e.preventDefault();
+        const file = document.getElementById('vq-photo').files[0];
+        if (!file) return;
+        go.disabled = true;
+        go.textContent = 'Analysing…';
+        out.innerHTML = '<div class="rounded-2xl bg-white border border-slate-200 p-5 text-slate-500">'
+                      + 'Reading the photo…</div>';
+        const body = new FormData();
+        body.set('company', document.getElementById('vq-company').value);
+        const sqft = document.getElementById('vq-sqft').value;
+        if (sqft) body.set('sqft', sqft);
+        body.set('photo', file);
+        try {
+            const res = await fetch('/api/vision/quote', { method: 'POST', body: body });
+            const text = await res.text();
+            let json;
+            try { json = JSON.parse(text); }
+            catch (err) {
+                out.innerHTML = '<div class="rounded-2xl bg-rose-50 border border-rose-200 p-5 text-rose-700">Server error — check the logs.</div>';
+                return;
+            }
+            out.innerHTML = render(json);
+        } catch (err) {
+            out.innerHTML = '<div class="rounded-2xl bg-rose-50 border border-rose-200 p-5 text-rose-700">Network error.</div>';
+        } finally {
+            go.disabled = false;
+            go.textContent = 'Analyse photo';
+        }
+    });
+});
+</script>
+{% endblock %}
