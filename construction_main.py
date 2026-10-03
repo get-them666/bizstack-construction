@@ -2500,6 +2500,57 @@ async def permit_skiptrace(permit_id: int, request: Request, db=Depends(get_db))
     return JSONResponse(content=result)
 
 
+@app.post("/api/leads/{lead_id}/send-once")
+async def send_once_route(lead_id: int, request: Request, subject: str = Form(""),
+                          body: str = Form(""), db=Depends(get_db)):
+    """Send one owner-written email to one lead. Admin-only.
+
+    This is the "send a specific message I typed" capability that did not exist.
+    fire_lead_draft could only send a draft the automated sweep had staged, and
+    nothing could stage one by hand, so a hand-written message had no way out.
+
+    It stages the text into draft_reply and then calls fire_lead_draft rather
+    than sending directly. That is deliberate: every guard lives in
+    fire_lead_draft -- contact_policy_allows (one touch per lead, across
+    channels), _channel_allowed (daily caps), the recipient scrub, and the
+    comms_logs write. Reusing it means this route cannot drift from the policy
+    the rest of the bot obeys, which is exactly how the send path in 76d6a01
+    came to be unguarded in the first place.
+
+    force is NOT passed. A lead that already ignored us, or that has had its
+    one timed follow-up, stays blocked here the same as anywhere else.
+    """
+    require_admin(request)
+    subject = (subject or "").strip()
+    body = (body or "").strip()
+    if not subject or not body:
+        raise HTTPException(status_code=400, detail="subject and body are both required")
+    if len(body) > 15000:
+        raise HTTPException(status_code=400, detail="body is too long")
+
+    with db.cursor() as cur:
+        cur.execute("SELECT id, name, email FROM leads WHERE id = %s;", (lead_id,))
+        lead = cur.fetchone()
+    if not lead:
+        raise HTTPException(status_code=404, detail="No such lead")
+    if not (lead.get("email") or "").strip():
+        raise HTTPException(status_code=400, detail="That lead has no email address")
+
+    # draft_reply is "subject\nbody"; fire_lead_draft splits on the first
+    # newline to recover the two.
+    with db.cursor() as cur:
+        cur.execute("UPDATE leads SET draft_reply = %s WHERE id = %s;", (f"{subject}\n{body}", lead_id))
+        db.commit()
+
+    result = auto_reply.fire_lead_draft(db, "construction", lead_id)
+    return JSONResponse(content={
+        "sent": bool(result.get("sent")),
+        "channel": result.get("channel"),
+        "why": result.get("why", ""),
+        "to": lead.get("email"),
+    })
+
+
 @app.post("/api/leads/{lead_id}/fire-draft")
 async def fire_lead_draft_route(lead_id: int, request: Request, db=Depends(get_db)):
     require_admin(request)
