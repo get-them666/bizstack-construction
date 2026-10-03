@@ -90,6 +90,12 @@ def _clean(value) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()
 
 
+_NAME_SUFFIXES = {
+    "jr", "jr.", "sr", "sr.", "ii", "ii.", "iii", "iii.", "iv", "iv.",
+    "v", "v.", "esq", "esq.", "md", "md.", "phd", "phd.", "dds", "dds.",
+}
+
+
 def format_recipient(name) -> str:
     """'Ada Lovelace' -> 'Ada L.'. No usable name -> 'the homeowner'.
 
@@ -118,7 +124,21 @@ def format_recipient(name) -> str:
     first = parts[0]
     if first.lower() in {"mr.", "mr", "mrs.", "mrs", "ms.", "ms", "miss", "dr.", "dr"}:
         return _clean(name)
-    return f"{first[0].upper()}. {parts[-1]}"
+
+    # A generational suffix is not a surname. Taking the last word blindly made
+    # "Leonard G Barlow Jr" address to "L. Jr" and greet "Dear L. Jr" -- on the
+    # envelope, on a letter to a real person. Strip trailing suffixes first, then
+    # keep the last real word as the surname.
+    tail = list(parts)
+    suffixes = []
+    while len(tail) > 2 and tail[-1].lower().rstrip(".") in {s.rstrip(".") for s in _NAME_SUFFIXES}:
+        suffixes.insert(0, tail.pop())
+    # With the suffix gone, a single leftover token is a first name on its own:
+    # "Mary Jane" -> "M. Jane", not "M.".
+    if len(tail) < 2:
+        tail = parts[:2] if len(parts) >= 2 else parts
+    rendered = f"{tail[0][0].upper()}. {tail[-1]}"
+    return f"{rendered} {' '.join(suffixes)}".strip() if suffixes else rendered
 
 
 def address_lines(address) -> list:
@@ -296,6 +316,58 @@ def fetch_leads(company: str, only_ids=None) -> list:
     return leads
 
 
+def apply_skip_traced_names(leads: list) -> int:
+    """Give each letter a real owner's name, from the cached skip-trace cache.
+
+    The permit feeds publish no applicant, so `leads.name` holds a CITY and every
+    letter reads "Dear the homeowner." skiptrace_cache already holds the owner of
+    record for addresses that have been looked up, and it is free to read.
+
+    Reads only the cache and only for leads whose current name is not already a
+    person, so it can never overwrite a name Skip Sherpa already resolved. It
+    makes no provider call: anything uncached stays "the homeowner" until
+    someone looks it up. Returns how many leads gained a name.
+
+    The name is not written back to `leads.name`. It is used for this batch only,
+    because a skip-traced owner is an inference from an assessor record rather
+    than a contact the business has, and overwriting a placeholder with it would
+    make it indistinguishable from a verified one everywhere else in the app.
+    """
+    import psycopg
+    from psycopg.rows import dict_row
+    import skiptrace_service as sts
+
+    named = 0
+    with psycopg.connect(os.getenv("DATABASE_URL", ""), row_factory=dict_row) as db:
+        for lead in leads:
+            current = _clean(lead.get("name"))
+            # Leave an existing real name alone: a person name is a better answer
+            # than anything the cache holds.
+            if current and current.lower() not in _PLACE_NAME_RECEIPIENTS:
+                continue
+            address = _clean(lead.get("address"))
+            if not address:
+                continue
+            parsed = sts.parse_address(address)
+            if not parsed["ok"]:
+                continue
+            key = sts.normalize_address(parsed["street"], parsed["city"],
+                                        parsed["state"], parsed["zipcode"])
+            with db.cursor() as cur:
+                cached = sts.cache_get(cur, key)
+            if not cached or not cached.get("found"):
+                continue
+            owner = _clean(cached.get("owner_of_record"))
+            # Reuse the letter's own formatter as the validity test, so the name
+            # put on the envelope is exactly the name format_recipient accepts.
+            rendered = format_recipient(owner)
+            if rendered == "the homeowner":
+                continue
+            lead["name"] = owner
+            named += 1
+    return named
+
+
 def safe_name(lead: dict) -> str:
     """Filesystem-safe stem. Separators are collapsed and trimmed, not just
     substituted, so a trailing ')' or '/' cannot leave a name ending in '-'."""
@@ -310,6 +382,9 @@ def main() -> int:
     ap.add_argument("--list", action="store_true", help="show eligible leads, write nothing")
     ap.add_argument("--out", default="", help="output directory for PDFs + manifest.csv")
     ap.add_argument("--id", action="append", help="restrict to specific lead id (repeatable)")
+    ap.add_argument("--trace-names", action="store_true",
+                    help="use cached skip-trace owner names so letters read 'Dear L. Barlow' "
+                         "instead of 'Dear the homeowner' (reads the cache only, spends nothing)")
     args = ap.parse_args()
 
     leads = fetch_leads(args.company, args.id)
@@ -317,6 +392,17 @@ def main() -> int:
     if not leads:
         print(f"No address-only leads for company '{args.company}'.")
         return 0
+
+    if args.trace_names:
+        try:
+            named = apply_skip_traced_names(leads)
+            print(f"skip-trace names applied to {named}/{len(leads)} letter(s) "
+                  f"(cached lookups only -- no address was looked up now)")
+        except Exception as exc:
+            # Never lose a batch over a cosmetic improvement: "the homeowner" is
+            # what these letters already say.
+            print(f"  skip-trace names unavailable ({type(exc).__name__}: {exc}); "
+                  f"letters will read 'Dear the homeowner'", file=sys.stderr)
 
     if args.list or not args.out:
         print(f"{len(leads)} address-only lead(s) eligible for a letter:\n")
