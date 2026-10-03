@@ -6577,8 +6577,11 @@ async def leads_addresses_csv(request: Request, company: str = "construction",
     require_admin(request)
     co = company if company in ("construction", "broom") else "construction"
     with db.cursor() as cur:
+        # No city/state/zip columns on `leads` -- the whole postal address lives
+        # in `address` as one string. (job_leads has city/state; leads does
+        # not.) Selecting them was a 500 on every request.
         cur.execute(
-            "SELECT id, name, address, city, state, zip, email, phone, status, source, "
+            "SELECT id, name, address, email, phone, status, source, "
             "       project_type, created_at "
             "FROM leads "
             "WHERE company = %(company)s AND address IS NOT NULL AND BTRIM(address) <> '' "
@@ -6598,9 +6601,9 @@ async def leads_addresses_csv(request: Request, company: str = "construction",
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow([
-        "lead_id", "name", "address", "city", "state", "zip",
-        "email", "phone", "has_contact", "status", "source",
-        "project_type", "first_row_for_address", "distinct_addresses", "created_at",
+        "lead_id", "name", "address", "email", "phone", "has_contact",
+        "status", "source", "project_type", "first_row_for_address",
+        "distinct_addresses", "created_at",
     ])
 
     def addr_key(value):
@@ -6627,9 +6630,6 @@ async def leads_addresses_csv(request: Request, company: str = "construction",
             r.get("id"),
             (r.get("name") or "").strip(),
             (r.get("address") or "").strip(),
-            (r.get("city") or "").strip(),
-            (r.get("state") or "").strip(),
-            (r.get("zip") or "").strip(),
             (r.get("email") or "").strip(),
             (r.get("phone") or "").strip(),
             "yes" if has_contact(r) else "no",
