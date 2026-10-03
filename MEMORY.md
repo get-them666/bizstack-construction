@@ -91,13 +91,42 @@ were silently always `[]` even on success.
 repo venv, so this path is only exercisable in production; `test_web_search_tool.py`
 injects a fake client instead.
 
+## Skip trace is live on the site, and it is a deliberate exception
+
+`skiptrace_service.py` + `POST /api/skiptrace` (admin-only) resolve a permit
+address to an owner of record via RentCast. This **contradicts** the
+business-contacts-only decision above, and the owner chose it knowingly on
+2026-10-03. The reason it is visible rather than buried: every lookup writes to
+`skiptrace_audit` with the requesting user, and results carry `is_residential`,
+so the exception is legible in the data. To reverse it, filter on that flag —
+nothing else needs to change.
+
+Two things make it survivable. **RentCast's free plan is 50 calls per MONTH**,
+so lookups are cached on the normalized address forever, misses included; a
+repeat lookup is a table read. And the endpoint is POST, so homeowner PII never
+lands in access logs or a Referer header.
+
+`RENTCAST_API_KEY` must be set in the Railway environment. The local tool at
+`~/skipTraced/main.py` has the key **hardcoded in source** at `main.py:99` —
+that is the leak to fix if this repo or that file is ever shared.
+
+### Why 400 and 404 are answers, not errors
+
+RentCast returns 404 for "address not in my database" and 400 for "cannot parse
+this address". For a tier-1 provider that is most of Virginia. The original
+local tool raised a 502 on any non-200, which aborted the whole waterfall — so
+the addresses that most needed a fallback were exactly the ones that threw.
+That was the reported "works sometimes, otherwise errors". Any new provider
+layer must return `NOT_FOUND` for both.
+
 ## Open threads
 
 - `ATTIC_API_KEY` / `SERVICEKANI_API_KEY` / `REGRID_API_KEY` / `BATCHLEADS_API_KEY`
   are all unset, and `lead_research.py` in the **hosts** repo is the thing to
   point a key at — not the PDL path in that same repo. It runs live and returns
   `0 enriched, 10 unresolved` on every pass purely because skip-trace is inert.
-  It is the only code that produces a homeowner name/phone.
+  It is the only code that produces a homeowner name/phone. `RENTCAST_API_KEY`
+  is now in use by `skiptrace_service.py` — see above for the one line to set.
 - SAM.gov is off (`LEAD_SOURCES_SAM_GOV=0`) and the operator does not want it.
   The federal block in `blocked_reason` is still armed and deliberate.
 - `mail_letters.py` is offline by design: it never writes `comms_logs`. Marking

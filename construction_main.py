@@ -59,6 +59,7 @@ import lead_sources
 import scrap_io
 import inbound_email
 import google_oauth
+import skiptrace_service
 
 db_url = os.getenv("DATABASE_URL", "postgresql://shaun:secret@localhost:5432/buildstack")
 templates = Jinja2Templates(directory="templates/construction")
@@ -2358,6 +2359,56 @@ async def pipeline_move(
         raise HTTPException(status_code=400, detail="Unknown stream")
     db.commit()
     return JSONResponse(content={"ok": True})
+
+
+@app.post("/api/skiptrace")
+async def api_skiptrace(request: Request, street: str = Form(""), city: str = Form(""),
+                       state: str = Form(""), zip_code: str = Form(""),
+                       db=Depends(get_db)):
+    """Look up the owner of record for an address. Admin-only, cache-first.
+
+    Cache-first is not an optimisation here, it is the whole design: RentCast's
+    free plan allows 50 calls per MONTH, so every repeat lookup -- including a
+    repeat miss -- has to come out of the database rather than the provider.
+
+    POST rather than GET so the address never lands in access logs, browser
+    history, or a Referer header. It is homeowner PII either way.
+    """
+    require_admin(request)
+    _, user_email = require_auth(request)
+
+    # trace_address blocks on urllib for up to 20s. In an async route that stalls
+    # the whole event loop, so it goes to a worker thread. The DB work stays on
+    # this thread: psycopg connections are not safe to share across threads.
+    key = skiptrace_service.normalize_address(street, city, state, zip_code)
+    if not key:
+        raise HTTPException(status_code=400, detail="street and city are required")
+
+    with db.cursor() as cur:
+        skiptrace_service.ensure_schema(cur)
+
+    cached = None
+    with db.cursor() as cur:
+        cached = skiptrace_service.cache_get(cur, key)
+    if cached is not None:
+        cached["found"] = bool(cached.get("found"))
+        with db.cursor() as cur:
+            skiptrace_service.audit(cur, user_email, key, cached, cached=True)
+        db.commit()
+        return JSONResponse(content=cached)
+
+    try:
+        result = await asyncio.to_thread(
+            skiptrace_service.trace_address, street, city, state, zip_code)
+    except skiptrace_service.ProviderError as exc:
+        db.rollback()
+        return JSONResponse(status_code=exc.status, content={"detail": exc.message})
+
+    with db.cursor() as cur:
+        skiptrace_service.cache_put(cur, key, result)
+        skiptrace_service.audit(cur, user_email, key, result, cached=False)
+    db.commit()
+    return JSONResponse(content=result)
 
 
 @app.post("/api/leads/{lead_id}/notes")

@@ -393,6 +393,119 @@ def trace_address(addr: dict) -> dict:
     }
 
 
+# --- RentCast prefilter --------------------------------------------------------
+# Why this exists: Skip Sherpa bills a credit for EVERY address traced, including
+# the ones that come back with no owner at all. RentCast answers the same
+# question -- does an owner of record exist here? -- for free, from the same
+# assessor record, and skiptrace_service caches every answer. So the addresses
+# that would burn a Skip Sherpa credit to return nothing can be identified
+# first, for nothing.
+#
+# This is not a replacement. RentCast returns an owner NAME and no phone or
+# email, and name-only is precisely what Skip Sherpa's 'owner-contact-any'
+# success criteria refuses to bill for. RentCast screens; Skip Sherpa delivers
+# the contact. Run order is RentCast, then Skip Sherpa on what survives.
+#
+# Disabled by default. It spends the shared RentCast quota, and that quota is
+# 50/month also used by instant-quote, so it is opt-in and separately bounded.
+PREFILTER_DEFAULT_CEILING = 20  # well under RentCast's 50/month
+
+
+def rentcast_prefilter(entries: list, db_url: str = "") -> tuple:
+    """Drop addresses RentCast says have no owner, so no credit is spent on them.
+
+    Returns (kept_entries, notes). `notes` is a list of human-readable lines for
+    the run report; it is the audit trail for what was dropped and why.
+
+    Fails soft and entirely: any problem here leaves the plan untouched and
+    reports why, because a broken prefilter must never silently delete real work
+    from the Skip Sherpa plan.
+    """
+    if not (os.getenv("RENTCAST_API_KEY") or "").strip():
+        return entries, ["prefilter: RENTCAST_API_KEY not set, plan unchanged"]
+
+    # Both imports are inside the guard. psycopg is optional in a bare checkout,
+    # and an ImportError escaping here would abort the run and spend nothing --
+    # worse than the outcome this function exists to produce.
+    try:
+        import psycopg
+        from psycopg.rows import dict_row
+        import skiptrace_service as sts
+    except ImportError as exc:
+        return entries, [f"prefilter unavailable ({exc}); plan unchanged"]
+
+    # The shared RentCast ceiling. Cached answers do not count against it --
+    # they cost nothing -- so this is a cap on provider calls, not on addresses.
+    ceiling = prefilter_ceiling()
+    spent, kept, notes = 0, [], []
+
+    try:
+        db = psycopg.connect(db_url or os.getenv("DATABASE_URL", ""), row_factory=dict_row)
+    except Exception as exc:
+        return entries, [f"prefilter: no database for cache ({type(exc).__name__}); plan unchanged"]
+
+    try:
+        with db.cursor() as cur:
+            sts.ensure_schema(cur)
+
+        for entry in entries:
+            to = entry["to"]
+            key = sts.normalize_address(to["street"], to["city"], to["state"], to["zipcode"])
+
+            cached = None
+            with db.cursor() as cur:
+                cached = sts.cache_get(cur, key)
+
+            if cached is None:
+                if spent >= ceiling:
+                    notes.append(f"prefilter: hit the {ceiling}-call RentCast ceiling; "
+                                 f"the rest go to Skip Sherpa unverified")
+                    kept.append(entry)
+                    continue
+                try:
+                    result = sts.trace_address(to["street"], to["city"], to["state"], to["zipcode"])
+                except sts.ProviderError as exc:
+                    # A quota or outage must not shrink the plan. Keep it.
+                    notes.append(f"prefilter: RentCast {exc.status} -- plan unchanged from here")
+                    kept.append(entry)
+                    continue
+                spent += 1
+                with db.cursor() as cur:
+                    sts.cache_put(cur, key, result)
+                    sts.audit(cur, "skip_sherpa_prefilter", key, result, cached=False)
+            else:
+                result = cached
+
+            if not result.get("found"):
+                notes.append(f"  dropped (no owner of record): {to['street']}, {to['city']} "
+                             f"-- saves 1 Skip Sherpa credit")
+                continue
+
+            entry["prefiltered_owner"] = result.get("owner_of_record") or ""
+            entry["prefiltered_residential"] = bool(result.get("is_residential"))
+            kept.append(entry)
+
+        db.commit()
+    except Exception as exc:
+        return entries, [f"prefilter failed ({type(exc).__name__}: {exc}); plan unchanged"]
+    finally:
+        try:
+            db.close()
+        except Exception:
+            pass
+
+    notes.insert(0, f"prefilter: {spent} RentCast call(s) (ceiling {ceiling}), "
+                    f"{len(entries) - len(kept)} address(es) dropped for free")
+    return kept, notes
+
+
+def prefilter_ceiling() -> int:
+    try:
+        return max(0, int(os.getenv("RENTCAST_PREFILTER_MAX_CALLS", PREFILTER_DEFAULT_CEILING) or 0))
+    except (TypeError, ValueError):
+        return PREFILTER_DEFAULT_CEILING
+
+
 ELIGIBLE_SQL = """
     SELECT id, name, address, email, phone, source, analysis_json
     FROM leads
@@ -543,6 +656,9 @@ def main() -> int:
     ap.add_argument("--out", default="", help="also write results to this JSON file")
     ap.add_argument("--import", dest="import_path", default="",
                     help="load already-paid results from this JSON file; spends no credits")
+    ap.add_argument("--prefilter", action="store_true",
+                    help="screen addresses with RentCast first, so Skip Sherpa credits "
+                         "are not spent on addresses with no owner of record")
     args = ap.parse_args()
 
     if args.import_path:
@@ -581,6 +697,16 @@ def main() -> int:
         print("\nNothing traced. Re-run with --limit N to spend N credits.")
         return 0
 
+    # Prefilter before the budget slice, not after: screening then truncating
+    # would waste the RentCast calls on addresses the limit was going to drop.
+    # It runs after the --list early return above, because --list must spend
+    # nothing -- not even free RentCast quota.
+    if args.prefilter:
+        print(f"\nprefiltering {len(plan)} address(es) with RentCast (free, cached)...")
+        plan, notes = rentcast_prefilter(plan)
+        for line in notes:
+            print(f"  {line}")
+
     target = plan[:budget]
     print(f"\ntracing {len(target)} address(es), {len(target)} credit(s)...")
     results = []
@@ -590,8 +716,12 @@ def main() -> int:
         res["leads"] = e["leads"]
         results.append(res)
         if res.get("ok"):
+            # Where the prefilter already found the name, show it when Skip
+            # Sherpa's success criteria withheld one -- a name-only match is
+            # not billed, so the answer would otherwise look like nothing.
+            owner = res.get("owner") or e.get("prefiltered_owner") or "(no name)"
             print(f"  [{i}/{len(target)}] {e['to']['street']:<28} "
-                  f"{(res.get('owner') or '(no name)'):<24} "
+                  f"{owner:<24} "
                   f"{(res.get('phone') or '(no phone)'):<16} {res.get('email') or ''}")
         else:
             print(f"  [{i}/{len(target)}] {e['to']['street']:<28} FAILED: {res.get('error')}")
