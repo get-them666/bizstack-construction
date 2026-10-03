@@ -301,9 +301,16 @@ You've told me the real facts: startup, nothing cleared on the books, FICO in th
 > - Marketing & lead generation (both service lines, AI assistant, instant-quote ads): $12,000
 >
 > **Ability to repay.** $50,000 over 6 years = ~$930/month. Projections show $300,000 in
-> year-one revenue at ~35% gross margin across fixed-price construction and pre-paid
-> cleaning fees — debt service coverage of ~3x, far above the 1.10 requirement, inside
-> year one. Personal guaranty available; no liens or judgments.
+> year-one revenue, modelled at a **55% gross margin** across fixed-price construction and
+> pre-paid cleaning fees — debt service coverage of **1.34x**, above the 1.10 requirement,
+> inside year one. Personal guaranty available; no liens or judgments.
+>
+> **The 55% is deliberately below what the business has demonstrated.** Two completed 2026
+> jobs, both self-performed at fixed price, returned **75.7%** ($24,700 revenue / $6,000
+> materials — Old Ironsides full build) and **79.2%** ($7,200 / $1,500 — Sunnywood flood
+> renovation), a weighted **76.5%**. Broom Service turnover cleaning adds roughly 75% on
+> supplies cost alone. The model underwrites ~21 points under the demonstrated figure so it
+> survives review rather than depending on a best case.
 >
 > **Requested.** $50,000 SBA Microloan through [Lender Name], 6-year term. Full package
 > attached: business plan, 12-month projections, licenses, insurance, personal financial
