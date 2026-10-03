@@ -6609,7 +6609,13 @@ async def enrich_lead_contact(lead_id: int, request: Request, db=Depends(get_db)
     if not email and not phone:
         detail = ((result.get("email") or {}).get("error")
                   or (result.get("mobile") or {}).get("error") or "no match")
-        raise HTTPException(status_code=502, detail=detail)
+        # 424, not 502. Cloudflare substitutes its own plain-text error page for
+        # a 502 and discards the response body, which threw away the provider's
+        # actual explanation -- "no active subscription" is the whole reason this
+        # is blocked, and a bare "error code: 502" is useless to whoever needs to
+        # fix it. Failed Dependency is also the semantically correct code for "an
+        # upstream refused us".
+        raise HTTPException(status_code=424, detail=detail)
 
     # Never overwrite a real existing value; only fill blanks and @lead.local
     # placeholders, matching how skip_sherpa writes results back.
