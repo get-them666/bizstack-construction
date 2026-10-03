@@ -2096,6 +2096,19 @@ async def leads_page(request: Request, status_filter: str = "", q: str = "", lan
     })
 
 
+@app.get("/skiptrace", response_class=HTMLResponse)
+async def skiptrace_page(request: Request):
+    """Standalone owner-of-record lookup.
+
+    The per-permit button on each card does the same thing, but it sits at the
+    bottom of a collapsed card and was hard to find. This is one form, one URL.
+    """
+    is_authed, _ = require_auth(request)
+    if not is_authed:
+        return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
+    return templates.TemplateResponse(request=request, name="skiptrace.html", context={})
+
+
 @app.get("/inventory", response_class=HTMLResponse)
 async def inventory_page(request: Request, company: str = "construction", db=Depends(get_db)):
     is_authed, user_email = require_auth(request)
@@ -2500,6 +2513,25 @@ async def permit_skiptrace(permit_id: int, request: Request, db=Depends(get_db))
     return JSONResponse(content=result)
 
 
+@app.post("/api/leads/{lead_id}/clear-draft")
+async def clear_draft_route(lead_id: int, request: Request, db=Depends(get_db)):
+    """Discard a staged draft without sending it.
+
+    send-once stages the text into draft_reply before firing. If the send is
+    blocked -- no transport, cap reached, lead already contacted -- the draft
+    stays behind, and fire-all-drafts would later try to send it. That is how a
+    half-finished send turns into an unexpected one. This is the manual undo.
+    """
+    require_admin(request)
+    with db.cursor() as cur:
+        cur.execute("UPDATE leads SET draft_reply = NULL WHERE id = %s RETURNING id;", (lead_id,))
+        row = cur.fetchone()
+        db.commit()
+    if not row:
+        raise HTTPException(status_code=404, detail="No such lead")
+    return JSONResponse(content={"ok": True, "cleared": True, "lead_id": lead_id})
+
+
 @app.post("/api/leads/{lead_id}/send-once")
 async def send_once_route(lead_id: int, request: Request, subject: str = Form(""),
                           body: str = Form(""), db=Depends(get_db)):
@@ -2543,11 +2575,25 @@ async def send_once_route(lead_id: int, request: Request, subject: str = Form(""
         db.commit()
 
     result = auto_reply.fire_lead_draft(db, "construction", lead_id)
+
+    # fire_lead_draft only clears draft_reply on a real send. If it was blocked
+    # -- no transport, cap reached, lead already contacted -- the text is left
+    # sitting on the lead, and fire-all-drafts would later send it as if the
+    # owner had staged it. Clear it here so a blocked send leaves no trace.
+    if not result.get("sent"):
+        try:
+            with db.cursor() as cur:
+                cur.execute("UPDATE leads SET draft_reply = NULL WHERE id = %s;", (lead_id,))
+                db.commit()
+        except Exception as exc:
+            print(f"[send-once] could not clear staged draft on lead {lead_id}: {exc}", flush=True)
+
     return JSONResponse(content={
         "sent": bool(result.get("sent")),
         "channel": result.get("channel"),
         "why": result.get("why", ""),
         "to": lead.get("email"),
+        "draft_cleared": not result.get("sent"),
     })
 
 

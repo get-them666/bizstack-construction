@@ -1,0 +1,155 @@
+{% extends "base.html" %}
+
+{# Owner of record lookup.
+
+   A standalone page rather than only the per-permit button, because that
+   button sits at the bottom of a collapsed card and was genuinely hard to
+   find. This is the direct way in: one form, result underneath.
+
+   Reads the public assessor record. It tells you who owns a house, not that
+   anyone has been contacted -- a phone number still needs a DNC check. #}
+
+{% block content %}
+<section class="max-w-3xl mx-auto px-4 py-10">
+    <h1 class="text-3xl font-extrabold text-slate-900">Owner Lookup</h1>
+    <p class="mt-2 text-slate-600">
+        Look up the owner of record for an address from the public assessor record.
+        This is the same data behind the "Who owns this property?" button on each permit,
+        and it costs nothing on an address you have checked before.
+    </p>
+
+    <form id="st-form" class="mt-6 bg-white rounded-2xl border border-slate-200 p-5 grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div class="sm:col-span-2">
+            <label class="block text-xs font-semibold text-slate-600 mb-1">Street address</label>
+            <input type="text" id="st-street" value="8494 Lynn River Road" required
+                   class="w-full px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-400">
+        </div>
+        <div>
+            <label class="block text-xs font-semibold text-slate-600 mb-1">City</label>
+            <input type="text" id="st-city" value="Norfolk" required
+                   class="w-full px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-400">
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+            <div>
+                <label class="block text-xs font-semibold text-slate-600 mb-1">State</label>
+                <input type="text" id="st-state" value="VA" maxlength="2" required
+                       class="w-full px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-400">
+            </div>
+            <div>
+                <label class="block text-xs font-semibold text-slate-600 mb-1">ZIP <span class="font-normal text-slate-400">(optional)</span></label>
+                <input type="text" id="st-zip"
+                       class="w-full px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-400">
+            </div>
+        </div>
+        <div class="sm:col-span-2">
+            <button type="submit" id="st-go"
+                    class="px-6 py-3 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition-colors">
+                Look up owner
+            </button>
+            <p class="mt-2 text-xs text-slate-500">
+                About 40% of permit records have no ZIP. Leave it blank — the lookup
+                still works, and the result is flagged as a city-level match.
+            </p>
+        </div>
+    </form>
+
+    <div id="st-out" class="mt-5"></div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const form = document.getElementById('st-form');
+    const out = document.getElementById('st-out');
+    const go = document.getElementById('st-go');
+
+    function esc(s) {
+        // Owner names come from a third-party record and are influenceable.
+        return String(s == null ? '' : s)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+    function money(v) { return '$' + Number(v).toLocaleString(); }
+
+    function render(d) {
+        if (d.detail) {
+            return '<div class="rounded-2xl bg-amber-50 border border-amber-200 p-5 text-amber-800">' + esc(d.detail) + '</div>';
+        }
+        if (!d.found) {
+            return '<div class="rounded-2xl bg-white border border-slate-200 p-5">'
+                 + '<p class="font-bold text-slate-900">No owner of record found</p>'
+                 + '<p class="mt-1 text-sm text-slate-600">Nothing in the assessor data for this address. '
+                 + 'That is common outside the cities the provider covers, and it is not an error — '
+                 + 'the county assessor directly is the fallback.</p></div>';
+        }
+        const p = d.property || {};
+        const rows = [
+            ['Owner of record', esc(d.owner_of_record)],
+            ['Registered agent', d.registered_agent ? esc(d.registered_agent) : null],
+            ['Assessed value', p.assessed_value != null ? money(p.assessed_value) : null],
+            ['Year built', p.year_built ? esc(p.year_built) : null],
+            ['Size', p.square_footage ? Number(p.square_footage).toLocaleString() + ' sqft' : null],
+            ['Property type', p.property_type ? esc(p.property_type) : null],
+            ['Last sale', p.last_sale_date
+                ? esc(String(p.last_sale_date).slice(0, 10)) +
+                  (p.last_sale_price ? ' · ' + money(p.last_sale_price) : '')
+                : null],
+            ['Parcel', p.parcel ? esc(p.parcel) : null],
+            ['County', p.county ? esc(p.county) : null],
+        ].filter(r => r[1]);
+
+        let h = '<div class="rounded-2xl bg-white border border-slate-200 overflow-hidden">';
+        h += '<div class="px-5 py-4 border-b border-slate-100 flex flex-wrap items-center gap-2">';
+        h += '<span class="text-lg font-extrabold text-slate-900">' + esc(d.owner_of_record) + '</span>';
+        h += d.owner_is_entity
+            ? '<span class="text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded bg-violet-100 text-violet-700">Business</span>'
+            : '<span class="text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded bg-sky-100 text-sky-700" title="Individual homeowner">Homeowner</span>';
+        if (d._cached) h += '<span class="text-[10px] font-semibold px-2 py-0.5 rounded bg-slate-100 text-slate-500">cached — no lookup spent</span>';
+        h += '</div>';
+        h += '<dl class="px-5 py-4 grid grid-cols-2 md:grid-cols-3 gap-4 text-sm">';
+        rows.forEach(r => {
+            h += '<div><dt class="text-xs text-slate-500">' + esc(r[0]) + '</dt>'
+               + '<dd class="font-semibold text-slate-800">' + r[1] + '</dd></div>';
+        });
+        h += '</dl>';
+        if (d.no_zip) {
+            h += '<p class="mx-5 mb-4 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">'
+               + 'No ZIP was given, so this is a city-level match — confirm the street before mailing or calling.</p>';
+        }
+        h += '<p class="px-5 pb-4 text-xs text-slate-400">Public assessor record. This identifies who owns the house; '
+           + 'it is not contact. A phone number still needs a DNC check before you dial.</p>';
+        h += '</div>';
+        return h;
+    }
+
+    form.addEventListener('submit', async function(e) {
+        e.preventDefault();
+        go.disabled = true;
+        go.textContent = 'Looking up…';
+        out.innerHTML = '';
+        const body = new FormData();
+        body.set('street', document.getElementById('st-street').value);
+        body.set('city', document.getElementById('st-city').value);
+        body.set('state', document.getElementById('st-state').value);
+        body.set('zip_code', document.getElementById('st-zip').value);
+        try {
+            const res = await fetch('/api/skiptrace', { method: 'POST', body: body });
+            const text = await res.text();
+            let json;
+            try { json = JSON.parse(text); }
+            catch (err) {
+                out.innerHTML = '<div class="rounded-2xl bg-rose-50 border border-rose-200 p-5 text-rose-700">Server error — check the logs.</div>';
+                return;
+            }
+            out.innerHTML = render(json);
+        } catch (err) {
+            out.innerHTML = '<div class="rounded-2xl bg-rose-50 border border-rose-200 p-5 text-rose-700">Network error.</div>';
+        } finally {
+            go.disabled = false;
+            go.textContent = 'Look up owner';
+        }
+    });
+});
+</script>
+{% endblock %}
