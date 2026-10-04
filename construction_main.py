@@ -5015,8 +5015,8 @@ def ingest_permits(conn, permits):
                 "contractor_name": p["contractor_name"], "value": est_val, "source": "permits",
             })
             cur.execute(
-                "INSERT INTO leads (name, phone, email, listing_url, status, source, referral_code, campaign, analysis_json, company) "
-                "VALUES (%s, %s, %s, %s, 'new', %s, %s, 'permit-radar', %s, 'construction') RETURNING id;",
+                "INSERT INTO leads (name, phone, email, address, listing_url, status, source, referral_code, campaign, analysis_json, company) "
+                "VALUES (%s, %s, %s, %s, %s, 'new', %s, %s, 'permit-radar', %s, 'construction') RETURNING id;",
                 (
                     f"Permit · {p['property_address'] or p['city'] or 'Hampton Roads'}",
                     # leads.phone is NOT NULL, but no permit source publishes a
@@ -5024,6 +5024,11 @@ def ingest_permits(conn, permits):
                     # worked as canvass/direct-mail targets, not call targets.
                     p.get("phone") or "",
                     f"con-permit-{digest[:15]}@lead.local",
+                    # Was NULL on all 367 rows before: the address was written only
+                    # into analysis_json, so mail_letters.py (which reads the
+                    # address column) could never see these leads. 337 doors
+                    # were invisible to the mail pool for this reason alone.
+                    (p["property_address"] or "").strip(),
                     listing,
                     "permit_finder",
                     p["permit_number"],
