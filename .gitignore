@@ -22,3 +22,6 @@ SESSION_NOTES.md
 
 # generated eVA spend report (regenerate with: python eva_intel.py)
 eva_intel.json
+
+# generated letter batch: real customer addresses + names, never commit these
+outbox/
