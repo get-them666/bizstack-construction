@@ -189,20 +189,6 @@ async def lifecycle(app: FastAPI):
                 cur.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS stripe_session_id VARCHAR(255);")
                 cur.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS notes TEXT;")
                 cur.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS draft_reply TEXT;")
-                # Attribute each outbound touch to the lead it was made for, not
-                # just the address it was sent to. Without this the contact policy
-                # can only count per (channel, recipient), so a lead mailed a
-                # letter on channel 'mail' starts that channel's counter at zero
-                # and could be mailed twice AND emailed twice - four contacts
-                # against a once-then-5-days rule. Nullable on purpose: historical
-                # rows stay NULL and the policy falls back to recipient counting
-                # for them, so this backfills forward instead of resetting.
-                cur.execute("ALTER TABLE comms_logs ADD COLUMN IF NOT EXISTS lead_id INTEGER;")
-                cur.execute("""
-                    CREATE INDEX IF NOT EXISTS idx_comms_logs_lead
-                    ON comms_logs (lead_id, direction, created_at)
-                    WHERE lead_id IS NOT NULL;
-                """)
                 cur.execute("""
                 CREATE TABLE IF NOT EXISTS payments (
                     id SERIAL PRIMARY KEY,
@@ -247,6 +233,28 @@ async def lifecycle(app: FastAPI):
                     message_body TEXT,
                     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
                 );
+                """)
+                # Attribute each outbound touch to the lead it was made for, not
+                # just the address it was sent to. Without this the contact policy
+                # can only count per (channel, recipient), so a lead mailed a
+                # letter on channel 'mail' starts that channel's counter at zero
+                # and could be mailed twice AND emailed twice - four contacts
+                # against a once-then-5-days rule. Nullable on purpose: historical
+                # rows stay NULL and the policy falls back to recipient counting
+                # for them, so this backfills forward instead of resetting.
+                #
+                # This ALTER has to sit AFTER the CREATE above. It used to run ~40
+                # lines earlier, so on an empty database it failed with
+                # 'relation "comms_logs" does not exist' -- and because the whole
+                # block is one transaction, the rollback also discarded the leads
+                # table created before it. The app could not bootstrap a fresh
+                # database at all; it only ever worked in production because
+                # comms_logs had existed there for months.
+                cur.execute("ALTER TABLE comms_logs ADD COLUMN IF NOT EXISTS lead_id INTEGER;")
+                cur.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_comms_logs_lead
+                    ON comms_logs (lead_id, direction, created_at)
+                    WHERE lead_id IS NOT NULL;
                 """)
                 inbound_email._ensure_schema(cur)
                 cur.execute("""
@@ -2478,7 +2486,10 @@ async def pipeline_board(
             "columns": columns,
         })
 
-    total_cards = sum(totals_by_stream.get(s, {}).values() for s in streams)
+    # sum() the counts INSIDE each stream's dict. Summing the dict_values
+    # objects themselves is `0 + dict_values`, which is a TypeError, not a
+    # number -- it took /pipeline down as a 500 on every request.
+    total_cards = sum(sum(totals_by_stream.get(s, {}).values()) for s in streams)
     total_value = sum(c["value"] for v in cols.values() for c in v)
 
     return templates.TemplateResponse(request=request, name="pipeline.html", context={
