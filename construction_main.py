@@ -2835,8 +2835,20 @@ async def payments_webhook(request: Request, db=Depends(get_db)):
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Webhook signature verification failed: {e}")
 
-    if event["type"] == "checkout.session.completed":
-        session = event["data"]["object"]
+    # construct_event() returns a stripe.Event OBJECT, not a dict. Indexing it
+    # like a dict raises KeyError('type') -> HTTP 500 on every payment, so Stripe
+    # retries, fails again, and eventually gives up. Read both shapes.
+    if isinstance(event, dict):
+        etype = event.get("type")
+        session = (event.get("data") or {}).get("object") or {}
+    else:
+        etype = event.type
+        session = event.data.object if event.data else {}
+    # stripe>=8 objects are NOT mappings: dict(session) raises TypeError. to_dict()
+    # exists on StripeObject but not on a plain dict, hence the hasattr guard.
+    session = session.to_dict() if hasattr(session, "to_dict") else dict(session)
+
+    if etype == "checkout.session.completed":
         lead_id = session.get("metadata", {}).get("lead_id")
         payment_intent = session.get("payment_intent")
         amount_total = session.get("amount_total", 0)
