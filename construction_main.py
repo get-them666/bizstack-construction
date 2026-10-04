@@ -2255,6 +2255,14 @@ async def update_lead_status_route(lead_id: int, request: Request, status_val: s
 # its own status vocabulary (a permit has no phone, so it can never be "quoted"
 # in the lead sense), so the board renders one column set per stream.
 
+# Board rendering limits. The previous code used a single `LIMIT 400` across
+# all columns plus a `cards[:60]` slice, so 1,516 permits and 417 leads were
+# absent with nothing on the page saying so. Cards are now fetched PER STATUS
+# and the true per-status totals are counted separately, so a column header can
+# honestly read "1,846" while showing 60 and offering a link to the rest.
+CARD_FETCH_PER_STATUS = 80
+CARD_RENDER_CAP = 60
+
 PIPELINE_STREAMS = ("leads", "permits", "backlog")
 
 
@@ -2264,6 +2272,7 @@ async def pipeline_board(
     stream: str = "",
     q: str = "",
     owner: str = "",
+    show_all: int = 0,
     db=Depends(get_db),
 ):
     """Kanban of everything in the sales pipeline, newest work first per column."""
@@ -2287,21 +2296,44 @@ async def pipeline_board(
 
     vis = source_visibility_clause()
     vis_params = source_visibility_params()
+    # Per-status fetch limit, and how many cards actually render. Separate on
+    # purpose: fetch a little more than we render so a card moving between
+    # columns does not blank the target column on the next load.
+    lead_totals: dict = {}
+    permit_totals: dict = {}
+    backlog_totals: dict = {}
+    permit_hidden_demo = 0
+    permit_hidden_commercial = 0
 
     if "leads" in streams:
         frag, params = _search(q, "name", "phone", "address", "project_type")
-        sql = (
-            # Exclude backlog: those rows are source='backlog' and get their own
-            # stream below. Including them here would double-count every
-            # back-logged job in the board and in the header totals.
-            "SELECT id, name, phone, email, address, project_type, status, source, "
-            "COALESCE(estimate_high_cents, estimate_low_cents, 0) AS value, created_at "
-            "FROM leads WHERE company = 'construction' AND source <> 'backlog'"
-            + frag + vis + " ORDER BY created_at DESC LIMIT 400;"
+        # Same defect as the permit stream: a single LIMIT 400 meant 417 of 817
+        # construction leads were absent with no indication. Counts are taken
+        # over the whole matching set, then cards are fetched per status.
+        base = (
+            " FROM leads WHERE company = 'construction' AND source <> 'backlog'"
+            + frag + vis
         )
         with db.cursor() as cur:
-            cur.execute(sql, tuple(params + vis_params))
-            rows = cur.fetchall()
+            cur.execute(
+                "SELECT COALESCE(status, 'new') AS status, count(*) AS c"
+                + base + " GROUP BY 1;",
+                tuple(params + vis_params),
+            )
+            lead_totals = {r["status"]: int(r["c"]) for r in cur.fetchall()}
+            cur.execute("SELECT DISTINCT status FROM leads WHERE company = 'construction'"
+                        " AND source <> 'backlog'" + frag + vis + ";",
+                        tuple(params + vis_params))
+            lead_statuses = [r["status"] for r in cur.fetchall()]
+            rows = []
+            for st in lead_statuses:
+                cur.execute(
+                    "SELECT id, name, phone, email, address, project_type, status, source, "
+                    "COALESCE(estimate_high_cents, estimate_low_cents, 0) AS value, created_at"
+                    + base + " AND COALESCE(status, 'new') = %s ORDER BY created_at DESC LIMIT %s;",
+                    tuple(params + vis_params) + (st, CARD_FETCH_PER_STATUS),
+                )
+                rows.extend(cur.fetchall())
         for r in rows:
             cols.setdefault(f"leads:{r['status']}", []).append({
                 "id": r["id"], "stream": "leads",
@@ -2314,19 +2346,62 @@ async def pipeline_board(
 
     if "permits" in streams:
         frag, params = _search(q, "address", "work_type", "permit_number", "contractor_name")
-        sql = (
-            "SELECT id, permit_number, address, work_type, job_description, status, "
-            "estimated_value, found_at FROM job_leads WHERE 1=1"
-            + frag + " ORDER BY found_at DESC LIMIT 400;"
-        )
+        # Demo rows are fake data (Chesapeake/W MB fall back to demo on purpose)
+        # and commercial rows are work that already has a contractor engaged.
+        # Neither is a job to knock, so they are excluded by default -- but the
+        # totals below report what was excluded and the owner can bring them back
+        # with show_all=1, so nothing is ever silently dropped.
+        excl = "" if show_all else " AND NOT is_demo AND COALESCE(use_class,'') <> 'commercial'"
+        base = " FROM job_leads WHERE 1=1" + excl + frag
         with db.cursor() as cur:
-            cur.execute(sql, tuple(params))
-            rows = cur.fetchall()
+            # TRUE per-column counts, computed over every matching row. These are
+            # what the column headers show. Previously `count` was derived from
+            # the rows actually fetched, so it always equalled the number on
+            # screen and the "+N more" warning could never fire -- which is how
+            # 1,516 permits went missing with no indication on the page at all.
+            cur.execute(
+                "SELECT COALESCE(status, 'new') AS status, count(*) AS c"
+                + base + " GROUP BY 1;",
+                tuple(params),
+            )
+            permit_totals = {r["status"]: int(r["c"]) for r in cur.fetchall()}
+
+            # What is being held back, so the UI can say so out loud.
+            if not show_all:
+                cur.execute(
+                    "SELECT count(*) FILTER (WHERE is_demo) AS demo,"
+                    " count(*) FILTER (WHERE COALESCE(use_class,'') = 'commercial') AS commercial"
+                    + base + ";",
+                    tuple(params),
+                )
+                r = cur.fetchone()
+                permit_hidden_demo = int(r["demo"] or 0)
+                permit_hidden_commercial = int(r["commercial"] or 0)
+            else:
+                permit_hidden_demo = permit_hidden_commercial = 0
+
+            # Cards to RENDER is a separate, smaller limit than the pool. Fetch
+            # per-column rather than one global LIMIT so a single big column
+            # cannot starve the others.
+            cur.execute(
+                "SELECT DISTINCT status FROM job_leads WHERE 1=1" + excl + frag + ";",
+                tuple(params),
+            )
+            statuses = [r["status"] for r in cur.fetchall()]
+            rows = []
+            for st in statuses:
+                cur.execute(
+                    "SELECT id, permit_number, address, work_type, job_description, status, "
+                    "estimated_value, found_at FROM job_leads WHERE 1=1" + excl + frag
+                    + " AND COALESCE(status, 'new') = %s ORDER BY found_at DESC LIMIT %s;",
+                    tuple(params) + (st, CARD_FETCH_PER_STATUS),
+                )
+                rows.extend(cur.fetchall())
         for r in rows:
             desc = (r["job_description"] or "").strip()
             if desc.lower().startswith("<") or len(desc) > 90:
                 desc = ""
-            cols.setdefault(f"permits:{r['status']}", []).append({
+            cols.setdefault(f"permits:{r['status'] or 'new'}", []).append({
                 "id": r["id"], "stream": "permits",
                 "title": r["address"] or "(no address)",
                 "sub": r["work_type"] or desc or r["permit_number"] or "",
@@ -2337,15 +2412,26 @@ async def pipeline_board(
 
     if "backlog" in streams:
         frag, params = _search(q, "name", "address", "project_type")
-        sql = (
-            "SELECT id, name, address, project_type, status, "
-            "COALESCE(estimate_high_cents, estimate_low_cents, 0) AS value, created_at "
-            "FROM leads WHERE source = 'backlog' AND company = 'construction'"
-            + frag + " ORDER BY created_at DESC LIMIT 400;"
-        )
+        base = (" FROM leads WHERE source = 'backlog' AND company = 'construction'" + frag)
         with db.cursor() as cur:
-            cur.execute(sql, tuple(params))
-            rows = cur.fetchall()
+            cur.execute(
+                "SELECT COALESCE(status, 'new') AS status, count(*) AS c"
+                + base + " GROUP BY 1;",
+                tuple(params),
+            )
+            backlog_totals = {r["status"]: int(r["c"]) for r in cur.fetchall()}
+            cur.execute("SELECT DISTINCT status FROM leads WHERE source = 'backlog'"
+                        " AND company = 'construction'" + frag + ";", tuple(params))
+            bl_statuses = [r["status"] for r in cur.fetchall()]
+            rows = []
+            for st in bl_statuses:
+                cur.execute(
+                    "SELECT id, name, address, project_type, status, "
+                    "COALESCE(estimate_high_cents, estimate_low_cents, 0) AS value, created_at"
+                    + base + " AND COALESCE(status, 'new') = %s ORDER BY created_at DESC LIMIT %s;",
+                    tuple(params) + (st, CARD_FETCH_PER_STATUS),
+                )
+                rows.extend(cur.fetchall())
         for r in rows:
             cols.setdefault(f"backlog:{r['status']}", []).append({
                 "id": r["id"], "stream": "backlog",
@@ -2357,6 +2443,7 @@ async def pipeline_board(
             })
 
     groups = []
+    totals_by_stream = {"leads": lead_totals, "permits": permit_totals, "backlog": backlog_totals}
     for s in streams:
         if s == "leads":
             stages = [(f"leads:{st}", STATUS_LABELS.get(st, st)) for st in LEAD_STATUSES]
@@ -2364,20 +2451,34 @@ async def pipeline_board(
             stages = [(f"permits:{st}", PERMIT_STATUS_LABELS.get(st, st)) for st in PERMIT_STATUSES]
         else:
             stages = [(f"backlog:{st}", STATUS_LABELS.get(st, st)) for st in LEAD_STATUSES]
+        totals = totals_by_stream.get(s, {})
+        columns = []
+        for key, label in stages:
+            status = key.split(":", 1)[1]
+            rendered = cols.get(key, [])
+            true_count = totals.get(status, 0)
+            # `count` is the number that EXISTS, not the number fetched. The
+            # "+N more" row at the bottom of the column depends on this being
+            # the true total; when it was derived from the fetched rows it
+            # always equalled the rendered count and the warning never fired.
+            columns.append({
+                "key": key,
+                "label": label,
+                "count": true_count,
+                "value": sum(c["value"] for c in rendered),
+                "shown": len(rendered[:CARD_RENDER_CAP]),
+                "hidden": max(0, true_count - CARD_RENDER_CAP),
+                "cards": rendered[:CARD_RENDER_CAP],
+            })
         groups.append({
             "stream": s,
             "title": {"leads": "Leads — can call or email",
                       "permits": "Permits — work the address",
                       "backlog": "Back-log — jobs you've decided to do"}[s],
-            "columns": [
-                {"key": key, "label": label, "count": len(cols.get(key, [])),
-                 "value": sum(c["value"] for c in cols.get(key, [])),
-                 "cards": cols.get(key, [])[:60]}
-                for key, label in stages
-            ],
+            "columns": columns,
         })
 
-    total_cards = sum(len(v) for v in cols.values())
+    total_cards = sum(totals_by_stream.get(s, {}).values() for s in streams)
     total_value = sum(c["value"] for v in cols.values() for c in v)
 
     return templates.TemplateResponse(request=request, name="pipeline.html", context={
@@ -2388,6 +2489,9 @@ async def pipeline_board(
         "q": q,
         "total_cards": total_cards,
         "total_value": total_value,
+        "show_all": bool(show_all),
+        "permit_hidden_demo": permit_hidden_demo,
+        "permit_hidden_commercial": permit_hidden_commercial,
         "permit_status": _permit_status(),
     })
 

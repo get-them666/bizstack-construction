@@ -60,6 +60,21 @@
                 <span class="text-[11px] font-semibold text-slate-400">
                     {{ g.columns | sum(attribute='count') }} total
                 </span>
+                {% if g.stream == 'permits' and not show_all and (permit_hidden_demo or permit_hidden_commercial) %}
+                <span class="text-[11px] font-semibold text-slate-500 bg-amber-50 border border-amber-200 text-amber-800 rounded-full px-2.5 py-0.5"
+                      title="Demo rows are fake fallback data for cities whose open feed is unusable. Commercial permits already have a contractor engaged.">
+                    {{ permit_hidden_demo }} demo
+                    {%- if permit_hidden_commercial %} · {{ permit_hidden_commercial }} commercial{% endif %} hidden —
+                    <a href="/pipeline?stream=permits{% if active_streams | length > 1 %}&amp;stream={{ active_streams | join(',') }}{% endif %}&amp;show_all=1"
+                       class="underline hover:text-amber-900">show them</a>
+                </span>
+                {% elif g.stream == 'permits' and show_all %}
+                <span class="text-[11px] font-semibold text-slate-500 bg-slate-100 border border-slate-200 rounded-full px-2.5 py-0.5">
+                    showing demo + commercial —
+                    <a href="/pipeline?stream=permits{% if active_streams | length > 1 %}&amp;stream={{ active_streams | join(',') }}{% endif %}"
+                       class="underline hover:text-indigo-600">hide</a>
+                </span>
+                {% endif %}
             </div>
 
             <div class="grid gap-3 overflow-x-auto pb-2"
@@ -99,11 +114,11 @@
 
                         {% if not col.cards %}
                         <p class="text-[11px] text-slate-400 text-center py-6 px-2">Empty</p>
-                        {% elif col.count > col.cards | length %}
+                        {% elif col.hidden %}
                         <p class="text-[11px] font-semibold text-slate-500 text-center py-2 px-2 border-t border-slate-200 pt-2">
-                            +{{ col.count - (col.cards | length) }} more —
-                            <a href="/pipeline?stream={{ g.stream }}&amp;status={{ col.key.split(':')[1] }}"
-                               class="underline hover:text-indigo-600">search to see them</a>
+                            Showing {{ col.shown }} of {{ col.count }} —
+                            <a href="/leads?lane=permits&amp;status={{ col.key.split(':')[1] }}{% if g.stream == 'leads' or g.stream == 'backlog' %}&amp;q={% endif %}"
+                               class="underline hover:text-indigo-600">see the other {{ col.hidden }}</a>
                         </p>
                         {% endif %}
                     </div>
