@@ -24,7 +24,7 @@ import threading
 import time
 import urllib.parse
 from pathlib import Path
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 from zoneinfo import ZoneInfo
 from contextlib import asynccontextmanager
 
@@ -45,6 +45,7 @@ import copilot_tasks
 import copilot_ops
 from stripe_service import StripeService, default_deposit_cents
 import permit_enricher
+import permit_stats
 from signalwire_service import SignalWireService
 import vapi_service
 import property_service
@@ -2081,19 +2082,24 @@ async def leads_page(request: Request, status_filter: str = "", q: str = "", lan
         p_clause = ("WHERE " + " AND ".join(p_where)) if p_where else ""
         cur.execute(f"SELECT * FROM job_leads {p_clause} ORDER BY found_at DESC LIMIT 500;", tuple(p_params))
         permits = cur.fetchall()
-        cur.execute("SELECT status, COUNT(*) AS c FROM job_leads GROUP BY status;")
-        permit_counts = {r["status"]: r["c"] for r in cur.fetchall()}
-        cur.execute("SELECT COUNT(*) AS c FROM job_leads WHERE status NOT IN ('won','lost','closed');")
-        permit_open = cur.fetchone()["c"]
-        # Data-quality tallies, so the owner can see how much of the list is
-        # actually workable instead of discovering it one knock at a time.
-        cur.execute(
-            "SELECT use_class, COUNT(*) AS c FROM job_leads "
-            "GROUP BY 1 ORDER BY 2 DESC;"
-        )
-        permit_use = {r["use_class"] or "unknown": r["c"] for r in cur.fetchall()}
-        cur.execute("SELECT COUNT(*) AS c FROM job_leads WHERE COALESCE(address,'') = '';")
-        permit_no_address = cur.fetchone()["c"]
+        # Every permit tally is recomputed here, from job_leads, on every page
+        # load. Nothing is cached, so a status change from ANY source -- the
+        # owner dragging a card, the Copilot, the voice agent, /job-leads/refresh,
+        # or a manual SQL edit -- is reflected the next time this renders.
+        pstats = permit_stats.permit_stats(cur)
+        permit_counts = pstats["workable_by_status"]
+        # The headline is distinct ACTIONABLE DOORS, not rows: one house often
+        # has several permits, and 862 permits sat at 655 doors.
+        permit_open = pstats["actionable_doors"]
+        permit_doors_total = pstats["actionable_doors"]
+        permit_permits_total = pstats["actionable_permits"]
+        permit_use = pstats["by_use_class"]
+        permit_no_address = pstats["no_address"]
+        permit_commercial = pstats["commercial"]
+        permit_unreviewed = pstats["unreviewed"]
+        permit_untouched = pstats["untouched_doors"]
+        permit_touched = pstats["touched_doors"]
+        permit_by_city = pstats["by_city"]
 
     return templates.TemplateResponse(request=request, name="leads.html", context={
         "user": {"email": user_email},
@@ -2113,6 +2119,13 @@ async def leads_page(request: Request, status_filter: str = "", q: str = "", lan
         "permit_use": permit_use,
         "permit_no_address": permit_no_address,
         "permit_open": permit_open,
+        "permit_doors_total": permit_doors_total,
+        "permit_permits_total": permit_permits_total,
+        "permit_commercial": permit_commercial,
+        "permit_unreviewed": permit_unreviewed,
+        "permit_untouched": permit_untouched,
+        "permit_touched": permit_touched,
+        "permit_by_city": permit_by_city,
         "shovels_configured": permit_service.is_configured(),
         "permit_status": _permit_status(),
         "lane": lane if lane in ("contactable", "permits") else "contactable",
@@ -5153,6 +5166,27 @@ async def job_leads_page(request: Request, status_filter: str = "", db=Depends(g
 @app.get("/permits", response_class=HTMLResponse)
 async def permits_page(request: Request, status_filter: str = "", db=Depends(get_db)):
     return RedirectResponse(url="/leads?lane=permits", status_code=status.HTTP_303_SEE_OTHER)
+
+@app.get("/api/permits/stats")
+async def permits_stats_api(request: Request, db=Depends(get_db)):
+    """Live permit tallies, recomputed from job_leads on every request.
+
+    Polled by the /leads page so the numbers track whatever changed them --
+    a card dragged on the board, the Copilot, the voice agent, a permit
+    refresh, or a direct SQL edit. There is no cache to invalidate and no
+    counter to drift, because nothing is stored: every hit is a fresh
+    aggregate over the table.
+
+    Auth-gated: these tallies expose how much unworked work exists.
+    """
+    require_admin(request)
+    with db.cursor() as cur:
+        stats = permit_stats.permit_stats(cur)
+    return JSONResponse(content={
+        **stats,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    })
+
 
 @app.post("/api/job-leads/refresh")
 async def job_leads_refresh(request: Request, city: str = Form("Chesapeake"), state: str = Form("VA"), db=Depends(get_db)):

@@ -252,7 +252,14 @@ COMMERCIAL_RE = re.compile(
     # car wash or body shop is a business. Commercial is checked first, so these
     # must be listed here to win over the residential "garage" pattern.
     r"repair garage|car wash|body shop|service station|gas station|lube|"
-    r"auto (shop|dealer|sales)|restaurant)",
+    r"auto (shop|dealer|sales)|restaurant|"
+    # Utility and site work that was previously sitting as "unreviewed". None of
+    # these are residential remodel work, and a gas or elevator permit is not a
+    # house we can win. Checked before RESIDENTIAL_RE, so "gas" cannot be pulled
+    # in by a trade word.
+    r"moving and hauling|hauling|utility|elevator|"
+    r"\bgas\b|demolition|shoring|grading|tree service|sign permit|"
+    r"fuel tank|tank install|sewer|water main)",
     re.I,
 )
 RESIDENTIAL_RE = re.compile(
@@ -260,7 +267,16 @@ RESIDENTIAL_RE = re.compile(
     r"condo|apartment|multifamily|adu|basement|garage|shed|"
     # Norfolk labels STR/homestay permits under work_type, and those are
     # residential properties even though they operate commercially.
-    r"homestay|short[- ]term rental|\bstr\b|hostel)",
+    r"homestay|short[- ]term rental|\bstr\b|hostel|"
+    # Trade permits on houses. These 773 rows sat as "unreviewed" purely
+    # because the pattern above only matched PROPERTY words, not TRADE words:
+    # 137 additions, 97 electrical, 94 plumbing, 137 mechanical were all
+    # invisible. They are exactly the work we take.
+    r"addition and or alteration|^alteration|^addition|renovat|remodel|"
+    r"electrical|plumbing|mechanical|roofing|roof\b|siding|hvac|"
+    r"duct work|furnace|heat pump|water heater|drywall|carpentry|"
+    r"tile|flooring|paint|deck|fence|patio|porch|window|door|"
+    r"kitchen|bath(room)?\b|laundry|rehab|repair|remodel)",
     re.I,
 )
 
@@ -286,17 +302,22 @@ def backfill_classification(conn) -> int:
     """Classify job_leads rows ingested before property_type was stored.
 
     Idempotent: only touches rows still marked unknown.
+
+    Passes property_type through. classify_use reads it FIRST, and Virginia Beach
+    packs the trade into that column ("Roof and or Siding", "Asbestos") while
+    Norfolk leaves it empty, so dropping it misclassified every VB row.
     """
+    updates = []
     try:
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT id, work_type, job_description, property_type FROM job_leads "
-                "WHERE COALESCE(use_class, '') = '' LIMIT 2000;"
+                "WHERE COALESCE(use_class, '') IN ('', 'unknown') LIMIT 5000;"
             )
             rows = cur.fetchall()
-            updates = []
             for r in rows:
-                verdict = classify_use(r.get("work_type"), r.get("job_description"))
+                verdict = classify_use(r.get("work_type"), r.get("job_description"),
+                                       r.get("property_type"))
                 if verdict and verdict != "unknown":
                     updates.append((verdict, r["id"]))
             if updates:

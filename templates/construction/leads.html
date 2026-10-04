@@ -21,7 +21,8 @@
             </a>
             <a href="/leads?lane=permits"
                class="px-4 py-2.5 text-sm font-bold rounded-xl border transition-colors {% if lane == 'permits' %}bg-slate-900 text-white border-slate-900{% else %}bg-white text-slate-600 border-slate-200 hover:border-slate-400{% endif %}">
-                Permits to work <span class="opacity-70 font-semibold">({{ permit_open }})</span>
+                Doors to work
+                <span id="permit-doors-live" class="opacity-70 font-semibold">({{ permit_open }})</span>
             </a>
             <p class="text-xs text-slate-500 ml-1">
                 {% if lane == 'permits' %}Permits have no phone or email. Work the address, then record who you reached.{% else %}People with a real phone number or email. These move through quoting and deposits.{% endif %}
@@ -39,4 +40,65 @@
 
 {% block scripts %}
 {% include "_shell_script.html" %}
+<script>
+// Keep the permit tallies live without a page reload.
+//
+// The numbers come from /api/permits/stats, which re-aggregates job_leads on
+// every request. There is nothing to invalidate here and no counter to reset:
+// the server has no stored total, so whoever changed the data -- you dragging a
+// card, the Copilot, the voice agent, a permit refresh -- is reflected the next
+// time this polls. Polling the aggregate is cheaper and far more truthful than
+// trying to update a number from every write path.
+(function () {
+    var el = document.getElementById('permit-doors-live');
+    if (!el) return;
+    var last = el.textContent.trim();
+
+    async function tick() {
+        try {
+            const res = await fetch('/api/permits/stats', {
+                headers: { 'Accept': 'application/json' },
+                credentials: 'same-origin'
+            });
+            // 303 to /login means the session went away. Stop polling rather
+            // than filling the console with redirects for the rest of the visit.
+            if (res.status === 303 || res.redirected) return;
+            if (!res.ok) return;
+            const s = await res.json();
+            if (typeof s.actionable_doors !== 'number') return;
+
+            const next = '(' + s.actionable_doors + ')';
+            if (next !== last) {
+                el.textContent = next;
+                last = next;
+                el.classList.add('text-emerald-300', 'transition-colors');
+                setTimeout(function () { el.classList.remove('text-emerald-300'); }, 1400);
+            }
+
+            // Breakdown counters, if the permits lane is on screen.
+            for (const [id, val] of Object.entries({
+                'live-residential': s.by_use_class ? (s.by_use_class.residential || 0) : null,
+                'live-commercial': s.commercial,
+                'live-unreviewed': s.unreviewed,
+                'live-noaddress': s.no_address,
+                'live-permits': s.actionable_permits,
+                'live-untouched': s.untouched_doors,
+                'live-touched': s.touched_doors
+            })) {
+                if (val === null || val === undefined) continue;
+                const t = document.getElementById(id);
+                if (t && t.textContent.trim() !== String(val)) t.textContent = val;
+            }
+        } catch (e) { /* offline or a transient 5xx: the next tick retries */ }
+    }
+
+    tick();
+    // 45s: often enough that a card you just moved shows up on your next look,
+    // rare enough to be invisible. No websocket is warranted for a count.
+    setInterval(tick, 45000);
+    document.addEventListener('visibilitychange', function () {
+        if (!document.hidden) tick();
+    });
+})();
+</script>
 {% endblock %}
