@@ -2108,6 +2108,12 @@ async def leads_page(request: Request, status_filter: str = "", q: str = "", lan
         permit_untouched = pstats["untouched_doors"]
         permit_touched = pstats["touched_doors"]
         permit_by_city = pstats["by_city"]
+        # Owner of record for every permit whose address we have already traced.
+        # Read from skiptrace_cache, so it is free and it persists: without this
+        # "Who owns this property?" only ever showed the answer until the page
+        # was reloaded, because the lookup deliberately does not write to the
+        # permit.
+        permit_owners = skiptrace_service.owners_for_rows(cur, permits)
 
     return templates.TemplateResponse(request=request, name="leads.html", context={
         "user": {"email": user_email},
@@ -2120,6 +2126,7 @@ async def leads_page(request: Request, status_filter: str = "", q: str = "", lan
         "draft_count": draft_count,
         "default_deposit": default_deposit_cents() / 100,
         "permits": permits,
+        "permit_owners": permit_owners,
         "permit_statuses": PERMIT_STATUSES,
         "permit_status_labels": PERMIT_STATUS_LABELS,
         "permit_status_colors": PERMIT_STATUS_COLORS,
@@ -2704,7 +2711,10 @@ async def skiptrace_enrich(request: Request, company: str = Form("construction")
     require_admin(request)
 
     def run(cur):
-        return skiptrace_service.enrich_address_only_leads(cur, company)
+        # `source` used to be dropped here, so the Form field was accepted and
+        # then ignored. Passing it through is what the signature and the
+        # docstring always described.
+        return skiptrace_service.enrich_address_only_leads(cur, company, source=source)
 
     summary = await asyncio.to_thread(run_with_cursor, db, run)
     db.commit()

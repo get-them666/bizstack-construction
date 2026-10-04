@@ -465,6 +465,88 @@ def audit(cur, requested_by: str, key: str, result: dict, cached: bool) -> None:
     )
 
 
+def cache_get_many(cur, keys) -> dict:
+    """Read many cache rows in ONE query. Returns {address_key: payload}.
+
+    The permits lane renders up to 500 rows at a time. Calling cache_get()
+    per row would be 500 round trips to display data we already hold, so the
+    keys go in as one array parameter instead.
+
+    Returns {} when the table does not exist, so a fresh database renders
+    without it rather than erroring.
+    """
+    keys = [k for k in dict.fromkeys(keys or []) if k]
+    if not keys:
+        return {}
+
+    # A failed statement poisons the whole transaction until rollback, so the
+    # existence check has to happen before the query rather than being caught.
+    cur.execute("SELECT to_regclass('skiptrace_cache') AS t;")
+    row = cur.fetchone()
+    present = (row.get("t") if isinstance(row, dict) else (row[0] if row else None))
+    if not present:
+        return {}
+
+    cur.execute("SELECT address_key, found, payload FROM skiptrace_cache "
+                "WHERE address_key = ANY(%s);", (keys,))
+    out = {}
+    for r in cur.fetchall():
+        payload = {}
+        if r["payload"]:
+            try:
+                payload = json.loads(r["payload"])
+            except (TypeError, ValueError):
+                payload = {}
+        payload["found"] = bool(r["found"])
+        payload["_cached"] = True
+        out[r["address_key"]] = payload
+    return out
+
+
+def owners_for_rows(cur, rows, id_key: str = "id", address_key: str = "address") -> dict:
+    """Map row id -> cached owner payload for many rows, parsing each once.
+
+    This is what makes "Who owns this property?" survive leaving the page.
+    The per-permit lookup button deliberately does not write to the permit --
+    resolving who owns a house is not the same as having reached them, and
+    filling contractor_name would make an unverified owner look like they
+    applied for the permit. So the answer lived only in the browser until the
+    next click.
+
+    It does not need to be written anywhere: skiptrace_cache already holds it,
+    keyed by normalized address, for every permit on that house. Reading it here
+    costs nothing, which matters against a 50-call/month plan, and it lights up
+    the ~119 addresses already traced rather than making them be looked up again.
+    """
+    row_key = {}
+    for r in rows or []:
+        raw = r.get(address_key) if isinstance(r, dict) else None
+        parsed = parse_address(raw)
+        if not parsed["ok"]:
+            continue
+        key = normalize_address(parsed["street"], parsed["city"],
+                                parsed["state"], parsed["zipcode"])
+        # First row wins for a given key, but every row on that house gets it.
+        row_key.setdefault(key, r.get(id_key))
+
+    cached = cache_get_many(cur, list(row_key))
+    if not cached:
+        return {}
+
+    out = {}
+    for r in rows or []:
+        raw = r.get(address_key) if isinstance(r, dict) else None
+        parsed = parse_address(raw)
+        if not parsed["ok"]:
+            continue
+        key = normalize_address(parsed["street"], parsed["city"],
+                                parsed["state"], parsed["zipcode"])
+        hit = cached.get(key)
+        if hit:
+            out[r.get(id_key)] = hit
+    return out
+
+
 def lookup(cur, street: str, city: str, state: str, zip_code: str = "",
            requested_by: str = "") -> dict:
     """Cache-first wrapper around trace_address. The entry point the route uses.
@@ -652,12 +734,23 @@ def enrich_address_only_leads(cur, company: str = "construction", cap: int = Non
             if not is_placeholder_name(current_name):
                 summary["skipped"] += 1
                 continue
+            # Compare-and-swap on the exact name we judged, not a second,
+            # stricter test of it. The WHERE clause used to require
+            # name IS NULL / BTRIM(name) = '' / LIKE '%@lead.local', while
+            # is_placeholder_name() above also accepts a city name -- which is
+            # what the permit feeds put there ("Virginia Beach", 122 rows;
+            # "Chesapeake", 31; "Williamsburg", 14). The two guards disagreed,
+            # the SQL one matched none of them, and this function spent RentCast
+            # quota to update exactly zero rows on every run.
+            #
+            # Swapping on the value we read keeps the real guarantee (we never
+            # overwrite a person) and adds lost-update safety: if the card was
+            # edited between the SELECT and here, the name no longer matches
+            # and nothing is written.
             cur.execute(
-                "UPDATE leads SET name = %s WHERE id = %s AND ("
-                "  name IS NULL OR BTRIM(name) = '' "
-                "  OR LOWER(name) LIKE '%%@lead.local' "
-                ") RETURNING id;",
-                (owner, lead_id),
+                "UPDATE leads SET name = %s WHERE id = %s "
+                "  AND COALESCE(name, '') = %s RETURNING id;",
+                (owner, lead_id, current_name or ""),
             )
             touched += cur.rowcount or 0
         summary["updated"] += touched

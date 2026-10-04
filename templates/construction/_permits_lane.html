@@ -180,16 +180,50 @@
                is the only way a permit lead gets one. Costs nothing on a repeat
                -- results are cached per address -- and never writes to the
                permit: finding out who owns the house is not the same as having
-               reached them. #}
+               reached them.
+
+               Because it does not write, the answer used to live only in the
+               browser until you navigated away. It is now rendered here from
+               skiptrace_cache, so a permit whose address has been traced shows
+               its owner on every load, and the button just expands the detail. #}
+            {% set owner = permit_owners.get(j.id) if permit_owners else none %}
             <div class="mt-3 bg-white rounded-xl border border-slate-200">
                 <button type="button"
-                        class="skiptrace-btn w-full px-4 py-3 text-left text-sm font-bold text-slate-700 hover:bg-slate-50 transition-colors flex items-center justify-between gap-2"
+                        class="skiptrace-btn w-full px-4 py-3 text-left text-sm font-bold {% if owner %}text-slate-400 hover:bg-slate-50{% else %}text-slate-700 hover:bg-slate-50{% endif %} transition-colors flex items-center justify-between gap-2"
                         data-permit-id="{{ j.id }}"
                         {% if not (j.address or '') %}disabled title="No address on this permit"{% endif %}>
                     <span>Who owns this property?</span>
-                    <span class="text-slate-400 text-xs font-normal">public assessor record</span>
+                    <span class="text-slate-400 text-xs font-normal">
+                        {% if owner %}owner on record{% else %}public assessor record{% endif %}
+                    </span>
                 </button>
-                <div class="skiptrace-out hidden px-4 pb-4 pt-1 text-sm" data-permit-id="{{ j.id }}"></div>
+                <div class="skiptrace-out {% if not owner %}hidden{% endif %} px-4 pb-4 pt-1 text-sm" data-permit-id="{{ j.id }}">
+                    {% if owner and owner.found and owner.owner_of_record %}
+                        <div class="space-y-2">
+                            <div class="flex flex-wrap items-center gap-2">
+                                <p class="font-bold text-slate-900">{{ owner.owner_of_record }}</p>
+                                {% if owner.owner_is_entity %}
+                                    <span class="text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded bg-violet-100 text-violet-700">Business</span>
+                                {% else %}
+                                    <span class="text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded bg-sky-100 text-sky-700" title="Individual homeowner, not a company. Public assessor record.">Homeowner</span>
+                                {% endif %}
+                                <span class="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-slate-100 text-slate-500">cached — no lookup spent</span>
+                            </div>
+                            {% if owner.no_zip %}
+                                <p class="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1">No ZIP on this permit, so this is a city-level match — confirm the street before mailing anything.</p>
+                            {% endif %}
+                            {% set prop = owner.property or {} %}
+                            <dl class="grid grid-cols-2 md:grid-cols-3 gap-2 text-xs">
+                                {% if prop.assessed_value %}<div><dt class="text-slate-500">Assessed value</dt><dd class="font-semibold text-slate-800">${{ '{:,.0f}'.format(prop.assessed_value|float) }}</dd></div>{% endif %}
+                                {% if prop.year_built %}<div><dt class="text-slate-500">Year built</dt><dd class="font-semibold text-slate-800">{{ prop.year_built }}</dd></div>{% endif %}
+                                {% if prop.square_footage %}<div><dt class="text-slate-500">Size</dt><dd class="font-semibold text-slate-800">{{ '{:,.0f}'.format(prop.square_footage|float) }} sqft</dd></div>{% endif %}
+                            </dl>
+                            <p class="text-[11px] text-slate-400">Public assessor record. This identifies who owns the house; it is not contact.</p>
+                        </div>
+                    {% elif owner and not owner.found %}
+                        <p class="text-slate-600 text-xs">No owner of record in the assessor data for this address. Already checked — trying again spends nothing.</p>
+                    {% endif %}
+                </div>
             </div>
         </div>
     </details>

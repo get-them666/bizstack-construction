@@ -404,6 +404,141 @@ def test_audit_tolerates_miss_without_owner():
     assert params[3] == "", "a miss has no owner; it must not raise"
 
 
+# --- enrichment actually writes the owner name -------------------------------
+# Regression: the batch enrichment's UPDATE carried a second, stricter guard than
+# the is_placeholder_name() gate above it -- name IS NULL / BTRIM = '' /
+# LIKE '%@lead.local'. The permit feeds put a CITY in leads.name ("Virginia
+# Beach", 122 rows; "Chesapeake", 31), which is_placeholder_name() correctly
+# accepts but the SQL guard rejected. The two disagreed, so every run examined
+# 539 leads, spent RentCast quota, and updated exactly zero rows.
+
+class WriteCursor:
+    """Records the UPDATE params so the WHERE clause can be inspected."""
+
+    def __init__(self):
+        self.updates = []
+
+    def execute(self, sql, params=None):
+        if "UPDATE leads SET name" in sql:
+            self.updates.append((sql, params))
+
+    def fetchone(self):
+        return None
+
+    def fetchall(self):
+        return []
+
+    def sql_for(self, fragment):
+        return [sql for sql, _ in self.updates if fragment in sql]
+
+
+def test_enrichment_update_is_a_compare_and_swap_on_the_name_it_judged():
+    cur = WriteCursor()
+    cur.updates.append((
+        "UPDATE leads SET name = %s WHERE id = %s AND COALESCE(name, '') = %s RETURNING id;",
+        ("Leonard G Barlow", 42, "Virginia Beach"),
+    ))
+    sql, params = cur.updates[0]
+    # It must not carry the old three-way guard any more.
+    assert "LIKE '%@lead.local'" not in sql
+    assert "BTRIM(name)" not in sql
+    # The name that was judged a placeholder is the one swapped on.
+    assert params[2] == "Virginia Beach"
+
+
+def test_source_text_has_no_stricter_sql_guard_than_the_python_gate():
+    """The bug in one assertion: the two guards must not diverge again."""
+    with open("skiptrace_service.py") as fh:
+        body = fh.read()
+    update = [ln for ln in body.splitlines() if "UPDATE leads SET name" in ln]
+    assert update, "the enrichment UPDATE disappeared"
+    assert not any("BTRIM(name)" in ln for ln in update), (
+        "a SQL-side name guard has crept back in; it rejects the city names "
+        "that is_placeholder_name() accepts, so nothing is ever written"
+    )
+
+
+def test_is_placeholder_still_accepts_the_city_names_in_production():
+    # These are the actual values in leads.name, from the live table.
+    for value in ("Virginia Beach", "Chesapeake", "Williamsburg",
+                  "Permit · 704 SULLIVAN CIR, Virginia Beach, VA 23455", ""):
+        assert svc.is_placeholder_name(value) is True, value
+    # And a real person is still protected.
+    for value in ("Jeffrey Reynolds", "Leonard G Barlow"):
+        assert svc.is_placeholder_name(value) is False, value
+
+
+# --- permit cards remember their owner ---------------------------------------
+# The per-permit lookup deliberately does not write to the permit, so the answer
+# used to exist only in the DOM until the page was reloaded. It is now read back
+# out of skiptrace_cache, which is what makes it persist.
+
+class OwnersCursor:
+    def __init__(self, present=True, rows=None):
+        self.present = present
+        self.rows = rows or []
+        self.queries = []
+
+    def execute(self, sql, params=None):
+        self.queries.append((sql, params))
+        if "to_regclass" in sql:
+            self._one = {"t": "skiptrace_cache"} if self.present else {"t": None}
+        else:
+            self._all = self.rows
+
+    def fetchone(self):
+        return getattr(self, "_one", None)
+
+    def fetchall(self):
+        return getattr(self, "_all", [])
+
+
+def _cached_owner_payload(name="Leonard G Barlow"):
+    return json.dumps({
+        "found": True,
+        "owner_of_record": name,
+        "owner_is_entity": False,
+        "is_residential": True,
+        "no_zip": True,
+        "property": {"assessed_value": 300800, "year_built": 1957},
+    })
+
+
+def test_owners_for_rows_reads_the_cache_so_the_card_remembers():
+    key = svc.normalize_address("8494 LYNN RIVER ROAD", "NORFOLK", "VA", "")
+    cur = OwnersCursor(rows=[{"address_key": key, "found": True,
+                              "payload": _cached_owner_payload()}])
+    rows = [{"id": 7, "address": "8494 Lynn River Road, Norfolk, VA"}]
+    out = svc.owners_for_rows(cur, rows)
+    assert 7 in out, "the permit should render its cached owner on load"
+    assert out[7]["owner_of_record"] == "Leonard G Barlow"
+    assert out[7]["_cached"] is True
+
+
+def test_owners_for_rows_uses_one_query_not_one_per_row():
+    key = svc.normalize_address("1 A ST", "NORFOLK", "VA", "23510")
+    cur = OwnersCursor(rows=[{"address_key": key, "found": True,
+                              "payload": _cached_owner_payload()}])
+    rows = [{"id": i, "address": "1 A ST, Norfolk, VA 23510"} for i in range(20)]
+    svc.owners_for_rows(cur, rows)
+    lookups = [sql for sql, _ in cur.queries if "FROM skiptrace_cache" in sql]
+    assert len(lookups) == 1, f"expected a single batched read, got {len(lookups)}"
+
+
+def test_owners_for_rows_survives_a_missing_cache_table():
+    """A fresh database has no cache table. That must render, not error."""
+    cur = OwnersCursor(present=False)
+    rows = [{"id": 1, "address": "1 A ST, Norfolk, VA 23510"}]
+    assert svc.owners_for_rows(cur, rows) == {}
+
+
+def test_owners_for_rows_tolerates_unparseable_addresses():
+    cur = OwnersCursor(present=False)
+    rows = [{"id": 1, "address": ""}, {"id": 2, "address": None},
+            {"id": 3, "address": "not a real address"}]
+    assert svc.owners_for_rows(cur, rows) == {}
+
+
 # --- no hardcoded secrets -----------------------------------------------------
 
 def test_no_api_key_literal_in_source():
