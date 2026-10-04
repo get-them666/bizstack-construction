@@ -194,12 +194,19 @@ for url in ("/leads", "/pipeline", "/dashboard"):
     check(f"{url} hides the sam-gov lead", "Sam Gov Hidden Co" not in body)
     check(f"{url} still shows other leads", "Visible Local Co" in body)
 
-# And it must come back when re-enabled.
+# And it must come back when re-enabled. Asserted per-source, not on the whole
+# list: scrap-io is independently gated and off by default (it spends credits,
+# and SCRAP_IO_API_KEY is unset here), so the list is legitimately non-empty and
+# asserting `not hidden_lead_sources()` only passed while sam-gov was the sole
+# gated source. That assertion failed the moment a second gated source landed.
 os.environ["LEAD_SOURCES_SAM_GOV"] = "1"
-check("nothing is hidden when re-enabled", not m.hidden_lead_sources())
+check("sam-gov is no longer hidden when re-enabled",
+      "sam-gov" not in m.hidden_lead_sources())
 check("leads list shows the sam-gov lead again",
       "Sam Gov Hidden Co" in client.get("/leads").text)
 os.environ["LEAD_SOURCES_SAM_GOV"] = "0"
+check("sam-gov is hidden again once switched off",
+      "sam-gov" in m.hidden_lead_sources())
 
 print("\n[6] lead auto-reply does not crash on a lead with no valid phone")
 # Regression: `to` was only bound inside the SMS branch but read unconditionally,

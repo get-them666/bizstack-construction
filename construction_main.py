@@ -2462,9 +2462,14 @@ async def pipeline_board(
         totals = totals_by_stream.get(s, {})
         columns = []
         for key, label in stages:
-            status = key.split(":", 1)[1]
+            # Not named `status`: assigning that anywhere in this function makes
+            # it a local for the WHOLE body, which shadowed the `starlette.status`
+            # module used by the signed-out redirect at the top -- so that
+            # redirect raised UnboundLocalError and 500'd instead of sending a
+            # logged-out visitor to /login.
+            col_status = key.split(":", 1)[1]
             rendered = cols.get(key, [])
-            true_count = totals.get(status, 0)
+            true_count = totals.get(col_status, 0)
             # `count` is the number that EXISTS, not the number fetched. The
             # "+N more" row at the bottom of the column depends on this being
             # the true total; when it was derived from the fetched rows it
