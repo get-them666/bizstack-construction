@@ -305,6 +305,24 @@ OPERATING MANUAL:
                     ),
                 },
             },
+            {
+                "type": "function",
+                "function": {
+                    "name": "enrich_permit_lead",
+                    "description": (
+                        "Resolve a permit lead from its tracking email "
+                        "(con-permit-<digest>@lead.local) to the underlying permit: "
+                        "address, permit number, work type and estimated value. Use "
+                        "when you have a permit lead's placeholder email and need "
+                        "what work is actually being done at that address."
+                    ),
+                    "parameters": self._props(
+                        {"email": "string"},
+                        ["email"],
+                        "The full tracking email, e.g. con-permit-422d36ec92d018b@lead.local",
+                    ),
+                },
+            },
         ]
 
     def _operator_tools(self) -> list:

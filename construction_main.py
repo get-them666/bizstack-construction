@@ -44,6 +44,7 @@ import copilot_memory
 import copilot_tasks
 import copilot_ops
 from stripe_service import StripeService, default_deposit_cents
+import permit_enricher
 from signalwire_service import SignalWireService
 import vapi_service
 import property_service
@@ -977,6 +978,16 @@ f"The mail transport did not accept the message. This usually means the "
             for r in rows
         ]}
 
+    def enrich_permit_lead(email=""):
+        """Resolve a permit lead from its con-permit-<digest>@lead.local tracking email.
+
+        Read-only: one SELECT, no writes, no outbound contact. Copilot/owner tier.
+        """
+        result = permit_enricher.enrich((email or "").strip())
+        if result.get("status") != "success":
+            return {"ok": False, "error": result.get("message", "unresolved")}
+        return {"ok": True, **result}
+
     def list_crew():
         with db.cursor() as cur:
             cur.execute(
@@ -1528,6 +1539,7 @@ f"The mail transport did not accept the message. This usually means the "
         "send_email_message": send_email_message,
         "create_deposit_link": create_deposit_link,
         "lookup_permits": lookup_permits,
+        "enrich_permit_lead": enrich_permit_lead,
         "list_crew": list_crew,
         "lookup_crew_timesheets": lookup_crew_timesheets,
         "get_payroll_summary": get_payroll_summary,
