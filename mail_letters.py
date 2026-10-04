@@ -376,12 +376,55 @@ def safe_name(lead: dict) -> str:
     return re.sub(r"-{2,}", "-", stem).strip("-.") or f"lead-{lead.get('id')}"
 
 
+def dedupe_by_address(leads: list) -> tuple:
+    """Collapse lead rows that are the same physical door. Returns (kept, dropped).
+
+    Permit feeds emit ONE ROW PER PERMIT, so a house with a deck permit and a
+    roof permit is two leads at one address. Measured on production: 178
+    eligible rows -> 63 unique addresses. Mailing the rows means mailing some
+    doors five times, which burns postage and reads as spam in the exact
+    neighborhood you want referrals from.
+
+    Keeps the LOWEST id per address, so a re-run is deterministic and the
+    surviving row is stable across batches (a later permit at the same house
+    will not silently start a second letter).
+
+    Normalization lowercases, strips punctuation, and collapses whitespace, so
+    "4695 Haygood Point Ct." and "4695  HAYGOOD POINT CT" are one door. Unit
+    designators are NOT expanded -- over-normalizing risks merging genuinely
+    different units in a townhouse development, and the cost of that is a
+    letter to a neighbor rather than a lost lead.
+    """
+    def norm(value):
+        s = re.sub(r"[^a-z0-9 ]", " ", (value or "").lower())
+        return re.sub(r"\s+", " ", s).strip()
+
+    kept, dropped = [], []
+    seen = {}
+    for ld in sorted(leads, key=lambda r: int(r["id"])):
+        key = norm(ld.get("address"))
+        if not key:
+            # No address can't be deduped against anything; keep it so the
+            # operator sees it rather than having it vanish.
+            kept.append(ld)
+            continue
+        if key in seen:
+            dropped.append((ld, seen[key]))
+            continue
+        seen[key] = ld
+        kept.append(ld)
+    return kept, dropped
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--company", default="construction")
     ap.add_argument("--list", action="store_true", help="show eligible leads, write nothing")
     ap.add_argument("--out", default="", help="output directory for PDFs + manifest.csv")
     ap.add_argument("--id", action="append", help="restrict to specific lead id (repeatable)")
+    ap.add_argument("--all-rows", action="store_true",
+                    help="do NOT collapse duplicate addresses (one letter per permit row). "
+                         "Off by default because this wastes postage and reads as spam.")
     ap.add_argument("--trace-names", action="store_true",
                     help="use cached skip-trace owner names so letters read 'Dear L. Barlow' "
                          "instead of 'Dear the homeowner' (reads the cache only, spends nothing)")
@@ -392,6 +435,23 @@ def main() -> int:
     if not leads:
         print(f"No address-only leads for company '{args.company}'.")
         return 0
+
+    if not args.all_rows:
+        leads, dropped = dedupe_by_address(leads)
+        if dropped:
+            print(f"Deduplicated {len(dropped)} repeat row(s) at the same address "
+                  f"-> {len(leads)} unique door(s).\n")
+            counts = {}
+            for ld, first in dropped:
+                k = _clean(first.get("address"))
+                counts[k] = counts.get(k, 0) + 1
+            for addr, n in sorted(counts.items(), key=lambda kv: -kv[1])[:10]:
+                print(f"  {n} letter(s) suppressed at {addr[:60]}")
+            if len(counts) > 10:
+                print(f"  ... and {len(counts) - 10} more address(es)")
+            print()
+    else:
+        print("--all-rows: one letter per permit row. Expect duplicate doors.\n")
 
     if args.trace_names:
         try:
@@ -415,6 +475,23 @@ def main() -> int:
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
+
+    # A letter with no ZIP is undeliverable or guessable, and a guessed ZIP that
+    # lands wrong is worse than no letter. Norfolk publishes no ZIP at all, so
+    # this is expected, not exceptional -- held back loudly rather than mailed.
+    mailable, held = [], []
+    for ld in leads:
+        if re.search(r"\b\d{5}(?:-\d{4})?\b", _clean(ld.get("address"))):
+            mailable.append(ld)
+        else:
+            held.append(ld)
+    if held:
+        print(f"HOLDING BACK {len(held)} address(es) with no ZIP in the feed -- "
+              f"USPS cannot deliver these and a wrong ZIP is worse than no letter:")
+        for ld in held:
+            print(f"  #{ld['id']:<6} {_clean(ld.get('address'))[:70]}")
+        print("  Fix the ZIP (or geocode), then re-run.\n")
+    leads = mailable
 
     rows = []
     for ld in leads:
