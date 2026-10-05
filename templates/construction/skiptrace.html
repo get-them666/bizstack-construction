@@ -18,15 +18,31 @@
         and it costs nothing on an address you have checked before.
     </p>
 
-    <form id="st-form" class="mt-6 bg-white rounded-2xl border border-slate-200 p-5 grid grid-cols-1 sm:grid-cols-2 gap-3">
+    {# The permits lane already knows every address, so pick one instead of
+       typing it. Falls back to manual entry for an address not on a permit. #}
+    <div class="mt-6 bg-white rounded-2xl border border-slate-200 p-5">
+        <label class="block text-xs font-semibold text-slate-600 mb-1">Pick an address</label>
+        <select id="st-pick"
+                class="w-full px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-400">
+            <option value="">Loading addresses…</option>
+        </select>
+        <p class="mt-2 text-xs text-slate-500">
+            {{ address_count or 0 }} addresses from your permit feeds. This calls the same
+            endpoint as the “Who owns this property?” button on each permit card, so it
+            reads the same cache and never spends a second lookup on an address already checked.
+        </p>
+    </div>
+
+    <form id="st-form" class="mt-4 bg-white rounded-2xl border border-slate-200 p-5 grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <input type="hidden" id="st-permit-id" value="">
         <div class="sm:col-span-2">
             <label class="block text-xs font-semibold text-slate-600 mb-1">Street address</label>
-            <input type="text" id="st-street" value="8494 Lynn River Road" required
+            <input type="text" id="st-street" required
                    class="w-full px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-400">
         </div>
         <div>
             <label class="block text-xs font-semibold text-slate-600 mb-1">City</label>
-            <input type="text" id="st-city" value="Norfolk" required
+            <input type="text" id="st-city" required
                    class="w-full px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-400">
         </div>
         <div class="grid grid-cols-2 gap-3">
@@ -60,6 +76,44 @@
 {% block scripts %}
 <script>
 document.addEventListener('DOMContentLoaded', function() {
+    const pick = document.getElementById('st-pick');
+    const permitId = document.getElementById('st-permit-id');
+    const street = document.getElementById('st-street');
+    const city = document.getElementById('st-city');
+    const zip = document.getElementById('st-zip');
+
+    // Load the permit addresses so this is a picker, not four typing boxes.
+    (async function loadAddresses() {
+        try {
+            const res = await fetch('/api/skiptrace/addresses', { credentials: 'same-origin' });
+            if (!res.ok) throw new Error('failed');
+            const html = await res.text();
+            pick.innerHTML = html;
+            pick.disabled = false;
+        } catch (e) {
+            pick.innerHTML = '<option value="">Could not load addresses — type it below</option>';
+            pick.disabled = true;
+        }
+    })();
+
+    // Selecting an address fills the manual fields too, so the lookup path is
+    // identical either way and the form still works if the list is unavailable.
+    pick.addEventListener('change', function() {
+        const opt = pick.options[pick.selectedIndex];
+        if (!opt || !opt.value) return;
+        permitId.value = opt.value;
+        const text = opt.textContent.trim();
+        const m = text.match(/^(.*?),\s*([A-Za-z .'-]+?),\s*([A-Z]{2})\s*(\d{5}(-\d{4})?)?\s*$/);
+        if (m) {
+            street.value = m[1];
+            city.value = m[2].trim();
+            zip.value = m[4] || '';
+        } else {
+            street.value = text;
+        }
+        street.focus();
+    });
+
     const form = document.getElementById('st-form');
     const out = document.getElementById('st-out');
     const go = document.getElementById('st-go');
@@ -74,7 +128,19 @@ document.addEventListener('DOMContentLoaded', function() {
 
     function render(d) {
         if (d.detail) {
-            return '<div class="rounded-2xl bg-amber-50 border border-amber-200 p-5 text-amber-800">' + esc(d.detail) + '</div>';
+            // Be specific about WHY. A provider that is out of quota and an
+            // address the assessor genuinely has no record of look identical
+            // otherwise, and the difference decides whether you retry, wait for
+            // the monthly reset, or move on.
+            let extra = '';
+            if (/quota|429|rate limit|too many/i.test(d.detail)) {
+                extra = '<p class="mt-2 text-xs">This is the monthly provider allowance, '
+                      + 'not a bad address. Lookups already in the cache still work, and '
+                      + 'repeat checks of a known address cost nothing. Try another address '
+                      + 'or wait for the allowance to reset.</p>';
+            }
+            return '<div class="rounded-2xl bg-amber-50 border border-amber-200 p-5 text-amber-800">'
+                 + esc(d.detail) + extra + '</div>';
         }
         if (!d.found) {
             return '<div class="rounded-2xl bg-white border border-slate-200 p-5">'
@@ -148,7 +214,15 @@ document.addEventListener('DOMContentLoaded', function() {
         body.set('state', document.getElementById('st-state').value);
         body.set('zip_code', document.getElementById('st-zip').value);
         try {
-            const res = await fetch('/api/skiptrace', { method: 'POST', body: body });
+            // When an address was picked, use the SAME endpoint the per-permit
+            // button uses. That route reads the address from the permit row
+            // server-side rather than trusting the browser to have formatted it
+            // correctly, which is why the card button has always worked.
+            const picked = document.getElementById('st-permit-id').value;
+            const url = picked
+                ? '/api/job-leads/' + encodeURIComponent(picked) + '/skiptrace'
+                : '/api/skiptrace';
+            const res = await fetch(url, { method: 'POST', body: picked ? undefined : body });
             const text = await res.text();
             let json;
             try { json = JSON.parse(text); }

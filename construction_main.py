@@ -15,6 +15,7 @@ Same stack and conventions as the Broom Service app, in its own repo + deploy.
 import os
 import io
 import csv
+import html
 import json
 import uuid
 import hmac
@@ -2279,7 +2280,7 @@ async def photo_quote_page(request: Request):
 
 
 @app.get("/skiptrace", response_class=HTMLResponse)
-async def skiptrace_page(request: Request):
+async def skiptrace_page(request: Request, db=Depends(get_db)):
     """Standalone owner-of-record lookup.
 
     The per-permit button on each card does the same thing, but it sits at the
@@ -2288,7 +2289,19 @@ async def skiptrace_page(request: Request):
     is_authed, _ = require_auth(request)
     if not is_authed:
         return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
-    return templates.TemplateResponse(request=request, name="skiptrace.html", context={})
+
+    # Addresses the permits lane already knows, so the form is a picker rather
+    # than four text boxes. Populated after load by /api/skiptrace/addresses.
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT count(*) AS c FROM job_leads "
+            "WHERE NOT is_demo AND COALESCE(address,'') <> '';"
+        )
+        address_count = (cur.fetchone() or {}).get("c", 0)
+    return templates.TemplateResponse(
+        request=request, name="skiptrace.html",
+        context={"address_count": address_count},
+    )
 
 
 @app.get("/inventory", response_class=HTMLResponse)
@@ -2746,6 +2759,35 @@ async def record_lead_touch(lead_id: int, request: Request, channel: str = Form(
         return JSONResponse(content=result, status_code=400)
     return RedirectResponse(url=request.headers.get("referer") or "/leads",
                             status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.get("/api/skiptrace/addresses", response_class=HTMLResponse)
+async def skiptrace_addresses(request: Request, q: str = "", db=Depends(get_db)):
+    """Recent addresses to pick from, so nobody retypes a permit address.
+
+    The per-permit button on the board already knows the address; this is the
+    same list for the standalone page. Deliberately a PAGE and not JSON: it
+    renders into the form via innerHTML, and every value below is escaped by
+    the caller before interpolation.
+    """
+    require_admin(request)
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT id, address FROM job_leads "
+            "WHERE NOT is_demo AND COALESCE(address,'') <> '' "
+            "ORDER BY found_at DESC LIMIT 60;"
+        )
+        rows = cur.fetchall()
+    term = (q or "").strip().lower()
+    items = []
+    for r in rows:
+        addr = (r["address"] or "").strip()
+        if term and term not in addr.lower():
+            continue
+        items.append(f'<option value="{html.escape(str(r["id"]))}">'
+                     f'{html.escape(addr)}</option>')
+    return HTMLResponse(content="".join(items) or
+                        '<option value="">No addresses match</option>')
 
 
 @app.post("/api/job-leads/{permit_id}/skiptrace")
