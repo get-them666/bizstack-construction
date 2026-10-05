@@ -207,24 +207,39 @@ def search_web(name: str, company: str = "", city: str = "") -> dict:
         return _skip(f"search failed: {type(exc).__name__}")
 
     # Walk the result links and check the first few real pages.
+    #
+    # DuckDuckGo's HTML endpoint returns REDIRECT links of the form
+    #   //duckduckgo.com/l/?uddg=<url-encoded real url>&rut=...
+    # not direct URLs. Treating those as "an internal link, skip it" discarded
+    # every single result, which is why the fetcher reported "no published
+    # email found" for every name while the same query visibly returns 6-7
+    # results. Unwrap the uddg parameter first, then filter.
     links = re.findall(r'class="result__a"[^>]*href="([^"]+)"', html)
     candidates = []
-    for href in links[:6]:
+    for href in links:
         real = urllib.parse.unquote(href)
-        if "duckduckgo.com" in real or _BAD_PATH.search(real):
+        if "duckduckgo.com/l/" in real or "uddg=" in real:
+            parsed = urllib.parse.urlparse(real if real.startswith("http") else "https:" + real)
+            qs = urllib.parse.parse_qs(parsed.query)
+            if qs.get("uddg"):
+                real = qs["uddg"][0]
+        if "duckduckgo.com" in real:
+            continue
+        if _BAD_PATH.search(real):
             continue
         if not real.startswith("http"):
             continue
         candidates.append(real)
-        if len(candidates) >= 3:
+        if len(candidates) >= 4:
             break
 
-    found, seen = [], set()
+    found, seen, pages_read = [], set(), 0
     for link in candidates:
         try:
             page = _strip_noise(_fetch(link))
         except Exception:
             continue
+        pages_read += 1
         for a in _emails_in(page):
             if a in seen:
                 continue
@@ -235,7 +250,8 @@ def search_web(name: str, company: str = "", city: str = "") -> dict:
         time.sleep(1.0)
 
     if not found:
-        return {"ok": False, "reason": "no published email found",
+        return {"ok": False,
+                "reason": f"no published email on the first {pages_read} page(s)",
                 "checked": len(candidates), "notes": []}
 
     # Prefer a mailto: (the site is telling you), then a personal-looking
@@ -378,3 +394,92 @@ def fetch_for_leads(cur, requested_by: str = "owner", cap: int = None, dry_run: 
         time.sleep(1.5)  # be a person about it
 
     return summary
+
+
+def test_one(name: str, company: str = "") -> dict:
+    """Look up a single name and print the result. No database, no auth.
+
+    This is the way to test the fetcher without touching leads: it makes one
+    search, writes no cache row, and changes nothing. Use a name you actually
+    own or a well-known public business -- it is a real outbound HTTP request
+    to whatever pages it finds.
+    """
+    print(f"name    : {name!r}")
+    print(f"company : {company or '(none)'}")
+
+    if not can_email(name):
+        try:
+            from skiptrace_service import is_placeholder_name
+            verdict = is_placeholder_name(name)
+        except ImportError:
+            verdict = None
+        print("REFUSED : looks like a placeholder, not a person"
+              + (f" (is_placeholder_name -> {verdict})" if verdict is not None else ""))
+        return {"ok": False, "reason": "placeholder name"}
+
+    print(f"querying public web (up to 3 result pages, ~1s apart)...")
+    t0 = time.time()
+    result = search_web(name, company, "")
+    took = time.time() - t0
+
+    if result.get("ok"):
+        print(f"\nFOUND   : {result['email']}")
+        print(f"via     : {result.get('source_url')}")
+        print(f"confidence: {result.get('confidence')}")
+        if result.get("other_found"):
+            print(f"also saw: {', '.join(result['other_found'])}")
+        print(f"\n  mailto:  -> strongest signal, the page is telling you")
+        print(f"  personal -> looks like a person at a company domain")
+        print(f"  generic  -> role account (info@, contact@) or a freemail provider")
+    else:
+        print(f"\nNO RESULT: {result.get('reason')}")
+        if result.get("checked") is not None:
+            print(f"pages checked: {result['checked']}")
+    print(f"\ntook {took:.1f}s. Nothing was cached and no lead was written.")
+    return result
+
+
+def _has_sts() -> bool:
+    try:
+        import skiptrace_service  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+if __name__ == "__main__":
+    import argparse
+
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--name", help="look up one name, no database needed")
+    ap.add_argument("--company", default="", help="optional company for the query")
+    ap.add_argument("--test-validator", action="store_true",
+                    help="offline checks only: no network, safe to run anywhere")
+    args = ap.parse_args()
+
+    if args.test_validator:
+        cases = [
+            ("john.smith@gmail.com", True), ("info@roofingco.com", True),
+            ("x@lead.local", False), ("a@example.com", False),
+            (".bad@x.com", False), ("bad.@x.com", False), ("a..b@x.com", False),
+            ("ab@gmail.com", False), ("real.name@biz.co", True),
+        ]
+        bad = [a for a, want in cases if usable_email(a) != want]
+        for a, want in cases:
+            got = usable_email(a)
+            print(f"  {'PASS' if got == want else 'FAIL'}  usable_email({a!r}) = {got}")
+        for n, want in [("Fred Kelley", True), ("Virginia Beach", False),
+                        ("self", False), ("Owner · 123", False),
+                        ("Testament Holdings", False), ("Michael Scott", True)]:
+            got = can_email(n)
+            print(f"  {'PASS' if got == want else 'FAIL'}  can_email({n!r}) = {got}")
+            if got != want:
+                bad.append(n)
+        print(f"\n{len(cases) + 6 - len(bad)}/{len(cases) + 6} pass, no network used")
+        raise SystemExit(1 if bad else 0)
+
+    if args.name:
+        raise SystemExit(0 if test_one(args.name, args.company) else 0)
+
+    ap.print_help()
