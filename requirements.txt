@@ -16,3 +16,7 @@ certifi>=2024.2.2
 # Server-side RudderStack ingestion. Analytics must never be able to break a
 # page, so every call in analytics_service.py is wrapped and fails soft.
 rudder-sdk-python>=2.1.9
+# enrichment.py: reverse-address a permit lead to owner email/phone. Same
+# module the hosts repo runs; both apps share one database, so it has to be
+# installed on both sides.
+peopledatalabs>=6.0.0

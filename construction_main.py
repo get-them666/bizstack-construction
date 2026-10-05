@@ -48,6 +48,7 @@ from stripe_service import StripeService, default_deposit_cents
 import permit_enricher
 import permit_stats
 import email_fetcher
+import enrichment
 from signalwire_service import SignalWireService
 import vapi_service
 import property_service
@@ -2890,6 +2891,46 @@ def run_with_cursor(db, fn):
     """
     with db.cursor() as cur:
         return fn(cur)
+
+
+@app.post("/api/enrich/pdl")
+async def enrich_pdl(request: Request, limit: int = Form(10),
+                     dry_run: str = Form("1"), db=Depends(get_db)):
+    """Reverse-address permit leads to owner email/phone via People Data Labs.
+
+    DRY RUN by default. Every lookup is a billable PDL record, so the response
+    reports the hit list, the miss list and the projected spend BEFORE any
+    write happens. Pass dry_run=0 to actually write.
+
+    Requires PDL_API_KEY on the service. Returns a clear 400 explaining that
+    when it is absent, rather than reporting zero hits -- which would be
+    indistinguishable from "PDL found nobody".
+    """
+    require_admin(request)
+    if not enrichment.pdl_enabled():
+        return JSONResponse(status_code=400, content={
+            "ok": False,
+            "error": "PDL_API_KEY is not set on this service.",
+            "how_to": "Sign up at peopledatalabs.com, then: "
+                      "railway variable set PDL_API_KEY=<key> --service BizStack-Construction "
+                      "--skip-deploys",
+        })
+    is_dry = (dry_run or "").strip().lower() not in ("0", "false", "no", "off")
+    capped = max(1, min(int(limit or 10), 100))
+
+    # enrichment opens its own psycopg connection from DATABASE_URL and blocks
+    # on HTTP per record, so it cannot share this route's connection (psycopg is
+    # not thread-safe) and must not run on the event loop.
+    try:
+        await asyncio.to_thread(enrichment.enrich_pending_leads, capped, is_dry)
+    except Exception as exc:
+        return JSONResponse(status_code=502, content={
+            "ok": False, "error": f"{type(exc).__name__}: {exc}"})
+
+    if is_dry:
+        summary = {"ok": True, **dict(enrichment.LAST_RUN)}
+        return JSONResponse(content=summary)
+    return JSONResponse(content={"ok": True, "dry_run": False, "note": "see service logs"})
 
 
 @app.post("/api/email/fetch")
