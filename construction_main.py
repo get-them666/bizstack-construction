@@ -46,6 +46,7 @@ import copilot_ops
 from stripe_service import StripeService, default_deposit_cents
 import permit_enricher
 import permit_stats
+import email_fetcher
 from signalwire_service import SignalWireService
 import vapi_service
 import property_service
@@ -2847,6 +2848,34 @@ def run_with_cursor(db, fn):
     """
     with db.cursor() as cur:
         return fn(cur)
+
+
+@app.post("/api/email/fetch")
+async def email_fetch(request: Request, cap: int = Form(0),
+                      commit: str = Form(""), db=Depends(get_db)):
+    """Look up a published email for named leads that have none.
+
+    Admin only, DRY RUN unless commit=1, and off entirely unless
+    EMAIL_FETCH_MAX > 0 is set as a service variable. That triple gate is
+    deliberate: this walks out to public web pages, so it must be a
+    conscious act, not something a stray scheduler can start.
+
+    Returns the leads it examined, the ones it could resolve, and the ones
+    with no public footprint -- the miss list matters as much as the hits.
+    """
+    require_admin(request)
+    actor = current_actor(request) or {}
+    dry = (commit or "").strip().lower() not in ("1", "true", "yes", "on")
+
+    def run(cur):
+        return email_fetcher.fetch_for_leads(
+            cur, requested_by=actor.get("email") or "owner",
+            cap=(cap or None), dry_run=dry,
+        )
+
+    summary = await asyncio.to_thread(run_with_cursor, db, run)
+    db.commit()
+    return JSONResponse(content=summary)
 
 
 @app.post("/api/leads/{lead_id}/draft-email")

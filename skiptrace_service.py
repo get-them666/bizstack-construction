@@ -596,10 +596,25 @@ def enrich_cap() -> int:
 
 
 _PLACEHOLDER_TOKENS = (
-    "permit", "city", "unknown", "homeowner", "owner", "test", "asleep",
-    "morning", "lead.local", "backlog", "instant_quote", "reddit", "website",
-    "linkedin", "shovels", "sam-gov", "n/a", "not available", "tbd",
+    "permit", "homeowner", "asleep", "morning", "lead.local", "backlog",
+    "instant_quote", "reddit", "website", "linkedin", "shovels", "sam-gov",
+    "n/a", "not available", "tbd", "applicant", "owner name", "n/a name",
+    # Words that are common fragments of REAL names -- "test" in "Testament",
+    # "city" in "Cityscape", "unknown" in "Unknown Soldier", "owner" in
+    # "Owner John Smith" -- are deliberately NOT substring tokens; they are
+    # whole-token matches in _PLACEHOLDER_EXACT below. Keeping them as
+    # substrings silently ate three real names in testing.
+    # "permit" stays a substring on purpose: "permit_finder" has no word
+    # boundary after "permit" because "_" is a word character.
 )
+# Whole-token matches, checked BEFORE substring matching. "Self" is the
+# common case (SELF_APPLICANTS in permit_service). "Self" and "Myself" share
+# a substring, so self must never be a substring token.
+_PLACEHOLDER_EXACT = {
+    "self", "self applied", "self-applied", "owner", "owner unknown",
+    "applicant", "city", "unknown", "homeowner", "test", "test lead",
+    "tbd", "na", "n a", "none", "null", "not available", "permits",
+}
 
 
 def is_placeholder_name(name: str) -> bool:
@@ -617,6 +632,15 @@ def is_placeholder_name(name: str) -> bool:
     """
     cleaned = re.sub(r"\s+", " ", str(name or "")).strip().lower()
     if not cleaned:
+        return True
+    if cleaned in _PLACEHOLDER_EXACT:
+        return True
+    # "Label · detail" form: "Permit · 415 Carlisle Way", "Owner · 123",
+    # "Reddit · /u/someone". The LABEL is what says whether this is a person.
+    # Check the label alone so "Owner · 123" is caught without making "owner"
+    # a substring token again.
+    label = re.split(r"\s·\s", cleaned, maxsplit=1)[0].strip()
+    if label and label != cleaned and label in _PLACEHOLDER_EXACT:
         return True
     if any(token in cleaned for token in _PLACEHOLDER_TOKENS):
         return True
