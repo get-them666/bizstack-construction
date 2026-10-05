@@ -87,8 +87,10 @@ document.addEventListener('DOMContentLoaded', function() {
         try {
             const res = await fetch('/api/skiptrace/addresses', { credentials: 'same-origin' });
             if (!res.ok) throw new Error('failed');
-            const html = await res.text();
-            pick.innerHTML = html;
+            // `markup`, not `html` -- shadowing the global html object in a page
+            // that builds HTML is asking for trouble later.
+            const markup = await res.text();
+            pick.innerHTML = markup;
             pick.disabled = false;
         } catch (e) {
             pick.innerHTML = '<option value="">Could not load addresses — type it below</option>';
@@ -183,7 +185,7 @@ document.addEventListener('DOMContentLoaded', function() {
             h += '<p class="mx-5 mb-4 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">'
                + 'No ZIP was given, so this is a city-level match — confirm the street before mailing or calling.</p>';
         }
-        if (d.known_contacts || []).length) {
+        if ((d.known_contacts || []).length) {
             h += '<div class="mx-5 mb-4 rounded-xl border border-emerald-200 bg-emerald-50 p-3">';
             h += '<p class="text-[10px] font-bold uppercase tracking-wide text-emerald-700 mb-2">We already have their contact</p>';
             d.known_contacts.forEach(function(c) {
