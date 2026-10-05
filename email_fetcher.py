@@ -233,11 +233,15 @@ def search_web(name: str, company: str = "", city: str = "") -> dict:
         if len(candidates) >= 4:
             break
 
-    found, seen, pages_read = [], set(), 0
+    found, seen, pages_read, errors = [], set(), 0, []
     for link in candidates:
         try:
             page = _strip_noise(_fetch(link))
-        except Exception:
+        except Exception as exc:
+            # Record WHY. `except: continue` here is what made this look like
+            # "nobody publishes their email" when the real cause was that no
+            # candidate page could be fetched at all.
+            errors.append(f"{urllib.parse.urlparse(link).netloc}: {type(exc).__name__}")
             continue
         pages_read += 1
         for a in _emails_in(page):
@@ -250,6 +254,13 @@ def search_web(name: str, company: str = "", city: str = "") -> dict:
         time.sleep(1.0)
 
     if not found:
+        # Distinguish "the scraper could not read anything" from "the pages had
+        # no email on them". They mean completely different things and looked
+        # identical before.
+        if pages_read == 0 and errors:
+            return {"ok": False,
+                    "reason": "could not read any result page: " + "; ".join(errors[:3]),
+                    "checked": len(candidates), "notes": ["network or TLS failure, not a miss"]}
         return {"ok": False,
                 "reason": f"no published email on the first {pages_read} page(s)",
                 "checked": len(candidates), "notes": []}
