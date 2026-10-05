@@ -240,6 +240,80 @@ try:
 except Exception as e:
     check("lead with no phone does not raise", False, repr(e))
 
+print("\n[7] contact details already held are surfaced by address")
+# Regression: the assessor record yields a name and no way to reach anyone,
+# which made it look like a paid skip-trace vendor was the only route. But some
+# leads are ALREADY enriched -- lead #1004 is Leonard G Barlow Jr /
+# leonard.barlow@gmail.com at 8494 LYNN RIVER ROAD, the same address the Owner
+# Lookup resolves from RentCast. Nothing rendered that, so a contact the owner
+# already had was invisible on both the permit card and the lookup page.
+with db.cursor() as cur:
+    cur.execute("""INSERT INTO leads (name, phone, email, address, project_type, source,
+                                  status, company, created_at)
+                   VALUES ('Known Contact Person', '757-555-0142', 'reachme@barlow.example',
+                           '8494 LYNN RIVER ROAD, Norfolk, VA', 'Deck', 'permit_finder',
+                           'new', 'construction', NOW()) RETURNING id;""")
+    known_id = cur.fetchone()["id"]
+    # Second lead at the SAME address (differing case) to prove dedupe.
+    cur.execute("""INSERT INTO leads (name, phone, email, address, project_type, source,
+                                  status, company, created_at)
+                   VALUES ('Known Contact Person', '757-555-0142', 'reachme@barlow.example',
+                           '8494 Lynn River Road, Norfolk, VA', 'Roof', 'permit_finder',
+                           'new', 'construction', NOW()) RETURNING id;""")
+    dup_id = cur.fetchone()["id"]
+    # Only the synthetic tracking address. Must never render as a real email.
+    cur.execute("""INSERT INTO leads (name, phone, email, address, project_type, source,
+                                  status, company, created_at)
+                   VALUES ('Permit Row', '', 'con-permit-422d36ec92d018b@lead.local',
+                           '8494 LYNN RIVER ROAD, Norfolk, VA', 'Fence', 'permit_finder',
+                           'new', 'construction', NOW()) RETURNING id;""")
+    placeholder_id = cur.fetchone()["id"]
+    # A hidden source. 128 of the real contacts are sam-gov, switched off by the
+    # operator; surfacing one here would leak it through a side door.
+    cur.execute("""INSERT INTO leads (name, phone, email, address, project_type, source,
+                                  status, company, created_at)
+                   VALUES ('Hidden Federal Vendor', '202-555-0100', 'hidden@gov.example',
+                           '8494 LYNN RIVER ROAD, Norfolk, VA', 'Roof', 'sam-gov',
+                           'new', 'construction', NOW()) RETURNING id;""")
+    hidden_id = cur.fetchone()["id"]
+    # The permits lane renders job_leads rows, so the card under test needs a
+    # permit at that address as well as the leads rows.
+    cur.execute("""INSERT INTO job_leads (address, city, work_type, status, found_at)
+                   VALUES ('8494 LYNN RIVER ROAD', 'Norfolk', 'deck', 'new', NOW())
+                   RETURNING id;""")
+    known_permit_id = cur.fetchone()["id"]
+db.commit()
+
+with db.cursor() as cur:
+    got = m.contacts_at_addresses(cur, [
+        {"id": 1, "address": "8494 LYNN RIVER ROAD, Norfolk, VA"},
+        {"id": 2, "address": "999 Nowhere Rd, Norfolk, VA 23510"},
+    ])
+check("contact surfaces for the matching address", 1 in got, f"got keys {sorted(got)}")
+check("the email is shown", any(c["email"] == "reachme@barlow.example"
+                                for c in got.get(1, [])), got.get(1))
+check("the phone is shown", any(c["phone"] == "757-555-0142"
+                                for c in got.get(1, [])), got.get(1))
+check("duplicate rows at one address collapse to one contact",
+      len(got.get(1, [])) == 1, got.get(1))
+check("a synthetic @lead.local tracking address is never shown as an email",
+      not any("lead.local" in c["email"] for c in got.get(1, [])), got.get(1))
+check("a hidden sam-gov contact is not surfaced",
+      not any("gov.example" in c["email"] for c in got.get(1, [])), got.get(1))
+check("an address with no contact yields nothing", 2 not in got, sorted(got))
+
+card = client.get("/leads?lane=permits&q=LYNN+RIVER").text
+check("the permit card shows the contact we already hold",
+      "reachme@barlow.example" in card, "not on the card")
+check("the permit card says where it came from",
+      "We already have their contact" in card, "card carries no label")
+
+with db.cursor() as cur:
+    cur.execute("DELETE FROM leads WHERE id = ANY(%s);",
+                ([known_id, dup_id, placeholder_id, hidden_id],))
+    cur.execute("DELETE FROM job_leads WHERE id = %s;", (known_permit_id,))
+db.commit()
+
 print("\n" + "=" * 60)
 if FAILS:
     print(f"{len(FAILS)} FAILING:")

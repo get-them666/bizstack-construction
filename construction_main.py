@@ -128,6 +128,115 @@ def source_visibility_params() -> list:
     return list(hidden_lead_sources())
 
 
+# --- contacts we ALREADY hold, keyed to a street address ---------------------
+def _known_contacts_for(cur, street, city, state, zip_code) -> list:
+    """Contacts already held for one address. [] when there are none.
+
+    The single-address form of contacts_at_addresses(), for the two owner-lookup
+    routes. Same filters, same reason: this is our own data, not a vendor's.
+    """
+    row_id = contacts_at_addresses(cur, [{"id": 0, "address": (
+        f"{street or ''}, {city or ''}, {state or ''} {zip_code or ''}").strip()}])
+    return [dict(c) for c in (row_id.get(0) or [])]
+
+
+def contacts_at_addresses(cur, rows, id_key: str = "id",
+                          address_key: str = "address") -> dict:
+    """Map row id -> contact details already held for that street address.
+
+    WHY THIS EXISTS RATHER THAN A PROVIDER CALL
+    The assessor record gives an owner NAME and no way to reach them, which made
+    it look like reaching a permit lead required buying a skip-trace vendor.
+    But the answer is often already in this table. Lead #1004 is
+    "Leonard G Barlow Jr / leonard.barlow@gmail.com" at 8494 LYNN RIVER ROAD --
+    the same address the Owner Lookup resolves to "Leonard G Barlow" from
+    RentCast. The owner already had the email; nothing on the permit card or the
+    lookup page said so, so it was invisible.
+
+    So this reads `leads` rather than calling anyone. No key, no quota, no
+    network, and it cannot be rate limited. RentCast is still the right tool for
+    the 529 addresses that have NO lead row at all; this is for the ones we have
+    already enriched.
+
+    TWO FILTERS ARE LOAD-BEARING
+    Placeholder values are excluded: every permit row carries a synthetic
+    `@lead.local` tracking address, and treating that as an email would put a
+    dead address on the card and make the app look like it had contact data it
+    does not. Same for the junk phone tokens ('unknown', 'n/a', '-').
+
+    Hidden sources are excluded too. 128 of the 142 contacts in the table are
+    sam-gov, which the operator switched off; surfacing them onto permit cards
+    would leak a deliberately hidden source through a side door, and would show
+    federal-contractor contacts next to a homeowner address.
+
+    One query for the whole page, not one per row. Contacts are deduped per
+    address: the same person can hold several rows at one house.
+    """
+    wanted = {}
+    for r in rows or []:
+        if not isinstance(r, dict):
+            continue
+        parsed = skiptrace_service.parse_address(r.get(address_key) or "")
+        if not parsed["ok"]:
+            continue
+        key = skiptrace_service.normalize_address(
+            parsed["street"], parsed["city"], parsed["state"], parsed["zipcode"])
+        wanted.setdefault(key, []).append(r.get(id_key))
+
+    if not wanted:
+        return {}
+
+    cur.execute(
+        "SELECT name, email, phone, status, source, address FROM leads "
+        "WHERE address IS NOT NULL AND BTRIM(address) <> '' "
+        "  AND ((email IS NOT NULL AND BTRIM(email) <> '' "
+        "        AND LOWER(email) NOT LIKE '%%@lead.local') "
+        "    OR (phone IS NOT NULL AND BTRIM(phone) <> '' "
+        "        AND LOWER(BTRIM(phone)) NOT IN ('unknown','n/a','none','-','none'))) "
+        + source_visibility_clause() + ";",
+        tuple(source_visibility_params()),
+    )
+
+    bucket: dict = {}
+    for row in cur.fetchall():
+        parsed = skiptrace_service.parse_address(row.get("address") or "")
+        if not parsed["ok"]:
+            continue
+        key = skiptrace_service.normalize_address(
+            parsed["street"], parsed["city"], parsed["state"], parsed["zipcode"])
+        if key not in wanted:
+            continue
+        email = (row.get("email") or "").strip().lower()
+        if email.endswith("@lead.local"):
+            email = ""
+        phone = (row.get("phone") or "").strip()
+        if phone.lower() in ("unknown", "n/a", "none", "-"):
+            phone = ""
+        if not email and not phone:
+            continue
+        # Same person, several rows at one house (permits re-ingested). Key the
+        # dedupe on the contact itself so the card shows one line, not three.
+        ident = (email, phone)
+        if any(c["_ident"] == ident for c in bucket.setdefault(key, [])):
+            continue
+        bucket[key].append({
+            "_ident": ident,
+            "name": (row.get("name") or "").strip(),
+            "email": email,
+            "phone": phone,
+            "status": row.get("status") or "",
+            "source": row.get("source") or "",
+        })
+
+    out = {}
+    for key, ids in wanted.items():
+        contacts = bucket.get(key)
+        if contacts:
+            for row_id in ids:
+                out[row_id] = contacts
+    return out
+
+
 # --- Company identity (env-driven so both brands stay configurable) ---------
 def company() -> dict:
     return {
@@ -2114,6 +2223,11 @@ async def leads_page(request: Request, status_filter: str = "", q: str = "", lan
         # was reloaded, because the lookup deliberately does not write to the
         # permit.
         permit_owners = skiptrace_service.owners_for_rows(cur, permits)
+        # Contact details we already hold for these addresses. The assessor
+        # record gives a name but no way to reach anyone, which made it look
+        # like a paid vendor was the only route -- but some of these leads are
+        # already enriched, and nothing on the card said so.
+        permit_contacts = contacts_at_addresses(cur, permits)
 
     return templates.TemplateResponse(request=request, name="leads.html", context={
         "user": {"email": user_email},
@@ -2127,6 +2241,7 @@ async def leads_page(request: Request, status_filter: str = "", q: str = "", lan
         "default_deposit": default_deposit_cents() / 100,
         "permits": permits,
         "permit_owners": permit_owners,
+        "permit_contacts": permit_contacts,
         "permit_statuses": PERMIT_STATUSES,
         "permit_status_labels": PERMIT_STATUS_LABELS,
         "permit_status_colors": PERMIT_STATUS_COLORS,
@@ -2585,6 +2700,7 @@ async def api_skiptrace(request: Request, street: str = Form(""), city: str = Fo
         cached["found"] = bool(cached.get("found"))
         with db.cursor() as cur:
             skiptrace_service.audit(cur, user_email, key, cached, cached=True)
+            cached["known_contacts"] = _known_contacts_for(cur, street, city, state, zip_code)
         db.commit()
         return JSONResponse(content=cached)
 
@@ -2598,6 +2714,7 @@ async def api_skiptrace(request: Request, street: str = Form(""), city: str = Fo
     with db.cursor() as cur:
         skiptrace_service.cache_put(cur, key, result)
         skiptrace_service.audit(cur, user_email, key, result, cached=False)
+        result["known_contacts"] = _known_contacts_for(cur, street, city, state, zip_code)
     db.commit()
     return JSONResponse(content=result)
 
