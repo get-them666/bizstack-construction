@@ -45,7 +45,7 @@ needs paper proof below.
 | Item | Status | Notes |
 |---|---|---|
 | Current bank statement showing $10,000 | ✅ | PNC statement pulled — clean PDF: `~/Documents/statement_equity_FINAL.pdf` (03/19 deposit = business revenue; the **$10K owner-equity** still needs the line to prove *your own funds* went into the business) |
-| Proof the $10K is invested in the business | ☐ | Depends how funds were injected — receipt/EIN record or statement note |
+| ~~Proof the $10K is invested in the business~~ | ⚠️ **correction** | The "$10,000" figure was wrong — never evidenced, no such deposit exists. Actual owner contribution is **~$2,600, April 12–18 2026** (from recollection, unverified). Statement drafted: `docs/OWNER-EQUITY-STATEMENT.html`. **Amount/method/source must be confirmed against a bank record before signing.** Note the date falls after the 03/19 revenue deposit, so confirm the funds were personal capital, not recycled revenue |
 
 ## Tax / identity
 
@@ -93,7 +93,7 @@ Statuses below are SBSD's requirement, **not** a claim about what you have on ha
 |---|---|---|
 | Proof you personally funded your ownership interest | ☐ | Both sides of cancelled checks, or receipts |
 | If >5 yrs old and records unavailable: signed statement of personal investment | ☐ | SBSD allows this fallback — document it while it's fresh |
-| **$10,000 equity injection proof** | ☐ | ⚠️ **Serves both files.** Same cancelled checks / deposit record the loan needs |
+| **Owner equity contribution proof** | ☐ | ⚠️ **Serves both files.** Not $10,000 — that figure was never real. Actual: **~$2,600 (April 2026)**, drafted in `OWNER-EQUITY-STATEMENT.html`, unsigned pending verification of amount/method/source against a bank record |
 
 ### Entity & tax
 | Item | Status | Notes |
@@ -143,7 +143,9 @@ for homeowner signatures, then scan or photograph and add to the package as PDFs
 5. Bundle everything into one folder as PDFs: `Loan_Package_<date>.zip` or PDF.
 6. Then send outreach in order: **SBDC → LISC → VCC → VSBFA**.
 
-**Fastest win available right now:** the *no employees* owner letter (SWaM section,
-Financials) takes five minutes to write and satisfies a hard SBSD requirement outright.
-The **$10,000 equity proof** is the single highest-value item — it's required by the loan
-*and* by SWaM, and it's the same document.
+**Fastest win available right now:** the *no employees* owner letter is drafted
+(`NO-EMPLOYEE-OWNER-LETTER.html`) and satisfies a hard SBSD requirement — it just needs
+your contractor license number and start date. The **owner equity statement** is drafted
+too (`OWNER-EQUITY-STATEMENT.html`) and serves the loan *and* SWaM from one document, but
+it is **unsigned pending verification**: confirm the ~$2,600 amount, method, and source
+against a bank record first.
