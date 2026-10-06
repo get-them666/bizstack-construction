@@ -26,7 +26,7 @@ needs paper proof below.
 | Invoice `BC-2026-002` marked **"PAID — CASH"** | ☐ | `docs/INVOICE_OLD_IRONSIDES.html` — covers the $2,200 cash remainder |
 | Signed receipt of payment | ☐ | `docs/RECEIPT_OLD_IRONSIDES.html` |
 | Before/after photos | ☐ | Highlight garage→apartment transformation |
-| Confirm the $2,200 gap | ☐ | What happened to the $2,200 not deposited? (materials paid cash / held) — have a one-line answer |
+| Confirm the $2,200 gap | ✅ | **Answered 2026-10-05:** disbursed directly in cash to suppliers for materials used on this job; never deposited. $22,500 (PNC 03/19) + $2,200 (materials) = $24,700 received in full. Reconciliation paragraph added to `INVOICE_OLD_IRONSIDES.html` and `RECEIPT_OLD_IRONSIDES.html`. Note: supplier receipts, if any were kept, would corroborate this — check the drawer/receipts folder. |
 | Income on tax return | ☐ | Included with 2026 filing |
 
 ## Broom Service records
@@ -74,7 +74,7 @@ Statuses below are SBSD's requirement, **not** a claim about what you have on ha
 | ~~First page of the two prior years~~ | **N/A** | Skip — no 3-year history exists yet |
 | ~~Form 941, last four quarters~~ | **N/A** | Established entities only |
 | *If sole prop / Sch. C:* full personal return | **N/A** | Established entities only |
-| **No-employees owner letter** (signed + dated) | ☐ | ✅ **Still worth sending** — five minutes, and it closes the 941 question anyway |
+| **No-employees owner letter** (signed + dated) | ☐ | ✅ **Drafted** — `docs/NO-EMPLOYEE-OWNER-LETTER.html`. Print, fill the two bracketed fields (contractor license #, start date), sign, date. Closes the 941 question outright. |
 | **Confirm the new-business lookback with SBSD** | ☐ | Call **(804) 786-6585**. Ask specifically: *"As a business in existence less than three years, do I substitute the EIN letter for the 3-year return requirement?"* Get the answer in your portal record |
 
 > ✅ **The three-year receipts gap is not a blocker.** **§ 2.2-4310** sets the size test at
@@ -119,8 +119,8 @@ Statuses below are SBSD's requirement, **not** a claim about what you have on ha
 > **Class 1 misdemeanor.** Everything checked here has to be true as filed. Don't guess at
 > ownership percentages or receipt figures — have SBDC read the file over first.
 
-**Fastest path from here:** ~~get the IRS EIN letter~~ ✅ done → write the
-**no-employees letter** (five minutes) → confirm the new-business lookback with SBSD at
+**Fastest path from here:** ~~get the IRS EIN letter~~ ✅ done → ~~write the
+**no-employees letter**~~ ✅ drafted, needs signature → confirm the new-business lookback with SBSD at
 (804) 786-6585 → SBDC review → file. Two of those four are same-day and one is a phone
 call.
 
@@ -131,8 +131,9 @@ Open each `docs/*.html` in a browser, then **Print → Save as PDF**. Print the 
 for homeowner signatures, then scan or photograph and add to the package as PDFs.
 
 ## Order to wrap up
-1. Confirm the $2,200 Old Ironsides gap (materials/held cash) — one-line answer ready. ✅ bank trail done.
+1. ~~Confirm the $2,200 Old Ironsides gap~~ ✅ answered — cash materials.
 2. Print invoices + receipts, get homeowner signatures (Sunnywood → Old Ironsides).
+   Both Old Ironsides documents now carry the reconciliation paragraph.
 3. Collect/email insurance scope paperwork from Rebecca Mastic.
 4. Gather photos for both jobs.
 5. Bundle everything into one folder as PDFs: `Loan_Package_<date>.zip` or PDF.
