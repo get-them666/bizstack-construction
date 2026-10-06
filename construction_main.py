@@ -7247,6 +7247,11 @@ async def connect_webhook(request: Request, db=Depends(get_db)):
         etype = event.type
         eobj = event.data.object if event.data else {}
     if etype in ("account.updated",):
+        # stripe>=8 objects are NOT mappings: eobj.get() raises AttributeError
+        # (->500 on every Connect event, so Stripe retries and gives up). Same
+        # fix as the payments webhook above; to_dict() exists on StripeObject
+        # but not on a plain dict, hence the hasattr guard.
+        eobj = eobj.to_dict() if hasattr(eobj, "to_dict") else dict(eobj)
         account_id = eobj.get("id")
         payouts_enabled = bool(eobj.get("payouts_enabled"))
         with db.cursor() as cur:
