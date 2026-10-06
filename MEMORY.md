@@ -207,6 +207,30 @@ recreated on the new account.
 `account.updated` returns 200 on both connect endpoints. The probe payload has
 `lead_id` empty so it writes nothing.
 
+## Pulling income evidence for a lender
+
+`stripe_income_report.py` reads the live account and writes a dated markdown
+report plus raw JSON to `docs/stripe/` (gitignored — charge metadata carries real
+customer names):
+
+    STRIPE_SECRET_KEY=sk_live_... python3 stripe_income_report.py
+
+It reports **payouts that actually landed** as the headline figure, and keeps
+failed charges and failed payouts in separate sections instead of netting them
+away. That split is the whole point: the old account's dashboard could have shown
+a plausible-looking balance while four -$99.50 payouts were bouncing. A report
+that hides that is not evidence.
+
+It reads the key from the environment and never writes it into the report or the
+JSON. Verified against the live account, and against synthetic data confirming a
+failed payout is never counted as income.
+
+Revenue recognition is a separate thing and is **not** set up. Stripe Billing is
+the wrong tool for it here: construction deposits are one-time milestone payments,
+not subscriptions, and Billing recognizes subscription revenue across a term for
+bookkeeping. It is not a lending signal either. What builds a case is volume —
+settled deposits over time.
+
 ## Capital: Stripe cannot be the source of today's funding
 
 Worth being blunt, because it comes up. Stripe **Capital** underwrites against

@@ -25,3 +25,8 @@ eva_intel.json
 
 # generated letter batch: real customer addresses + names, never commit these
 outbox/
+
+# generated Stripe income reports: real customer names/descriptions in charge
+# metadata, and financial figures that do not belong in a public repo.
+# Regenerate with: python3 stripe_income_report.py
+docs/stripe/
