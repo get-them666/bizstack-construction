@@ -163,6 +163,62 @@ Two design points that matter when it is switched on:
 Accurate Append at 100/month is roughly twice Skip Sherpa's free allowance, so
 prefer it first and keep Skip Sherpa as the fallback.
 
+## Stripe is on the SECOND account, and the first one was empty
+
+Live account is now **`acct_1UAeKoJ6MbAT3Jcc`** ("BuildStack Construction"),
+switched 2026-10-05. The old `acct_1U21rk7FqkxpR5Dt` ("Shaun OLeary") is
+**retired** — don't point anything back at it.
+
+The reason for switching was not a preference. The old account had charges and
+payouts enabled but had only ever produced **3 failed charges** ($49 each, Aug
+27–30) and **4 `payout_failure`** balance transactions at -$99.50, meaning the
+bank was rejecting withdrawals. It also billed **-$90/mo for the Stripe Tax
+product subscription** while collecting nothing. Zero successful revenue, so it
+was worthless as income evidence for a lender.
+
+**Four endpoints, and the two brands need different secrets.** Each service holds
+the secret for its *own* endpoint; swapping them 400s every event:
+
+| | construction | bizstackperks |
+|---|---|---|
+| payments | `we_1UNNMNJ6MbAT3JccolNX76Dc` | `we_1UNNMNJ6MbAT3JccAw20YIYy` |
+| connect | `we_1UNNMOJ6MbAT3JccR5Ms69nj` | `we_1UNNMOJ6MbAT3Jcc5UYJ1SSa` |
+
+The old account had exactly ONE endpoint, pointed at `bizstackperks.com` only —
+which is why construction deposits never marked a lead paid. Both brands now
+receive events; that was a deliberate owner decision, not an oversight.
+
+Two bugs found while wiring this, both the same root cause:
+
+- **`connect_webhook` 500'd on every event.** `eobj.get("id")` on a stripe>=8
+  `Account` raises `AttributeError`, so Stripe retried and gave up, silently
+  stranding `crew.bank_status`. The identical bug in the payments webhook was
+  fixed in 3caecb7; this one was missed. Fixed in 4a6953d.
+- **`STRIPE_CONNECT_WEBHOOK_SECRET` was not a Stripe secret** — a 32-char hex
+  value with no `whsec_` prefix. It could never verify anything.
+
+`bizstack-perks` hardcodes a fallback price ID at `main.py:1583` and the hosts
+service had no `PRICE_ID_99`/`PRICE_ID_49`, so swapping the key alone would have
+broken Broom Service subscriptions silently. Both are now set to prices
+recreated on the new account.
+
+**Verified by signed probe, not by inspection:** a hand-signed
+`checkout.session.completed` returns 200 on both payment endpoints, and an
+`account.updated` returns 200 on both connect endpoints. The probe payload has
+`lead_id` empty so it writes nothing.
+
+## Capital: Stripe cannot be the source of today's funding
+
+Worth being blunt, because it comes up. Stripe **Capital** underwrites against
+payment history on the account, and this account had zero history at cutover.
+There is no basis for an offer yet. Income evidence accrues from now on.
+
+For the $31,900 already worked, the path stays `docs/CHECKLIST.md`: SBA 7(a),
+where the EIN letter substitutes for the 3-year return history a new business
+doesn't have. The PNC $22,500 deposit is the only real bank trail; the $9,400
+cash remainder is undocumented. Getting deposits to actually flow through Stripe
+is what makes the *next* loan easier, not this one.
+
 ## Open threads
 
 - `ATTIC_API_KEY` / `SERVICEKANI_API_KEY` / `REGRID_API_KEY` / `BATCHLEADS_API_KEY`
