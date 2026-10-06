@@ -8,14 +8,18 @@ needs paper proof below.
 
 ---
 
-## Job 1 — Sunnywood (Rebecca Mastic) · $7,200 · May 6–17, 2026
+## Job 1 — Sunnywood (Barbara Mastic, owner) · $7,200 · May 6–17, 2026
+
+> **Who signs:** **Barbara Mastic** — property owner, engaged and oversaw the project, holds
+> the insurance policy. Rebecca Mastic is her daughter; she tendered the $7,200 cash on
+> Barbara's behalf on 05/17, but is not the customer. Both documents reflect this.
 
 | Item | Status | Notes |
 |---|---|---|
 | Invoice `BC-2026-001` marked **"PAID — CASH"** | ☐ | `docs/INVOICE_SUNNYWOOD.html` — print & date it |
 | Signed receipt of payment | ☐ | `docs/RECEIPT_SUNNYWOOD.html` — homeowner + Shaun sign |
 | Before/after photos | ☐ | 4–8 photos; see `docs/PHOTO_LOG.html` |
-| Homeowner's insurance scope-of-loss paperwork | ☐ | **They hold the policy** — ask Rebecca for a copy of the claim/scope; it corroborates dates & scope |
+| Homeowner's insurance scope-of-loss paperwork | ☐ | **Barbara holds the policy** — ask **Barbara** (or Rebecca to fetch it from her) for the claim/scope; it corroborates dates & scope independently |
 | Income on tax return | ☐ | Must be reported on 2026 return to be usable |
 
 ## Job 2 — Old Ironsides (Carl Simmons) · $24,700 · Mar 4–12, 2026
@@ -134,7 +138,7 @@ for homeowner signatures, then scan or photograph and add to the package as PDFs
 1. ~~Confirm the $2,200 Old Ironsides gap~~ ✅ answered — cash materials.
 2. Print invoices + receipts, get homeowner signatures (Sunnywood → Old Ironsides).
    Both Old Ironsides documents now carry the reconciliation paragraph.
-3. Collect/email insurance scope paperwork from Rebecca Mastic.
+3. Collect/email insurance scope paperwork from Barbara Mastic.
 4. Gather photos for both jobs.
 5. Bundle everything into one folder as PDFs: `Loan_Package_<date>.zip` or PDF.
 6. Then send outreach in order: **SBDC → LISC → VCC → VSBFA**.
