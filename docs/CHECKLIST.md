@@ -16,10 +16,10 @@ needs paper proof below.
 
 | Item | Status | Notes |
 |---|---|---|
-| Invoice `BC-2026-001` marked **"PAID — CASH"** | ☐ | `docs/INVOICE_SUNNYWOOD.html` — print & date it |
-| Signed receipt of payment | ☐ | `docs/RECEIPT_SUNNYWOOD.html` — homeowner + Shaun sign |
-| Before/after photos | ☐ | 4–8 photos; see `docs/PHOTO_LOG.html` |
-| Homeowner's insurance scope-of-loss paperwork | ☐ | **Barbara holds the policy** — ask **Barbara** (or Rebecca to fetch it from her) for the claim/scope; it corroborates dates & scope independently |
+| Invoice `BC-2026-001` marked **"PAID — CASH"** | ☐ | `docs/INVOICE_SUNNYWOOD.html` — print & date it. Billed to Barbara; records Rebecca as tendering party |
+| Signed receipt of payment | ☐ | `docs/RECEIPT_SUNNYWOOD.html` — **Barbara** + Shaun sign |
+| Before/after photos | ✅ | **Have them** — before **and** after sets exist. Fill counts in `docs/PHOTO_LOG.html`. Before = flood damage; After = restored interior |
+| Homeowner's insurance scope-of-loss paperwork | **N/A** | **Owner declined to share — her claim file, her call.** Not needed: signed receipt is the standard evidence for a business at this level. Invoice keeps the claim *reference* line, which explains the flood scope and discloses nothing |
 | Income on tax return | ☐ | Must be reported on 2026 return to be usable |
 
 ## Job 2 — Old Ironsides (Carl Simmons) · $24,700 · Mar 4–12, 2026
@@ -28,8 +28,8 @@ needs paper proof below.
 |---|---|---|
 | **Bank trail (have it)** | ✅ | PNC statement 02/26–03/27, page 3 of 5: **$22,500 deposited 03/19/2026** = Old Ironsides payment. Clean PDF: `~/Documents/statement_equity_FINAL.pdf` |
 | Invoice `BC-2026-002` marked **"PAID — CASH"** | ☐ | `docs/INVOICE_OLD_IRONSIDES.html` — covers the $2,200 cash remainder |
-| Signed receipt of payment | ☐ | `docs/RECEIPT_OLD_IRONSIDES.html` |
-| Before/after photos | ☐ | Highlight garage→apartment transformation |
+| Signed receipt of payment | ☐ | `docs/RECEIPT_OLD_IRONSIDES.html` — Carl + Shaun sign. Carries the $2,200 cash-materials reconciliation |
+| Before/after photos | ✅ | **Have them** — before **and** after sets. Lead with the garage→apartment transformation |
 | Confirm the $2,200 gap | ✅ | **Answered 2026-10-05:** disbursed directly in cash to suppliers for materials used on this job; never deposited. $22,500 (PNC 03/19) + $2,200 (materials) = $24,700 received in full. Reconciliation paragraph added to `INVOICE_OLD_IRONSIDES.html` and `RECEIPT_OLD_IRONSIDES.html`. Note: supplier receipts, if any were kept, would corroborate this — check the drawer/receipts folder. |
 | Income on tax return | ☐ | Included with 2026 filing |
 
@@ -139,7 +139,7 @@ for homeowner signatures, then scan or photograph and add to the package as PDFs
 2. Print invoices + receipts, get homeowner signatures (Sunnywood → Old Ironsides).
    Both Old Ironsides documents now carry the reconciliation paragraph.
 3. Collect/email insurance scope paperwork from Barbara Mastic.
-4. Gather photos for both jobs.
+4. ~~Gather photos for both jobs~~ ✅ have before/after for both — just fill the counts in `PHOTO_LOG.html`.
 5. Bundle everything into one folder as PDFs: `Loan_Package_<date>.zip` or PDF.
 6. Then send outreach in order: **SBDC → LISC → VCC → VSBFA**.
 
