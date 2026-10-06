@@ -63,7 +63,46 @@ check(f"all {len(list(TPL_DIR.glob('*.html')))} templates compile", not unrender
       "; ".join(f"{n}: {e}" for n, e in unrenderable))
 
 print("\n[2] app imports and schema builds")
-os.environ.setdefault("DATABASE_URL", "postgresql://localhost/postgres")
+# Defaults to the scratch database, not `postgres`. This test WRITES rows, and
+# `postgres` is a database that has held real data on this machine -- running
+# against it seeded it with 24 junk leads and 6 junk permits. Point DATABASE_URL
+# elsewhere to override.
+os.environ.setdefault("DATABASE_URL", "postgresql://localhost/bz_scratch")
+
+# A test must not run the production background jobs.
+#
+# Importing the app fires `lifecycle`, which starts the permit importer, the
+# lead-source scanner and the loan-outreach loop. With those live, simply running
+# this file scraped real Virginia Beach permits into whatever database it pointed
+# at -- 1,598 job_leads appeared in bz_scratch on one run -- and the outreach loop
+# is the same code path that sends email. All three are disabled here, set BEFORE
+# the import because that is when startup runs.
+#
+# setdefault, so an operator can still run the file with them deliberately on.
+# Nothing in this test needs them on.
+os.environ.setdefault("DISABLE_PERMIT_IMPORT", "1")
+os.environ.setdefault("DISABLE_LEAD_SCAN", "1")
+os.environ.setdefault("DISABLE_LOAN_OUTREACH", "1")
+
+# Every row this test creates is recorded and deleted at the end.
+#
+# The previous cleanup hard-coded four lead ids, but the file makes eight
+# INSERTs -- and `dup_id` is reused for two different rows, so the first board
+# row could never be reached by id. Four junk leads and one junk permit leaked
+# on every run. The cleanup block also sweeps by sentinel value as a backstop.
+made_leads = []
+made_permits = []
+
+
+def note_lead(lead_id):
+    made_leads.append(lead_id)
+    return lead_id
+
+
+def note_permit(permit_id):
+    made_permits.append(permit_id)
+    return permit_id
+
 try:
     import construction_main as m
     import auth_service
@@ -121,7 +160,7 @@ _KEEP_PDB = g          # hold the generator so psycopg doesn't close the conn
 with pdb.cursor() as cur:
     cur.execute("""INSERT INTO job_leads (address, city, work_type, status, found_at)
                    VALUES ('77 Board Test Ave','Norfolk','deck','new',NOW()) RETURNING id;""")
-    permit_id = cur.fetchone()["id"]
+    permit_id = note_permit(cur.fetchone()["id"])
 pdb.commit()
 
 r = client.post("/api/pipeline/move", data={"stream": "permits", "item_id": permit_id, "status": "knocked"})
@@ -155,14 +194,17 @@ with pdb.cursor() as cur:
                                   company, created_at)
                    VALUES ('Board Dup Job', '', '5 Dup St', 'Deck', 'backlog', 'new',
                            'construction', NOW()) RETURNING id;""")
-    dup_id = cur.fetchone()["id"]
+    dup_id = note_lead(cur.fetchone()["id"])
 pdb.commit()
 r = client.get("/pipeline?stream=leads&q=Board Dup Job")
 check("back-log job is not in the leads stream", r.text.count('data-id="%d"' % dup_id) == 0,
       "back-log job leaked into the leads stream")
 r = client.get("/pipeline?stream=backlog&q=Board Dup Job")
-check("back-log job is in the back-log stream", r.text.count('data-id="%d"' % dup_id) == 1,
-      f"expected exactly 1, got {r.text.count('data-id=\"%d\"' % dup_id)}")
+# The needle is built outside the f-string: a backslash inside an f-string
+# expression is a SyntaxError before 3.12, and this venv is 3.10.
+_dup_needle = 'data-id="%d"' % dup_id
+check("back-log job is in the back-log stream", r.text.count(_dup_needle) == 1,
+      f"expected exactly 1, got {r.text.count(_dup_needle)}")
 
 print("\n[5] a disabled lead source is hidden everywhere, and reversible")
 # The operator switched SAM.gov off for both companies. Leads must disappear
@@ -181,12 +223,12 @@ with pdb.cursor() as cur:
                                   status, company, created_at)
                    VALUES ('Sam Gov Hidden Co', '', 'x@lead.local', '1 Fed Way', 'Roof',
                            'sam-gov', 'new', 'construction', NOW()) RETURNING id;""")
-    sam_id = cur.fetchone()["id"]
+    sam_id = note_lead(cur.fetchone()["id"])
     cur.execute("""INSERT INTO leads (name, phone, email, address, project_type, source,
                                   status, company, created_at)
                    VALUES ('Visible Local Co', '757-555-9999', 'y@lead.local', '2 Local Way',
                            'Deck', 'reddit', 'new', 'construction', NOW()) RETURNING id;""")
-    vis_id = cur.fetchone()["id"]
+    vis_id = note_lead(cur.fetchone()["id"])
 pdb.commit()
 
 for url in ("/leads", "/pipeline", "/dashboard"):
@@ -226,7 +268,7 @@ with db.cursor() as cur:
                       timeline, description, source, status, company, created_at)
                    VALUES ('NoPhone','','','Roofing','1 A St','','','',
                    'web','new','construction',NOW()) RETURNING id;""")
-    no_phone_id = cur.fetchone()["id"]
+    no_phone_id = note_lead(cur.fetchone()["id"])
 db.commit()
 
 try:
@@ -253,21 +295,24 @@ with db.cursor() as cur:
                    VALUES ('Known Contact Person', '757-555-0142', 'reachme@barlow.example',
                            '8494 LYNN RIVER ROAD, Norfolk, VA', 'Deck', 'permit_finder',
                            'new', 'construction', NOW()) RETURNING id;""")
-    known_id = cur.fetchone()["id"]
+    known_id = note_lead(cur.fetchone()["id"])
     # Second lead at the SAME address (differing case) to prove dedupe.
     cur.execute("""INSERT INTO leads (name, phone, email, address, project_type, source,
                                   status, company, created_at)
                    VALUES ('Known Contact Person', '757-555-0142', 'reachme@barlow.example',
                            '8494 Lynn River Road, Norfolk, VA', 'Roof', 'permit_finder',
                            'new', 'construction', NOW()) RETURNING id;""")
-    dup_id = cur.fetchone()["id"]
+    # Misnamed in the original: this is the "known contact" row, not a duplicate.
+    # It is a SECOND `dup_id` assignment, which is precisely why the old cleanup
+    # could never reach the first one by id.
+    dup_id = note_lead(cur.fetchone()["id"])
     # Only the synthetic tracking address. Must never render as a real email.
     cur.execute("""INSERT INTO leads (name, phone, email, address, project_type, source,
                                   status, company, created_at)
                    VALUES ('Permit Row', '', 'con-permit-422d36ec92d018b@lead.local',
                            '8494 LYNN RIVER ROAD, Norfolk, VA', 'Fence', 'permit_finder',
                            'new', 'construction', NOW()) RETURNING id;""")
-    placeholder_id = cur.fetchone()["id"]
+    placeholder_id = note_lead(cur.fetchone()["id"])
     # A hidden source. 128 of the real contacts are sam-gov, switched off by the
     # operator; surfacing one here would leak it through a side door.
     cur.execute("""INSERT INTO leads (name, phone, email, address, project_type, source,
@@ -275,13 +320,13 @@ with db.cursor() as cur:
                    VALUES ('Hidden Federal Vendor', '202-555-0100', 'hidden@gov.example',
                            '8494 LYNN RIVER ROAD, Norfolk, VA', 'Roof', 'sam-gov',
                            'new', 'construction', NOW()) RETURNING id;""")
-    hidden_id = cur.fetchone()["id"]
+    hidden_id = note_lead(cur.fetchone()["id"])
     # The permits lane renders job_leads rows, so the card under test needs a
     # permit at that address as well as the leads rows.
     cur.execute("""INSERT INTO job_leads (address, city, work_type, status, found_at)
                    VALUES ('8494 LYNN RIVER ROAD', 'Norfolk', 'deck', 'new', NOW())
                    RETURNING id;""")
-    known_permit_id = cur.fetchone()["id"]
+    known_permit_id = note_permit(cur.fetchone()["id"])
 db.commit()
 
 with db.cursor() as cur:
@@ -309,10 +354,31 @@ check("the permit card says where it came from",
       "We already have their contact" in card, "card carries no label")
 
 with db.cursor() as cur:
-    cur.execute("DELETE FROM leads WHERE id = ANY(%s);",
-                ([known_id, dup_id, placeholder_id, hidden_id],))
-    cur.execute("DELETE FROM job_leads WHERE id = %s;", (known_permit_id,))
+    # Delete by tracked id first -- exact, and cannot touch a real row.
+    if made_leads:
+        cur.execute("DELETE FROM leads WHERE id = ANY(%s);", (made_leads,))
+    if made_permits:
+        cur.execute("DELETE FROM job_leads WHERE id = ANY(%s);", (made_permits,))
+    # Backstop by sentinel value, so a row created through a route rather than a
+    # direct INSERT (a convert, say) is still removed.
+    cur.execute("""DELETE FROM leads WHERE name IN
+                   ('Board Dup Job', 'Sam Gov Hidden Co', 'Visible Local Co', 'NoPhone',
+                    'Known Contact Person', 'Known Contact Duplicate');""")
+    cur.execute("DELETE FROM job_leads WHERE address = '77 Board Test Ave';")
 db.commit()
+
+# Prove the cleanup worked instead of trusting it. This assertion's absence is
+# why four rows per run accumulated unnoticed.
+with db.cursor() as cur:
+    cur.execute("SELECT count(*) AS n FROM leads WHERE name IN "
+                "('Board Dup Job', 'Sam Gov Hidden Co', 'Visible Local Co', 'NoPhone', "
+                "'Known Contact Person', 'Known Contact Duplicate');")
+    leaked_leads = cur.fetchone()["n"]
+    cur.execute("SELECT count(*) AS n FROM job_leads WHERE address = '77 Board Test Ave';")
+    leaked_permits = cur.fetchone()["n"]
+check(f"cleanup left no test rows behind ({len(made_leads)} leads, {len(made_permits)} permits created)",
+      leaked_leads == 0 and leaked_permits == 0,
+      f"{leaked_leads} lead(s) and {leaked_permits} permit(s) leaked")
 
 print("\n" + "=" * 60)
 if FAILS:

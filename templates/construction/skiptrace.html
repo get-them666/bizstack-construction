@@ -169,8 +169,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
         let h = '<div class="rounded-2xl bg-white border border-slate-200 overflow-hidden">';
         h += '<div class="px-5 py-4 border-b border-slate-100 flex flex-wrap items-center gap-2">';
-        h += '<span class="text-lg font-extrabold text-slate-900">' + esc(d.owner_of_record) + '</span>';
-        h += d.owner_is_entity
+        h += '<span class="text-lg font-extrabold text-slate-900">' + esc(d.owner_of_record) + '</span>';        h += d.owner_is_entity
             ? '<span class="text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded bg-violet-100 text-violet-700">Business</span>'
             : '<span class="text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded bg-sky-100 text-sky-700" title="Individual homeowner">Homeowner</span>';
         if (d._cached) h += '<span class="text-[10px] font-semibold px-2 py-0.5 rounded bg-slate-100 text-slate-500">cached — no lookup spent</span>';
@@ -199,10 +198,207 @@ document.addEventListener('DOMContentLoaded', function() {
             h += '<p class="text-[11px] text-emerald-700/80 pt-1 border-t border-emerald-200 mt-2">From an existing lead at this address — already in the system, nothing was looked up.</p>';
             h += '</div>';
         }
+        h += ownerContactPanel(d);
         h += '<p class="px-5 pb-4 text-xs text-slate-400">Public assessor record. This identifies who owns the house; '
            + 'it is not contact. A phone number still needs a DNC check before you dial.</p>';
         h += '</div>';
         return h;
+    }
+
+    // Owner contact lookup.
+    //
+    // Deliberately a second button, not a continuation of the assessor lookup.
+    // The assessor record is free and cached and gives a NAME. A phone and an
+    // email cost a Skip Sherpa credit, and most doors are not worth one.
+    // A separate click means a credit is spent only on the addresses you chose.
+    //
+    // Nothing is written to the database until Save is pressed, and Save stages
+    // a draft for review -- it does not send anything.
+    function ownerContactPanel(d) {
+        let h = '<div class="mx-5 mb-4 rounded-xl border border-slate-200 bg-slate-50 p-3">';
+        h += '<p class="text-[10px] font-bold uppercase tracking-wide text-slate-500 mb-1">Owner phone &amp; email</p>';
+        if (d.no_zip) {
+            // No ZIP means no lookup button at all. Skip Sherpa keys on the full
+            // address and a ZIP-less lookup can match a different house and
+            // still bill a credit.
+            h += '<p class="text-xs text-amber-800">This lookup has no ZIP, and a skip trace without one can '
+               + 'match a different house and still bill you. Add the ZIP above first.</p>';
+            h += '</div>';
+            return h;
+        }
+        h += '<p class="text-xs text-slate-600 mb-2">The assessor record above is a name only. This spends one '
+           + 'Skip Sherpa credit to get a reachable phone and email.</p>';
+        h += '<button type="button" id="st-contact-btn" '
+           + 'class="px-4 py-2 text-xs font-bold text-white bg-slate-700 hover:bg-slate-800 rounded-lg">'
+           + 'Find contact for this owner</button>';
+        h += '<div id="st-contact" class="mt-3"></div>';
+        h += '</div>';
+        return h;
+    }
+
+    // Render a Skip Sherpa result. DNC numbers are shown but not selectable --
+    // visible, so the choice is informed, without being one click away.
+    function renderContact(d) {
+        if (d.detail) {
+            let extra = d.credit_spent ? ' This one was billed; repeating it will bill again.' : '';
+            return '<div class="rounded-xl bg-rose-50 border border-rose-200 p-3 text-sm text-rose-800">'
+                 + esc(d.detail) + extra + '</div>';
+        }
+        if (!d.ok || !d.found) {
+            return '<div class="rounded-xl bg-amber-50 border border-amber-200 p-3 text-sm text-amber-800">'
+                 + esc(d.message || 'No contact found at this address.') + '</div>';
+        }
+        const phones = d.phones || [];
+        const emails = d.emails || [];
+        if (!phones.length && !emails.length) {
+            return '<div class="rounded-xl bg-amber-50 border border-amber-200 p-3 text-sm text-amber-800">'
+                 + 'Skip Sherpa matched the property but has no phone or email for this owner. A credit was spent.</div>';
+        }
+
+        let h = '<div class="rounded-xl bg-white border border-slate-200 p-3">';
+        h += '<p class="text-sm font-bold text-slate-900">' + esc(d.owner || 'Owner') + '</p>';
+        h += '<div class="mt-2 space-y-2">';
+        if (emails.length) {
+            h += '<label class="block"><span class="text-[11px] font-bold text-slate-600">Email</span>';
+            h += '<select id="st-c-email" class="mt-1 w-full px-2 py-1.5 text-sm rounded-lg border border-slate-200 bg-slate-50">';
+            emails.forEach(function(e) {
+                h += '<option value="' + esc(e) + '">' + esc(e) + '</option>';
+            });
+            h += '</select></label>';
+        } else {
+            h += '<p class="text-xs text-slate-500">No email found for this owner.</p>';
+        }
+        if (phones.length) {
+            h += '<label class="block"><span class="text-[11px] font-bold text-slate-600">Phone</span>';
+            h += '<select id="st-c-phone" class="mt-1 w-full px-2 py-1.5 text-sm rounded-lg border border-slate-200 bg-slate-50">';
+            phones.forEach(function(p) {
+                const label = p.e164 + ' · ' + (p.type || 'unknown type')
+                    + (p.dnc ? ' · DO NOT CALL' : '')
+                    + (p.last_seen ? ' · seen ' + p.last_seen : '')
+                    + (p.usable ? '' : ' · not recommended');
+                h += '<option value="' + esc(p.e164) + '"' + (p.usable ? ' selected' : ' disabled') + '>'
+                   + esc(label) + '</option>';
+            });
+            h += '</select></label>';
+        }
+        h += '</div>';
+        if (d.dnc_count) {
+            h += '<p class="mt-2 text-xs text-amber-800">' + d.dnc_count + ' of these numbers are flagged '
+               + 'do-not-call by the registry and cannot be selected. Recorded, not used.</p>';
+        }
+        if (d.owner_occupied !== null && d.owner_occupied !== undefined) {
+            h += '<p class="text-[11px] text-slate-500">Owner occupied: ' + esc(String(d.owner_occupied)) + '</p>';
+        }
+        h += '<button type="button" id="st-c-save" '
+           + 'class="mt-3 px-4 py-2 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg">'
+           + 'Save &amp; stage draft</button>';
+        h += '<label class="mt-2 flex items-center gap-2 text-[11px] text-slate-600 cursor-pointer">'
+           + '<input type="checkbox" id="st-c-push" class="rounded border-slate-300 text-violet-600">'
+           + 'Also push this lead to REsimpli</label>';
+        h += '<p class="mt-2 text-[11px] text-slate-500">Stages an email draft on the lead for you to read and send '
+           + 'from the leads page. Nothing is sent, and the lead stays "new" until you send it.</p>';
+        h += '<div id="st-c-result" class="mt-2"></div>';
+        h += '</div>';
+        return h;
+    }
+
+    // The assessor result, read by saveContact(). Set when the lookup finishes.
+    let lastResult = null;
+
+    // A REsimpli push failure is expected until the API key is working, so it is
+    // reported in place rather than replacing the save confirmation -- the lead
+    // WAS saved and drafted, and only the push failed.
+    function renderResimplyResult(r) {
+        if (!r) return '';
+        if (r.ok) {
+            return '<p class="mt-2 text-xs font-semibold text-emerald-800">Pushed to REsimpli.</p>';
+        }
+        return '<div class="mt-2 rounded-lg bg-amber-50 border border-amber-200 p-2 text-xs text-amber-800">'
+             + '<p class="font-bold">Not pushed to REsimpli</p>'
+             + '<p class="mt-1">' + esc(r.error || 'unknown error') + '</p>'
+             + '<p class="mt-1">The lead is saved and drafted regardless.</p></div>';
+    }
+
+    async function findContact(btn) {
+        const box = document.getElementById('st-contact');
+        btn.disabled = true;
+        btn.textContent = 'Searching…';
+        box.innerHTML = '<p class="text-xs text-slate-500">One credit, a few seconds.</p>';
+        const body = new FormData();
+        const picked = document.getElementById('st-permit-id').value;
+        body.set('permit_id', picked);
+        if (!picked) {
+            body.set('street', document.getElementById('st-street').value);
+            body.set('city', document.getElementById('st-city').value);
+            body.set('state', document.getElementById('st-state').value);
+            body.set('zip_code', document.getElementById('st-zip').value);
+        }
+        try {
+            const res = await fetch('/api/skiptrace/contact', { method: 'POST', body: body });
+            const text = await res.text();
+            let json;
+            try { json = JSON.parse(text); }
+            catch (err) {
+                box.innerHTML = '<div class="rounded-xl bg-rose-50 border border-rose-200 p-3 text-sm text-rose-700">Server error — check the logs.</div>';
+                return;
+            }
+            box.innerHTML = renderContact(json);
+            const save = document.getElementById('st-c-save');
+            if (save && json.ok && json.found) {
+                save.addEventListener('click', function() { saveContact(); });
+            }
+        } catch (err) {
+            box.innerHTML = '<div class="rounded-xl bg-rose-50 border border-rose-200 p-3 text-sm text-rose-700">Network error.</div>';
+        } finally {
+            btn.disabled = false;
+            btn.textContent = 'Find contact for this owner';
+        }
+    }
+
+    async function saveContact() {
+        const btn = document.getElementById('st-c-save');
+        const box = document.getElementById('st-c-result');
+        const emailSel = document.getElementById('st-c-email');
+        const phoneSel = document.getElementById('st-c-phone');
+        btn.disabled = true;
+        btn.textContent = 'Saving…';
+        box.innerHTML = '';
+        const body = new FormData();
+        body.set('owner_name', (lastResult && lastResult.owner_of_record) || '');
+        body.set('email', emailSel ? emailSel.value : '');
+        body.set('phone', phoneSel ? phoneSel.value : '');
+        body.set('street', document.getElementById('st-street').value);
+        body.set('city', document.getElementById('st-city').value);
+        body.set('state', document.getElementById('st-state').value);
+        body.set('zip_code', document.getElementById('st-zip').value);
+        body.set('property_json', JSON.stringify((lastResult && lastResult.property) || {}));
+        // Opt-in, and off by default. The lead is saved and drafted either way.
+        if (document.getElementById('st-c-push') && document.getElementById('st-c-push').checked) {
+            body.set('push_resimply', '1');
+        }
+        try {
+            const res = await fetch('/api/skiptrace/save', { method: 'POST', body: body });
+            const json = await res.json();
+            if (!json.ok) {
+                box.innerHTML = '<div class="rounded-xl bg-amber-50 border border-amber-200 p-3 text-sm text-amber-800">'
+                     + esc(json.detail || 'Could not save.') + '</div>';
+                return;
+            }
+            box.innerHTML = '<div class="rounded-xl bg-emerald-50 border border-emerald-200 p-3 text-sm text-emerald-900">'
+                 + '<p class="font-bold">Saved to lead #' + json.lead_id + '</p>'
+                 + '<p class="mt-1">' + esc(json.note) + '</p>'
+                 + '<p class="mt-1 text-xs">Email: ' + esc(json.saved.email || 'not set') + '</p>'
+                 + '<p class="text-xs">Status is still "' + esc(String(json.status || 'new')) + '" — it moves to '
+                 + 'contacted only when the draft is actually sent.</p>'
+                 + renderResimplyResult(json.resimply)
+                 + '<a href="/leads" class="inline-block mt-2 text-xs font-bold text-emerald-800 underline">Go to leads</a>'
+                 + '</div>';
+        } catch (err) {
+            box.innerHTML = '<div class="rounded-xl bg-rose-50 border border-rose-200 p-3 text-sm text-rose-700">Network error.</div>';
+        } finally {
+            btn.disabled = false;
+            btn.textContent = 'Save & stage draft';
+        }
     }
 
     form.addEventListener('submit', async function(e) {
@@ -232,7 +428,14 @@ document.addEventListener('DOMContentLoaded', function() {
                 out.innerHTML = '<div class="rounded-2xl bg-rose-50 border border-rose-200 p-5 text-rose-700">Server error — check the logs.</div>';
                 return;
             }
+            // Kept for the Save step, which needs the owner name and the
+            // property facts to build the draft.
+            lastResult = json;
             out.innerHTML = render(json);
+            // The contact button is created inside render(), so it is bound
+            // after the innerHTML assignment rather than at load time.
+            const cbtn = document.getElementById('st-contact-btn');
+            if (cbtn) cbtn.addEventListener('click', function() { findContact(cbtn); });
         } catch (err) {
             out.innerHTML = '<div class="rounded-2xl bg-rose-50 border border-rose-200 p-5 text-rose-700">Network error.</div>';
         } finally {
