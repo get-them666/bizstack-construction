@@ -6,7 +6,7 @@
 > Send emails on the same day across lenders (Day 0), then run texts/emails on the same deadlines.
 
 ## ⚠️ BEFORE SENDING — get these ready (see `docs/CHECKLIST.md`)
-- [ ] Bank statement showing the $10K equity (current, last 30 days) — `~/Documents/statement_equity_FINAL.pdf` ✅ exists
+- [ ] ~~Bank statement showing the $10K equity~~ — **cancelled.** No such deposit exists; see `docs/OWNER-EQUITY-STATEMENT.html`
 - [x] One-page pitch exported to PDF (`docs/SBA_7a_LOAN_PITCH.pdf`) — **generated Sept 18, 2026**
 - [ ] Invoices + signed receipts from both cash jobs (if not yet signed, send tomorrow AM — do NOT block the SBDC email on this)
 - [x] Fill `[First Name]` + `[Lender Name]` fields below — **verified Sep 18, 2026**
@@ -40,7 +40,8 @@ Quick background:
   plus 3 turnovers and a 15% co-host commission across 3 host relationships
 - The business already runs on software I built: instant online quotes, a 24/7
   AI phone/SMS assistant, GPS crew time-tracking, Stripe payments, and payroll
-- $10,000 of my own capital going in
+- ~$1,000 of my own capital into labor for the first job, plus $31,900
+    of completed-job revenue collected to date ($28,700 bank-documented)
 - Target: repayment covered inside year one (DSCR above the SBA's 1.10 floor)
 
 I can send my one-page summary, license, insurance, and financials ahead of the
@@ -80,7 +81,8 @@ Quick facts:
   cleaning + co-host commission across 3 host relationships ($616.50)
 - The business already runs on software I built: instant online quotes, a 24/7
   AI phone/SMS assistant, GPS crew time-tracking, Stripe payments, and payroll
-- $10,000 of my own capital going in
+- ~$1,000 of my own capital into labor for the first job, plus $31,900
+    of completed-job revenue collected to date ($28,700 bank-documented)
 - 12-month projections show the ~$930/month payment covered inside year one
 
 Use of funds: $20K working capital/payroll & supplies, $18K equipment/tools,
@@ -123,7 +125,8 @@ Quick facts:
   cleaning + co-host commission across 3 host relationships ($616.50)
 - The business already runs on software I built: instant online quotes, a 24/7
   AI phone/SMS assistant, GPS crew time-tracking, Stripe payments, and payroll
-- $10,000 of my own capital going in
+- ~$1,000 of my own capital into labor for the first job, plus $31,900
+    of completed-job revenue collected to date ($28,700 bank-documented)
 - 12-month projections show the ~$930/month payment covered inside year one
 - No judgments, no liens, no bankruptcies
 
@@ -165,7 +168,8 @@ Quick facts:
 - 25 years in the construction trade; I'm the operator, not an investor
 - $32,516 in 2026 revenue: two completed construction projects ($31,900) and
   cleaning + co-host commission across 3 host relationships ($616.50)
-- $10,000 of my own capital going in
+- ~$1,000 of my own capital into labor for the first job, plus $31,900
+    of completed-job revenue collected to date ($28,700 bank-documented)
 - 12-month projections show the ~$930/month payment covered inside year one
 
 Use of funds: $20K working capital, $18K equipment/tools, $12K marketing &
@@ -305,7 +309,7 @@ hello@bizstackperks.com · bizstackperks.com
 - [x] Send SBDC email (Step 0) — **sent Sept 18, 2026**
 - [x] Run `pitch_numbers.py` → verify numbers still match, update pitch if needed
 - [x] Export pitch PDF (`docs/SBA_7a_LOAN_PITCH.pdf`) — generated Sept 18, 2026
-- [ ] Pull bank statement for $10K equity
+- [ ] ~~Pull bank statement for $10K equity~~ — cancelled; pull a **personal** statement for February 2026 instead
 - [x] Day 0 send all three lender emails (LISC, VCC, VSBFA) — **sent Sept 18, 2026**
 - [ ] Print/sign invoices + receipts with homeowners, add to package
 - [ ] Collect insurance scope paperwork (Sunnywood)

@@ -293,7 +293,13 @@ You've told me the real facts: startup, nothing cleared on the books, FICO in th
 > projections, not a historical revenue line.
 >
 > **My fit.** 25 years in the construction industry; I am the operator, not an
-> investor. I am investing $10,000 of my own capital into the company.
+> investor. I am contributing approximately $1,000 of my own funds toward labor
+> assistance on the company's first project, ahead of any customer payment, and
+> have funded operations from personal resources since. To date the business has
+> collected **$31,900 in completed-job revenue**, of which **$28,700 is documented
+> by bank deposit records** and the balance was received in cash and disbursed to
+> material suppliers. I have not represented revenue as capital; a signed statement
+> of owner contribution is available on request.
 >
 > **Use of funds ($50,000).**
 > - Working capital / first payroll & supplies buffer (both service lines): $20,000
@@ -328,8 +334,13 @@ your own equity, the pipeline, and a clean credit story.**
    one. The SBDC helps free.
 2. **Pipeline proof from both systems** — run `pitch_numbers.py` (see below) to print
    construction pipeline + hospitality bookings straight from the live databases.
-3. **Owner equity** — CDFIs want to see 10–25% of your own money in (roughly $5K–$12K on
-   a $50K ask). Documented savings, not hope.
+3. **Owner contribution** — CDFIs typically want to see owner money in the business. Be
+   straight with them about the actual figure rather than the target: ~$1,000 in February
+   2026 on labor assistance, before any customer payment. What you have that a startup
+   usually doesn't is **$31,900 of completed-job revenue with $28,700 bank-documented**.
+   Lead with that. A signed statement of owner contribution is in `docs/`. Do not quote a
+   number the bank record doesn't support — lenders compare against the statement, and a
+   gap invites a decline.
 4. **Credit story, not credit number** — low 600s works at LISC/VCC if the story is
    clean: no judgments, no liens, explain any dings *in writing* before they ask.
 5. **Free coaching** — email the Hampton Roads SBDC first. This is a free approval
@@ -372,7 +383,8 @@ lender channels — is in **`LOAN_OUTREACH_SEQUENCE.md`**. Start there. Short ve
 > 24/7 AI phone/SMS assistant, GPS crew time-tracking, Stripe payments, and payroll.
 >
 > I have 25 years in the trade, 2 host accounts and 1 property onboarded with 3 jobs
-> scheduled and 1 inbound lead, I'm investing $10,000 of my own money, and 12-month
+> scheduled and 1 inbound lead, $31,900 of completed-job revenue collected to date
+> ($28,700 of it bank-documented), and 12-month
 > projections show the ~$930/month payment covered inside year one.
 >
 > My full package is ready — what's the best next step to submit? I can send everything
@@ -427,8 +439,10 @@ export DATABASE_URL="postgresql://user:pass@host:port/db"
 python pitch_numbers.py
 ```
 
-*The only remaining target is the $10,000 equity injection — confirm it's real and
-documented before you submit; everything else here is your actual data.*
+*Owner contribution is stated honestly throughout: ~$1,000 in February 2026 on labor
+assistance, not the $10,000 this package previously claimed. That figure was never
+evidenced — the PNC record shows only customer-revenue deposits. Every number in the
+generated package now traces to a bank record or a signed document.*
 
 *Rates as of Sept 2026: microloans typically 8–13%; VSBFA fixed 6% (3% veterans);
 SBA 7(a) small-loan DSCR floor 1.10x per March 2026 rules.*

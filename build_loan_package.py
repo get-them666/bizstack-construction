@@ -71,7 +71,15 @@ def t(value) -> str:
 REQUEST_AMOUNT = 50_000
 LOAN_YEARS = 6
 MONTHLY_PAYMENT = 930          # pitch, line 6
-OWNER_EQUITY = 10_000          # pitch: "investing $10,000 of my own capital"
+# Owner capital actually contributed, verified against the PNC record:
+# ~$1,000 in February 2026 on labor assistance for the first project, before any
+# customer payment. The old figure here was $10,000, which was never evidenced --
+# the two deposits in the record ($22,500 and $6,200) are customer revenue.
+OWNER_EQUITY = 1_000
+# What the business actually collected on completed jobs. Prefer this over a
+# capital figure when arguing capacity: $28,700 of it is bank-documented.
+REVENUE_COLLECTED = 31_900
+REVENUE_BANK_DOCUMENTED = 28_700
 OWNER_EXPERIENCE_YEARS = 25    # pitch: "25 years in the construction trade"
 OWNER_TENURE = "25 years in the construction trade"
 DSCR_TARGET = 1.10             # SBA cash-flow threshold, March 2026 rule
@@ -437,10 +445,12 @@ def projections(pdf):
               "of capability; this is the number being underwritten.", bold=True)
 
     heading(pdf, "Month-one coverage", 2)
-    body(pdf, f"Even with no revenue at all in month one, the business can service "
-              f"{money(MONTHLY_PAYMENT)} from owner capital of {money(OWNER_EQUITY)} alone — "
-              f"{OWNER_EQUITY/MONTHLY_PAYMENT:.1f} months of debt service is funded before "
-              "the first invoice clears. The loan does not need to win to survive.")
+    body(pdf, f"Debt service is underwritten on the projected revenue above, not on owner "
+              f"capital. Owner contribution is {money(OWNER_EQUITY)} and is stated for "
+              "completeness; it is not presented as a reserve against the loan. The business "
+              f"has already collected {money(REVENUE_COLLECTED)} on completed work, "
+              f"{money(REVENUE_BANK_DOCUMENTED)} of which is bank-documented, which is the "
+              "stronger evidence of capacity.")
 
 
 def owner_fit(pdf):
@@ -448,7 +458,15 @@ def owner_fit(pdf):
     heading(pdf, "6.  Owner contribution and fit")
 
     body(pdf, f"{OWNER_TENURE}. Owner and operator, not a passive investor.", bold=True)
-    body(pdf, f"Investing {money(OWNER_EQUITY)} of personal capital into the company.")
+    body(pdf, f"Owner capital of approximately {money(OWNER_EQUITY)} was contributed in February "
+              "2026 to engage labor assistance for the company's first project, ahead of any "
+              "customer payment. Operations have since been funded from personal resources and "
+              "customer receipts.")
+    body(pdf, f"Stated plainly for the reviewer: this is a modest owner contribution, not the "
+              f"10–25% some lenders look for. The business has instead demonstrated "
+              f"{money(REVENUE_COLLECTED)} of collected revenue on completed jobs, "
+              f"{money(REVENUE_BANK_DOCUMENTED)} of it traceable to bank deposits. A signed "
+              "statement of owner contribution accompanies this package.")
 
     heading(pdf, "Why this borrower", 2)
     for item in [
@@ -502,8 +520,7 @@ def risk(pdf):
     body(pdf, f"{money(REQUEST_AMOUNT)} funds 6 months of operating buffer, the equipment to "
               "self-perform both service lines, and marketing to convert a documented pipeline. "
               f"Debt service of approximately {money(MONTHLY_PAYMENT)} per month is covered "
-              f"{dscr:.2f}x by projected cash flow and is additionally funded for "
-              f"{OWNER_EQUITY/MONTHLY_PAYMENT:.1f} months from owner capital alone.", bold=True)
+              f"{dscr:.2f}x by projected cash flow.", bold=True)
 
     pdf.ln(6)
     body(pdf, "Documentation available on request: business plan, 12-month projections, "
