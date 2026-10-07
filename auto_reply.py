@@ -94,9 +94,13 @@ def notify_owner_email(company_key, *, lead_id, name="", phone="", email="", ser
         if not to:
             continue
         try:
-            run_coro(documents_service.send_email(cfg, to, subject, summary))
-            ok = True
-            print(f"[notify-owner] emailed {to} (lead #{lead_id})", flush=True)
+            delivered = run_coro(documents_service.send_email(cfg, to, subject, summary))
+            if not delivered:
+                print(f"[notify-owner] email to {to} not delivered (provider returned False)", flush=True)
+                ok = False
+            else:
+                ok = True
+                print(f"[notify-owner] emailed {to} (lead #{lead_id})", flush=True)
         except Exception as exc:
             print(f"[notify-owner] email to {to} failed: {exc}", flush=True)
         if delay > 0:
@@ -910,7 +914,11 @@ def fire_lead_draft(db, company_key, lead_id, *, force=False):
                         result["why"] = "email not configured"
                         continue
                     subject = (draft.split("\n", 1)[0] or "Thanks for reaching out")
-                    run_coro(documents_service.send_email(cfg, recipient, subject.replace("To: ", ""), body.replace("\n", "<br>")))
+                    delivered = run_coro(documents_service.send_email(cfg, recipient, subject.replace("To: ", ""), body.replace("\n", "<br>")))
+                    if not delivered:
+                        print(f"[auto-reply {company_key}] fire email to {recipient} not delivered (provider returned False)", flush=True)
+                        result["why"] = "transport refused"
+                        continue
                 except Exception as exc:
                     print(f"[auto-reply {company_key}] fire email failed: {exc}", flush=True)
                     result["why"] = str(exc)[:200]
@@ -1231,7 +1239,7 @@ def fire_pending_bid_inquiries(company_key, *, db=None, max_emails=0, dry_run=Fa
                 "SELECT id, name, phone, email, project_type, address, listing_url, source "
                 "FROM leads "
                 "WHERE campaign = 'lead-source-scan' AND status = 'new' AND company = %s "
-                "AND email IS NOT NULL AND email <> '' AND email NOT LIKE '%@lead.local' "
+                "AND email IS NOT NULL AND email <> '' AND email NOT LIKE '%%@lead.local' "
                 "AND NOT EXISTS ("
                 "  SELECT 1 FROM comms_logs cl "
                 "  WHERE cl.channel = 'email' AND cl.direction = 'outbound' AND LOWER(cl.recipient) = LOWER(leads.email)"

@@ -386,7 +386,6 @@ def trace_address(addr: dict) -> dict:
         "all_phones": [f"{e} ({t}{', DNC' if d else ''}{', seen ' + s if s else ''})"
                        for e, t, d, s in ordered[:5]],
         "all_emails": ordered_emails[:6],
-        "phone_count": len(phones),
         "email": emails[0] if emails else "",
         "value": prop.get("estimated_value"),
         "owner_occupied": prop.get("owner_occupied"),

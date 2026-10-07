@@ -428,7 +428,7 @@ def test_one(name: str, company: str = "") -> dict:
               + (f" (is_placeholder_name -> {verdict})" if verdict is not None else ""))
         return {"ok": False, "reason": "placeholder name"}
 
-    print(f"querying public web (up to 3 result pages, ~1s apart)...")
+    print("querying public web (up to 3 result pages, ~1s apart)...")
     t0 = time.time()
     result = search_web(name, company, "")
     took = time.time() - t0
@@ -439,9 +439,9 @@ def test_one(name: str, company: str = "") -> dict:
         print(f"confidence: {result.get('confidence')}")
         if result.get("other_found"):
             print(f"also saw: {', '.join(result['other_found'])}")
-        print(f"\n  mailto:  -> strongest signal, the page is telling you")
-        print(f"  personal -> looks like a person at a company domain")
-        print(f"  generic  -> role account (info@, contact@) or a freemail provider")
+        print("\n  mailto:  -> strongest signal, the page is telling you")
+        print("  personal -> looks like a person at a company domain")
+        print("  generic  -> role account (info@, contact@) or a freemail provider")
     else:
         print(f"\nNO RESULT: {result.get('reason')}")
         if result.get("checked") is not None:

@@ -68,7 +68,7 @@ def permit_stats(cur) -> dict:
     out["workable_by_status"] = {r["status"]: int(r["c"]) for r in cur.fetchall()}
 
     # The breakdown, so the total is explainable rather than a bare number.
-    cur.execute(f"""
+    cur.execute("""
         SELECT
             count(*) FILTER (WHERE use_class = 'commercial')                          AS commercial,
             count(*) FILTER (WHERE COALESCE(use_class,'') IN ('', 'unknown'))          AS unreviewed,

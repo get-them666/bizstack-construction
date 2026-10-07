@@ -177,16 +177,62 @@ def contacts_at_addresses(cur, rows, id_key: str = "id",
     One query for the whole page, not one per row. Contacts are deduped per
     address: the same person can hold several rows at one house.
     """
-    wanted = {}
+    def street_key(parsed):
+        """Zip-stripped street|city|state key for fuzzy street-level matching."""
+        key = skiptrace_service.normalize_address(
+            parsed["street"], parsed["city"], parsed["state"], "")
+        return key
+
+    def street_only(parsed):
+        return skiptrace_service.normalize_address(
+            parsed["street"], "", "", "")
+
+    def parse_lenient(raw: str) -> dict:
+        """parse_address() demands a 2-letter state, but Socrata Norfolk rows
+        carry only a street and no state anywhere. For a display-only matcher
+        a street-level key is enough, so fall back to the pre-comma chunk
+        instead of dropping the row entirely."""
+        parsed = skiptrace_service.parse_address(raw or "")
+        if parsed["ok"]:
+            return parsed
+        text = str(raw or "").strip()
+        if not text:
+            return {"ok": False}
+        return {"ok": True, "street": text.split(",")[0].strip(), "city": "", "state": "", "zipcode": ""}
+
+    def compatible(a_parsed, b_parsed):
+        """Street must match; city/state only constrain when present on BOTH sides.
+
+        The Socrata Norfolk feed publishes no city-in-address at all, so a
+        permit row is often just '4220 SOME ST' with the city in a separate
+        column (and state NULL). Requiring an exact full-key match meant those
+        permits never surfaced the contact we were already holding."""
+        if street_only(a_parsed) != street_only(b_parsed):
+            return False
+        a_city, b_city = (a_parsed.get("city") or "").lower(), (b_parsed.get("city") or "").lower()
+        if a_city and b_city and a_city != b_city:
+            return False
+        a_state, b_state = (a_parsed.get("state") or "").lower(), (b_parsed.get("state") or "").lower()
+        if a_state and b_state and a_state != b_state:
+            return False
+        return True
+
+    # wanted + parsed kept per row id so fuzzy match can consult geography.
+    wanted = []
     for r in rows or []:
         if not isinstance(r, dict):
             continue
-        parsed = skiptrace_service.parse_address(r.get(address_key) or "")
+        parsed = parse_lenient(r.get(address_key) or "")
         if not parsed["ok"]:
             continue
-        key = skiptrace_service.normalize_address(
-            parsed["street"], parsed["city"], parsed["state"], parsed["zipcode"])
-        wanted.setdefault(key, []).append(r.get(id_key))
+        # City/state often live in their own columns on permit rows, not in
+        # the address string. Fold them in so the permit side has as much
+        # geography as the lead side.
+        if not (parsed.get("city") or "").strip():
+            parsed["city"] = (r.get("city") or "").strip()
+        if not (parsed.get("state") or "").strip():
+            parsed["state"] = (r.get("state") or "").strip()
+        wanted.append((r.get(id_key), parsed))
 
     if not wanted:
         return {}
@@ -204,12 +250,10 @@ def contacts_at_addresses(cur, rows, id_key: str = "id",
 
     bucket: dict = {}
     for row in cur.fetchall():
-        parsed = skiptrace_service.parse_address(row.get("address") or "")
+        parsed = parse_lenient(row.get("address") or "")
         if not parsed["ok"]:
             continue
-        key = skiptrace_service.normalize_address(
-            parsed["street"], parsed["city"], parsed["state"], parsed["zipcode"])
-        if key not in wanted:
+        if not any(compatible(row_parsed, parsed) for _, row_parsed in wanted):
             continue
         email = (row.get("email") or "").strip().lower()
         if email.endswith("@lead.local"):
@@ -222,23 +266,28 @@ def contacts_at_addresses(cur, rows, id_key: str = "id",
         # Same person, several rows at one house (permits re-ingested). Key the
         # dedupe on the contact itself so the card shows one line, not three.
         ident = (email, phone)
-        if any(c["_ident"] == ident for c in bucket.setdefault(key, [])):
-            continue
-        bucket[key].append({
-            "_ident": ident,
-            "name": (row.get("name") or "").strip(),
-            "email": email,
-            "phone": phone,
-            "status": row.get("status") or "",
-            "source": row.get("source") or "",
-        })
+        bucket_key = street_only(parsed)
+        contacts = bucket.setdefault(bucket_key, [])
+        if not any(c["_ident"] == ident for c in contacts):
+            contacts.append({
+                "_ident": ident,
+                "_parsed": parsed,
+                "name": (row.get("name") or "").strip(),
+                "email": email,
+                "phone": phone,
+                "status": row.get("status") or "",
+                "source": row.get("source") or "",
+            })
 
     out = {}
-    for key, ids in wanted.items():
-        contacts = bucket.get(key)
+    for row_id, row_parsed in wanted:
+        contacts = [c for c in bucket.get(street_only(row_parsed), [])
+                    if compatible(c["_parsed"], row_parsed)]
         if contacts:
-            for row_id in ids:
-                out[row_id] = contacts
+            out[row_id] = contacts
+    for row_id, contacts in out.items():
+        for c in contacts:
+            c.pop("_parsed", None)
     return out
 
 
@@ -638,20 +687,20 @@ async def lifecycle(app: FastAPI):
     except Exception as e:
         print(f"⚠️ materials_catalog refresh skipped: {e}")
 
-    if not os.getenv("DISABLE_LOAN_OUTREACH"):
+    if not _disabled("DISABLE_LOAN_OUTREACH"):
         _outreach_tasks = start_outreach_tasks()
         try:
             app.state.outreach_tasks = _outreach_tasks
         except AttributeError:
             pass
 
-    if not os.getenv("DISABLE_PERMIT_IMPORT"):
+    if not _disabled("DISABLE_PERMIT_IMPORT"):
         try:
             _start_permit_importer()
         except Exception as exc:
             print(f"[permit-scan] could not start importer: {exc}", flush=True)
 
-    if not os.getenv("DISABLE_LEAD_SCAN"):
+    if not _disabled("DISABLE_LEAD_SCAN"):
         try:
             _start_lead_source_scheduler()
         except Exception as exc:
@@ -828,6 +877,12 @@ def _set_setting(db, key, value):
         db.commit()
 
 
+def _del_setting(db, key):
+    with db.cursor() as cur:
+        cur.execute("DELETE FROM app_settings WHERE key = %s;", (key,))
+        db.commit()
+
+
 # --- Crew feature toggles (namespaced away from Broom's perms_worker) -------
 CREW_PERMS_KEY = "perms_crew"
 
@@ -839,6 +894,17 @@ def _crew_features(db) -> dict:
 def _require_crew_feature(db, feature: str):
     if not bool(_crew_features(db).get(feature)):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This tool is turned off for your account")
+
+
+def _disabled(var: str) -> bool:
+    """True only when `var` is genuinely switched on.
+
+    A bare `if os.getenv(var)` is wrong here: Railway stores unset flags as the
+    STRING "false" on some services, which is truthy in Python, so the guard
+    silently disabled the scheduler while the log still read "started". That
+    cost weeks of a dead loan campaign. Only an explicit on-value disables.
+    """
+    return (os.getenv(var, "") or "").strip().lower() in ("1", "true", "yes", "on")
 
 
 def _otp_enabled(db) -> bool:
@@ -1786,6 +1852,64 @@ async def legal_page(request: Request):
     return templates.TemplateResponse(request=request, name="legal.html", context={})
 
 
+@app.get("/finance", response_class=HTMLResponse)
+async def finance_page(request: Request):
+    return templates.TemplateResponse(request=request, name="finance.html", context={})
+
+
+@app.post("/finance")
+async def finance_apply(
+    request: Request,
+    full_name: str = Form(""),
+    phone: str = Form(""),
+    email: str = Form(""),
+    project_type: str = Form(""),
+    address: str = Form(""),
+    amount_needed: str = Form(""),
+    how_soon: str = Form(""),
+    when_start: str = Form(""),
+    message: str = Form(""),
+    ref: str = Form(""),
+    db=Depends(get_db),
+):
+    name = (full_name or "").strip()
+    phone = (phone or "").strip()
+    email = (email or "").strip()
+    if not name or not phone:
+        return RedirectResponse(url="/finance?error=Please+add+your+name+and+phone", status_code=status.HTTP_303_SEE_OTHER)
+    if not email:
+        return RedirectResponse(url="/finance?error=Please+add+your+email+%E2%80%94+we%27ll+send+your+quote+there", status_code=status.HTTP_303_SEE_OTHER)
+    budget = (amount_needed or "").strip()
+    timeline = (when_start or how_soon or "").strip()
+    use_note = (message or "").strip()[:2000]
+    ref_code = (ref or request.query_params.get("ref") or "").strip().lower()[:50]
+
+    try:
+        with db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO leads (name, email, phone, project_type, address, budget, timeline, description, "
+                "source, status, funding_needed, funding_use, referral_code, campaign, company) "
+                "VALUES (%s, %s, %s, NULLIF(%s,''), NULLIF(%s,''), NULLIF(%s,''), NULLIF(%s,''), %s, "
+                "'finance', 'new', TRUE, %s, NULLIF(%s,''), 'finance-link', 'construction') RETURNING id;",
+                (name, email, phone, project_type, address, budget, timeline, use_note, use_note, ref_code),
+            )
+            lead_id = cur.fetchone()["id"]
+            db.commit()
+    except Exception as e:
+        print(f"⚠️ finance lead save failed: {e}", flush=True)
+        return RedirectResponse(url="/finance?error=Could+not+save+your+application+right+now", status_code=status.HTTP_303_SEE_OTHER)
+
+    try:
+        auto_reply.notify_owner_email(
+            "construction", lead_id=lead_id, name=name, phone=phone, email=email,
+            service=project_type, address=address, source="finance",
+        )
+    except Exception as e:
+        print(f"⚠️ finance owner notify failed: {e}", flush=True)
+
+    return RedirectResponse(url="/finance?sent=1", status_code=status.HTTP_303_SEE_OTHER)
+
+
 VISION_QUOTE_MAX_UPLOAD_BYTES = 12 * 1024 * 1024
 VISION_QUOTE_CACHE_MAX = 200
 VISION_QUOTE_WINDOW_SECONDS = 300
@@ -2125,7 +2249,7 @@ async def google_oauth_callback(request: Request, code: str = None, error: str =
         return _finish_login(actor_dict, request)
     except Exception as e:
         print(f"[GOOGLE OAUTH] Callback error: {e}")
-        return RedirectResponse(url=f"/login?error=Google+sign-in+failed", status_code=status.HTTP_303_SEE_OTHER)
+        return RedirectResponse(url="/login?error=Google+sign-in+failed", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.post("/api/google/revoke")
@@ -5414,7 +5538,7 @@ def pipeline_digest():
                 by_source = cur.fetchall()
                 cur.execute(
                     "SELECT COUNT(*) FILTER (WHERE source IN ('website','referral') AND email IS NOT NULL "
-                    "  AND email <> '' AND email NOT LIKE '%@lead.local') AS website_real_email, "
+                    "  AND email <> '' AND email NOT LIKE '%%@lead.local') AS website_real_email, "
                     "COUNT(*) FILTER (WHERE source IN ('website','referral')) AS website_total, "
                     "COUNT(*) FILTER (WHERE source IN ('website','referral') AND status = 'analyzed') AS website_analyzed, "
                     "COUNT(*) FILTER (WHERE source IN ('website','referral') AND status IN ('quoted','deposit','in_progress')) AS website_active, "
@@ -5424,14 +5548,14 @@ def pipeline_digest():
                 website = cur.fetchone()
                 cur.execute(
                     "SELECT COUNT(*) AS scan_pending FROM leads WHERE campaign = 'lead-source-scan' AND status = 'new' "
-                    "AND email IS NOT NULL AND email <> '' AND email NOT LIKE '%@lead.local' "
+                    "AND email IS NOT NULL AND email <> '' AND email NOT LIKE '%%@lead.local' "
                     "AND NOT EXISTS (SELECT 1 FROM comms_logs cl WHERE cl.channel = 'email' AND cl.direction = 'outbound' "
                     "  AND LOWER(cl.recipient) = LOWER(leads.email));"
                 )
                 scan_pending = cur.fetchone()["scan_pending"]
                 cur.execute(
                     "SELECT COUNT(*) AS overdue FROM leads WHERE email IS NOT NULL AND email <> '' "
-                    "AND email NOT LIKE '%@lead.local' AND last_reply_at IS NULL "
+                    "AND email NOT LIKE '%%@lead.local' AND last_reply_at IS NULL "
                     "AND source IN ('website','referral') "
                     "AND EXISTS (SELECT 1 FROM comms_logs cl WHERE cl.channel = 'email' AND cl.direction = 'outbound' "
                     "  AND LOWER(cl.recipient) = LOWER(leads.email)) "
@@ -5439,7 +5563,7 @@ def pipeline_digest():
                 )
                 overdue = cur.fetchone()["overdue"]
                 cur.execute(
-                    "SELECT COUNT(*) FILTER (WHERE email LIKE '%@lead.local') AS masked, "
+                    "SELECT COUNT(*) FILTER (WHERE email LIKE '%%@lead.local') AS masked, "
                     "COUNT(*) FILTER (WHERE source = 'reddit') AS reddit, "
                     "COUNT(*) FILTER (WHERE source = 'permit_finder') AS permits "
                     "FROM leads;"

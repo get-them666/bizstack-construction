@@ -127,10 +127,14 @@ def list_tasks(
 def purge_expired(conn, limit: int = 5000) -> int:
     """Drop tasks past the one-year retention window."""
     with conn.cursor() as cur:
+        # The interval is built with make_interval(), NOT '%s days' inside a
+        # quoted literal. psycopg substitutes a parameter into the string as a
+        # quoted literal of its own, so nesting one inside quotes produces
+        # `INTERVAL ''500' days'` -- a syntax error the first time this ran.
         cur.execute(
             "DELETE FROM copilot_tasks WHERE id IN ("
             "  SELECT id FROM copilot_tasks "
-            "  WHERE created_at < NOW() - INTERVAL '%s days' LIMIT %s"
+            "  WHERE created_at < NOW() - make_interval(days => %s) LIMIT %s"
             ");",
             (RETENTION_DAYS, limit),
         )

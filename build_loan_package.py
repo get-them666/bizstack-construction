@@ -83,7 +83,10 @@ REVENUE_BANK_DOCUMENTED = 28_700
 OWNER_EXPERIENCE_YEARS = 25    # pitch: "25 years in the construction trade"
 OWNER_TENURE = "25 years in the construction trade"
 DSCR_TARGET = 1.10             # SBA cash-flow threshold, March 2026 rule
-DSCR_CLAIMED = 3.0             # pitch: "debt service coverage of ~3x"
+# NOTE: the old DSCR_CLAIMED = 3.0 is gone. It was never used to render anything
+# and contradicted the 1.34x the model actually computes, which is what the pitch
+# says and what section 5 shows. Two different coverage figures in one package
+# is an invitation to stop reading.
 
 # year-one projection. The pitch's own header warns these are Sept 16 figures
 # and have not been refreshed since Sept 30, so the PDF labels them as such.
@@ -98,9 +101,12 @@ YEAR_ONE_REVENUE = 300_000
 # these and has been removed rather than defended.
 DEMONSTRATED_CONSTRUCTION_MARGIN = 0.765
 
-# The model underwrites well BELOW the demonstrated margin. If the lender takes
-# the model at face value and the business lands at 55% instead, it still clears
-# the 1.10x threshold with about $5,000 of headroom.
+# The model underwrites BELOW the demonstrated margin, which is the right instinct
+# -- but note the arithmetic: at 55% with $150K opex the model clears 1.10x only
+# if revenue lands within ~2% of $300K. Section 5 shows the sensitivity table so a
+# reviewer is not left to discover this. A lender who finds a 2% margin by doing
+# the division themselves will discount the whole package; the same reviewer shown
+# the table up front is reading a disclosure rather than catching a weakness.
 GROSS_MARGIN = 0.55
 
 USE_OF_FUNDS = [
@@ -386,6 +392,12 @@ def traction(pdf):
 ANNUAL_DEBT_SERVICE = MONTHLY_PAYMENT * 12
 ANNUAL_OPEX = 150_000          # owner comp $60K + operating expenses $90K
 
+# What revenue is REQUIRED to hold coverage at exactly the floor. At the projected
+# $300K the model clears 1.10x by ~2%, and a 2% miss inverts coverage to negative.
+# Section 5 discloses this with a sensitivity table rather than leaving a reviewer
+# to find it by dividing.
+DSCR_BREAK_EVEN_REVENUE = (ANNUAL_OPEX + DSCR_TARGET * ANNUAL_DEBT_SERVICE) / GROSS_MARGIN
+
 
 def projected_dscr() -> float:
     """The one number underwriting turns on, derived rather than asserted."""
@@ -444,6 +456,59 @@ def projections(pdf):
               "its two completed jobs (section 4). The demonstrated figure is offered as evidence "
               "of capability; this is the number being underwritten.", bold=True)
 
+    # --- Sensitivity. The 1.34x above is thin, and a reviewer who divides it
+    # themselves will find that before anyone says it. Disclosing it converts a
+    # discovered weakness into a disclosed one, and it is also the honest framing:
+    # a business with $31,900 of history is asking a lender to underwrite a $300K
+    # year, and that is a real gap between the two.
+    heading(pdf, "What happens if the projection misses", 2)
+    body(pdf, f"At {int(GROSS_MARGIN*100)}% gross margin and {money(ANNUAL_OPEX)} of operating cost, "
+              f"revenue of {money(DSCR_BREAK_EVEN_REVENUE)} is required to hold coverage at exactly "
+              f"{DSCR_TARGET:.2f}x. The {money(YEAR_ONE_REVENUE)} projection clears that bar by roughly "
+              f"{(YEAR_ONE_REVENUE - DSCR_BREAK_EVEN_REVENUE) / YEAR_ONE_REVENUE * 100:.0f}%, which is a "
+              "narrow margin and is stated here rather than left for the reviewer to find.")
+
+    sens = [(300_000, "projection as written"),
+            (280_000, "5% below projection"),
+            (260_000, "13% below projection"),
+            (240_000, "20% below projection")]
+    pdf.set_font("Helvetica", "B", 9)
+    pdf.set_text_color(40, 44, 55)
+    pdf.cell(70, 5.5, t("Year-one revenue"))
+    pdf.cell(55, 5.5, t("Operating cash flow"))
+    pdf.cell(35, 5.5, t("DSCR"))
+    pdf.cell(0, 5.5, t("Against floor"))
+    pdf.ln(7)
+    for rev, label in sens:
+        cf = rev * GROSS_MARGIN - ANNUAL_OPEX
+        d = cf / ANNUAL_DEBT_SERVICE
+        ok = d >= DSCR_TARGET
+        pdf.set_font("Helvetica", "", 9)
+        pdf.set_text_color(40, 44, 55)
+        pdf.cell(70, 5.5, t(f"{money(rev)}  ({label})"))
+        pdf.cell(55, 5.5, t(money(cf) if cf > 0 else f"({money(-cf)})"))
+        pdf.cell(35, 5.5, t(f"{d:.2f}x" if cf > 0 else "n/a"))
+        pdf.cell(0, 5.5, t("clears" if ok else "does not clear"))
+        pdf.ln(6)
+
+    pdf.ln(3)
+    body(pdf, "The shape of that table matters more than the top line. Coverage does not decay "
+              "gradually — it falls off a cliff, because $150,000 of operating cost against a "
+              "fixed debt payment leaves almost no buffer. A 7% revenue miss drops coverage below "
+              "1.0x. This is the honest weakness of the request, and the reason it is stated here.",
+         italic=True, size=8, color=(150, 60, 20))
+
+    body(pdf, "Three things strengthen it, all of which are requests rather than assertions. "
+              "First, the operating cost base is not fixed: the $60,000 owner compensation is "
+              "discretionary and can be reduced in a weak year, which the table above does not "
+              "model. Second, gross margin is held at "
+              f"{int(GROSS_MARGIN*100)}% against {DEMONSTRATED_CONSTRUCTION_MARGIN*100:.1f}% "
+              "actually demonstrated on completed work; at the demonstrated margin the cliff moves "
+              "well below these volumes. Third, a smaller request carries proportionally less "
+              "fixed debt service against the same cost base, and the applicant is open to sizing "
+              "the ask to the cash flow actually demonstrated rather than to the projection.",
+         italic=True, size=8, color=(150, 60, 20))
+
     heading(pdf, "Month-one coverage", 2)
     body(pdf, f"Debt service is underwritten on the projected revenue above, not on owner "
               f"capital. Owner contribution is {money(OWNER_EQUITY)} and is stated for "
@@ -497,7 +562,7 @@ def risk(pdf):
     heading(pdf, "7.  Risk and mitigants")
 
     heading(pdf, "Primary risk: revenue is young and concentrated", 2)
-    body(pdf, f"Construction revenue to date comes from two projects. That is real but thin, "
+    body(pdf, "Construction revenue to date comes from two projects. That is real but thin, "
               "and a reviewer should weigh it as the main underwriting concern.")
     bullet(pdf, "Mitigant: the 529-address permit pipeline is monitored continuously and is "
                 "not dependent on winning a single large job.")

@@ -231,8 +231,10 @@ def _good_body():
 
 
 def test_trace_success_marks_individual_owner_as_residential(monkeypatch):
-    monkeypatch.setenv("RENTCAST_API_KEY", "test")
-    monkeypatch.setattr(svc, "_get", lambda *a, **k: (200, _good_body()))
+    import enrichment
+    monkeypatch.setattr(enrichment, "_enrich_address", lambda address: {
+        "name": "Craig K Searles", "email": "craig@example.com", "phone": "7575550100",
+    })
     out = svc.trace_address("151 Battle Green Dr", "Virginia Beach", "VA", "23451")
     assert out["found"] is True
     assert out["owner_of_record"] == "Craig K Searles"
@@ -240,15 +242,15 @@ def test_trace_success_marks_individual_owner_as_residential(monkeypatch):
     assert out["is_residential"] is True
     assert out["owner_is_entity"] is False
     assert out["registered_agent"] is None
-    assert out["property"]["assessed_value"] == 722400
+    assert out["property"]["_source"] == "pdl"
 
 
 def test_trace_miss_returns_clean_result_not_exception(monkeypatch):
-    monkeypatch.setenv("RENTCAST_API_KEY", "test")
-    monkeypatch.setattr(svc, "_get", lambda *a, **k: (404, None))
+    import enrichment
+    monkeypatch.setattr(enrichment, "_enrich_address", lambda address: None)
     out = svc.trace_address("701 Dana Dr", "Chesapeake", "VA", "23321")
     assert out["found"] is False
-    assert any("no record" in line for line in out["layers_tried"])
+    assert any("no contact found" in line for line in out["layers_tried"])
 
 
 def test_trace_rejects_bad_state_without_calling_provider(monkeypatch):
