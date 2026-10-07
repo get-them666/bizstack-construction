@@ -3103,10 +3103,50 @@ async def skiptrace_contact(request: Request, street: str = Form(""),
     """
     require_admin(request)
 
+    # Free PDL lookup first. PDL gives 100 lookups/month on a free key, so try
+    # it before spending a skip_sherpa credit. If PDL has a record at this
+    # address, return it directly; otherwise fall through to skip_sherpa.
+    import os as _os
+    if _os.getenv("PDL_API_KEY"):
+        addr = f"{street.strip()}, {city.strip()}, {state.strip().upper()} {zip_code.strip()}"
+        try:
+            pdl_hit = await asyncio.to_thread(enrichment._enrich_address, addr)
+        except Exception:
+            pdl_hit = {}
+        if pdl_hit and (pdl_hit.get("email") or pdl_hit.get("phone")):
+            phones = []
+            if pdl_hit.get("phone"):
+                phones.append({
+                    "e164": str(pdl_hit["phone"]),
+                    "type": "",
+                    "dnc": False,
+                    "last_seen": "",
+                    "usable": True,
+                })
+            emails = [pdl_hit["email"]] if pdl_hit.get("email") else []
+            return JSONResponse(content={
+                "ok": True,
+                "found": True,
+                "owner": pdl_hit.get("name", ""),
+                "all_owners": [pdl_hit["name"]] if pdl_hit.get("name") else [],
+                "phones": phones,
+                "preferred_phone": str(pdl_hit["phone"]) if pdl_hit.get("phone") else "",
+                "raw_phone": str(pdl_hit["phone"]) if pdl_hit.get("phone") else "",
+                "phone_count": len(phones),
+                "dnc_count": 0,
+                "emails": emails,
+                "email": emails[0] if emails else "",
+                "email_count": len(emails),
+                "owner_occupied": None,
+                "value": None,
+                "checked_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "_source": "pdl",
+            })
+
     if not skip_sherpa_service.configured():
         return JSONResponse(status_code=400, content={
-            "detail": "Skip Sherpa is not configured. Set SKIP_SHERPA_API_KEY to enable "
-                      "owner contact lookup. No credit was spent.",
+            "detail": "Neither PDL (PDL_API_KEY) nor Skip Sherpa (SKIP_SHERPA_API_KEY) is configured. "
+                      "Set at least one to enable owner contact lookup. No credit was spent.",
         })
 
     # A permit was picked on the page, so the address comes from the row rather
