@@ -2882,6 +2882,14 @@ async def skiptrace_enrich(request: Request, company: str = Form("construction")
     return JSONResponse(content=summary)
 
 
+@app.post("/api/permit/enrich")
+async def permit_enrich_endpoint(request: Request, email: str = Form(""), db=Depends(get_db)):
+    """Enrich a permit tracking email into permit details. Admin-only."""
+    require_admin(request)
+    result = permit_enricher.enrich((email or "").strip())
+    return JSONResponse(content=result)
+
+
 def run_with_cursor(db, fn):
     """Run fn(cur) on a fresh cursor and return its result.
 
