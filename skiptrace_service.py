@@ -313,40 +313,53 @@ def trace_address(street: str, city: str, state: str, zip_code: str = "") -> dic
     attempted = []
     record = None
 
-    # Use PDL directly: RentCast has no emails and its upstream is why we were
-    # seeing 502s. PDL returns owner/name/email/phone -- exactly what the
-    # skiptrace route is meant to surface.
-    try:
-        import enrichment
-        got = enrichment._enrich_address(address)
-    except Exception:
-        return {"found": False, "layers_tried": ["pdl: error"],
+    # Layer 1. Layers 2 and 3 (eStated, Regrid) are wired in the local tool but
+    # need keys that are unset, so only RentCast is live here. A missing key is
+    # a skip, not a failure -- the caller still gets a clean "no record".
+    got = fetch_rentcast(address)
+    if got is not None and got is not NOT_FOUND:
+        got["no_zip"] = not zip_code
+        if not zip_code:
+            # Without a ZIP the provider falls back to a city-level match, so
+            # the owner may belong to a different house on the same street.
+            # Carried in the payload (not a `_` key) so it survives the cache.
+            got["_low_confidence"] = True
+
+    if got is None:
+        attempted.append("rentcast: RENTCAST_API_KEY not set, skipped")
+    elif got is NOT_FOUND:
+        attempted.append("rentcast: no record for this address")
+    else:
+        record = got
+
+    if record is None:
+        return {"found": False, "layers_tried": attempted,
                 "address": address, "no_zip": not zip_code,
                 "checked_at": time.strftime("%Y-%m-%d %H:%M:%S")}
 
-    if got and (got.get("email") or got.get("phone")):
-        owner_name = got.get("name", "")
-        return {
-            "found": True,
-            "address": address,
-            "owner_of_record": owner_name,
-            "owner_is_entity": looks_like_entity(owner_name),
-            "is_residential": not looks_like_entity(owner_name),
-            "no_zip": not zip_code,
-            "registered_agent": None,
-            "property": {
-                "owner_name": owner_name,
-                "email": got.get("email", ""),
-                "phone": got.get("phone", ""),
-                "_source": "pdl",
-            },
-            "layers_tried": ["pdl: record found"],
-            "checked_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-        }
+    owner = record.get("owner_name")
+    is_entity = looks_like_entity(owner)
+    agent = ""
+    if is_entity:
+        try:
+            agent = fetch_registered_agent(owner)
+        except Exception:
+            agent = ""  # optional layer; never fail the whole call for it
 
-    return {"found": False, "layers_tried": ["pdl: no contact found"],
-            "address": address, "no_zip": not zip_code,
-            "checked_at": time.strftime("%Y-%m-%d %H:%M:%S")}
+    return {
+        "found": True,
+        "address": address,
+        "owner_of_record": owner,
+        "owner_is_entity": is_entity,
+        # The business-contacts-only exception, made visible in the data.
+        "is_residential": not is_entity,
+        # True when there was no ZIP, so the match may be a neighbouring house.
+        "no_zip": not zip_code,
+        "registered_agent": agent or None,
+        "property": record,
+        "layers_tried": attempted,
+        "checked_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
 
 
 # --- persistence --------------------------------------------------------------

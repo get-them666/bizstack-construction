@@ -188,7 +188,7 @@ def enrich_str_leads(limit: int = 15) -> int:
                 "SELECT id, name, email, phone, address, analysis_json FROM leads "
                 "WHERE source = 'str_seed' "
                 "AND COALESCE(phone, '') = '' "
-                "AND (email IS NULL OR LOWER(email) LIKE '%%@lead.local') "
+                "AND (email IS NULL OR LOWER(email) LIKE '%@lead.local') "
                 "AND (analysis_json::text NOT LIKE '%\"enriched\"%') "
                 "ORDER BY id DESC LIMIT %s;",
                 (limit,),
@@ -263,7 +263,7 @@ def enrich_pending_leads(limit: int = 15, dry_run: bool = False) -> int:
                 "WHERE company = 'construction' "
                 "AND source = 'permit_finder' "
                 "AND COALESCE(phone, '') = '' "
-                "AND (email IS NULL OR LOWER(email) LIKE '%%@lead.local') "
+                "AND (email IS NULL OR LOWER(email) LIKE '%@lead.local') "
                 "AND (analysis_json::text NOT LIKE '%\"enriched\"%') "
                 "ORDER BY id DESC LIMIT %s;",
                 (limit,),
