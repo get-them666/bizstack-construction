@@ -89,9 +89,8 @@ def _enrich_address(address: str) -> dict:
         print("[pdl] peopledatalabs package not installed", flush=True)
         return {}
     sql = (
-        'SELECT * FROM person '
-        f"WHERE location_street_address LIKE '%{address}%' "
-        'AND emails IS NOT NULL'
+        f'datasets="person" AND location.address="{address}" AND '
+        f'(location.location_type="Residence" OR residential="true")'
     )
     try:
         client = PDLPY(api_key=os.getenv("PDL_API_KEY", ""))
