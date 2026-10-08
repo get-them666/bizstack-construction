@@ -13,23 +13,28 @@
 <section class="max-w-3xl mx-auto px-4 py-10">
     <h1 class="text-3xl font-extrabold text-slate-900">Owner Lookup</h1>
     <p class="mt-2 text-slate-600">
-        Look up the owner of record for an address from the public assessor record.
-        This is the same data behind the "Who owns this property?" button on each permit,
-        and it costs nothing on an address you have checked before.
+        Start from <a class="font-semibold text-indigo-700 underline" href="/leads?lane=permits">Leads → Permits</a>
+        or choose an address below. Owner names come from free public parcel records in Hampton Roads;
+        email and phone are a separate, optional lookup.
     </p>
+    <ol class="mt-5 grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+        <li class="rounded-xl bg-indigo-50 px-3 py-2 font-semibold text-indigo-800">1. Choose address</li>
+        <li class="rounded-xl bg-slate-100 px-3 py-2 text-slate-700">2. Confirm owner</li>
+        <li class="rounded-xl bg-slate-100 px-3 py-2 text-slate-700">3. Find contact</li>
+        <li class="rounded-xl bg-slate-100 px-3 py-2 text-slate-700">4. Save to Leads</li>
+    </ol>
 
     {# The permits lane already knows every address, so pick one instead of
        typing it. Falls back to manual entry for an address not on a permit. #}
     <div class="mt-6 bg-white rounded-2xl border border-slate-200 p-5">
         <label class="block text-xs font-semibold text-slate-600 mb-1">Pick an address</label>
-        <select id="st-pick"
+        <select id="st-pick" data-selected-permit-id="{{ selected_permit_id or '' }}"
                 class="w-full px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-400">
             <option value="">Loading addresses…</option>
         </select>
         <p class="mt-2 text-xs text-slate-500">
-            {{ address_count or 0 }} addresses from your permit feeds. This calls the same
-            endpoint as the “Who owns this property?” button on each permit card, so it
-            reads the same cache and never spends a second lookup on an address already checked.
+            {{ address_count or 0 }} addresses from your permit feeds. Choosing one fills
+            the address below; the owner result is shared with the permit card and cached.
         </p>
     </div>
 
@@ -63,8 +68,8 @@
                 Look up owner
             </button>
             <p class="mt-2 text-xs text-slate-500">
-                About 40% of permit records have no ZIP. Leave it blank — the lookup
-                still works, and the result is flagged as a city-level match.
+                The HRGEO public parcel lookup is free. If it has no unique match,
+                a configured RentCast key is tried next. A missing ZIP lowers match confidence.
             </p>
         </div>
     </form>
@@ -80,6 +85,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const permitId = document.getElementById('st-permit-id');
     const street = document.getElementById('st-street');
     const city = document.getElementById('st-city');
+    const state = document.getElementById('st-state');
     const zip = document.getElementById('st-zip');
 
     // Load the permit addresses so this is a picker, not four typing boxes.
@@ -92,6 +98,10 @@ document.addEventListener('DOMContentLoaded', function() {
             const markup = await res.text();
             pick.innerHTML = markup;
             pick.disabled = false;
+            if (pick.dataset.selectedPermitId) {
+                pick.value = pick.dataset.selectedPermitId;
+                if (pick.value) pick.dispatchEvent(new Event('change'));
+            }
         } catch (e) {
             pick.innerHTML = '<option value="">Could not load addresses — type it below</option>';
             pick.disabled = true;
@@ -105,15 +115,19 @@ document.addEventListener('DOMContentLoaded', function() {
         if (!opt || !opt.value) return;
         permitId.value = opt.value;
         const text = opt.textContent.trim();
-        const m = text.match(/^(.*?),\s*([A-Za-z .'-]+?),\s*([A-Z]{2})\s*(\d{5}(-\d{4})?)?\s*$/);
-        if (m) {
-            street.value = m[1];
-            city.value = m[2].trim();
-            zip.value = m[4] || '';
-        } else {
-            street.value = text;
-        }
+        street.value = opt.dataset.street || text;
+        city.value = opt.dataset.city || '';
+        document.getElementById('st-state').value = opt.dataset.state || 'VA';
+        zip.value = opt.dataset.zip || '';
         street.focus();
+    });
+    [street, city, state, zip].forEach(function(input) {
+        input.addEventListener('input', function() {
+            if (permitId.value) {
+                permitId.value = '';
+                pick.value = '';
+            }
+        });
     });
 
     const form = document.getElementById('st-form');
@@ -142,14 +156,15 @@ document.addEventListener('DOMContentLoaded', function() {
                       + 'or wait for the allowance to reset.</p>';
             }
             return '<div class="rounded-2xl bg-amber-50 border border-amber-200 p-5 text-amber-800">'
-                 + esc(d.detail) + extra + '</div>';
+                 + esc(d.detail)
+                 + (d.request_id ? '<p class="mt-2 text-xs">Reference: ' + esc(d.request_id) + '</p>' : '')
+                 + extra + '</div>';
         }
         if (!d.found) {
             return '<div class="rounded-2xl bg-white border border-slate-200 p-5">'
                  + '<p class="font-bold text-slate-900">No owner of record found</p>'
                  + '<p class="mt-1 text-sm text-slate-600">Nothing in the assessor data for this address. '
-                 + 'That is common outside the cities the provider covers, and it is not an error — '
-                 + 'the county assessor directly is the fallback.</p></div>';
+                 + 'Check the address and ZIP, then try the locality assessor if no parcel is available.</p></div>';
         }
         const p = d.property || {};
         const rows = [
@@ -199,6 +214,10 @@ document.addEventListener('DOMContentLoaded', function() {
             h += '</div>';
         }
         h += ownerContactPanel(d);
+        if (p._source === 'hrgeo' && p.source_url) {
+            h += '<p class="px-5 pb-2 text-xs text-slate-500">Source: <a class="underline" target="_blank" rel="noopener noreferrer" href="'
+               + esc(p.source_url) + '">HRGEO regional parcels</a> (planning/research data; verify before relying on title).</p>';
+        }
         h += '<p class="px-5 pb-4 text-xs text-slate-400">Public assessor record. This identifies who owns the house; '
            + 'it is not contact. A phone number still needs a DNC check before you dial.</p>';
         h += '</div>';
@@ -226,6 +245,11 @@ document.addEventListener('DOMContentLoaded', function() {
             h += '</div>';
             return h;
         }
+        if (!d.contact_lookup_available) {
+            h += '<p class="text-xs text-slate-600">Phone and email are not in parcel records. No contact provider is configured, so this step is unavailable; any contact already in Leads is shown above.</p>';
+            h += '</div>';
+            return h;
+        }
         h += '<p class="text-xs text-slate-600 mb-2">The assessor record above is a name only. This spends one '
            + 'Skip Sherpa credit to get a reachable phone and email.</p>';
         h += '<button type="button" id="st-contact-btn" '
@@ -242,7 +266,9 @@ document.addEventListener('DOMContentLoaded', function() {
         if (d.detail) {
             let extra = d.credit_spent ? ' This one was billed; repeating it will bill again.' : '';
             return '<div class="rounded-xl bg-rose-50 border border-rose-200 p-3 text-sm text-rose-800">'
-                 + esc(d.detail) + extra + '</div>';
+                 + esc(d.detail)
+                 + (d.request_id ? '<p class="mt-2 text-xs">Reference: ' + esc(d.request_id) + '</p>' : '')
+                 + extra + '</div>';
         }
         if (!d.ok || !d.found) {
             return '<div class="rounded-xl bg-amber-50 border border-amber-200 p-3 text-sm text-amber-800">'
@@ -339,7 +365,8 @@ document.addEventListener('DOMContentLoaded', function() {
             let json;
             try { json = JSON.parse(text); }
             catch (err) {
-                box.innerHTML = '<div class="rounded-xl bg-rose-50 border border-rose-200 p-3 text-sm text-rose-700">Server error — check the logs.</div>';
+                box.innerHTML = '<div class="rounded-xl bg-rose-50 border border-rose-200 p-3 text-sm text-rose-700">The server returned an unreadable response (HTTP '
+                    + res.status + '). No contact was saved. Please retry; if it repeats, share this status with support.</div>';
                 return;
             }
             box.innerHTML = renderContact(json);
@@ -371,6 +398,7 @@ document.addEventListener('DOMContentLoaded', function() {
         body.set('city', document.getElementById('st-city').value);
         body.set('state', document.getElementById('st-state').value);
         body.set('zip_code', document.getElementById('st-zip').value);
+        body.set('permit_id', document.getElementById('st-permit-id').value);
         body.set('property_json', JSON.stringify((lastResult && lastResult.property) || {}));
         // Opt-in, and off by default. The lead is saved and drafted either way.
         if (document.getElementById('st-c-push') && document.getElementById('st-c-push').checked) {
@@ -378,20 +406,29 @@ document.addEventListener('DOMContentLoaded', function() {
         }
         try {
             const res = await fetch('/api/skiptrace/save', { method: 'POST', body: body });
-            const json = await res.json();
+            const text = await res.text();
+            let json;
+            try { json = JSON.parse(text); }
+            catch (err) {
+                box.innerHTML = '<div class="rounded-xl bg-rose-50 border border-rose-200 p-3 text-sm text-rose-700">The server returned an unreadable response (HTTP '
+                    + res.status + '). No contact was saved. Please retry; if it repeats, share this status with support.</div>';
+                return;
+            }
             if (!json.ok) {
                 box.innerHTML = '<div class="rounded-xl bg-amber-50 border border-amber-200 p-3 text-sm text-amber-800">'
-                     + esc(json.detail || 'Could not save.') + '</div>';
+                     + esc(json.detail || 'Could not save.')
+                     + (json.request_id ? '<p class="mt-2 text-xs">Reference: ' + esc(json.request_id) + '</p>' : '')
+                     + '</div>';
                 return;
             }
             box.innerHTML = '<div class="rounded-xl bg-emerald-50 border border-emerald-200 p-3 text-sm text-emerald-900">'
-                 + '<p class="font-bold">Saved to lead #' + json.lead_id + '</p>'
+                 + '<p class="font-bold">' + (json.created ? 'Added to Leads as #' : 'Saved to lead #') + json.lead_id + '</p>'
                  + '<p class="mt-1">' + esc(json.note) + '</p>'
                  + '<p class="mt-1 text-xs">Email: ' + esc(json.saved.email || 'not set') + '</p>'
                  + '<p class="text-xs">Status is still "' + esc(String(json.status || 'new')) + '" — it moves to '
                  + 'contacted only when the draft is actually sent.</p>'
                  + renderResimplyResult(json.resimply)
-                 + '<a href="/leads" class="inline-block mt-2 text-xs font-bold text-emerald-800 underline">Go to leads</a>'
+                 + '<a href="/leads?q=' + encodeURIComponent(json.saved.name || '') + '" class="inline-block mt-2 text-xs font-bold text-emerald-800 underline">Open this lead in Leads</a>'
                  + '</div>';
         } catch (err) {
             box.innerHTML = '<div class="rounded-xl bg-rose-50 border border-rose-200 p-3 text-sm text-rose-700">Network error.</div>';
@@ -407,6 +444,7 @@ document.addEventListener('DOMContentLoaded', function() {
         go.textContent = 'Looking up…';
         out.innerHTML = '';
         const body = new FormData();
+        body.set('permit_id', document.getElementById('st-permit-id').value);
         body.set('street', document.getElementById('st-street').value);
         body.set('city', document.getElementById('st-city').value);
         body.set('state', document.getElementById('st-state').value);
@@ -425,7 +463,8 @@ document.addEventListener('DOMContentLoaded', function() {
             let json;
             try { json = JSON.parse(text); }
             catch (err) {
-                out.innerHTML = '<div class="rounded-2xl bg-rose-50 border border-rose-200 p-5 text-rose-700">Server error — check the logs.</div>';
+                out.innerHTML = '<div class="rounded-2xl bg-rose-50 border border-rose-200 p-5 text-rose-700">The server returned an unreadable response (HTTP '
+                    + res.status + '). Retry; if it repeats, share this status with support.</div>';
                 return;
             }
             // Kept for the Save step, which needs the owner name and the

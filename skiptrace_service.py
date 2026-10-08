@@ -6,15 +6,11 @@ urllib to match this repo (nothing here needs httpx, and requirements.txt does
 not carry it). Exposed as POST /api/skiptrace, admin-only.
 
 WHY THE CACHE IS NOT OPTIONAL
-RentCast's free Developer plan allows 50 calls per MONTH. The permit feeds
-publish hundreds of addresses, and MEMORY.md records that 177 leads cover only
-58 distinct doors, so even a modest pass would blow the quota several times
-over. Every lookup is therefore cached on the normalized address forever: a
-repeat lookup is a table read, not a billable call. Without this the endpoint
-returns 429 within minutes of anyone using it twice.
-
-The cache is also why an address that misses stays missing -- NOT_FOUND is
-cached too, so a known-empty address is never re-spent on.
+Hampton Roads addresses use HRGEO's free public parcel layer first. RentCast's
+free Developer plan allows only 50 calls per month, so it is an optional
+fallback for a GIS miss and is never called without a configured key. Results
+are cached by normalized address. A successful parcel-service miss is cached;
+an unavailable service is an error and is not cached as "no owner."
 
 WHAT THIS RETURNS AND THE RULE THAT GOVERNS IT
 This reads the assessor's public record of who owns a property. That record is
@@ -56,6 +52,18 @@ _SCHEMA_READY = False
 
 _RENTCAST_URL = "https://api.rentcast.io/v1/properties"
 _OPENCORP_URL = "https://api.opencorporates.com/v0.4/companies"
+_HRGEO_PARCELS_URL = (
+    "https://geo.hrsd.com/hrgeo/rest/services/regionalgis/"
+    "HRGeo_Parcels_Public/MapServer/0/query"
+)
+HRGEO_SOURCE_URL = "https://www.hrgeo.org/pages/regional-parcels"
+
+_STREET_SUFFIXES = {
+    "AVENUE": "AVE", "BOULEVARD": "BLVD", "CIRCLE": "CIR", "COURT": "CT",
+    "CRESCENT": "CRES", "DRIVE": "DR", "HIGHWAY": "HWY", "LANE": "LN",
+    "PARKWAY": "PKWY", "PLACE": "PL", "ROAD": "RD", "STREET": "ST",
+    "TERRACE": "TER", "TRAIL": "TRL",
+}
 
 
 class ProviderError(Exception):
@@ -264,6 +272,120 @@ def fetch_rentcast(address: str):
     }
 
 
+def _normalize_situs_street(value: str) -> str:
+    """Normalize common street suffixes so parcel and input addresses compare."""
+    text = re.sub(r"[.,#]", " ", str(value or "").upper())
+    text = re.sub(r"\b(?:APT|APARTMENT|UNIT|STE|SUITE)\s+[A-Z0-9-]+\b.*$", "", text)
+    tokens = re.sub(r"\s+", " ", text).strip().split()
+    if tokens:
+        tokens[-1] = _STREET_SUFFIXES.get(tokens[-1], tokens[-1])
+    return " ".join(tokens)
+
+
+def _arcgis_literal(value: str) -> str:
+    """Quote a value for ArcGIS' SQL where expression."""
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def fetch_hrgeo_owner(street: str, city: str, zip_code: str = ""):
+    """Resolve one Hampton Roads situs address against HRGEO's public parcels.
+
+    ArcGIS returns a prefix candidate set, so the complete normalized street,
+    city, and (when available) ZIP are checked locally before accepting a hit.
+    Ambiguous parcel matches are treated as misses rather than guessed.
+    """
+    street_key = _normalize_situs_street(street)
+    city_key = re.sub(r"\s+", " ", str(city or "").strip()).upper()
+    if not street_key or not city_key:
+        return NOT_FOUND
+
+    prefix_tokens = street_key.split()
+    if len(prefix_tokens) < 2:
+        return NOT_FOUND
+    # Exclude a final road suffix from the prefix so the service can still find
+    # records whose locality data uses the long or abbreviated suffix form.
+    prefix = prefix_tokens[:-1] if prefix_tokens[-1] in set(_STREET_SUFFIXES.values()) else prefix_tokens
+    if len(prefix) < 2:
+        prefix = prefix_tokens
+
+    where = (
+        f"UPPER(PSTLCITY) = {_arcgis_literal(city_key)} AND "
+        f"UPPER(PSTLADDRESS) LIKE {_arcgis_literal(' '.join(prefix) + '%')}"
+    )
+    if zip_code:
+        where += f" AND PSTLZIP5 = {_arcgis_literal(str(zip_code).strip()[:5])}"
+
+    status, body = _get(
+        _HRGEO_PARCELS_URL,
+        {
+            "where": where,
+            "outFields": (
+                "OWNERNME1,PSTLADDRESS,PSTLCITY,PSTLZIP5,PARCELID,TOTVALUE,"
+                "RESYRBLT,SRCAGENCY,LASTUPDATE"
+            ),
+            "returnGeometry": "false",
+            "resultRecordCount": 100,
+            "f": "json",
+        },
+    )
+    if status != 200:
+        raise ProviderError(f"HRGEO public parcel service HTTP {status}", 502)
+    if not isinstance(body, dict):
+        raise ProviderError("HRGEO public parcel service returned invalid JSON", 502)
+    if body.get("error"):
+        error = body["error"]
+        code = error.get("code") if isinstance(error, dict) else ""
+        raise ProviderError(
+            f"HRGEO public parcel service error{f' {code}' if code else ''}", 502
+        )
+
+    features = body.get("features") or []
+    matches = []
+    input_zip = str(zip_code or "").strip()[:5]
+    for feature in features:
+        attrs = feature.get("attributes") if isinstance(feature, dict) else None
+        if not isinstance(attrs, dict):
+            continue
+        if _normalize_situs_street(attrs.get("PSTLADDRESS")) != street_key:
+            continue
+        if str(attrs.get("PSTLCITY") or "").strip().upper() != city_key:
+            continue
+        parcel_zip = str(attrs.get("PSTLZIP5") or "").strip()[:5]
+        if input_zip and parcel_zip and input_zip != parcel_zip:
+            continue
+        owner = str(attrs.get("OWNERNME1") or "").strip()
+        if owner:
+            matches.append(attrs)
+
+    # Multiple parcels can share a street address. Do not guess which is the
+    # lead's property unless the public data resolves to a single parcel.
+    parcels = {
+        str(row["PARCELID"]): row
+        for row in matches if str(row.get("PARCELID") or "").strip()
+    }
+    if len(parcels) != 1:
+        return NOT_FOUND
+
+    parcel = next(iter(parcels.values()))
+    return {
+        "owner_name": str(parcel["OWNERNME1"]).strip(),
+        "owner_type": None,
+        "owner_occupied": None,
+        "owner_mailing_city": None,
+        "parcel": parcel.get("PARCELID"),
+        "county": parcel.get("SRCAGENCY") or parcel.get("PSTLCITY"),
+        "assessed_value": parcel.get("TOTVALUE"),
+        "year_built": parcel.get("RESYRBLT"),
+        "square_footage": None,
+        "property_type": None,
+        "last_sale_date": None,
+        "last_sale_price": None,
+        "last_update": parcel.get("LASTUPDATE"),
+        "source_url": HRGEO_SOURCE_URL,
+        "_source": "hrgeo",
+    }
+
+
 # --- LAYER 2: OpenCorporates (optional, entity owners only) --------------------
 def fetch_registered_agent(company_name: str) -> str:
     """Resolve a company owner's registered agent. Empty string if unavailable."""
@@ -313,28 +435,49 @@ def trace_address(street: str, city: str, state: str, zip_code: str = "") -> dic
     attempted = []
     record = None
 
-    # Layer 1. Layers 2 and 3 (eStated, Regrid) are wired in the local tool but
-    # need keys that are unset, so only RentCast is live here. A missing key is
-    # a skip, not a failure -- the caller still gets a clean "no record".
-    got = fetch_rentcast(address)
-    if got is not None and got is not NOT_FOUND:
-        got["no_zip"] = not zip_code
-        if not zip_code:
-            # Without a ZIP the provider falls back to a city-level match, so
-            # the owner may belong to a different house on the same street.
-            # Carried in the payload (not a `_` key) so it survives the cache.
-            got["_low_confidence"] = True
-
-    if got is None:
-        attempted.append("rentcast: RENTCAST_API_KEY not set, skipped")
-    elif got is NOT_FOUND:
-        attempted.append("rentcast: no record for this address")
+    # Prefer HRGEO's free public parcel data. RentCast remains the fallback for
+    # addresses outside Hampton Roads, ambiguous parcel matches, or GIS misses.
+    hrgeo_error = None
+    rentcast_result = None
+    try:
+        hrgeo_result = fetch_hrgeo_owner(street, city, zip_code)
+    except ProviderError as exc:
+        hrgeo_error = exc
+        attempted.append(f"hrgeo: {exc.message}")
+        rentcast_result = fetch_rentcast(address)
     else:
-        record = got
+        if hrgeo_result is not None and hrgeo_result is not NOT_FOUND:
+            hrgeo_result["no_zip"] = not zip_code
+            hrgeo_result["provider"] = "hrgeo"
+            record = hrgeo_result
+            attempted.append("hrgeo: parcel matched")
+        else:
+            attempted.append("hrgeo: no unique parcel match")
+            rentcast_result = fetch_rentcast(address)
+
+    if record is None:
+        got = rentcast_result
+        if got is not None and got is not NOT_FOUND:
+            got["no_zip"] = not zip_code
+            if not zip_code:
+                # Without a ZIP the provider falls back to a city-level match,
+                # so the owner may belong to a different house on the street.
+                # Carried in the payload (not a `_` key) so it survives cache.
+                got["_low_confidence"] = True
+            got["provider"] = "rentcast"
+            record = got
+            attempted.append("rentcast: matched")
+        elif got is NOT_FOUND:
+            attempted.append("rentcast: no record for this address")
+        else:
+            attempted.append("rentcast: RENTCAST_API_KEY not set, skipped")
+
+    if record is None and hrgeo_error:
+        raise hrgeo_error
 
     if record is None:
         return {"found": False, "layers_tried": attempted,
-                "address": address, "no_zip": not zip_code,
+                "address": address, "no_zip": not zip_code, "provider": "hrgeo",
                 "checked_at": time.strftime("%Y-%m-%d %H:%M:%S")}
 
     owner = record.get("owner_name")
@@ -431,6 +574,10 @@ def cache_get(cur, key: str):
     # carry. An older row, or a payload written before a field was added, can
     # disagree with the column; trusting the column keeps the two from drifting.
     data["found"] = bool(found)
+    if not data["found"] and source != "hrgeo":
+        # Invalidate permanent misses created before the free parcel source was
+        # added; otherwise newly covered addresses would stay undiscoverable.
+        return None
     data["_cached"] = True
     data["_cache_source"] = source
     return data
@@ -450,7 +597,7 @@ def cache_put(cur, key: str, result: dict) -> None:
              SET found = EXCLUDED.found, payload = EXCLUDED.payload,
                  source = EXCLUDED.source, checked_at = CURRENT_TIMESTAMP;""",
         (key, bool(result.get("found")), json.dumps(payload, default=str),
-         (result.get("property") or {}).get("_source")),
+         (result.get("property") or {}).get("_source") or result.get("provider")),
     )
 
 
@@ -487,10 +634,14 @@ def cache_get_many(cur, keys) -> dict:
     if not present:
         return {}
 
-    cur.execute("SELECT address_key, found, payload FROM skiptrace_cache "
+    cur.execute("SELECT address_key, found, payload, source FROM skiptrace_cache "
                 "WHERE address_key = ANY(%s);", (keys,))
     out = {}
     for r in cur.fetchall():
+        if not r["found"] and r.get("source") != "hrgeo":
+            # A negative written before the free regional lookup was added is
+            # stale; let the user recheck it rather than presenting it as final.
+            continue
         payload = {}
         if r["payload"]:
             try:
@@ -499,6 +650,7 @@ def cache_get_many(cur, keys) -> dict:
                 payload = {}
         payload["found"] = bool(r["found"])
         payload["_cached"] = True
+        payload["_cache_source"] = r.get("source")
         out[r["address_key"]] = payload
     return out
 
@@ -575,17 +727,15 @@ def lookup(cur, street: str, city: str, state: str, zip_code: str = "",
 # Every lead that arrives with a postal address and no contact is run through
 # the lookup and written back. Two facts shape this entirely:
 #
-# 1. RentCast allows 50 calls per MONTH. So this is bounded by a hard per-run
-#    cap, and it consults the cache before spending anything. A repeat run over
-#    the same addresses is free, which is what makes a scheduler safe to leave
-#    on. Dedupe is on the normalized address because the permit feeds emit one
-#    row per permit: 177 leads covered only 58 distinct doors, so per-lead work
-#    would spend the whole monthly quota on about 15 real addresses.
+# 1. Hampton Roads parcels come from the free HRGEO layer. RentCast remains a
+#    capped, optional fallback for unmatched addresses. Results are cached and
+#    deduplicated by normalized situs address because permit feeds can emit
+#    multiple rows for one property.
 #
 # 2. The assessor record contains a NAME and no phone or email. So this fills in
 #    the one field that is genuinely empty and truthful. It does not fabricate
 #    contact details, and it never overwrites a name that is already a person.
-ENRICH_DEFAULT_CAP = 25  # per run; the monthly quota is the real ceiling
+ENRICH_DEFAULT_CAP = 25  # per run; also bounds optional paid fallbacks
 
 
 def enrich_cap() -> int:

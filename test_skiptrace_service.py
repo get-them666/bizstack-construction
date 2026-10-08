@@ -185,6 +185,107 @@ def test_5xx_surfaces_as_provider_error(monkeypatch):
         assert exc.status == 502
 
 
+# --- free HRGEO parcel lookup -------------------------------------------------
+
+def _hrgeo_feature(**overrides):
+    attrs = {
+        "OWNERNME1": "Sample Homeowner",
+        "PSTLADDRESS": "1501 Vance Drive",
+        "PSTLCITY": "Chesapeake",
+        "PSTLZIP5": "23320",
+        "PARCELID": "123456",
+        "TOTVALUE": 325000,
+        "RESYRBLT": 2004,
+        "SRCAGENCY": "Chesapeake",
+        "LASTUPDATE": "2026-09-01",
+    }
+    attrs.update(overrides)
+    return {"attributes": attrs}
+
+
+def test_hrgeo_query_matches_exact_situs_address_and_zip(monkeypatch):
+    request = {}
+
+    def fake_get(url, params, *args, **kwargs):
+        request.update(url=url, params=params)
+        return 200, {"features": [_hrgeo_feature()]}
+
+    monkeypatch.setattr(svc, "_get", fake_get)
+    result = svc.fetch_hrgeo_owner("1501 Vance Dr.", "Chesapeake", "23320-1234")
+    assert result["owner_name"] == "Sample Homeowner"
+    assert result["_source"] == "hrgeo"
+    assert result["parcel"] == "123456"
+    assert result["assessed_value"] == 325000
+    assert request["url"] == svc._HRGEO_PARCELS_URL
+    assert "UPPER(PSTLCITY) = 'CHESAPEAKE'" in request["params"]["where"]
+    assert "UPPER(PSTLADDRESS) LIKE '1501 VANCE%'" in request["params"]["where"]
+    assert "PSTLZIP5 = '23320'" in request["params"]["where"]
+    assert request["params"]["returnGeometry"] == "false"
+
+
+def test_hrgeo_does_not_return_prefix_only_street_match(monkeypatch):
+    monkeypatch.setattr(
+        svc, "_get",
+        lambda *a, **k: (200, {"features": [_hrgeo_feature(PSTLADDRESS="1501 Vance Drive East")]}),
+    )
+    assert svc.fetch_hrgeo_owner("1501 Vance Dr", "Chesapeake", "23320") is svc.NOT_FOUND
+
+
+def test_hrgeo_does_not_guess_between_multiple_parcels(monkeypatch):
+    monkeypatch.setattr(
+        svc, "_get",
+        lambda *a, **k: (200, {"features": [
+            _hrgeo_feature(PARCELID="parcel-1"),
+            _hrgeo_feature(PARCELID="parcel-2", OWNERNME1="Other Owner"),
+        ]}),
+    )
+    assert svc.fetch_hrgeo_owner("1501 Vance Dr", "Chesapeake", "23320") is svc.NOT_FOUND
+
+
+def test_trace_uses_free_hrgeo_before_rentcast(monkeypatch):
+    monkeypatch.setattr(svc, "fetch_hrgeo_owner", lambda *a: {
+        "owner_name": "Jane Smith", "owner_type": None, "_source": "hrgeo",
+    })
+    monkeypatch.setattr(
+        svc, "fetch_rentcast",
+        lambda *_: (_ for _ in ()).throw(AssertionError("paid fallback must not run")),
+    )
+    result = svc.trace_address("1501 Vance Cir", "Chesapeake", "VA", "23320")
+    assert result["found"] is True
+    assert result["owner_of_record"] == "Jane Smith"
+    assert result["property"]["_source"] == "hrgeo"
+    assert result["layers_tried"] == ["hrgeo: parcel matched"]
+
+
+def test_trace_preserves_rentcast_fallback_for_hrgeo_miss(monkeypatch):
+    monkeypatch.setattr(svc, "fetch_hrgeo_owner", lambda *a: svc.NOT_FOUND)
+    monkeypatch.setattr(svc, "fetch_rentcast", lambda *_: {
+        "owner_name": "John Smith", "_source": "rentcast",
+    })
+    result = svc.trace_address("1 Main St", "Richmond", "VA", "23220")
+    assert result["found"] is True
+    assert result["owner_of_record"] == "John Smith"
+    assert result["property"]["_source"] == "rentcast"
+    assert result["layers_tried"] == [
+        "hrgeo: no unique parcel match", "rentcast: matched",
+    ]
+
+
+def test_trace_preserves_rentcast_fallback_when_hrgeo_is_unavailable(monkeypatch):
+    def unavailable(*_):
+        raise svc.ProviderError("HRGEO timed out", 502)
+
+    monkeypatch.setattr(svc, "fetch_hrgeo_owner", unavailable)
+    monkeypatch.setattr(svc, "fetch_rentcast", lambda *_: {
+        "owner_name": "John Smith", "_source": "rentcast",
+    })
+    result = svc.trace_address("1 Main St", "Richmond", "VA", "23220")
+    assert result["found"] is True
+    assert result["owner_of_record"] == "John Smith"
+    assert result["property"]["_source"] == "rentcast"
+    assert result["layers_tried"] == ["hrgeo: HRGEO timed out", "rentcast: matched"]
+
+
 def test_network_failure_does_not_claim_to_have_spent_quota(monkeypatch):
     def boom(*a, **k):
         raise svc.ProviderError("network", 502, spendable=False)
@@ -231,9 +332,8 @@ def _good_body():
 
 
 def test_trace_success_marks_individual_owner_as_residential(monkeypatch):
-    import enrichment
-    monkeypatch.setattr(enrichment, "_enrich_address", lambda address: {
-        "name": "Craig K Searles", "email": "craig@example.com", "phone": "7575550100",
+    monkeypatch.setattr(svc, "fetch_hrgeo_owner", lambda *a: {
+        "owner_name": "Craig K Searles", "_source": "hrgeo",
     })
     out = svc.trace_address("151 Battle Green Dr", "Virginia Beach", "VA", "23451")
     assert out["found"] is True
@@ -242,15 +342,17 @@ def test_trace_success_marks_individual_owner_as_residential(monkeypatch):
     assert out["is_residential"] is True
     assert out["owner_is_entity"] is False
     assert out["registered_agent"] is None
-    assert out["property"]["_source"] == "pdl"
+    assert out["property"]["_source"] == "hrgeo"
 
 
 def test_trace_miss_returns_clean_result_not_exception(monkeypatch):
-    import enrichment
-    monkeypatch.setattr(enrichment, "_enrich_address", lambda address: None)
+    monkeypatch.setattr(svc, "fetch_hrgeo_owner", lambda *a: svc.NOT_FOUND)
+    monkeypatch.setattr(svc, "fetch_rentcast", lambda *_: svc.NOT_FOUND)
     out = svc.trace_address("701 Dana Dr", "Chesapeake", "VA", "23321")
     assert out["found"] is False
-    assert any("no contact found" in line for line in out["layers_tried"])
+    assert out["layers_tried"] == [
+        "hrgeo: no unique parcel match", "rentcast: no record for this address",
+    ]
 
 
 def test_trace_rejects_bad_state_without_calling_provider(monkeypatch):
@@ -296,8 +398,20 @@ def test_cache_get_returns_none_on_miss():
 
 def test_cache_get_handles_dict_rows():
     """get_db() uses row_factory=dict_row; positional indexing raises TypeError."""
-    read = FakeCursor(found_row={"found": False, "payload": "{}", "source": None})
+    read = FakeCursor(found_row={"found": False, "payload": "{}", "source": "hrgeo"})
     assert svc.cache_get(read, "k")["found"] is False
+
+
+def test_cache_get_invalidates_negative_written_before_hrgeo():
+    old = FakeCursor(found_row={
+        "found": False, "payload": '{"found": false}', "source": None,
+    })
+    assert svc.cache_get(old, "k") is None
+
+    current = FakeCursor(found_row={
+        "found": False, "payload": '{"found": false}', "source": "hrgeo",
+    })
+    assert svc.cache_get(current, "k")["_cached"] is True
 
 
 def test_cache_get_survives_corrupt_payload():
