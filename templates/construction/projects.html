@@ -27,13 +27,13 @@
                 {% if projects %}
                 <div class="space-y-4">
                     {% for p in projects %}
-                    <div class="bg-white rounded-3xl border border-slate-200 overflow-hidden">
+                    <div id="project-{{ p.id }}" class="bg-white rounded-3xl border border-slate-200 overflow-hidden">
                         <details class="group" {% if loop.first %}open{% endif %}>
                             <summary class="cursor-pointer list-none px-5 py-4 flex flex-wrap items-center gap-x-6 gap-y-2 hover:bg-slate-50">
                                 <div class="flex-1 min-w-[200px]">
                                     <div class="flex items-center gap-3">
                                         <p class="font-bold text-slate-900">{{ p.name }}</p>
-                                        {% if p.lead_name %}<span class="text-xs text-slate-400">lead: {{ p.lead_name }}</span>{% endif %}
+                                        {% if p.lead_name %}<span class="text-xs text-slate-500">lead: {{ p.lead_name }}</span>{% endif %}
                                     </div>
                                     <p class="text-sm text-slate-500 mt-0.5">{{ p.address or '—' }} · {{ p.crew_names or 'unassigned' }}</p>
                                 </div>
@@ -47,6 +47,7 @@
                                 <span class="text-slate-400 text-sm group-open:rotate-180 transition-transform">▾</span>
                             </summary>
                             <div class="px-5 pb-5 pt-1 border-t border-slate-100">
+                                {% if p.lead_id %}<a href="/leads/{{ p.lead_id }}" class="inline-flex mt-3 text-sm font-semibold text-indigo-700 hover:underline">Open lead workspace →</a>{% endif %}
                                 {% if p.summary %}<p class="text-sm text-slate-600 mt-3 whitespace-pre-wrap">{{ p.summary }}</p>{% endif %}
                                 {% if p.notes %}<p class="mt-2 text-xs text-slate-400 whitespace-pre-wrap bg-slate-50 rounded-xl p-3 border border-slate-100">📝 {{ p.notes }}</p>{% endif %}
                                 {% if p.start_date or p.end_date %}<p class="mt-2 text-xs font-semibold text-slate-500">{{ p.start_date or '—' }} → {{ p.end_date or 'open' }}</p>{% endif %}
@@ -104,16 +105,16 @@
             </div>
 
             <div>
-                <div class="bg-white rounded-3xl border border-slate-200 p-5">
+                <div id="create-project" class="bg-white rounded-3xl border border-slate-200 p-5">
                     <p class="text-sm font-bold text-slate-900 mb-3">Create project</p>
                     <form method="POST" action="/api/projects" class="space-y-3">
                         <select name="lead_id" class="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500">
                             <option value="">— from a lead (optional) —</option>
-                            {% for l in leads %}<option value="{{ l.id }}">{{ l.name or '' }}{% if l.address %} · {{ l.address }}{% endif %}</option>{% endfor %}
+                            {% for l in leads %}<option value="{{ l.id }}" {% if selected_lead and l.id == selected_lead.id %}selected{% endif %}>{{ l.name or '' }}{% if l.address %} · {{ l.address }}{% endif %}</option>{% endfor %}
                         </select>
-                        <input type="text" name="name" placeholder="Project name" class="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
-                        <input type="text" name="address" placeholder="Jobsite address" class="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
-                        <textarea name="summary" rows="2" placeholder="Scope summary" class="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"></textarea>
+                        <input type="text" name="name" value="{{ ((selected_lead.project_type or 'Project') ~ ' — ' ~ (selected_lead.name or '')) if selected_lead else '' }}" placeholder="Project name" class="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                        <input type="text" name="address" value="{{ selected_lead.address if selected_lead else '' }}" placeholder="Jobsite address" class="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                        <textarea name="summary" rows="2" placeholder="Scope summary" class="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">{{ selected_lead.description if selected_lead else '' }}</textarea>
                         <button type="submit" class="w-full py-3 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition-colors">+ Create</button>
                     </form>
                 </div>

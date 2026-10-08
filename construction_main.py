@@ -2319,6 +2319,83 @@ async def leads_page(request: Request, status_filter: str = "", q: str = "", lan
     })
 
 
+@app.get("/leads/{lead_id}", response_class=HTMLResponse)
+async def lead_workspace_page(lead_id: int, request: Request, db=Depends(get_db)):
+    """One workspace for a lead's sales activity and connected job."""
+    is_authed, user_email = require_auth(request)
+    if not is_authed:
+        return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
+
+    visibility = source_visibility_clause("l")
+    visibility_params = tuple(source_visibility_params())
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT l.* FROM leads l WHERE l.id = %s AND l.company = 'construction'"
+            + visibility + ";",
+            (lead_id,) + visibility_params,
+        )
+        lead = cur.fetchone()
+        if not lead:
+            raise HTTPException(status_code=404, detail="Lead not found")
+
+        cur.execute(
+            """SELECT p.*,
+                      COALESCE((SELECT string_agg(c.name, ', ' ORDER BY c.name)
+                                FROM project_assignments pa
+                                JOIN crew c ON c.id = pa.crew_id
+                                WHERE pa.project_id = p.id), '') AS crew_names,
+                      (SELECT COUNT(*) FROM job_photos ph WHERE ph.project_id = p.id)
+                          AS photo_count
+               FROM projects p
+               WHERE p.lead_id = %s
+               ORDER BY p.created_at DESC
+               LIMIT 1;""",
+            (lead_id,),
+        )
+        project = cur.fetchone()
+
+        cur.execute(
+            "SELECT id, direction, channel, sender, recipient, message_body, created_at "
+            "FROM comms_logs WHERE lead_id = %s "
+            "OR (%s <> '' AND (LOWER(recipient) = LOWER(%s) OR LOWER(sender) = LOWER(%s))) "
+            "OR (%s <> '' AND (LOWER(recipient) = LOWER(%s) OR LOWER(sender) = LOWER(%s))) "
+            "ORDER BY created_at DESC LIMIT 30;",
+            (
+                lead_id,
+                (lead.get("email") or "").strip(),
+                (lead.get("email") or "").strip(),
+                (lead.get("email") or "").strip(),
+                (lead.get("phone") or "").strip(),
+                (lead.get("phone") or "").strip(),
+                (lead.get("phone") or "").strip(),
+            ),
+        )
+        activity = cur.fetchall()
+
+        cur.execute(
+            "SELECT id, amount_cents, currency, status, created_at "
+            "FROM payments WHERE lead_id = %s ORDER BY created_at DESC LIMIT 20;",
+            (lead_id,),
+        )
+        payments = cur.fetchall()
+
+    return templates.TemplateResponse(
+        request=request,
+        name="lead_workspace.html",
+        context={
+            "user": {"email": user_email or ""},
+            "lead": lead,
+            "project": project,
+            "activity": activity,
+            "payments": payments,
+            "statuses": LEAD_STATUSES,
+            "status_labels": STATUS_LABELS,
+            "progress_statuses": [stage for stage in LEAD_STATUSES if stage != "lost"],
+            "default_deposit": default_deposit_cents() / 100,
+        },
+    )
+
+
 @app.get("/photo-quote", response_class=HTMLResponse)
 async def photo_quote_page(request: Request):
     """Photo -> scope -> ballpark. Behind login.
@@ -6081,12 +6158,17 @@ PROJECT_STATUSES = ["planned", "active", "on_hold", "completed", "cancelled"]
 
 
 @app.get("/projects", response_class=HTMLResponse)
-async def projects_page(request: Request, status_filter: str = "", db=Depends(get_db)):
+async def projects_page(request: Request, status_filter: str = "", lead_id: int = 0,
+                        project_id: int = 0,
+                        db=Depends(get_db)):
     require_admin(request)
     where, params = [], []
     if status_filter:
         where.append("p.status = %s")
         params.append(status_filter)
+    if project_id:
+        where.append("p.id = %s")
+        params.append(project_id)
     clause = ("WHERE " + " AND ".join(where)) if where else ""
     with db.cursor() as cur:
         cur.execute(f"""
@@ -6102,11 +6184,22 @@ async def projects_page(request: Request, status_filter: str = "", db=Depends(ge
         projects = cur.fetchall()
         cur.execute("SELECT id, name FROM crew ORDER BY name;")
         crew_rows = cur.fetchall()
-        cur.execute("SELECT id, name, phone, address, project_type, status FROM leads WHERE company = 'construction' ORDER BY created_at DESC LIMIT 25;")
+        cur.execute("SELECT id, name, phone, address, project_type, description, status FROM leads WHERE company = 'construction' ORDER BY created_at DESC LIMIT 25;")
         lead_rows = cur.fetchall()
+        selected_lead = next((row for row in lead_rows if row["id"] == lead_id), None)
+        if lead_id and not selected_lead:
+            cur.execute(
+                "SELECT id, name, phone, address, project_type, description, status FROM leads "
+                "WHERE id = %s AND company = 'construction';",
+                (lead_id,),
+            )
+            selected_lead = cur.fetchone()
+            if selected_lead:
+                lead_rows.insert(0, selected_lead)
     return templates.TemplateResponse(request=request, name="projects.html", context={
         "user": {"email": require_auth(request)[1]},
         "projects": projects, "crew": crew_rows, "leads": lead_rows,
+        "selected_lead": selected_lead,
         "statuses": PROJECT_STATUSES, "active_status": status_filter,
     })
 
@@ -6115,20 +6208,34 @@ async def projects_page(request: Request, status_filter: str = "", db=Depends(ge
 async def project_create(request: Request, name: str = Form(""), lead_id: str = Form(""), address: str = Form(""),
                          summary: str = Form(""), db=Depends(get_db)):
     require_admin(request)
+    lead_pk = None
     with db.cursor() as cur:
         if lead_id:
-            cur.execute("SELECT name, address, project_type FROM leads WHERE id = %s;", (int(lead_id),))
+            try:
+                lead_pk = int(lead_id)
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid lead ID")
+            cur.execute(
+                "SELECT name, address, project_type, description FROM leads "
+                "WHERE id = %s AND company = 'construction';",
+                (lead_pk,),
+            )
             lead = cur.fetchone()
-            if lead and (not name or not address):
-                name = name or f"{lead['project_type'] or 'Project'} — {lead['name']}"
-                address = address or lead["address"] or ""
+            if not lead:
+                raise HTTPException(status_code=404, detail="Construction lead not found")
+            name = name or f"{lead['project_type'] or 'Project'} — {lead['name']}"
+            address = address or lead["address"] or ""
+            summary = summary or lead["description"] or ""
         cur.execute(
             "INSERT INTO projects (lead_id, name, address, summary, status) VALUES (%s,%s,%s,%s,'planned') RETURNING id;",
-            (int(lead_id) if lead_id else None, name or "Untitled project", address, summary),
+            (lead_pk, name or "Untitled project", address, summary),
         )
         pid = cur.fetchone()["id"]
         db.commit()
-    return RedirectResponse(url=f"/projects?ok=created+%23{pid}", status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(
+        url=f"/projects?project_id={pid}#project-{pid}",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
 
 
 @app.post("/api/projects/{project_id}/update")
@@ -6142,9 +6249,16 @@ async def project_update(request: Request, project_id: int, db=Depends(get_db),
     with db.cursor() as cur:
         cur.execute(
             "UPDATE projects SET name=%s, address=%s, summary=%s, status=%s, "
-            "start_date=%s, end_date=%s, notes=%s WHERE id=%s;",
+            "start_date=%s, end_date=%s, notes=%s WHERE id=%s RETURNING lead_id;",
             (name, address, summary, status_val, start_date or None, end_date or None, notes, project_id),
         )
+        project = cur.fetchone()
+        if project and project.get("lead_id") and status_val in ("active", "completed"):
+            lead_status = "in_progress" if status_val == "active" else "completed"
+            cur.execute(
+                "UPDATE leads SET status = %s WHERE id = %s AND company = 'construction';",
+                (lead_status, project["lead_id"]),
+            )
         db.commit()
     return RedirectResponse(url=request.headers.get("referer") or "/projects", status_code=status.HTTP_303_SEE_OTHER)
 

@@ -101,11 +101,11 @@ if __name__ == "__main__":
           any("WHERE id = %s AND status = 'new'" in s for s in db.statements()))
 
     print("\n[3] every physical channel is accepted, junk is not")
-    for chan in ("letter", "door-knock", "phone", "in-person", "other"):
+    for chan in ("letter", "door-knock", "phone", "sms", "in-person", "other"):
         db = FakeDb()
         r = auto_reply.record_manual_touch(db, 1, chan)
         check(f"{chan!r} accepted", r.get("ok") is True, r)
-    for bad in ("email", "sms", "", "LETTER DROP TABLE", "carrier pigeon"):
+    for bad in ("email", "", "LETTER DROP TABLE", "carrier pigeon"):
         db = FakeDb()
         r = auto_reply.record_manual_touch(db, 1, bad)
         check(f"{bad!r} rejected", r.get("ok") is False, r)
@@ -146,4 +146,3 @@ if __name__ == "__main__":
         print(f"FAILED ({len(FAILS)}): {FAILS}")
         sys.exit(1)
     print("All manual-touch tests passed.")
-

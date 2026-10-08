@@ -190,8 +190,11 @@ document.addEventListener('DOMContentLoaded', function() {
             body.set('notes', body.get('notes') || '');
             try {
                 await fetch(form.action, { method: 'POST', body: body });
-                form.querySelector('input[name="notes"]').style.borderColor = '#10b981';
-                setTimeout(function() { form.querySelector('input[name="notes"]').style.borderColor = ''; }, 1200);
+                const notesField = form.querySelector('[name="notes"]');
+                if (notesField) {
+                    notesField.style.borderColor = '#10b981';
+                    setTimeout(function() { notesField.style.borderColor = ''; }, 1200);
+                }
             } catch (e) {
                 alert('Could not save notes');
             }
