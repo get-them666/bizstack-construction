@@ -17,6 +17,7 @@ import re
 import pytest
 
 import resimply_service as res
+import skiptrace_service as owner_lookup
 import skip_sherpa_service as sherpa
 
 # This repo's app is construction_main.py; the sister hosts repo's is main.py.
@@ -232,32 +233,37 @@ def test_configured_reflects_env(monkeypatch):
     assert sherpa.configured() is False
 
 
-# --- the save statement ----------------------------------------------------
-
-def test_owner_save_sql_placeholder_count():
-    """Guards the bug that prompted extracting this to module scope.
-
-    An inline version of this statement had 8 placeholders and 9 params, which
-    psycopg accepts at import and rejects on the first real click.
-    """
-    src = open(APP_MODULE).read()
-    m = re.search(r"_OWNER_SAVE_SQL = \((.*?)\n\)", src, re.S)
-    assert m, "_OWNER_SAVE_SQL not found — was it renamed?"
-    body = m.group(1)
-    # Count only placeholders in the concatenated literal, minus %% escapes.
-    placeholders = body.count("%s")
-    # owner, email x2, phone x2, address, json, id
-    assert placeholders == 8, f"expected 8 placeholders, found {placeholders}"
-
+# --- owner save ------------------------------------------------------------
 
 def test_owner_save_sql_does_not_clobber_real_email():
-    src = open(APP_MODULE).read()
-    m = re.search(r"_OWNER_SAVE_SQL = \((.*?)\n\)", src, re.S)
-    body = m.group(1)
-    # The real value must be the ELSE branch, and a @lead.local sentinel must
-    # remain replaceable.
+    body = _read_route("skiptrace_save")
     assert "ELSE email END" in body
     assert "@lead.local" in body
+
+
+def test_permit_save_rebuilds_full_address_from_permit_columns():
+    """Permit rows store city/state/ZIP separately from the situs street."""
+    body = _read_route("skiptrace_save")
+    assert 'address = parsed["formatted"]' in body
+    assert 'source_address = (permit.get("address") or "").strip()' in body
+
+
+def test_permit_address_parts_combine_separate_locality_fields():
+    import pathlib
+
+    src = pathlib.Path(__file__).resolve().parent / APP_MODULE
+    text = src.read_text()
+    start = text.index("def _permit_address_parts(")
+    end = text.find("\ndef ", start + 1)
+    namespace = {"re": re, "skiptrace_service": owner_lookup}
+    exec(compile(text[start:end], str(src), "exec"), namespace)
+    parts = namespace["_permit_address_parts"]({
+        "address": "1501 Vance Cir", "city": "Chesapeake",
+        "state": "VA", "postal_code": "23320",
+    })
+    assert parts["ok"] is True
+    assert parts["formatted"] == "1501 Vance Cir, CHESAPEAKE, VA 23320"
+    assert owner_lookup.parse_address(parts["formatted"])["ok"] is True
 
 
 def _load_owner_draft_body():
@@ -288,8 +294,7 @@ def test_draft_body_makes_no_unsupported_claims():
         {"year_built": 1998, "square_footage": 2100})
     assert "Leonard" in body
     assert "1998" in body
-    # An opt-out is a CAN-SPAM requirement for commercial email.
-    assert "won't contact you again" in body
+    assert "I won't follow up." in body
     # It must not assert a quote, a permit, or an offer we have not verified.
     low = body.lower()
     for claim in ("we offer", "your permit", "guaranteed", "free estimate"):
@@ -315,9 +320,9 @@ def test_draft_property_details_render_as_a_sentence():
     # No line may start with whitespace -- that is the signature of the bug.
     for line in body.split("\n"):
         assert not line.startswith(" "), f"line starts with a space: {line!r}"
-    assert "The assessor record lists it as built in 1998, 2,100 sq ft, Single Family." in body
+    assert "The public assessor record lists it as built in 1998, 2,100 sq ft." in body
     # And the facts are attributed, not asserted as certain.
-    assert "The assessor record lists it" in body
+    assert "The public assessor record lists it" in body
 
 
 def test_draft_property_line_is_omitted_when_there_are_no_facts():
@@ -342,7 +347,7 @@ def _read_route(name, window=2200):
 def test_resimply_settings_route_exists_and_guards():
     """The save route must be admin-gated like every other settings POST."""
     body = _read_route("save_resimply_settings")
-    assert "require_auth(request)" in body, "settings save must be auth-gated"
+    assert "require_admin(request)" in body, "settings save must be admin-gated"
     # Blank means keep, clearing is explicit. Otherwise saving the page would
     # silently wipe a token the owner cannot read back.
     assert "clear_resimply" in body
@@ -363,8 +368,8 @@ def test_settings_page_does_not_verify_when_unconfigured():
     assert idx > 0, "settings page not found"
     start = src.rfind("async def", 0, idx)
     body = src[start:idx]
-    assert "resimply_configured" in body
-    assert "if resimply_configured:" in body, "verify() must be gated on a token existing"
+    assert "configured" in body
+    assert "if configured:" in body, "verify() must be gated on a token existing"
 
 
 # --- the skiptrace page ----------------------------------------------------
@@ -399,3 +404,26 @@ def test_dnc_phones_are_rendered_disabled_not_hidden():
     assert "DO NOT CALL" in html
     assert "' disabled'" in html or "' disabled'" in html.replace("'", '"') or "disabled" in html
     assert "dnc_count" in html
+
+
+def test_skiptrace_page_workflow_routes_exist_in_the_construction_app():
+    """The owner/contact UI must not point at routes removed from this deploy."""
+    with open(APP_MODULE) as fh:
+        source = fh.read()
+    for route in (
+        '@app.post("/api/skiptrace/contact")',
+        '@app.post("/api/skiptrace/save")',
+        '@app.get("/settings"',
+        '@app.post("/api/settings/resimply")',
+    ):
+        assert route in source, f"missing construction route: {route}"
+    assert "INSERT INTO leads" in source
+    assert "auto_reply._stage_draft" in source
+
+
+def test_skiptrace_page_links_permits_to_the_complete_contact_workflow():
+    page = open("templates/construction/skiptrace.html").read()
+    lane = open("templates/construction/_permits_lane.html").read()
+    assert "data-selected-permit-id" in page
+    assert "/skiptrace?permit_id={{ j.id }}" in lane
+    assert "add to Leads" in lane

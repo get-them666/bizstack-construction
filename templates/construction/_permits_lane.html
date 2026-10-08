@@ -250,6 +250,12 @@
                         <p class="text-slate-600 text-xs">No owner of record in the assessor data for this address. Already checked — trying again spends nothing.</p>
                     {% endif %}
                 </div>
+                {% if j.address %}
+                <a href="/skiptrace?permit_id={{ j.id }}"
+                   class="block px-4 pb-3 text-xs font-semibold text-indigo-700 hover:underline">
+                    Continue: find owner contact and add to Leads →
+                </a>
+                {% endif %}
             </div>
         </div>
     </details>

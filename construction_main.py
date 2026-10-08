@@ -17,6 +17,8 @@ import io
 import csv
 import html
 import json
+import logging
+import re
 import uuid
 import hmac
 import hashlib
@@ -65,7 +67,10 @@ import scrap_io
 import inbound_email
 import google_oauth
 import skiptrace_service
+import skip_sherpa_service
+import resimply_service
 import accurate_append
+logger = logging.getLogger("construction")
 
 db_url = os.getenv("DATABASE_URL", "postgresql://shaun:secret@localhost:5432/buildstack")
 templates = Jinja2Templates(directory="templates/construction")
@@ -141,6 +146,34 @@ def _known_contacts_for(cur, street, city, state, zip_code) -> list:
     row_id = contacts_at_addresses(cur, [{"id": 0, "address": (
         f"{street or ''}, {city or ''}, {state or ''} {zip_code or ''}").strip()}])
     return [dict(c) for c in (row_id.get(0) or [])]
+
+
+def _permit_address_parts(row: dict) -> dict:
+    """Combine a permit's situs address with city/state/ZIP stored separately."""
+    raw = (row.get("address") or "").strip()
+    parsed = skiptrace_service.parse_address(raw)
+    street = parsed.get("street") if parsed.get("ok") else raw.split(",")[0].strip()
+    city = (parsed.get("city") or row.get("city") or "").strip()
+    state = (parsed.get("state") or row.get("state") or "").strip().upper()
+    zipcode = (parsed.get("zipcode") or row.get("postal_code") or "").strip()
+    if city and not parsed.get("city"):
+        street = re.sub(
+            rf"(?:,\s*|\s+){re.escape(city)}\s*$", "", street or "", flags=re.IGNORECASE
+        ).strip(" ,")
+    if not street:
+        return {"ok": False, "why": "empty street"}
+    if not city:
+        return {"ok": False, "why": "no city"}
+    if len(state) != 2:
+        return {"ok": False, "why": "no state"}
+    return {
+        "ok": True, "street": street, "city": city.upper(),
+        "state": state, "zipcode": zipcode,
+        "formatted": ", ".join(part for part in [
+            street, city.upper(),
+            " ".join(value for value in [state, zipcode] if value),
+        ] if part),
+    }
 
 
 def contacts_at_addresses(cur, rows, id_key: str = "id",
@@ -675,6 +708,27 @@ async def lifecycle(app: FastAPI):
 
 
 app = FastAPI(title="Buildstack Construction Co.", lifespan=lifecycle)
+
+
+@app.exception_handler(Exception)
+async def api_exception_handler(request: Request, exc: Exception):
+    """Keep unexpected API failures JSON-shaped and correlate them with logs."""
+    request_id = uuid.uuid4().hex[:12]
+    logger.exception(
+        "Unhandled request failure request_id=%s method=%s path=%s",
+        request_id, request.method, request.url.path,
+    )
+    if request.url.path.startswith("/api/"):
+        return JSONResponse(
+            status_code=500,
+            content={
+                "ok": False,
+                "error": "internal_server_error",
+                "detail": "The request failed unexpectedly. Share this reference with support.",
+                "request_id": request_id,
+            },
+        )
+    return HTMLResponse(content="Internal server error", status_code=500)
 
 os.makedirs("static", exist_ok=True)
 os.makedirs("uploads", exist_ok=True)
@@ -2281,7 +2335,7 @@ async def photo_quote_page(request: Request):
 
 
 @app.get("/skiptrace", response_class=HTMLResponse)
-async def skiptrace_page(request: Request, db=Depends(get_db)):
+async def skiptrace_page(request: Request, permit_id: int = 0, db=Depends(get_db)):
     """Standalone owner-of-record lookup.
 
     The per-permit button on each card does the same thing, but it sits at the
@@ -2299,9 +2353,21 @@ async def skiptrace_page(request: Request, db=Depends(get_db)):
             "WHERE NOT is_demo AND COALESCE(address,'') <> '';"
         )
         address_count = (cur.fetchone() or {}).get("c", 0)
+        selected_permit_id = 0
+        if permit_id > 0:
+            cur.execute(
+                "SELECT id FROM job_leads WHERE id = %s AND NOT is_demo "
+                "AND COALESCE(address,'') <> '';",
+                (permit_id,),
+            )
+            selected = cur.fetchone()
+            selected_permit_id = int(selected["id"]) if selected else 0
     return templates.TemplateResponse(
         request=request, name="skiptrace.html",
-        context={"address_count": address_count},
+        context={
+            "address_count": address_count,
+            "selected_permit_id": selected_permit_id,
+        },
     )
 
 
@@ -2711,8 +2777,11 @@ async def api_skiptrace(request: Request, street: str = Form(""), city: str = Fo
     cached = None
     with db.cursor() as cur:
         cached = skiptrace_service.cache_get(cur, key)
-    if cached is not None:
+    if cached is not None and (
+        cached.get("found") or cached.get("_cache_source") == "hrgeo"
+    ):
         cached["found"] = bool(cached.get("found"))
+        cached["contact_lookup_available"] = skip_sherpa_service.configured()
         with db.cursor() as cur:
             skiptrace_service.audit(cur, user_email, key, cached, cached=True)
             cached["known_contacts"] = _known_contacts_for(cur, street, city, state, zip_code)
@@ -2723,13 +2792,17 @@ async def api_skiptrace(request: Request, street: str = Form(""), city: str = Fo
         result = await asyncio.to_thread(
             skiptrace_service.trace_address, street, city, state, zip_code)
     except skiptrace_service.ProviderError as exc:
+        logger.warning("Owner lookup provider failure status=%s detail=%s", exc.status, exc.message)
         db.rollback()
-        return JSONResponse(status_code=exc.status, content={"detail": exc.message})
+        return JSONResponse(status_code=exc.status, content={
+            "ok": False, "error": "provider_error", "detail": exc.message,
+        })
 
     with db.cursor() as cur:
         skiptrace_service.cache_put(cur, key, result)
         skiptrace_service.audit(cur, user_email, key, result, cached=False)
         result["known_contacts"] = _known_contacts_for(cur, street, city, state, zip_code)
+    result["contact_lookup_available"] = skip_sherpa_service.configured()
     db.commit()
     return JSONResponse(content=result)
 
@@ -2774,7 +2847,7 @@ async def skiptrace_addresses(request: Request, q: str = "", db=Depends(get_db))
     require_admin(request)
     with db.cursor() as cur:
         cur.execute(
-            "SELECT id, address FROM job_leads "
+            "SELECT id, address, city, state, postal_code FROM job_leads "
             "WHERE NOT is_demo AND COALESCE(address,'') <> '' "
             "ORDER BY found_at DESC LIMIT 60;"
         )
@@ -2782,10 +2855,18 @@ async def skiptrace_addresses(request: Request, q: str = "", db=Depends(get_db))
     term = (q or "").strip().lower()
     items = []
     for r in rows:
-        addr = (r["address"] or "").strip()
+        parts = _permit_address_parts(r)
+        if not parts["ok"]:
+            continue
+        addr = parts["formatted"]
         if term and term not in addr.lower():
             continue
-        items.append(f'<option value="{html.escape(str(r["id"]))}">'
+        items.append(
+            f'<option value="{html.escape(str(r["id"]))}" '
+            f'data-street="{html.escape(parts["street"], quote=True)}" '
+            f'data-city="{html.escape(parts["city"], quote=True)}" '
+            f'data-state="{html.escape(parts["state"], quote=True)}" '
+            f'data-zip="{html.escape(parts["zipcode"], quote=True)}">'
                      f'{html.escape(addr)}</option>')
     return HTMLResponse(content="".join(items) or
                         '<option value="">No addresses match</option>')
@@ -2808,19 +2889,17 @@ async def permit_skiptrace(permit_id: int, request: Request, db=Depends(get_db))
     _, user_email = require_auth(request)
 
     with db.cursor() as cur:
-        cur.execute("SELECT address FROM job_leads WHERE id = %s;", (permit_id,))
+        cur.execute(
+            "SELECT address, city, state, postal_code FROM job_leads WHERE id = %s;",
+            (permit_id,),
+        )
         row = cur.fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="No such permit")
-    raw = (row["address"] or "").strip()
-    if not raw:
-        raise HTTPException(status_code=400, detail="This permit has no address to look up")
-
-    parsed = skiptrace_service.parse_address(raw)
+    parsed = _permit_address_parts(row)
     if not parsed["ok"]:
         raise HTTPException(status_code=400,
-                            detail=f"Cannot read that address ({parsed['why']}). "
-                                   f"Edit it on the permit first.")
+                            detail=f"Cannot read this permit address ({parsed['why']}).")
     # parsed["zipcode"] is legitimately empty: 217 of 500 permit rows have no
     # ZIP and the provider still resolves them. The response flags that case as
     # low confidence rather than hiding it.
@@ -2830,8 +2909,11 @@ async def permit_skiptrace(permit_id: int, request: Request, db=Depends(get_db))
     with db.cursor() as cur:
         skiptrace_service.ensure_schema(cur)
         cached = skiptrace_service.cache_get(cur, key)
-    if cached is not None:
+    if cached is not None and (
+        cached.get("found") or cached.get("_cache_source") == "hrgeo"
+    ):
         cached["found"] = bool(cached.get("found"))
+        cached["contact_lookup_available"] = skip_sherpa_service.configured()
         with db.cursor() as cur:
             skiptrace_service.audit(cur, user_email, key, cached, cached=True)
         db.commit()
@@ -2842,12 +2924,16 @@ async def permit_skiptrace(permit_id: int, request: Request, db=Depends(get_db))
             skiptrace_service.trace_address,
             parsed["street"], parsed["city"], parsed["state"], parsed["zipcode"])
     except skiptrace_service.ProviderError as exc:
+        logger.warning("Owner lookup provider failure status=%s detail=%s", exc.status, exc.message)
         db.rollback()
-        return JSONResponse(status_code=exc.status, content={"detail": exc.message})
+        return JSONResponse(status_code=exc.status, content={
+            "ok": False, "error": "provider_error", "detail": exc.message,
+        })
 
     with db.cursor() as cur:
         skiptrace_service.cache_put(cur, key, result)
         skiptrace_service.audit(cur, user_email, key, result, cached=False)
+    result["contact_lookup_available"] = skip_sherpa_service.configured()
     db.commit()
     return JSONResponse(content=result)
 
@@ -2880,6 +2966,309 @@ async def skiptrace_enrich(request: Request, company: str = Form("construction")
     summary = await asyncio.to_thread(run_with_cursor, db, run)
     db.commit()
     return JSONResponse(content=summary)
+
+
+@app.get("/settings", response_class=HTMLResponse)
+async def settings_page(request: Request, db=Depends(get_db)):
+    require_admin(request)
+    getter = lambda key: _get_setting(db, key)
+    configured = resimply_service.configured(getter)
+    resimply_status = None
+    if configured:
+        resimply_status = await asyncio.to_thread(resimply_service.verify, getter)
+    return templates.TemplateResponse(
+        request=request,
+        name="settings.html",
+        context={
+            "skip_sherpa_configured": skip_sherpa_service.configured(),
+            "resimply_configured": configured,
+            "resimply_status": resimply_status,
+            "resimply_missing": resimply_service.missing_ids(getter),
+        },
+    )
+
+
+@app.post("/api/settings/resimply")
+async def save_resimply_settings(request: Request, db=Depends(get_db)):
+    require_admin(request)
+    form = await request.form()
+    fields = {
+        "resimply_api_token": resimply_service.TOKEN_SETTING,
+        "resimply_campaign_id": "resimply_campaign_id",
+        "resimply_market_id": "resimply_market_id",
+        "resimply_pipeline_id": "resimply_pipeline_id",
+        "resimply_status_id": "resimply_status_id",
+    }
+    for field, key in fields.items():
+        value = (form.get(field) or "").strip()
+        if value:
+            _set_setting(db, key, value)
+    if form.get("clear_resimply"):
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM app_settings WHERE key = ANY(%s);",
+                        (list(fields.values()),))
+            db.commit()
+    return RedirectResponse(url="/settings", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/api/skiptrace/contact")
+async def skiptrace_contact(request: Request, street: str = Form(""),
+                            city: str = Form(""), state: str = Form(""),
+                            zip_code: str = Form(""), permit_id: str = Form(""),
+                            db=Depends(get_db)):
+    """Find contact channels only after an explicit user click."""
+    require_admin(request)
+    if permit_id:
+        try:
+            selected_id = int(permit_id)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Invalid permit selection")
+        with db.cursor() as cur:
+            cur.execute(
+                "SELECT address, city, state, postal_code FROM job_leads "
+                "WHERE id = %s AND NOT is_demo;",
+                (selected_id,),
+            )
+            row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="No such permit")
+        parsed = _permit_address_parts(row)
+        if not parsed["ok"]:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot read that permit's address ({parsed['why']}).",
+            )
+        street, city = parsed["street"], parsed["city"]
+        state, zip_code = parsed["state"], parsed["zipcode"]
+
+    if not skip_sherpa_service.configured():
+        return JSONResponse(status_code=400, content={
+            "ok": False,
+            "error": "contact_lookup_not_configured",
+            "detail": (
+                "Owner names are available from free public parcels. Phone and email "
+                "lookup needs SKIP_SHERPA_API_KEY; no contact lookup was made."
+            ),
+        })
+    if not (street or "").strip() or not (city or "").strip():
+        raise HTTPException(status_code=400, detail="Street and city are required")
+    if not (zip_code or "").strip():
+        return JSONResponse(status_code=400, content={
+            "ok": False,
+            "error": "zip_required",
+            "detail": (
+                "Phone/email lookup needs the full address including ZIP to avoid "
+                "matching the wrong property. No credit was spent."
+            ),
+            "credit_spent": False,
+        })
+    try:
+        result = await asyncio.to_thread(
+            skip_sherpa_service.trace,
+            street.strip(), city.strip(), state.strip().upper(), zip_code.strip(),
+        )
+    except skip_sherpa_service.ProviderError as exc:
+        logger.warning("Owner contact provider failure status=%s detail=%s", exc.status, exc.message)
+        db.rollback()
+        return JSONResponse(status_code=exc.status, content={
+            "ok": False,
+            "error": "contact_provider_error",
+            "detail": exc.message,
+            "credit_spent": exc.spendable,
+        })
+    return JSONResponse(content=result)
+
+
+def _owner_draft_body(owner: str, address: str, property_data: dict) -> str:
+    first = (owner or "there").split()[0]
+    detail = []
+    if property_data.get("year_built"):
+        detail.append(f"built in {property_data['year_built']}")
+    if property_data.get("square_footage"):
+        detail.append(f"{int(property_data['square_footage']):,} sq ft")
+    listed_property = (
+        "The public assessor record lists it as " + ", ".join(detail) + ".\n\n"
+        if detail else ""
+    )
+    return (
+        f"Hi {first},\n\n"
+        f"I'm reaching out about the property at {address}. I'm a local contractor "
+        "and wanted to introduce myself in case you need help with a renovation "
+        f"or repair.\n\n{listed_property}"
+        "If this is not relevant, let me know and I won't follow up.\n\n"
+        "Thanks,\nBuildstack Construction"
+    )
+
+
+def _matching_construction_lead(cur, address: str, street: str, city: str,
+                                state: str, zip_code: str, source_address: str = ""):
+    """Match an existing lead by parsed situs address, not display formatting."""
+    number = (street.split() or [""])[0]
+    if not number:
+        return None
+    if source_address:
+        cur.execute(
+            "SELECT id, name, email, phone, status, address FROM leads "
+            "WHERE company = 'construction' AND status <> 'lost' "
+            "AND LOWER(BTRIM(COALESCE(address,''))) = LOWER(BTRIM(%s)) "
+            "ORDER BY id LIMIT 2;",
+            (source_address,),
+        )
+        exact_matches = cur.fetchall()
+        if len(exact_matches) == 1:
+            return exact_matches[0]
+    cur.execute(
+        "SELECT id, name, email, phone, status, address FROM leads "
+        "WHERE company = 'construction' AND status <> 'lost' "
+        "AND address IS NOT NULL AND POSITION(%s IN LOWER(address)) > 0 "
+        "ORDER BY id LIMIT 250;",
+        (number.lower(),),
+    )
+    expected = skiptrace_service.normalize_address(street, city, state)
+    expected_zip = (zip_code or "").strip()[:5]
+    for lead in cur.fetchall():
+        parsed = skiptrace_service.parse_address(lead.get("address") or "")
+        if not parsed.get("ok"):
+            continue
+        candidate = skiptrace_service.normalize_address(
+            parsed["street"], parsed["city"], parsed["state"]
+        )
+        candidate_zip = parsed.get("zipcode", "")[:5]
+        if candidate == expected and (
+            not expected_zip or not candidate_zip or candidate_zip == expected_zip
+        ):
+            return lead
+    return None
+
+
+@app.post("/api/skiptrace/save")
+async def skiptrace_save(request: Request, owner_name: str = Form(""),
+                         email: str = Form(""), phone: str = Form(""),
+                         street: str = Form(""), city: str = Form(""),
+                         state: str = Form(""), zip_code: str = Form(""),
+                         permit_id: str = Form(""), property_json: str = Form(""),
+                         push_resimply: str = Form(""),
+                         db=Depends(get_db)):
+    """Save reviewed owner details to a lead and stage, but never send, email."""
+    require_admin(request)
+    owner, email, phone = (owner_name or "").strip(), (email or "").strip(), (phone or "").strip()
+    if not owner:
+        raise HTTPException(status_code=400, detail="No owner name to save")
+    if not email and not phone:
+        raise HTTPException(status_code=400, detail="Save requires an email address or phone number")
+
+    try:
+        property_data = json.loads(property_json) if property_json else {}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Property details were malformed") from exc
+    if not isinstance(property_data, dict):
+        raise HTTPException(status_code=400, detail="Property details were malformed")
+
+    source_address = ""
+    address = ""
+    if permit_id:
+        try:
+            selected_id = int(permit_id)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Invalid permit selection")
+        with db.cursor() as cur:
+            cur.execute(
+                "SELECT address, city, state, postal_code, permit_number, work_type, job_description "
+                "FROM job_leads WHERE id = %s AND NOT is_demo;",
+                (selected_id,),
+            )
+            permit = cur.fetchone()
+        if not permit:
+            raise HTTPException(status_code=404, detail="No such permit")
+        parsed = _permit_address_parts(permit)
+        if not parsed["ok"]:
+            raise HTTPException(status_code=400, detail="The selected permit has no usable address")
+        street, city = parsed["street"], parsed["city"]
+        state, zip_code = parsed["state"], parsed["zipcode"]
+        source_address = (permit.get("address") or "").strip()
+        address = parsed["formatted"]
+    else:
+        address = ", ".join(part for part in [
+            street.strip(), city.strip(),
+            " ".join(value for value in [state.strip(), zip_code.strip()] if value),
+        ] if part)
+    parsed = skiptrace_service.parse_address(address)
+    if not parsed["ok"]:
+        raise HTTPException(status_code=400, detail="Enter a complete property address")
+
+    existing = None
+    with db.cursor() as cur:
+        existing = _matching_construction_lead(
+            cur, address, parsed["street"], parsed["city"], parsed["state"],
+            parsed["zipcode"], source_address=source_address,
+        )
+        if existing:
+            replace_name = skiptrace_service.is_placeholder_name(existing.get("name"))
+            cur.execute(
+                "UPDATE leads SET "
+                "name = CASE WHEN %s THEN %s ELSE name END, "
+                "email = CASE WHEN %s <> '' AND (BTRIM(COALESCE(email,'')) = '' "
+                "OR LOWER(COALESCE(email,'')) LIKE '%%@lead.local') THEN %s ELSE email END, "
+                "phone = CASE WHEN %s <> '' AND BTRIM(COALESCE(phone,'')) = '' "
+                "THEN %s ELSE phone END "
+                "WHERE id = %s RETURNING id, name, email, phone, status, address;",
+                (replace_name, owner, email, email, phone, phone, existing["id"]),
+            )
+            lead = cur.fetchone()
+            created = False
+        else:
+            description = (
+                "Owner/contact details researched from the public parcel record "
+                "and the selected contact lookup."
+            )
+            cur.execute(
+                "INSERT INTO leads (name, phone, email, project_type, address, description, "
+                "source, status, company) "
+                "VALUES (%s, %s, %s, 'Property inquiry', %s, %s, 'permit_finder', "
+                "'new', 'construction') "
+                "RETURNING id, name, email, phone, status, address;",
+                (owner, phone, email, address, description),
+            )
+            lead = cur.fetchone()
+            created = True
+        db.commit()
+
+    draft_staged = False
+    if (lead.get("email") or "").strip():
+        draft_staged = auto_reply._stage_draft(
+            db, lead["id"], "construction", "email", lead["email"],
+            _owner_draft_body(owner, address, property_data),
+        )
+
+    pushed = None
+    if push_resimply:
+        try:
+            pushed = resimply_service.push_lead(
+                name=owner, email=lead.get("email") or email,
+                phone=lead.get("phone") or phone, address=lead.get("address") or address,
+                comment="Owner details reviewed from a public parcel record.",
+                get_setting=lambda key: _get_setting(db, key),
+            )
+        except resimply_service.ResimplyError as exc:
+            pushed = {"ok": False, "error": exc.message, "auth": exc.auth}
+
+    return JSONResponse(content={
+        "ok": True,
+        "created": created,
+        "lead_id": lead["id"],
+        "saved": {
+            "name": lead.get("name"), "email": lead.get("email"),
+            "phone": lead.get("phone"), "address": lead.get("address"),
+        },
+        "status": lead.get("status"),
+        "draft_staged": draft_staged,
+        "note": (
+            "Added to Leads and staged an email draft for your review. Nothing was sent."
+            if created and draft_staged else
+            "Contact saved to Leads. Nothing was sent."
+        ),
+        "resimply": pushed,
+    })
 
 
 @app.post("/api/permit/enrich")

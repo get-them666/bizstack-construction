@@ -109,7 +109,8 @@ document.addEventListener('DOMContentLoaded', function() {
                 catch (e) {
                     // An HTML body means something upstream failed before our
                     // JSON, which is a different problem from a lookup miss.
-                    out.innerHTML = '<p class="text-rose-700 text-xs">Server error — check the logs.</p>';
+                    out.innerHTML = '<p class="text-rose-700 text-xs">The server returned an unreadable response (HTTP ' +
+                        res.status + '). Retry; if it repeats, share this status with support.</p>';
                     btn.disabled = false;
                     return;
                 }
@@ -139,11 +140,13 @@ document.addEventListener('DOMContentLoaded', function() {
 
     function renderSkiptrace(d) {
         if (d.detail) {
-            return '<p class="text-amber-700 text-xs">' + escapeHtml(d.detail) + '</p>';
+            return '<p class="text-amber-700 text-xs">' + escapeHtml(d.detail) +
+                (d.request_id ? '<br><span class="text-[11px]">Reference: ' + escapeHtml(d.request_id) + '</span>' : '') +
+                '</p>';
         }
         if (!d.found) {
             return '<p class="text-slate-600 text-xs">No owner of record in the assessor data for this address. ' +
-                   'Try the county assessor directly — RentCast covers most but not all of Virginia.</p>';
+                   'Check the address and ZIP, then try the locality assessor if no parcel is available.</p>';
         }
         const p = d.property || {};
         const rows = [
