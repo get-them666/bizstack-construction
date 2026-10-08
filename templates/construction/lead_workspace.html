@@ -1,0 +1,218 @@
+{% extends "base.html" %}
+{% set co = company() %}
+{% block title %}{{ lead.name or 'Lead' }} | {{ co.name }}{% endblock %}
+{% block meta %}<meta name="robots" content="noindex, nofollow">{% endblock %}
+
+{% block content %}
+<section class="py-8 bg-slate-50 min-h-[80vh]">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="flex flex-wrap items-center justify-between gap-3 mb-5">
+            <a href="/leads" class="text-sm font-semibold text-indigo-700 hover:underline">← Back to leads</a>
+            <a href="/pipeline?stream=leads" class="text-sm font-semibold text-slate-600 hover:text-indigo-700">Open pipeline</a>
+        </div>
+
+        <header class="bg-white rounded-3xl border border-slate-200 p-5 sm:p-7">
+            <div class="flex flex-wrap items-start justify-between gap-4">
+                <div class="min-w-[220px] flex-1">
+                    <p class="text-xs font-bold uppercase tracking-widest text-indigo-600">Lead workspace · #{{ lead.id }}</p>
+                    <h1 class="mt-1 text-3xl font-black tracking-tight text-slate-900">{{ lead.name or 'Unnamed lead' }}</h1>
+                    <p class="mt-2 text-sm text-slate-600">
+                        {{ lead.project_type or 'Project inquiry' }}
+                        {% if lead.address %}<span class="text-slate-400">·</span> {{ lead.address }}{% endif %}
+                    </p>
+                </div>
+                <form method="POST" action="/api/leads/{{ lead.id }}/status" class="flex items-center gap-2">
+                    <label for="lead-status" class="text-xs font-semibold text-slate-500">Stage</label>
+                    <select id="lead-status" name="status_val" onchange="this.form.submit()"
+                            class="px-3 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                        {% for stage in statuses %}
+                        <option value="{{ stage }}" {% if stage == lead.status %}selected{% endif %}>{{ status_labels.get(stage, stage) }}</option>
+                        {% endfor %}
+                    </select>
+                </form>
+            </div>
+
+            {% if lead.status == 'lost' %}
+            <p class="mt-5 rounded-xl bg-rose-50 border border-rose-200 px-4 py-3 text-sm font-semibold text-rose-800">This lead is marked closed / lost. Change the stage above to reopen it.</p>
+            {% else %}
+            <ol class="mt-6 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2" aria-label="Lead progress">
+                {% for stage in progress_statuses %}
+                <li class="rounded-xl px-3 py-2 text-xs font-bold border
+                    {% if stage == lead.status %}bg-indigo-600 text-white border-indigo-600
+                    {% elif progress_statuses.index(stage) < progress_statuses.index(lead.status or 'new') %}bg-emerald-50 text-emerald-700 border-emerald-200
+                    {% else %}bg-slate-50 text-slate-500 border-slate-200{% endif %}">
+                    <span class="block text-[10px] opacity-70">{{ loop.index }} / {{ progress_statuses | length }}</span>
+                    {{ status_labels.get(stage, stage) }}
+                </li>
+                {% endfor %}
+            </ol>
+            {% endif %}
+        </header>
+
+        <div class="mt-5 grid grid-cols-1 lg:grid-cols-3 gap-5 items-start">
+            <div class="lg:col-span-2 space-y-5">
+                <section class="bg-white rounded-3xl border border-slate-200 p-5">
+                    <div class="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                            <h2 class="text-lg font-black text-slate-900">Next actions</h2>
+                            <p class="text-sm text-slate-500">Keep the contact, quote, and job handoff together here.</p>
+                        </div>
+                        <div class="flex flex-wrap gap-2">
+                            {% if lead.phone %}
+                            <a href="tel:{{ lead.phone }}" class="px-3 py-2 text-sm font-semibold text-slate-700 bg-white border border-slate-200 rounded-xl">Call</a>
+                            <a href="sms:{{ lead.phone }}" class="px-3 py-2 text-sm font-semibold text-slate-700 bg-white border border-slate-200 rounded-xl">Text</a>
+                            {% endif %}
+                            {% if lead.email and 'lead.local' not in lead.email %}
+                            <a href="mailto:{{ lead.email }}" class="px-3 py-2 text-sm font-semibold text-slate-700 bg-white border border-slate-200 rounded-xl">Email</a>
+                            <button type="button" class="draft-btn px-3 py-2 text-sm font-semibold text-white bg-indigo-600 rounded-xl"
+                                    data-lead-id="{{ lead.id }}">Draft email</button>
+                            {% endif %}
+                        </div>
+                    </div>
+
+                    {% if lead.deposit_status == 'paid' %}
+                    <div class="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800">
+                        Deposit received{% if lead.deposit_cents %}: ${{ '{:,.2f}'.format(lead.deposit_cents / 100) }}{% endif %}.
+                    </div>
+                    {% elif lead.deposit_status == 'pending' %}
+                    <div class="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-4">
+                        <p class="text-sm font-bold text-amber-900">Deposit link pending</p>
+                        <div class="mt-2 flex flex-wrap items-center gap-2">
+                            <label for="amt-{{ lead.id }}" class="sr-only">Deposit amount in dollars</label>
+                            <input id="amt-{{ lead.id }}" type="number" step="50" min="50"
+                                   value="{{ (lead.deposit_cents or default_deposit * 100) / 100 }}"
+                                   class="w-36 px-3 py-2 rounded-lg border border-amber-200 bg-white text-sm">
+                            <button data-deposit data-lead="{{ lead.id }}" type="button"
+                                    class="px-4 py-2 text-sm font-bold text-white bg-emerald-600 rounded-lg">Open deposit link</button>
+                        </div>
+                    </div>
+                    {% elif lead.status in ('quoted', 'deposit') %}
+                    <div class="mt-4 rounded-xl border border-indigo-200 bg-indigo-50 p-4">
+                        <p class="text-sm font-bold text-indigo-900">Ready to request a deposit?</p>
+                        <div class="mt-2 flex flex-wrap items-center gap-2">
+                            <label for="amt-{{ lead.id }}" class="sr-only">Deposit amount in dollars</label>
+                            <input id="amt-{{ lead.id }}" type="number" step="50" min="50"
+                                   value="{{ (lead.deposit_cents or default_deposit * 100) / 100 }}"
+                                   class="w-36 px-3 py-2 rounded-lg border border-indigo-200 bg-white text-sm">
+                            <button data-deposit data-lead="{{ lead.id }}" type="button"
+                                    class="px-4 py-2 text-sm font-bold text-white bg-emerald-600 rounded-lg">Create deposit link</button>
+                        </div>
+                    </div>
+                    {% else %}
+                    <p class="mt-4 rounded-xl bg-slate-50 border border-slate-200 p-4 text-sm text-slate-600">
+                        Move this lead to <strong>Quoted</strong> when you are ready to request a deposit.
+                    </p>
+                    {% endif %}
+
+                    {% if project %}
+                    <div class="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 p-4">
+                        <div class="flex flex-wrap items-center justify-between gap-2">
+                            <div>
+                                <p class="text-xs font-bold uppercase tracking-wide text-emerald-700">Job in progress</p>
+                                <p class="font-bold text-slate-900">{{ project.name }}</p>
+                                <p class="text-sm text-slate-600">{{ project.status | replace('_', ' ') | title }} · {{ project.crew_names or 'Crew not assigned' }}</p>
+                            </div>
+                            <a href="/projects?project_id={{ project.id }}#project-{{ project.id }}" class="px-3 py-2 text-sm font-semibold text-emerald-800 bg-white border border-emerald-200 rounded-xl">Manage project →</a>
+                        </div>
+                    </div>
+                    {% else %}
+                    <div class="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4">
+                        <p class="font-bold text-slate-900">Won the work? Create its job record</p>
+                        <p class="mt-1 text-sm text-slate-600">The project will stay connected to this lead for crew, schedule, and completion tracking.</p>
+                        <a href="/projects?lead_id={{ lead.id }}#create-project"
+                           class="inline-flex mt-3 px-4 py-2.5 text-sm font-bold text-white bg-slate-900 hover:bg-slate-700 rounded-xl">Create project from this lead</a>
+                    </div>
+                    {% endif %}
+                </section>
+
+                <section class="bg-white rounded-3xl border border-slate-200 p-5">
+                    <div class="flex items-center justify-between gap-3">
+                        <div>
+                            <h2 class="text-lg font-black text-slate-900">Activity</h2>
+                            <p class="text-sm text-slate-500">Calls, messages, and email recorded for this lead.</p>
+                        </div>
+                        <span class="text-xs font-semibold text-slate-500">{{ activity | length }} recent</span>
+                    </div>
+                    {% if activity %}
+                    <ol class="mt-4 divide-y divide-slate-100">
+                        {% for item in activity %}
+                        <li class="py-3 first:pt-0">
+                            <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
+                                <span class="text-xs font-bold uppercase tracking-wide {% if item.direction == 'inbound' %}text-blue-700{% else %}text-slate-600{% endif %}">
+                                    {{ item.direction }} · {{ item.channel }}
+                                </span>
+                                <span class="text-xs text-slate-400">{{ item.created_at }}</span>
+                            </div>
+                            {% if item.message_body %}<p class="mt-1 text-sm text-slate-700 whitespace-pre-wrap break-words">{{ item.message_body }}</p>{% endif %}
+                        </li>
+                        {% endfor %}
+                    </ol>
+                    {% else %}
+                    <p class="mt-4 rounded-xl bg-slate-50 p-4 text-sm text-slate-500">No activity is recorded yet. Log an in-person, phone, or mail touch after you reach out.</p>
+                    {% endif %}
+
+                    <div class="mt-4 border-t border-slate-100 pt-4">
+                        <p class="text-xs font-bold uppercase tracking-wide text-slate-500 mb-2">Log a touch</p>
+                        <form action="/api/leads/{{ lead.id }}/touch" class="flex flex-wrap gap-2">
+                            {% for label, channel in [('Called', 'phone'), ('Texted', 'sms'), ('Knocked', 'door-knock'), ('Mailed', 'letter'), ('Met', 'in-person')] %}
+                            <button type="submit" name="channel" value="{{ channel }}"
+                                    class="px-3 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 rounded-lg">{{ label }}</button>
+                            {% endfor %}
+                            <input type="text" name="detail" placeholder="Add a note (optional)"
+                                   class="flex-1 min-w-[12rem] px-3 py-2 text-xs rounded-lg bg-slate-50 border border-slate-200">
+                        </form>
+                    </div>
+                </section>
+            </div>
+
+            <aside class="space-y-5">
+                <section class="bg-white rounded-3xl border border-slate-200 p-5">
+                    <h2 class="text-lg font-black text-slate-900">Lead details</h2>
+                    <dl class="mt-4 grid grid-cols-[90px,1fr] gap-x-3 gap-y-3 text-sm">
+                        <dt class="text-slate-500">Phone</dt><dd class="font-semibold break-all">{{ lead.phone or '—' }}</dd>
+                        <dt class="text-slate-500">Email</dt><dd class="font-semibold break-all">{{ lead.email or '—' }}</dd>
+                        <dt class="text-slate-500">Address</dt><dd class="font-semibold">{{ lead.address or '—' }}</dd>
+                        <dt class="text-slate-500">Budget</dt><dd class="font-semibold">{{ lead.budget or '—' }}</dd>
+                        <dt class="text-slate-500">Timeline</dt><dd class="font-semibold">{{ lead.timeline or '—' }}</dd>
+                        <dt class="text-slate-500">Source</dt><dd class="font-semibold">{{ lead.source or '—' }}</dd>
+                    </dl>
+                    {% if lead.description %}
+                    <div class="mt-4">
+                        <p class="text-xs font-bold uppercase tracking-wide text-slate-500">Project details</p>
+                        <p class="mt-2 text-sm text-slate-700 whitespace-pre-wrap">{{ lead.description }}</p>
+                    </div>
+                    {% endif %}
+                    <form data-notes action="/api/leads/{{ lead.id }}/notes" class="mt-5 border-t border-slate-100 pt-4">
+                        <label for="lead-notes" class="text-xs font-bold uppercase tracking-wide text-slate-500">Internal notes</label>
+                        <textarea id="lead-notes" name="notes" rows="5" placeholder="Scope, estimate, next follow-up…"
+                                  class="mt-2 w-full px-3 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">{{ lead.notes or '' }}</textarea>
+                        <button type="submit" class="mt-2 px-4 py-2 text-sm font-semibold text-slate-700 bg-white border border-slate-200 rounded-xl">Save notes</button>
+                    </form>
+                </section>
+
+                <section class="bg-white rounded-3xl border border-slate-200 p-5">
+                    <h2 class="text-lg font-black text-slate-900">Payments</h2>
+                    {% if payments %}
+                    <ul class="mt-3 divide-y divide-slate-100">
+                        {% for payment in payments %}
+                        <li class="py-2.5 flex items-center justify-between gap-3 text-sm">
+                            <span class="text-slate-600">{{ payment.created_at }}</span>
+                            <span class="font-bold">${{ '{:,.2f}'.format(payment.amount_cents / 100) }}</span>
+                            <span class="text-xs text-slate-500">{{ payment.status | title }}</span>
+                        </li>
+                        {% endfor %}
+                    </ul>
+                    {% else %}
+                    <p class="mt-2 text-sm text-slate-500">No payments recorded for this lead.</p>
+                    {% endif %}
+                    <a href="/payments" class="inline-flex mt-3 text-sm font-semibold text-indigo-700 hover:underline">All payments →</a>
+                </section>
+            </aside>
+        </div>
+    </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+{% include "_shell_script.html" %}
+{% endblock %}

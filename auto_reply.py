@@ -516,7 +516,7 @@ def record_manual_touch(db, lead_id, channel: str, detail: str = "") -> dict:
     Channels are the bot's own vocabulary plus the physical ones, because the
     policy counts across every channel:
 
-        letter | door-knock | phone | in-person | other
+        letter | door-knock | phone | sms | in-person | other
 
     The row is attributed to the lead via lead_id, which is the column
     contact_policy_allows prefers. Without a recipient address, the
@@ -524,7 +524,7 @@ def record_manual_touch(db, lead_id, channel: str, detail: str = "") -> dict:
     makes this visible to the policy at all.
     """
     channel = (channel or "").strip().lower()
-    allowed = {"letter", "door-knock", "phone", "in-person", "other"}
+    allowed = {"letter", "door-knock", "phone", "sms", "in-person", "other"}
     if channel not in allowed:
         return {"ok": False, "error": f"channel must be one of {sorted(allowed)}"}
     if not lead_id or db is None:
@@ -718,9 +718,9 @@ def _fire_sent_effect(db, lead_id, company_key, channel, recipient, body):
                 (notes, lead_id),
             )
             cur.execute(
-                "INSERT INTO comms_logs (direction, channel, sender, recipient, message_body) "
-                "VALUES ('outbound', %s, 'system', %s, %s);",
-                (channel, recipient, body[:2000]),
+                "INSERT INTO comms_logs (direction, channel, sender, recipient, message_body, lead_id) "
+                "VALUES ('outbound', %s, 'system', %s, %s, %s);",
+                (channel, recipient, body[:2000], lead_id),
             )
             db.commit()
         print(f"[auto-reply {company_key}] sent {channel} to {recipient} (lead #{lead_id})", flush=True)
@@ -1332,4 +1332,3 @@ def bot_health(db):
     print(f"[auto-reply] bot-health: {result['sent_today']} sent today, "
           f"{result['staged']} staged, caps {result['caps']}", flush=True)
     return result
-
