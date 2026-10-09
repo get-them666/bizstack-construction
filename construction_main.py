@@ -2860,6 +2860,7 @@ async def api_skiptrace(request: Request, street: str = Form(""), city: str = Fo
     ):
         cached["found"] = bool(cached.get("found"))
         cached["contact_lookup_available"] = skip_sherpa_service.configured()
+        cached["pdl_contact_available"] = pdl_contact_service.configured()
         with db.cursor() as cur:
             skiptrace_service.audit(cur, user_email, key, cached, cached=True)
             cached["known_contacts"] = _known_contacts_for(cur, street, city, state, zip_code)
@@ -2881,6 +2882,7 @@ async def api_skiptrace(request: Request, street: str = Form(""), city: str = Fo
         skiptrace_service.audit(cur, user_email, key, result, cached=False)
         result["known_contacts"] = _known_contacts_for(cur, street, city, state, zip_code)
     result["contact_lookup_available"] = skip_sherpa_service.configured()
+    result["pdl_contact_available"] = pdl_contact_service.configured()
     db.commit()
     return JSONResponse(content=result)
 
@@ -3013,6 +3015,7 @@ async def permit_skiptrace(permit_id: int, request: Request, db=Depends(get_db))
     ):
         cached["found"] = bool(cached.get("found"))
         cached["contact_lookup_available"] = skip_sherpa_service.configured()
+        cached["pdl_contact_available"] = pdl_contact_service.configured()
         with db.cursor() as cur:
             skiptrace_service.audit(cur, user_email, key, cached, cached=True)
         db.commit()
@@ -3033,6 +3036,7 @@ async def permit_skiptrace(permit_id: int, request: Request, db=Depends(get_db))
         skiptrace_service.cache_put(cur, key, result)
         skiptrace_service.audit(cur, user_email, key, result, cached=False)
     result["contact_lookup_available"] = skip_sherpa_service.configured()
+    result["pdl_contact_available"] = pdl_contact_service.configured()
     db.commit()
     return JSONResponse(content=result)
 

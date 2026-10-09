@@ -301,17 +301,86 @@ document.addEventListener('DOMContentLoaded', function() {
             h += '</div>';
             return h;
         }
-        if (!d.contact_lookup_available) {
+        // Two providers, two buttons. They are NOT interchangeable.
+        //
+        // PDL is the cheaper first move and returns one email plus one phone.
+        // Skip Sherpa returns several of each AND a do-not-call flag, so it is
+        // the one to use when you intend to dial. Neither is a continuation of
+        // the free assessor lookup -- both bill per address, which is why each
+        // is a separate click.
+        const hasSherpa = !!d.contact_lookup_available;
+        const hasPdl = !!d.pdl_contact_available;
+        if (!hasSherpa && !hasPdl) {
             h += '<p class="text-xs text-slate-600">Phone and email are not in parcel records. No contact provider is configured, so this step is unavailable; any contact already in Leads is shown above.</p>';
             h += '</div>';
             return h;
         }
-        h += '<p class="text-xs text-slate-600 mb-2">The assessor record above is a name only. This spends one '
-           + 'Skip Sherpa credit to get a reachable phone and email.</p>';
-        h += '<button type="button" id="st-contact-btn" '
-           + 'class="px-4 py-2 text-xs font-bold text-white bg-slate-700 hover:bg-slate-800 rounded-lg">'
-           + 'Find contact for this owner</button>';
+        h += '<p class="text-xs text-slate-600 mb-2">The assessor record above is a name only. Each lookup below bills one search on the provider you pick.</p>';
+        if (hasPdl) {
+            h += '<button type="button" id="st-pdl-btn" '
+               + 'class="px-4 py-2 text-xs font-bold text-white bg-emerald-700 hover:bg-emerald-800 rounded-lg">'
+               + 'Find email &amp; phone (PDL)</button>';
+            h += '<p class="mt-1 text-[11px] text-slate-500">One email, one phone. People Data Labs does not report '
+               + 'do-not-call status, so treat any number as unverified before dialing.</p>';
+        }
+        if (hasSherpa) {
+            if (hasPdl) h += '<div class="my-2 border-t border-slate-200"></div>';
+            h += '<button type="button" id="st-contact-btn" '
+               + 'class="px-4 py-2 text-xs font-bold text-white bg-slate-700 hover:bg-slate-800 rounded-lg">'
+               + 'Find contact for this owner (Skip Sherpa)</button>';
+            h += '<p class="mt-1 text-[11px] text-slate-500">Several phones and emails, and do-not-call flags. '
+               + 'Use this one when you plan to call rather than email.</p>';
+        }
         h += '<div id="st-contact" class="mt-3"></div>';
+        h += '</div>';
+        return h;
+    }
+
+    // Render a PDL result. PDL returns a single email and phone with no
+    // do-not-call signal, so the number is shown but carries an explicit
+    // "unverified" marker rather than looking equivalent to a cleared one.
+    function renderPdlContact(d) {
+        if (d.detail) {
+            return '<div class="rounded-xl bg-rose-50 border border-rose-200 p-3 text-sm text-rose-800">'
+                 + esc(d.detail) + '</div>';
+        }
+        if (!d.found) {
+            return '<div class="rounded-xl bg-amber-50 border border-amber-200 p-3 text-sm text-amber-800">'
+                 + esc(d.message || 'No contact found at this address.') + '</div>';
+        }
+        let h = '<div class="rounded-xl bg-white border border-slate-200 p-3">';
+        h += '<p class="text-sm font-bold text-slate-900">' + esc(d.owner_name || 'Owner') + '</p>';
+        h += '<div class="mt-2 space-y-2">';
+        if (d.email) {
+            h += '<label class="block"><span class="text-[11px] font-bold text-slate-600">Email</span>';
+            h += '<input id="st-p-email" type="text" readonly '
+               + 'value="' + esc(d.email) + '" '
+               + 'class="mt-1 w-full px-2 py-1.5 text-sm rounded-lg border border-slate-200 bg-slate-50"></label>';
+        } else {
+            h += '<p class="text-xs text-slate-500">No email found for this owner.</p>';
+        }
+        if (d.phone) {
+            h += '<label class="block"><span class="text-[11px] font-bold text-slate-600">Phone '
+               + '<span class="text-amber-700">· unverified</span></span>';
+            h += '<input id="st-p-phone" type="text" readonly '
+               + 'value="' + esc(d.phone) + '" '
+               + 'class="mt-1 w-full px-2 py-1.5 text-sm rounded-lg border border-amber-300 bg-amber-50"></label>';
+        } else {
+            h += '<p class="text-xs text-slate-500">No phone found for this owner.</p>';
+        }
+        h += '</div>';
+        h += '<p class="mt-2 text-[11px] text-amber-800">People Data Labs does not report do-not-call registration. '
+           + 'This number has not been checked against the registry -- check it, or use the Skip Sherpa button, '
+           + 'before dialing.</p>';
+        if (d._cached) {
+            h += '<p class="mt-1 text-[11px] text-slate-500">Cached from an earlier lookup — no new search was spent.</p>';
+        }
+        h += '<button type="button" id="st-p-save" '
+           + 'class="mt-3 px-4 py-2 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg">'
+           + 'Save &amp; stage draft</button>';
+        h += '<p class="mt-2 text-[11px] text-slate-500">Stages an email draft on the lead for you to read and send '
+           + 'from the leads page. Nothing is sent.</p>';
+        h += '<div id="st-p-result" class="mt-2"></div>';
         h += '</div>';
         return h;
     }
@@ -401,11 +470,9 @@ document.addEventListener('DOMContentLoaded', function() {
              + '<p class="mt-1">The lead is saved and drafted regardless.</p></div>';
     }
 
-    async function findContact(btn) {
-        const box = document.getElementById('st-contact');
-        btn.disabled = true;
-        btn.textContent = 'Searching…';
-        box.innerHTML = '<p class="text-xs text-slate-500">One credit, a few seconds.</p>';
+    // Shared by both providers: the same permit_id-or-address body, so the two
+    // lookups stay interchangeable apart from which endpoint they hit.
+    function contactBody() {
         const body = new FormData();
         const picked = document.getElementById('st-permit-id').value;
         body.set('permit_id', picked);
@@ -415,6 +482,95 @@ document.addEventListener('DOMContentLoaded', function() {
             body.set('state', document.getElementById('st-state').value);
             body.set('zip_code', document.getElementById('st-zip').value);
         }
+        return body;
+    }
+
+    async function findPdlContact(btn) {
+        const box = document.getElementById('st-contact');
+        const label = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = 'Searching…';
+        box.innerHTML = '<p class="text-xs text-slate-500">One search, a few seconds.</p>';
+        try {
+            const res = await fetch('/api/skiptrace/pdl-contact',
+                                    { method: 'POST', body: contactBody() });
+            const text = await res.text();
+            let json;
+            try { json = JSON.parse(text); }
+            catch (err) {
+                box.innerHTML = '<div class="rounded-xl bg-rose-50 border border-rose-200 p-3 text-sm text-rose-700">'
+                    + 'The server returned an unreadable response (HTTP ' + res.status
+                    + '). No contact was saved.</div>';
+                return;
+            }
+            box.innerHTML = renderPdlContact(json);
+            const save = document.getElementById('st-p-save');
+            if (save && json.found) {
+                save.addEventListener('click', function() { savePdlContact(); });
+            }
+        } catch (err) {
+            box.innerHTML = '<div class="rounded-xl bg-rose-50 border border-rose-200 p-3 text-sm text-rose-700">Network error.</div>';
+        } finally {
+            btn.disabled = false;
+            btn.textContent = label;
+        }
+    }
+
+    // Save a PDL result. Same endpoint as the Skip Sherpa save, but the fields
+    // are readonly inputs rather than selects because PDL returns one of each.
+    async function savePdlContact() {
+        const btn = document.getElementById('st-p-save');
+        const box = document.getElementById('st-p-result');
+        btn.disabled = true;
+        btn.textContent = 'Saving…';
+        box.innerHTML = '';
+        const body = new FormData();
+        const emailEl = document.getElementById('st-p-email');
+        const phoneEl = document.getElementById('st-p-phone');
+        body.set('owner_name', (lastResult && lastResult.owner_of_record) || '');
+        body.set('email', emailEl ? emailEl.value : '');
+        body.set('phone', phoneEl ? phoneEl.value : '');
+        body.set('street', document.getElementById('st-street').value);
+        body.set('city', document.getElementById('st-city').value);
+        body.set('state', document.getElementById('st-state').value);
+        body.set('zip_code', document.getElementById('st-zip').value);
+        body.set('permit_id', document.getElementById('st-permit-id').value);
+        body.set('property_json', JSON.stringify((lastResult && lastResult.property) || {}));
+        try {
+            const res = await fetch('/api/skiptrace/save', { method: 'POST', body: body });
+            const text = await res.text();
+            let json;
+            try { json = JSON.parse(text); }
+            catch (err) {
+                box.innerHTML = '<div class="rounded-xl bg-rose-50 border border-rose-200 p-3 text-sm text-rose-700">'
+                    + 'The server returned an unreadable response (HTTP ' + res.status
+                    + '). No contact was saved.</div>';
+                return;
+            }
+            if (!json.ok) {
+                box.innerHTML = '<div class="rounded-xl bg-amber-50 border border-amber-200 p-3 text-sm text-amber-800">'
+                     + esc(json.detail || 'Could not save.') + '</div>';
+                return;
+            }
+            // `note` is what the save route returns; `message` is kept as a
+            // fallback so a shape change surfaces text rather than silence.
+            box.innerHTML = '<p class="text-xs font-semibold text-emerald-800">'
+                 + esc(json.note || json.message || 'Saved and draft staged.') + '</p>';
+        } catch (err) {
+            box.innerHTML = '<div class="rounded-xl bg-rose-50 border border-rose-200 p-3 text-sm text-rose-700">Network error.</div>';
+        } finally {
+            btn.disabled = false;
+            btn.textContent = 'Save & stage draft';
+        }
+    }
+
+    async function findContact(btn) {
+        const box = document.getElementById('st-contact');
+        const label = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = 'Searching…';
+        box.innerHTML = '<p class="text-xs text-slate-500">One credit, a few seconds.</p>';
+        const body = contactBody();
         try {
             const res = await fetch('/api/skiptrace/contact', { method: 'POST', body: body });
             const text = await res.text();
@@ -434,7 +590,7 @@ document.addEventListener('DOMContentLoaded', function() {
             box.innerHTML = '<div class="rounded-xl bg-rose-50 border border-rose-200 p-3 text-sm text-rose-700">Network error.</div>';
         } finally {
             btn.disabled = false;
-            btn.textContent = 'Find contact for this owner';
+            btn.textContent = label;
         }
     }
 
@@ -527,8 +683,11 @@ document.addEventListener('DOMContentLoaded', function() {
             // property facts to build the draft.
             lastResult = json;
             out.innerHTML = render(json);
-            // The contact button is created inside render(), so it is bound
-            // after the innerHTML assignment rather than at load time.
+            // The contact buttons are created inside render(), so they are bound
+            // after the innerHTML assignment rather than at load time. Either
+            // may be absent when its provider has no key configured.
+            const pbtn = document.getElementById('st-pdl-btn');
+            if (pbtn) pbtn.addEventListener('click', function() { findPdlContact(pbtn); });
             const cbtn = document.getElementById('st-contact-btn');
             if (cbtn) cbtn.addEventListener('click', function() { findContact(cbtn); });
         } catch (err) {
