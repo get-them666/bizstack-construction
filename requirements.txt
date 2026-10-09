@@ -20,3 +20,9 @@ rudder-sdk-python>=2.1.9
 # module the hosts repo runs; both apps share one database, so it has to be
 # installed on both sides.
 peopledatalabs>=6.0.0
+# Local-only manual research tool. Drives a visible Chrome window to open an
+# interactive search; nothing is extracted programmatically and the operator
+# reads the results. Requires a local Chrome install and a display, so it must
+# never be imported from construction_main.py or any Railway-deployed module --
+# selenium is not available in the container and nothing here needs it to be.
+selenium>=4.20.0

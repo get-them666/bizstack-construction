@@ -68,6 +68,7 @@ import inbound_email
 import google_oauth
 import skiptrace_service
 import skip_sherpa_service
+import pdl_contact_service
 import resimply_service
 import accurate_append
 logger = logging.getLogger("construction")
@@ -3107,6 +3108,125 @@ async def save_resimply_settings(request: Request, db=Depends(get_db)):
                         (list(fields.values()),))
             db.commit()
     return RedirectResponse(url="/settings", status_code=status.HTTP_303_SEE_OTHER)
+
+
+def _actor_label(request: Request) -> str:
+    """Who to record in an audit row. Best-effort; never raises.
+
+    The audit trail is what makes holding homeowner contact details defensible,
+    so the actor has to be recorded even when the session carries no email. The
+    fallback is the request IP -- real but less useful -- rather than a blank
+    or a fabricated identity.
+    """
+    # require_admin already proved an admin session exists, so an email is
+    # normally available here. The cookie is the fallback for the older admin
+    # path; the IP is the last resort.
+    try:
+        actor = current_actor(request)
+        if actor and actor.get("email"):
+            return str(actor["email"])[:255]
+        legacy = request.cookies.get("user_email")
+        if legacy:
+            return str(legacy)[:255]
+    except Exception:
+        pass
+    client = getattr(request, "client", None)
+    host = getattr(client, "host", "") if client else ""
+    return f"ip:{host}" if host else "unknown"
+
+
+@app.get("/api/skiptrace/pdl-status")
+async def skiptrace_pdl_status(request: Request):
+    """Is the PDL contact layer usable? Admin-only, and spends nothing.
+
+    The page needs this to decide whether to offer the button at all, so a
+    misconfigured key shows as "not available" rather than a failed click.
+    """
+    require_admin(request)
+    return JSONResponse(content={
+        "pdl_configured": pdl_contact_service.configured(),
+        "rentcast_configured": property_service.is_configured(),
+        "skip_sherpa_configured": skip_sherpa_service.configured(),
+    })
+
+
+@app.post("/api/skiptrace/pdl-contact")
+async def skiptrace_pdl_contact(request: Request, street: str = Form(""),
+                                city: str = Form(""), state: str = Form(""),
+                                zip_code: str = Form(""), permit_id: str = Form(""),
+                                db=Depends(get_db)):
+    """Email/phone for one address via PDL, after an explicit click.
+
+    The counterpart to /api/skiptrace/contact. That route bills Skip Sherpa per
+    lookup; this one uses the PDL key that is already configured, which is what
+    the parcel lookup cannot supply and what commit c4a77ae removed by accident.
+
+    One address per click, no batch path: PDL bills per person search. A ZIP is
+    required, because without one PDL can match at city level and hand back a
+    neighbour's contact details.
+    """
+    require_admin(request)
+    if permit_id:
+        try:
+            selected_id = int(permit_id)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Invalid permit selection")
+        with db.cursor() as cur:
+            cur.execute(
+                "SELECT address, city, state, postal_code FROM job_leads "
+                "WHERE id = %s AND NOT is_demo;",
+                (selected_id,),
+            )
+            row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="No such permit")
+        parsed = _permit_address_parts(row)
+        if not parsed["ok"]:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot read that permit's address ({parsed['why']}).",
+            )
+        street, city = parsed["street"], parsed["city"]
+        state, zip_code = parsed["state"], parsed["zipcode"]
+
+    if not pdl_contact_service.configured():
+        return JSONResponse(status_code=400, content={
+            "ok": False, "error": "pdl_not_configured",
+            "detail": ("Email/phone lookup needs PDL_API_KEY. Owner names are still "
+                       "available from free public parcels. No lookup was made."),
+        })
+
+    def run(cur):
+        # The owner name is free (HRGEO/RentCast) and tells a human whose door
+        # this is before spending a PDL search on it. Best-effort: if the parcel
+        # layer is down the PDL search is still worth making.
+        owner_name = ""
+        try:
+            trace = skiptrace_service.trace_address(
+                street.strip(), city.strip(), state.strip().upper(), zip_code.strip()
+            )
+            if trace.get("found"):
+                owner_name = trace.get("owner_of_record") or ""
+        except Exception:
+            owner_name = ""
+
+        result = pdl_contact_service.lookup(
+            street.strip(), city.strip(), state.strip().upper(), zip_code.strip(),
+            owner_name=owner_name, cur=cur,
+            requested_by=_actor_label(request),
+        )
+        return result
+
+    try:
+        result = await asyncio.to_thread(lambda: run_with_cursor(db, run))
+    except Exception as exc:
+        logger.warning("PDL contact lookup failed: %s", exc)
+        db.rollback()
+        return JSONResponse(status_code=502, content={
+            "ok": False, "error": "pdl_lookup_failed", "detail": str(exc)[:300],
+        })
+    db.commit()
+    return JSONResponse(content=result)
 
 
 @app.post("/api/skiptrace/contact")
