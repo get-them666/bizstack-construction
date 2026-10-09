@@ -1,40 +1,64 @@
 {% extends "base.html" %}
 {% set co = company() %}
 {% block title %}Recent Projects | {{ co.name }} — Renovations &amp; Repairs Portfolio{% endblock %}
-{% block meta %}<meta name="description" content="Browse recent Buildstack Construction renovations and repairs across {{ co.service_area }}: kitchens, baths, whole-home rehabs, decks, roofing and rental make-readies.">{% endblock %}
+{% block meta %}<meta name="description" content="Real before and after photos from Buildstack Construction projects across {{ co.service_area }}: kitchens, baths, whole-home remodels, additions, decks, roofing, basements and rental conversions.">{% endblock %}
 
 {% block content %}
+{% set projects = [
+    ("full-home-remodel", "Full Home Remodel", "Whole-home renovation"),
+    ("kitchen-remodel", "Kitchen Remodel", "Cabinets, counters, layout"),
+    ("bathroom-remodel", "Bathroom Remodel", "Shower, tile, and fixtures"),
+    ("home-addition", "Home Addition", "Addition and exterior"),
+    ("deck-build", "Deck Build", "Composite deck and railing"),
+    ("new-roof", "New Roof", "Tear-off and reroof"),
+    ("garage-to-airbnb", "Detached Garage Conversion to Airbnb", "Rental conversion"),
+    ("den-renovation", "Flood Damaged Den Renovation", "Water damage rebuild"),
+    ("front-porch", "Front Porch Renovation", "Entry and porch rebuild"),
+    ("basement-finish", "Basement Finish", "Basement living space"),
+    ("siding-replacement", "Siding Replacement", "Exterior siding"),
+    ("landscaping-outdoor-living", "Landscaping &amp; Outdoor Living", "Patio and outdoor space")
+] %}
+
 <section class="bg-gradient-to-br from-slate-900 to-indigo-900 text-white">
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16 lg:py-20">
         <p class="text-sm font-bold text-indigo-300 uppercase tracking-widest">Our work</p>
-        <h1 class="text-4xl sm:text-5xl font-black tracking-tight mt-3 max-w-3xl">Projects we're proud to put our name on.</h1>
-        <p class="mt-5 text-lg text-slate-300 max-w-2xl">A sample of recent renovations, repairs, and rental make-readies across {{ co.service_area }}. Photos being added as projects complete.</p>
+        <h1 class="text-4xl sm:text-5xl font-black tracking-tight mt-3 max-w-3xl">Before and after, project by project.</h1>
+        <p class="mt-5 text-lg text-slate-300 max-w-2xl">Real photos from renovations, additions, and rental conversions across {{ co.service_area }}. Every image below is a real job — click one to see the before and after full size.</p>
     </div>
 </section>
 
 <section class="py-16 bg-white">
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-            {% set projects = [
-                ("Whole-Home Renovation", "Virginia Beach, VA", "🏠", "3 bed / 2 bath gut rehab: new kitchen, two baths, LVP flooring, paint, lighting, and trim throughout.", ["Structural repair", "Kitchen &amp; baths", "Flooring", "Paint"]),
-                ("Kitchen Remodel", "Williamsburg, VA", "🍳", "Opened a galley kitchen into the dining area, new cabinets, quartz counters, tile backsplash, and under-cabinet lighting.", ["Carpentry", "Electrical", "Tile"]),
-                ("Primary Bath Rebuild", "Newport News, VA", "🚿", "Full shower rebuild with new waterproofing, custom tile, niche, glass door, and new vanity and fixtures.", ["Plumbing", "Tile", "Waterproofing"]),
-                ("Roof &amp; Siding Refresh", "Hampton, VA", "🏗️", "Tear-off and reroof, new flashing and gutters, repaired siding, and fresh exterior paint.", ["Roofing", "Siding", "Exterior"]),
-                ("Deck &amp; Fence Build", "Yorktown, VA", "🌳", "New composite deck with stairs and railing, plus a privacy fence with two gates.", ["Decks", "Fences"]),
-                ("STR Make-Ready", "Outer Banks, NC", "🏡", "Rental make-ready: repairs, fresh paint, LVP flooring, new fixtures, and a furnished, photo-ready finish for listing.", ["Renovation", "Flooring", "Rental-ready"])
-            ] %}
-            {% for title, location, icon, desc, tags in projects %}
-            <article class="rounded-3xl border border-slate-200 bg-slate-50 overflow-hidden flex flex-col">
-                <div class="aspect-[4/3] bg-gradient-to-br from-indigo-100 to-slate-200 flex items-center justify-center text-6xl">{{ icon }}</div>
+            {% for slug, title, subtitle in projects %}
+            {% set is_gallery = slug == "garage-to-airbnb" %}
+            <article class="rounded-3xl border border-slate-200 bg-slate-50 overflow-hidden flex flex-col shadow-sm hover:shadow-lg transition-shadow">
+                <button type="button"
+                        class="block w-full text-left bg-slate-100 hover:opacity-95 transition-opacity cursor-zoom-in"
+                        data-slug="{{ slug }}"
+                        data-title="{{ title | safe }}"
+                        data-pair="{{ '/static/listing/projects2/' }}{{ slug }}{{ '-gallery.jpg' if is_gallery else '-before-after.jpg' }}"
+                        data-before="{{ '/static/listing/projects2/' }}{{ slug }}-1.jpg"
+                        data-after="{{ '/static/listing/projects2/' }}{{ slug }}-2.jpg"
+                        data-extra="{{ '/static/listing/projects2/' }}{{ slug }}-3.jpg"
+                        aria-label="View {{ title | safe }} before and after photos">
+                    <img src="/static/listing/projects2/{{ slug }}-{{ 'gallery' if is_gallery else 'before-after' }}.jpg"
+                         alt="{{ title | safe }} — before and after, {{ subtitle | safe }}"
+                         loading="lazy" decoding="async"
+                         class="w-full h-64 object-cover">
+                </button>
                 <div class="p-6 flex flex-col flex-1">
-                    <p class="text-xs font-semibold text-indigo-600 uppercase tracking-wider">{{ location }}</p>
+                    <p class="text-xs font-semibold text-indigo-600 uppercase tracking-wider">{{ subtitle | safe }}</p>
                     <h3 class="font-bold text-slate-900 mt-1">{{ title | safe }}</h3>
-                    <p class="text-sm text-slate-600 mt-2 flex-1">{{ desc | safe }}</p>
-                    <div class="flex flex-wrap gap-2 mt-4">
-                        {% for tag in tags %}
-                        <span class="px-2.5 py-1 text-xs font-semibold bg-white border border-slate-200 text-slate-600 rounded-full">{{ tag | safe }}</span>
-                        {% endfor %}
-                    </div>
+                    <button type="button" class="mt-3 self-start text-sm font-bold text-indigo-600 hover:text-indigo-800"
+                            data-slug="{{ slug }}"
+                            data-title="{{ title | safe }}"
+                            data-pair="{{ '/static/listing/projects2/' }}{{ slug }}{{ '-gallery.jpg' if is_gallery else '-before-after.jpg' }}"
+                            data-before="{{ '/static/listing/projects2/' }}{{ slug }}-1.jpg"
+                            data-after="{{ '/static/listing/projects2/' }}{{ slug }}-2.jpg"
+                            data-extra="{{ '/static/listing/projects2/' }}{{ slug }}-3.jpg">
+                        See full size →
+                    </button>
                 </div>
             </article>
             {% endfor %}
@@ -49,4 +73,72 @@
         <a href="/quote" class="mt-6 inline-flex px-7 py-4 text-base font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-2xl transition-all">Get a Free Estimate</a>
     </div>
 </section>
+
+<!-- Full-size before/after viewer -->
+<div id="pf-lightbox" class="fixed inset-0 z-50 hidden bg-slate-950/95 p-4 sm:p-8 overflow-auto" role="dialog" aria-modal="true" aria-label="Project photo viewer">
+    <div class="max-w-7xl mx-auto">
+        <div class="flex items-start justify-between gap-4 mb-5">
+            <h3 id="pf-title" class="text-2xl font-black text-white"></h3>
+            <button type="button" id="pf-close" class="shrink-0 px-4 py-2 text-sm font-bold text-white bg-white/10 hover:bg-white/20 rounded-xl">Close ✕</button>
+        </div>
+        <img id="pf-pair" src="" alt="" class="w-full rounded-2xl bg-slate-900">
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-5">
+            <figure><img id="pf-before" src="" alt="Before" class="w-full rounded-xl"><figcaption class="mt-2 text-xs font-bold uppercase tracking-wider text-slate-400">Before</figcaption></figure>
+            <figure><img id="pf-after" src="" alt="After" class="w-full rounded-xl"><figcaption class="mt-2 text-xs font-bold uppercase tracking-wider text-slate-400">After</figcaption></figure>
+            <figure id="pf-extra-wrap" class="hidden"><img id="pf-extra" src="" alt="Finished interior" class="w-full rounded-xl"><figcaption class="mt-2 text-xs font-bold uppercase tracking-wider text-slate-400">Finished</figcaption></figure>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+    var box = document.getElementById('pf-lightbox');
+    if (!box) return;
+    var titleEl = document.getElementById('pf-title');
+    var pairEl = document.getElementById('pf-pair');
+    var beforeEl = document.getElementById('pf-before');
+    var afterEl = document.getElementById('pf-after');
+    var extraEl = document.getElementById('pf-extra');
+    var extraWrap = document.getElementById('pf-extra-wrap');
+
+    function open(el) {
+        var d = el.dataset;
+        titleEl.textContent = d.title || '';
+        pairEl.src = d.pair; pairEl.alt = (d.title || '') + ' before and after';
+        beforeEl.src = d.before; beforeEl.alt = (d.title || '') + ' before';
+        afterEl.src = d.after; afterEl.alt = (d.title || '') + ' after';
+        // The garage conversion has a third shot; every other project is a pair.
+        if (d.extra) {
+            extraEl.src = d.extra;
+            extraEl.alt = (d.title || '') + ' finished interior';
+            extraWrap.classList.remove('hidden');
+        } else {
+            extraWrap.classList.add('hidden');
+            extraEl.removeAttribute('src');
+        }
+        box.classList.remove('hidden');
+        document.body.style.overflow = 'hidden';
+    }
+
+    function close() {
+        box.classList.add('hidden');
+        document.body.style.overflow = '';
+        pairEl.removeAttribute('src');
+        beforeEl.removeAttribute('src');
+        afterEl.removeAttribute('src');
+        extraEl.removeAttribute('src');
+    }
+
+    document.querySelectorAll('[data-slug]').forEach(function (el) {
+        el.addEventListener('click', function () { open(el); });
+    });
+    document.getElementById('pf-close').addEventListener('click', close);
+    box.addEventListener('click', function (e) { if (e.target === box) close(); });
+    document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape' && !box.classList.contains('hidden')) close();
+    });
+})();
+</script>
 {% endblock %}
