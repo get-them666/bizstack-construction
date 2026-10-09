@@ -2912,6 +2912,27 @@ async def record_lead_touch(lead_id: int, request: Request, channel: str = Form(
                             status_code=status.HTTP_303_SEE_OTHER)
 
 
+@app.get("/api/skiptrace/zip")
+async def api_skiptrace_zip(request: Request, street: str = "", city: str = "",
+                            state: str = ""):
+    """Fill in the ZIP for an address, so the owner lookup stops matching city-wide.
+
+    The page refuses a skip trace without a ZIP because a street-only match can
+    resolve to the wrong house and still bill. This uses Census first and ArcGIS
+    second, both free and keyless, so it keeps working now that Google geocoding
+    returns REQUEST_DENIED. It never guesses: no street-level match means an
+    empty zipcode and ok=false, never a city-level fallback.
+    """
+    require_admin(request)
+    import zip_lookup
+
+    try:
+        result = zip_lookup.lookup_zip(street, city, state)
+    except zip_lookup.ZipLookupError as exc:
+        return JSONResponse({"ok": False, "zipcode": "", "error": str(exc)[:300]}, status_code=502)
+    return JSONResponse(result)
+
+
 @app.get("/api/skiptrace/addresses", response_class=HTMLResponse)
 async def skiptrace_addresses(request: Request, q: str = "", db=Depends(get_db)):
     """Recent addresses to pick from, so nobody retypes a permit address.

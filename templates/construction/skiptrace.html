@@ -57,9 +57,18 @@
                        class="w-full px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-400">
             </div>
             <div>
-                <label class="block text-xs font-semibold text-slate-600 mb-1">ZIP <span class="font-normal text-slate-400">(optional)</span></label>
-                <input type="text" id="st-zip"
-                       class="w-full px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-400">
+                <label class="block text-xs font-semibold text-slate-600 mb-1">
+                    ZIP <span class="font-normal text-slate-400">(optional)</span>
+                </label>
+                <div class="flex gap-2">
+                    <input type="text" id="st-zip"
+                           class="w-full px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-400">
+                    <button type="button" id="st-fill-zip"
+                            class="shrink-0 px-4 py-3 text-xs font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded-xl border border-indigo-200 transition-colors">
+                        Find ZIP
+                    </button>
+                </div>
+                <p id="st-zip-note" class="mt-1 text-xs text-slate-500 hidden"></p>
             </div>
         </div>
         <div class="sm:col-span-2">
@@ -87,6 +96,53 @@ document.addEventListener('DOMContentLoaded', function() {
     const city = document.getElementById('st-city');
     const state = document.getElementById('st-state');
     const zip = document.getElementById('st-zip');
+
+    // Fill the ZIP from street+city+state. Census first, ArcGIS second, both
+    // free and keyless. Never invents one: if the server reports no match we
+    // say so and leave the box alone, because a wrong ZIP would make the skip
+    // trace run against a different house and still cost money.
+    (function wireZipFill() {
+        const btn = document.getElementById('st-fill-zip');
+        const note = document.getElementById('st-zip-note');
+        if (!btn) return;
+
+        function say(msg, tone) {
+            note.textContent = msg;
+            note.className = 'mt-1 text-xs ' + (tone || 'text-slate-500') + '';
+            note.classList.remove('hidden');
+        }
+
+        btn.addEventListener('click', async function() {
+            const street = document.getElementById('st-street').value.trim();
+            if (!street) { say('Enter a street address first.', 'text-amber-600'); return; }
+
+            btn.disabled = true;
+            const original = btn.textContent;
+            btn.textContent = 'Looking…';
+            try {
+                const qs = new URLSearchParams({
+                    street: street,
+                    city: city.value.trim(),
+                    state: state.value.trim(),
+                });
+                const res = await fetch('/api/skiptrace/zip?' + qs.toString(),
+                                        { credentials: 'same-origin' });
+                const data = await res.json();
+                if (data.zipcode) {
+                    zip.value = data.zipcode;
+                    const via = data.cached ? 'cached' : (data.source || 'a free source');
+                    say('ZIP ' + data.zipcode + ' filled in via ' + via + '.', 'text-emerald-600');
+                } else {
+                    say(data.error || 'No street-level ZIP match — check the address.', 'text-amber-600');
+                }
+            } catch (e) {
+                say('ZIP lookup failed. Try again.', 'text-amber-600');
+            } finally {
+                btn.disabled = false;
+                btn.textContent = original;
+            }
+        });
+    })();
 
     // Load the permit addresses so this is a picker, not four typing boxes.
     (async function loadAddresses() {
