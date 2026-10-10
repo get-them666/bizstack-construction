@@ -3,7 +3,14 @@
   "build": {
     "builder": "RAILPACK",
     "watchPatterns": [
-      "construction_main.py"
+      "construction_main.py",
+      "con_ai_agent.py",
+      "ai_agent.py",
+      "copilot_ops.py",
+      "copilot_memory.py",
+      "copilot_tasks.py",
+      "bot_knowledge.md",
+      "construction_knowledge.md"
     ],
     "buildEnvironment": "V3"
   },
