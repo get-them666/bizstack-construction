@@ -70,13 +70,23 @@ class BusinessAIAgent:
         except OSError:
             return ""
 
+    # Opt-in retarget at OpenCode Zen. Scoped to THIS client on purpose: the
+    # OpenAI SDK reads OPENAI_BASE_URL from the process environment, so setting
+    # that variable in Railway would silently redirect the live voice agent
+    # (construction_main.py builds its own client) and web_search's Responses
+    # API call at the same time. Zen speaks chat-completions, not Responses, so
+    # that second one would break rather than merely change behaviour.
+    #
+    # Set COPILOT_BASE_URL=https://opencode.ai/zen/v1 to move the Copilot only.
+    # _on_zen() reads the same variable, so the free-model fallback engages.
     @property
     def client(self) -> OpenAI:
         if self._client is None:
             api_key = os.getenv("OPENAI_API_KEY")
             if not api_key:
                 raise RuntimeError("OPENAI_API_KEY is not configured.")
-            self._client = OpenAI(api_key=api_key)
+            base_url = (os.getenv("COPILOT_BASE_URL") or "").strip() or None
+            self._client = OpenAI(api_key=api_key, base_url=base_url)
         return self._client
 
     # --- Brain assembly ----------------------------------------------------
@@ -873,9 +883,10 @@ OPERATING MANUAL:
 
     # --- Model routing ----------------------------------------------------
     # OpenCode Zen serves an OpenAI-compatible /chat/completions at
-    # https://opencode.ai/zen/v1, so setting OPENAI_BASE_URL retargets every
-    # model call in this class with no code change -- the OpenAI SDK reads that
-    # variable when the client is constructed.
+    # https://opencode.ai/zen/v1. Set COPILOT_BASE_URL to that value and every
+    # model call in this class retargets with no further code change -- the
+    # client property passes it to the SDK explicitly. See the note there on why
+    # the process-global OPENAI_BASE_URL is not used instead.
     ZEN_BASE_URL = "https://opencode.ai/zen/v1"
 
     # Zen's free models are the safety net for when the configured model is
@@ -898,13 +909,18 @@ OPERATING MANUAL:
 
     @classmethod
     def _on_zen(cls) -> bool:
-        """True when the SDK is pointed at Zen rather than at OpenAI.
+        """True when this agent is pointed at Zen rather than at OpenAI.
 
         Compared on the host, not the whole URL: a trailing slash or a
         version-stamped path must not silently read as "not Zen", which would
         turn the free fallback off.
+
+        Reads COPILOT_BASE_URL, which is what the client property passes to the
+        SDK explicitly. OPENAI_BASE_URL is deliberately NOT consulted: it is
+        process-global and is left unset so the voice agent and web_search stay
+        on OpenAI.
         """
-        base = (os.getenv("OPENAI_BASE_URL") or "").strip().rstrip("/")
+        base = (os.getenv("COPILOT_BASE_URL") or "").strip().rstrip("/")
         host = base.split("://", 1)[-1].split("/", 1)[0].lower()
         return host == cls.ZEN_BASE_URL.split("://", 1)[-1].split("/", 1)[0]
 

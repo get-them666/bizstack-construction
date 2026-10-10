@@ -3,10 +3,12 @@
     venv/bin/python -m pytest test_model_fallback.py -v
 
 The Copilot is being retargeted at OpenCode Zen, which is OpenAI-compatible at
-https://opencode.ai/zen/v1 -- setting OPENAI_BASE_URL is enough, because the
-OpenAI SDK reads that variable itself. Zen's free models are free but heavily
-rate limited: driving the local server picked ling-3.1-flash-free and got back
-429 "Endpoint is unavailable".
+https://opencode.ai/zen/v1 -- setting COPILOT_BASE_URL is enough, because the
+client property passes it straight to the SDK. Deliberately NOT OPENAI_BASE_URL:
+that one is process-global and would drag the live voice agent and web_search
+along with it. Zen's free models are free but heavily rate limited: driving the
+local server picked ling-3.1-flash-free and got back 429 "Endpoint is
+unavailable".
 
 That failure mode is dangerous precisely because it is quiet. An unhandled 429
 lands in the generic handler and returns "Message received. Our team will follow
@@ -71,6 +73,7 @@ def _agent(script, **env):
 def _has_api_key(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("COPILOT_BASE_URL", raising=False)
     monkeypatch.delenv("COPILOT_FREE_FALLBACK_MODELS", raising=False)
 
 
@@ -107,20 +110,20 @@ def test_no_fallback_off_zen():
 
 
 def test_configured_model_is_always_first(monkeypatch):
-    monkeypatch.setenv("OPENAI_BASE_URL", "https://opencode.ai/zen/v1")
+    monkeypatch.setenv("COPILOT_BASE_URL", "https://opencode.ai/zen/v1")
     a = BusinessAIAgent(subset="copilot", model="gpt-5.5")
     assert a._model_candidates()[0] == "gpt-5.5"
 
 
 def test_free_models_never_repeat_the_configured_one(monkeypatch):
-    monkeypatch.setenv("OPENAI_BASE_URL", "https://opencode.ai/zen/v1")
+    monkeypatch.setenv("COPILOT_BASE_URL", "https://opencode.ai/zen/v1")
     monkeypatch.setenv("COPILOT_FREE_FALLBACK_MODELS", "space-bunny-free,big-pickle")
     a = BusinessAIAgent(subset="copilot", model="space-bunny-free")
     assert a._model_candidates() == ["space-bunny-free", "big-pickle"]
 
 
 def test_env_overrides_the_roting_default_list(monkeypatch):
-    monkeypatch.setenv("OPENAI_BASE_URL", "https://opencode.ai/zen/v1")
+    monkeypatch.setenv("COPILOT_BASE_URL", "https://opencode.ai/zen/v1")
     monkeypatch.setenv("COPILOT_FREE_FALLBACK_MODELS", " one-free , two-free ,")
     a = BusinessAIAgent(subset="copilot")
     assert a._model_candidates()[1:] == ["one-free", "two-free"]
@@ -129,7 +132,7 @@ def test_env_overrides_the_roting_default_list(monkeypatch):
 # --- the fallback itself ------------------------------------------------
 
 def test_a_rate_limited_model_falls_through_to_a_free_one(monkeypatch):
-    monkeypatch.setenv("OPENAI_BASE_URL", "https://opencode.ai/zen/v1")
+    monkeypatch.setenv("COPILOT_BASE_URL", "https://opencode.ai/zen/v1")
     monkeypatch.setenv("COPILOT_FREE_FALLBACK_MODELS", "space-bunny-free")
     a = _agent({"gpt-5.5": RATE_LIMITED})
     a._model = "gpt-5.5"
@@ -141,7 +144,7 @@ def test_a_rate_limited_model_falls_through_to_a_free_one(monkeypatch):
 def test_a_healthy_model_is_never_displaced(monkeypatch):
     """The free tier is a fallback, not a default. It must cost nothing when
     the paid model is working."""
-    monkeypatch.setenv("OPENAI_BASE_URL", "https://opencode.ai/zen/v1")
+    monkeypatch.setenv("COPILOT_BASE_URL", "https://opencode.ai/zen/v1")
     monkeypatch.setenv("COPILOT_FREE_FALLBACK_MODELS", "space-bunny-free")
     a = _agent({})
     a._model = "gpt-5.5"
@@ -166,7 +169,7 @@ def test_every_candidate_failing_tries_them_all_then_falls_back(monkeypatch):
     turns a single 429 into a working answer, so a chain that gave up early
     would look identical from here.
     """
-    monkeypatch.setenv("OPENAI_BASE_URL", "https://opencode.ai/zen/v1")
+    monkeypatch.setenv("COPILOT_BASE_URL", "https://opencode.ai/zen/v1")
     monkeypatch.setenv("COPILOT_FREE_FALLBACK_MODELS", "space-bunny-free,big-pickle")
     a = _agent({"gpt-5.5": RATE_LIMITED, "space-bunny-free": RATE_LIMITED,
                 "big-pickle": RATE_LIMITED})
@@ -182,7 +185,7 @@ def test_the_deadline_stops_the_retry_chain(monkeypatch):
     inner guard, so a slow first model cannot spend the whole budget failing
     over to free ones that will also be too slow.
     """
-    monkeypatch.setenv("OPENAI_BASE_URL", "https://opencode.ai/zen/v1")
+    monkeypatch.setenv("COPILOT_BASE_URL", "https://opencode.ai/zen/v1")
     monkeypatch.setenv("COPILOT_FREE_FALLBACK_MODELS", "space-bunny-free,big-pickle")
     a = _agent({"gpt-5.5": RATE_LIMITED})
     a._model = "gpt-5.5"
@@ -203,7 +206,7 @@ def test_the_deadline_stops_the_retry_chain(monkeypatch):
 def test_the_out_of_credits_message_points_at_the_right_billing_page(monkeypatch):
     """On Zen, "add credit at platform.openai.com" sends the owner to a page
     that cannot possibly fix it."""
-    monkeypatch.setenv("OPENAI_BASE_URL", "https://opencode.ai/zen/v1")
+    monkeypatch.setenv("COPILOT_BASE_URL", "https://opencode.ai/zen/v1")
     a = _agent({"gpt-5.5": RuntimeError("insufficient_quota")})
     a._model = "gpt-5.5"
     with pytest.raises(ModelUnavailable) as exc:
@@ -223,7 +226,7 @@ def test_off_zen_the_message_is_unchanged():
 def test_a_trailing_slash_still_counts_as_zen(monkeypatch):
     """The fallback turns OFF silently if the URL match is brittle, and a
     rate-limited Zen model would then have nowhere to go."""
-    monkeypatch.setenv("OPENAI_BASE_URL", "https://opencode.ai/zen/v1/")
+    monkeypatch.setenv("COPILOT_BASE_URL", "https://opencode.ai/zen/v1/")
     a = BusinessAIAgent(subset="copilot")
     assert a._on_zen()
     assert len(a._model_candidates()) > 1
@@ -232,5 +235,33 @@ def test_a_trailing_slash_still_counts_as_zen(monkeypatch):
 def test_another_host_is_not_zen(monkeypatch):
     """A self-hosted gateway that merely mentions opencode must not inherit
     Zen's free-model list -- those ids do not exist there."""
-    monkeypatch.setenv("OPENAI_BASE_URL", "https://proxy.example.com/opencode/v1")
+    monkeypatch.setenv("COPILOT_BASE_URL", "https://proxy.example.com/opencode/v1")
     assert not BusinessAIAgent(subset="copilot")._on_zen()
+
+
+def test_the_global_openai_base_url_does_not_move_the_copilot(monkeypatch):
+    """The scoping that makes this safe.
+
+    OPENAI_BASE_URL is process-global, so the OpenAI SDK picks it up for every
+    client in the app -- including the live voice agent and web_search's
+    Responses call, neither of which Zen serves. The Copilot must ignore it, so
+    setting it cannot silently drag the rest of the app onto Zen.
+    """
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://opencode.ai/zen/v1")
+    assert not BusinessAIAgent(subset="copilot")._on_zen()
+    assert BusinessAIAgent(subset="copilot")._model_candidates() == [
+        BusinessAIAgent(subset="copilot")._model]
+
+
+def test_copilot_base_url_is_what_reaches_the_sdk(monkeypatch):
+    """The retarget has to be real: the client is built with that base_url."""
+    monkeypatch.setenv("COPILOT_BASE_URL", "https://opencode.ai/zen/v1")
+    a = BusinessAIAgent(subset="copilot")
+    assert "opencode.ai" in str(a.client.base_url)
+
+
+def test_the_client_defaults_to_openai_when_unset(monkeypatch):
+    """Absent the opt-in, nothing changes. Copilot stays exactly where it was."""
+    monkeypatch.delenv("COPILOT_BASE_URL", raising=False)
+    a = BusinessAIAgent(subset="copilot")
+    assert "api.openai.com" in str(a.client.base_url)
