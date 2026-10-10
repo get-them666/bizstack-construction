@@ -35,6 +35,16 @@ DISTANCE_MAX_DESTINATIONS = 25
 
 _LAST_ERROR = {"endpoint": "", "status": "", "message": ""}
 
+# Statuses meaning the key is present but the project is not authorised for the
+# call. These are not transient: they stay wrong until someone enables billing or
+# relaxes a restriction, so retrying is pure waste.
+_MAPS_HARD_FAILURES = ("REQUEST_DENIED", "PERMISSION_DENIED", "UNAUTHENTICATED")
+
+
+def maps_override() -> bool:
+    """MAPS_TOOLS=on advertises the Maps tools even after a hard rejection."""
+    return (os.getenv("MAPS_TOOLS") or "").strip().lower() in ("on", "1", "true", "yes")
+
 
 def maps_status() -> dict:
     """Why Maps is or isn't usable. Cheap: no network call.
@@ -42,14 +52,42 @@ def maps_status() -> dict:
     The operator hit a real outage where every function returned None and the
     cause was invisible. Anything integrating this should check this first and
     surface the message rather than pretending the data does not exist.
+
+    A key being present is not the same as Maps working. Billing can be off, the
+    API can be disabled, a key can be referer-restricted -- in each of those
+    cases the key is right there and every call still fails. This used to answer
+    "key present" regardless, so callers believed a dead service was healthy.
+    Now a recorded hard rejection makes it report not-ok and carries the status.
+    The latch clears on restart; MAPS_TOOLS=on overrides it.
     """
     key = (os.getenv("GOOGLE_MAPS_SERVER_KEY") or os.getenv("GOOGLE_MAPS_API_KEY") or "").strip()
     if not key:
         return {"ok": False, "reason": "no key set",
                 "hint": "set GOOGLE_MAPS_SERVER_KEY to an unrestricted or IP-restricted key"}
+
+    status = str(_LAST_ERROR.get("status") or "")
+    if status in _MAPS_HARD_FAILURES and not maps_override():
+        return {
+            "ok": False,
+            "reason": f"Google Maps rejected the key: {status}",
+            "hint": "enable billing on the Google Cloud project, or set MAPS_TOOLS=on "
+                    "to advertise the tools anyway",
+            "last_error": dict(_LAST_ERROR),
+        }
+
     return {"ok": True, "reason": "key present",
             "using": "GOOGLE_MAPS_SERVER_KEY" if os.getenv("GOOGLE_MAPS_SERVER_KEY") else "GOOGLE_MAPS_API_KEY",
             "last_error": _LAST_ERROR or None}
+
+
+def maps_tools_available() -> bool:
+    """Whether the Maps tools should be advertised to an agent at all.
+
+    No network call. False means do not offer these: a tool that can only fail
+    costs a whole round trip every time the model reaches for it, which is how a
+    five-step pipeline ran past two minutes and timed out.
+    """
+    return bool(maps_status().get("ok"))
 
 
 def _api_get(url: str, params: dict) -> Dict[str, Any]:

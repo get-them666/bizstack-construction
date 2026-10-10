@@ -292,62 +292,54 @@ def build_maps_tools(db):
 
     Calendar service needs the owner's email for token lookup; Maps needs no
     per-user credentials.
+
+    Returns tools backed by keyless providers -- open_geo -- so there is no
+    Google Maps dependency left to fail. Previously this returned nothing when
+    the Maps key was rejected, which left the model unable to geocode anything
+    while still burning a round trip reaching for the tool.
+
+    `maps_find_place` is gone. It needed a place/business database, the only
+    keyless candidate being Overpass, whose public instances returned nothing
+    for a populated area and then timed out outright. Shipping a flaky tool is
+    worse than not shipping it, and the model is pointed at web_search instead
+    -- which suits these leads, since suppliers are business contacts.
     """
 
     def maps_geocode(address: str = "") -> dict:
-        """Get latitude/longitude and a formatted address for a street address."""
-        import google_maps
+        """Get latitude/longitude and a normalized address for a street address."""
+        import open_geo
 
-        if not address.strip():
+        if not (address or "").strip():
             return {"ok": False, "error": "What is the address?"}
-        result = google_maps.geocode_address(address.strip())
-        if not result:
-            return {"ok": False, "error": f"Couldn't find that address: {address}"}
-        return {"ok": True, **result}
-
-    def maps_find_place(name: str = "", address: str = "") -> dict:
-        """Find a nearby business by name (supplier, store, inspector) with phone and website."""
-        import google_maps
-
-        if not (name or "").strip():
-            return {"ok": False, "error": "What should I look for?"}
-        place = google_maps.find_place_by_name_and_address(name.strip(), (address or "").strip())
-        if not place:
-            return {"ok": False, "error": f"No match for {name}."}
-        return {"ok": True, **place}
+        return open_geo.geocode(address.strip())
 
     def maps_directions(origin: str = "", destination: str = "") -> dict:
-        """Driving distance and minutes between two addresses, plus a clickable directions URL."""
-        import google_maps
+        """Driving distance and minutes between two addresses, plus an Apple Maps link."""
+        import open_geo
 
-        if not origin.strip() or not destination.strip():
+        if not (origin or "").strip() or not (destination or "").strip():
             return {"ok": False, "error": "Need both an origin and a destination address."}
         origin, destination = origin.strip(), destination.strip()
-        a, b = google_maps.geocode_address(origin), google_maps.geocode_address(destination)
-        if not a or not b:
-            missing = origin if not a else destination
-            return {"ok": False, "error": f"Couldn't geocode {missing}."}
-        try:
-            # distance_matrix takes lists of "lat,lng" or addresses and raises on
-            # failure rather than reporting "no route" -- surface that honestly.
-            matrix = google_maps.distance_matrix([origin], [destination]) or {}
-        except Exception as e:
-            return {"ok": False, "error": f"Directions unavailable: {e}"}
+
+        a, b = open_geo.geocode(origin), open_geo.geocode(destination)
+        if not a.get("ok"):
+            return {"ok": False, "error": f"Couldn't geocode {origin}: {a.get('error', '')}"}
+        if not b.get("ok"):
+            return {"ok": False, "error": f"Couldn't geocode {destination}: {b.get('error', '')}"}
+
+        leg = open_geo.route(a, b)
+        if not leg.get("ok"):
+            return leg
         return {
             "ok": True,
-            "origin": a.get("formatted_address") or origin,
-            "destination": b.get("formatted_address") or destination,
-            "directions_url": google_maps.maps_directions_url(
-                a["lat"], a["lng"], b["lat"], b["lng"]
-            ),
-            **matrix,
+            "origin": a.get("label") or origin,
+            "destination": b.get("label") or destination,
+            "directions_url": open_geo.apple_directions_url(a, b),
+            "miles": leg["miles"],
+            "minutes": leg["minutes"],
         }
 
-    return {
-        "maps_geocode": maps_geocode,
-        "maps_find_place": maps_find_place,
-        "maps_directions": maps_directions,
-    }
+    return {"maps_geocode": maps_geocode, "maps_directions": maps_directions}
 
 
 # --- Google Calendar --------------------------------------------------------

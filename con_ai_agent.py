@@ -1,10 +1,24 @@
 import json
 import os
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 from openai import OpenAI
+
+
+class ToolBudgetExhausted(RuntimeError):
+    """A tool kept failing, so the request was stopped instead of grinding on.
+
+    Raised rather than returned so it reaches the owner as a visible failure. The
+    previous behaviour was worse than useless: the loop spent six round trips
+    re-calling a tool that could only fail, the request ran to 125 seconds where
+    the proxy killed it, and the model then reported it "couldn't access the
+    information" -- which reads like a data problem and sent the investigation in
+    the wrong direction. Anything already written by an earlier tool in the same
+    turn is committed and stays written.
+    """
 
 
 class BusinessAIAgent:
@@ -384,29 +398,26 @@ OPERATING MANUAL:
                 "type": "function",
                 "function": {
                     "name": "maps_geocode",
-                    "description": "Get latitude/longitude and a normalized address for a street address.",
+                    "description": (
+                        "Get latitude/longitude and a normalized address for a street address. "
+                        "Backed by the US Census and ArcGIS geocoders, so it is free and "
+                        "reliable for US addresses. Use it when you need coordinates or a "
+                        "confirmed spelling of an address -- not for a ZIP alone, which "
+                        "lookup_zip answers more cheaply."
+                    ),
                     "parameters": self._props({"address": "string"}, ["address"], "Full street address."),
                 },
             },
             {
                 "type": "function",
                 "function": {
-                    "name": "maps_find_place",
-                    "description": (
-                        "Find a business by name near an address -- supplier, rental yard, "
-                        "hardware store, inspector. Returns phone and website."
-                    ),
-                    "parameters": self._props(
-                        {"name": "string", "address": "string"}, ["name"],
-                        "Business name; address narrows the search area.",
-                    ),
-                },
-            },
-            {
-                "type": "function",
-                "function": {
                     "name": "maps_directions",
-                    "description": "Driving distance and minutes between two addresses, plus a directions link.",
+                    "description": (
+                        "Driving distance and minutes between two addresses, plus an Apple Maps "
+                        "link. For finding a SUPPLIER, rental yard, hardware store or inspector, "
+                        "use web_search instead -- it reaches real business listings, and those "
+                        "are business contacts."
+                    ),
                     "parameters": self._props(
                         {"origin": "string", "destination": "string"},
                         ["origin", "destination"], "Both as plain street addresses.",
@@ -804,12 +815,46 @@ OPERATING MANUAL:
         # contact_policy_allows (auto_reply, send-once, the digest mails).
         tools = [t for t in tools
                  if t.get("function", {}).get("name") != "send_email_message"]
+
+        # The Maps tools no longer touch Google at all -- they are backed by
+        # open_geo (Census/ArcGIS/Nominatim for geocoding, OSRM for routing).
+        # The only thing withheld here is maps_find_place, which was removed with
+        # its provider: a place database needs a key, and the keyless Overpass
+        # instances were unreliable enough to be worse than absent. build_maps_tools
+        # withholds the handler at the same moment, so the two stay in step.
+        dead_maps = {"maps_find_place"}
+        tools = [t for t in tools
+                 if t.get("function", {}).get("name") not in dead_maps]
+
         return tools
 
     def _tools(self) -> list:
         return self._full_tools() if self._subset == "copilot" else self._safe_tools()
 
     # --- Tool exec --------------------------------------------------------
+    @staticmethod
+    def _tool_budget() -> int:
+        """How many times ONE tool may run in a single request.
+
+        Two means one call plus one retry. The cap is per tool, not per request:
+        the lead pipeline is sequential and needs several different tools, so a
+        request-wide cap would break it, while a per-tool cap still stops the
+        model grinding one dead call until the proxy kills the request.
+        COPILOT_TOOL_ATTEMPTS overrides it.
+        """
+        try:
+            return max(1, int(os.getenv("COPILOT_TOOL_ATTEMPTS") or 2))
+        except (TypeError, ValueError):
+            return 2
+
+    @staticmethod
+    def _tool_deadline() -> float:
+        """Wall-clock ceiling on one request, in seconds. COPILOT_TOOL_DEADLINE_SECONDS."""
+        try:
+            return max(5.0, float(os.getenv("COPILOT_TOOL_DEADLINE_SECONDS") or 90))
+        except (TypeError, ValueError):
+            return 90.0
+
     def _execute_tool(self, name: str, arguments: str) -> str:
         handler = self._tool_handlers.get(name)
         if handler is None:
@@ -854,7 +899,15 @@ OPERATING MANUAL:
 
         max_tokens = 800 if self._subset == "copilot" else 300
         try:
+            budget = self._tool_budget()
+            deadline = time.monotonic() + self._tool_deadline()
+            attempts: dict = {}
             for _ in range(6):
+                if time.monotonic() > deadline:
+                    raise ToolBudgetExhausted(
+                        f"Stopped after {int(self._tool_deadline())}s of tool calls "
+                        f"without finishing. Narrow the request to one lead or address."
+                    )
                 response = self.client.chat.completions.create(
                     model=self._model,
                     messages=messages,
@@ -884,15 +937,35 @@ OPERATING MANUAL:
                         ],
                     }
                 )
+                exhausted = None
                 for tc in message_obj.tool_calls:
+                    name = tc.function.name
+                    attempts[name] = attempts.get(name, 0) + 1
+                    if attempts[name] > budget:
+                        # Refused, not executed. Every tool_call still needs a
+                        # matching tool message or the next API call 400s, so the
+                        # refusal is answered in the same slot.
+                        exhausted = exhausted or name
+                        content = json.dumps({
+                            "ok": False,
+                            "error": f"{name} already ran {budget} time(s) in this request "
+                                     f"without succeeding. Not retrying it again.",
+                        })
+                    else:
+                        content = self._execute_tool(name, tc.function.arguments)
                     messages.append(
-                        {
-                            "role": "tool",
-                            "tool_call_id": tc.id,
-                            "content": self._execute_tool(tc.function.name, tc.function.arguments),
-                        }
+                        {"role": "tool", "tool_call_id": tc.id, "content": content}
+                    )
+
+                if exhausted:
+                    raise ToolBudgetExhausted(
+                        f"{exhausted} failed {budget} time(s) in a row, so the request was "
+                        f"stopped instead of retrying further. Check that tool's provider "
+                        f"credentials or quota -- see the server log for the exact error."
                     )
             return fallback
+        except ToolBudgetExhausted:
+            raise
         except Exception as e:
             print(f"⚠️ AI agent fallback triggered: {e}")
             return fallback

@@ -811,11 +811,20 @@ def _format_currency(cents) -> str:
 
 
 def _map_embed(address: str | None) -> str:
-    return f"https://maps.google.com/maps?q={urllib.parse.quote_plus(address or '')}&output=embed"
+    """Iframe map for a job address.
+
+    Was a Google embed, which required a billing-enabled Cloud project. OpenStreet
+    Map's export/embed is keyless and drop-in; Apple Maps publishes no iframe
+    endpoint at all, so it cannot serve this role.
+    """
+    import open_geo
+    return open_geo.embed_url_for_address(address or "")
 
 
 def _map_directions(address: str | None) -> str:
-    return f"https://www.google.com/maps/dir/?api=1&destination={urllib.parse.quote_plus(address or '')}"
+    """'Map ->' link for a job address. Apple Maps takes the address directly."""
+    import open_geo
+    return open_geo.directions_url_for_address("", address or "")
 
 
 def _template_actor(request: Request):
@@ -7944,7 +7953,18 @@ async def copilot_chat(request: Request, message: str = Form(...), db=Depends(ge
         tool_handlers=build_copilot_handlers(db, owner_email),
         subset="copilot",
     )
-    reply = agent.process_conversation(history, message)
+    try:
+        reply = agent.process_conversation(history, message)
+    except ToolBudgetExhausted as exc:
+        # Surfaced as a real error on purpose. Returning the fallback string here
+        # is what made this look like missing data: the agent would report it
+        # "couldn't access the information" and the owner would go hunting through
+        # lead records when the actual fault was one tool failing repeatedly.
+        print(f"🚨 Copilot tool budget exhausted: {exc}")
+        return JSONResponse(
+            status_code=502,
+            content={"error": str(exc), "tooling": True},
+        )
     copilot_memory.append_turn(db, "copilot", owner_email, "user", message)
     copilot_memory.append_turn(db, "copilot", owner_email, "assistant", reply)
     return JSONResponse(content={"reply": reply})
