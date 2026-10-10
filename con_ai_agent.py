@@ -702,10 +702,12 @@ OPERATING MANUAL:
                     "name": "skip_trace_owner",
                     "description": (
                         "Look up the OWNER OF RECORD for a property address from the public "
-                        "assessor record. Returns a name plus property facts (total value, year "
-                        "built, square footage). It does NOT return an email or a phone -- no "
-                        "public record carries those; use pdl_contact for them. Cached per "
-                        "address, so a repeat lookup is free."
+                        "assessor record. On success the name is in `owner_of_record` (e.g. "
+                        "'Blow, Vernon K' -- last, first; take the part after the comma for a "
+                        "first-name greeting). Also returns `parcel`, `assessed_value`, "
+                        "`year_built` and `is_residential`. It does NOT return an email or a "
+                        "phone -- no public record carries those; use pdl_contact for them. "
+                        "Cached per address, so a repeat lookup is free."
                     ),
                     "parameters": self._props(
                         {"address": "string"}, ["address"],
