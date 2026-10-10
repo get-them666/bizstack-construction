@@ -40,8 +40,7 @@ Quick background:
   plus 3 turnovers and a 15% co-host commission across 3 host relationships
 - The business already runs on software I built: instant online quotes, a 24/7
   AI phone/SMS assistant, GPS crew time-tracking, Stripe payments, and payroll
-- ~$1,000 of my own capital into labor for the first job, plus $31,900
-    of completed-job revenue collected to date ($28,700 bank-documented)
+- $31,900 of completed-job revenue collected to date ($28,700 bank-documented)
 - Target: repayment covered inside year one (DSCR above the SBA's 1.10 floor)
 
 I can send my one-page summary, license, insurance, and financials ahead of the
@@ -81,9 +80,8 @@ Quick facts:
   cleaning + co-host commission across 3 host relationships ($616.50)
 - The business already runs on software I built: instant online quotes, a 24/7
   AI phone/SMS assistant, GPS crew time-tracking, Stripe payments, and payroll
-- ~$1,000 of my own capital into labor for the first job, plus $31,900
-    of completed-job revenue collected to date ($28,700 bank-documented)
-- 12-month projections show the ~$930/month payment covered inside year one
+- $31,900 of completed-job revenue collected to date ($28,700 bank-documented)
+- 12-month projections show the ~$967/month payment covered inside year one
 
 Use of funds: $20K working capital/payroll & supplies, $18K equipment/tools,
 $12K marketing & lead generation.
@@ -125,9 +123,8 @@ Quick facts:
   cleaning + co-host commission across 3 host relationships ($616.50)
 - The business already runs on software I built: instant online quotes, a 24/7
   AI phone/SMS assistant, GPS crew time-tracking, Stripe payments, and payroll
-- ~$1,000 of my own capital into labor for the first job, plus $31,900
-    of completed-job revenue collected to date ($28,700 bank-documented)
-- 12-month projections show the ~$930/month payment covered inside year one
+- $31,900 of completed-job revenue collected to date ($28,700 bank-documented)
+- 12-month projections show the ~$967/month payment covered inside year one
 - No judgments, no liens, no bankruptcies
 
 Use of funds: $20K working capital/payroll & supplies, $18K equipment/tools,
@@ -168,9 +165,8 @@ Quick facts:
 - 25 years in the construction trade; I'm the operator, not an investor
 - $32,516 in 2026 revenue: two completed construction projects ($31,900) and
   cleaning + co-host commission across 3 host relationships ($616.50)
-- ~$1,000 of my own capital into labor for the first job, plus $31,900
-    of completed-job revenue collected to date ($28,700 bank-documented)
-- 12-month projections show the ~$930/month payment covered inside year one
+- $31,900 of completed-job revenue collected to date ($28,700 bank-documented)
+- 12-month projections show the ~$967/month payment covered inside year one
 
 Use of funds: $20K working capital, $18K equipment/tools, $12K marketing &
 lead generation. (These are my own working-capital, equipment, and software

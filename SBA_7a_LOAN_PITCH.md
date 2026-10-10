@@ -3,7 +3,7 @@
 
 **Situation:** Startup, no revenue on the books yet, owner credit in the 600s
 **The move:** SBA **Microloan** ($50K max) through a CDFI — NOT a bank 7(a)
-**Target payment:** ~$930–970/month (6-yr microloan; VSBFA state loan @ 6% fixed)
+**Target payment:** ~$967/month (5-yr unsecured; VSBFA Microloan @ 6% fixed — 3% if Veteran)
 
 ---
 
@@ -293,22 +293,19 @@ You've told me the real facts: startup, nothing cleared on the books, FICO in th
 > projections, not a historical revenue line.
 >
 > **My fit.** 25 years in the construction industry; I am the operator, not an
-> investor. I am contributing approximately $1,000 of my own funds toward labor
-> assistance on the company's first project, ahead of any customer payment, and
-> have funded operations from personal resources since. To date the business has
-> collected **$31,900 in completed-job revenue**, of which **$28,700 is documented
-> by bank deposit records** and the balance was received in cash and disbursed to
-> material suppliers. I have not represented revenue as capital; a signed statement
-> of owner contribution is available on request.
+> investor. To date the business has collected **$31,900 in completed-job revenue**,
+> of which **$28,700 is documented by bank deposit records** and the balance was
+> received in cash and disbursed to material suppliers. I have not represented revenue
+> as capital.
 >
 > **Use of funds ($50,000).**
 > - Working capital / first payroll & supplies buffer (both service lines): $20,000
 > - Equipment & tools (construction tools + commercial cleaning equipment & linens): $18,000
 > - Marketing & lead generation (both service lines, AI assistant, instant-quote ads): $12,000
 >
-> **Ability to repay.** $50,000 over 6 years = ~$930/month. Projections show $300,000 in
+> **Ability to repay.** $50,000 over 5 years (unsecured) at 6% fixed = ~$967/month. Projections show $300,000 in
 > year-one revenue, modelled at a **55% gross margin** across fixed-price construction and
-> pre-paid cleaning fees — debt service coverage of **1.34x**, above the 1.10 requirement,
+> pre-paid cleaning fees — debt service coverage of **1.29x**, above the 1.10 requirement,
 > inside year one. Personal guaranty available; no liens or judgments.
 >
 > **The 55% is deliberately below what the business has demonstrated.** Two completed 2026
@@ -334,13 +331,14 @@ your own equity, the pipeline, and a clean credit story.**
    one. The SBDC helps free.
 2. **Pipeline proof from both systems** — run `pitch_numbers.py` (see below) to print
    construction pipeline + hospitality bookings straight from the live databases.
-3. **Owner contribution** — CDFIs typically want to see owner money in the business. Be
-   straight with them about the actual figure rather than the target: ~$1,000 in February
-   2026 on labor assistance, before any customer payment. What you have that a startup
+3. **Owner contribution is deliberately absent from this package.** The figure has never
+   been reconciled against a bank record, and an unverified number in a lender file is a
+   liability, not a selling point — lenders compare it against whatever you send and a gap
+   invites a decline. So it is omitted rather than estimated. What you have that a startup
    usually doesn't is **$31,900 of completed-job revenue with $28,700 bank-documented**.
-   Lead with that. A signed statement of owner contribution is in `docs/`. Do not quote a
-   number the bank record doesn't support — lenders compare against the statement, and a
-   gap invites a decline.
+   Lead with that. If a lender asks directly about owner money in the business, answer with
+   the bank-verified figure once it is confirmed from the PNC record — do not quote a number
+   the record doesn't support.
 4. **Credit story, not credit number** — low 600s works at LISC/VCC if the story is
    clean: no judgments, no liens, explain any dings *in writing* before they ask.
 5. **Free coaching** — email the Hampton Roads SBDC first. This is a free approval
@@ -385,7 +383,7 @@ lender channels — is in **`LOAN_OUTREACH_SEQUENCE.md`**. Start there. Short ve
 > I have 25 years in the trade, 2 host accounts and 1 property onboarded with 3 jobs
 > scheduled and 1 inbound lead, $31,900 of completed-job revenue collected to date
 > ($28,700 of it bank-documented), and 12-month
-> projections show the ~$930/month payment covered inside year one.
+> projections show the ~$967/month payment covered inside year one.
 >
 > My full package is ready — what's the best next step to submit? I can send everything
 > same-day by email.
@@ -439,10 +437,11 @@ export DATABASE_URL="postgresql://user:pass@host:port/db"
 python pitch_numbers.py
 ```
 
-*Owner contribution is stated honestly throughout: ~$1,000 in February 2026 on labor
-assistance, not the $10,000 this package previously claimed. That figure was never
-evidenced — the PNC record shows only customer-revenue deposits. Every number in the
-generated package now traces to a bank record or a signed document.*
+*Owner contribution is **not stated** in this package. An earlier version claimed $10,000 —
+that figure was never evidenced, and a later revision put ~$1,000 in February 2026, which was
+never reconciled against a bank record either. Rather than ship a third guess, the claim has
+been removed and the verified alternative carries the argument instead. Every remaining number
+in the generated package traces to a bank record or a signed document.*
 
 *Rates as of Sept 2026: microloans typically 8–13%; VSBFA fixed 6% (3% veterans);
 SBA 7(a) small-loan DSCR floor 1.10x per March 2026 rules.*

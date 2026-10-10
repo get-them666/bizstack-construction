@@ -9,7 +9,7 @@ reads, in the order they read them:
     3. Business plan (two service lines, one customer relationship)
     4. Traction: verified 2026 revenue
     5. 12-month projections with the DSCR arithmetic shown
-    6. Owner contribution and fit
+    6. Owner fit
     7. Risk and mitigants, stated plainly
 
 Design rules, all of them deliberate:
@@ -69,13 +69,28 @@ def t(value) -> str:
 
 # --- The figures. Each carries where it came from. --------------------------
 REQUEST_AMOUNT = 50_000
-LOAN_YEARS = 6
-MONTHLY_PAYMENT = 930          # pitch, line 6
-# Owner capital actually contributed, verified against the PNC record:
-# ~$1,000 in February 2026 on labor assistance for the first project, before any
-# customer payment. The old figure here was $10,000, which was never evidenced --
-# the two deposits in the record ($22,500 and $6,200) are customer revenue.
-OWNER_EQUITY = 1_000
+# VSBFA Microloan Program published terms (sbsd.virginia.gov, Form 102):
+#   fixed 6% (3% for Veterans); 5 yr UNSECURED / 7 yr SECURED; cap $150,000.
+# Confirm with Karen White before relying on these -- they can change.
+LOAN_SECURED = False
+LOAN_RATE = 0.06                # 0.03 if the borrower qualifies as a Veteran
+# Payment is COMPUTED, never asserted. The previous hardcoded 930 matched no
+# published amortization at all, so the package contradicted its own terms.
+def _payment(principal, annual_rate, years):
+    r = annual_rate / 12.0
+    n = years * 12
+    return principal * r / (1 - (1 + r) ** -n)
+
+LOAN_YEARS = 7 if LOAN_SECURED else 5
+MONTHLY_PAYMENT = round(_payment(REQUEST_AMOUNT, LOAN_RATE, LOAN_YEARS))
+PROGRAM_NAME = "VSBFA Microloan Program"
+# OWNER_EQUITY is deliberately None. The figure has never been reconciled against
+# a bank record: the old $10,000 was never evidenced, and a later $1,000 revision
+# asserted "verified against the PNC record" when MEMORY.md records no owner
+# deposit in that statement at all (both deposits are customer revenue). Rather
+# than ship a third guess, the package omits the claim and leans on the
+# bank-documented revenue instead. Set to an int only once a PNC record confirms it.
+OWNER_EQUITY = None
 # What the business actually collected on completed jobs. Prefer this over a
 # capital figure when arguing capacity: $28,700 of it is bank-documented.
 REVENUE_COLLECTED = 31_900
@@ -231,7 +246,7 @@ def cover(pdf):
         "Section 3 — Business plan",
         "Section 4 — Traction: verified 2026 revenue",
         "Section 5 — 12-month projections and DSCR",
-        "Section 6 — Owner contribution and fit",
+        "Section 6 — Owner fit",
         "Section 7 — Risk and mitigants",
     ]:
         bullet(pdf, item)
@@ -511,27 +526,27 @@ def projections(pdf):
 
     heading(pdf, "Month-one coverage", 2)
     body(pdf, f"Debt service is underwritten on the projected revenue above, not on owner "
-              f"capital. Owner contribution is {money(OWNER_EQUITY)} and is stated for "
-              "completeness; it is not presented as a reserve against the loan. The business "
-              f"has already collected {money(REVENUE_COLLECTED)} on completed work, "
-              f"{money(REVENUE_BANK_DOCUMENTED)} of which is bank-documented, which is the "
-              "stronger evidence of capacity.")
+              "capital. No owner-contribution figure is presented: none has been reconciled "
+              "against a bank record, and an unverified figure in a file is a liability rather "
+              f"than a strength. The business has already collected {money(REVENUE_COLLECTED)} "
+              f"on completed work, {money(REVENUE_BANK_DOCUMENTED)} of which is bank-documented "
+              "and is the stronger evidence of capacity.")
 
 
 def owner_fit(pdf):
     pdf.add_page()
-    heading(pdf, "6.  Owner contribution and fit")
+    heading(pdf, "6.  Owner fit")
 
     body(pdf, f"{OWNER_TENURE}. Owner and operator, not a passive investor.", bold=True)
-    body(pdf, f"Owner capital of approximately {money(OWNER_EQUITY)} was contributed in February "
-              "2026 to engage labor assistance for the company's first project, ahead of any "
-              "customer payment. Operations have since been funded from personal resources and "
-              "customer receipts.")
-    body(pdf, f"Stated plainly for the reviewer: this is a modest owner contribution, not the "
-              f"10–25% some lenders look for. The business has instead demonstrated "
+    body(pdf, "No owner-capital figure is stated in this package. Earlier drafts carried a "
+              "$10,000 figure that was never evidenced, and a later revision carried a smaller "
+              "figure that was likewise never reconciled against a bank record. Rather than "
+              "submit a third unverified number, the claim has been removed and the "
+              "bank-documented revenue below carries the argument instead.")
+    body(pdf, f"Stated plainly for the reviewer: the demonstrated record is "
               f"{money(REVENUE_COLLECTED)} of collected revenue on completed jobs, "
-              f"{money(REVENUE_BANK_DOCUMENTED)} of it traceable to bank deposits. A signed "
-              "statement of owner contribution accompanies this package.")
+              f"{money(REVENUE_BANK_DOCUMENTED)} of it traceable to bank deposits, plus "
+              f"{OWNER_EXPERIENCE_YEARS} years of operating experience in the trade.")
 
     heading(pdf, "Why this borrower", 2)
     for item in [

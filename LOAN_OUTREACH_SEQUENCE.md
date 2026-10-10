@@ -57,8 +57,7 @@ and send from **hello@bizstackperks.com** (be consistent on every touch).
 >   3 turnovers and a 15% co-host commission across 3 hosts
 > - The business already runs on software I built: instant online quotes, a 24/7 AI
 >   phone/SMS assistant, GPS crew time-tracking, Stripe payments, and payroll
-> - ~$1,000 of my own capital into labor for the first job, plus $31,900
-    of completed-job revenue collected to date ($28,700 bank-documented)
+> - $31,900 of completed-job revenue collected to date ($28,700 bank-documented)
 > - Target: repayment covered inside year one (DSCR above the SBA's 1.10 floor)
 >
 > I can send my one-page summary, license, insurance, and financials ahead of the
@@ -97,9 +96,8 @@ which local microlender is approving right now. Do this before Day 0.
 >   co-host commission across 3 host relationships ($616.50)
 > - The business already runs on software I built: instant online quotes, a 24/7 AI
 >   phone/SMS assistant, GPS crew time-tracking, Stripe payments, and payroll
-> - ~$1,000 of my own capital into labor for the first job, plus $31,900
-    of completed-job revenue collected to date ($28,700 bank-documented)
-> - 12-month projections show the ~$930/month payment covered inside year one
+> - $31,900 of completed-job revenue collected to date ($28,700 bank-documented)
+> - 12-month projections show the ~$967/month payment covered inside year one
 >
 > Use of funds: $20K working capital/payroll & supplies, $18K equipment/tools,
 > $12K marketing & lead generation.
@@ -211,6 +209,10 @@ Then stop emailing. Move to the next lender. Revisit in 60 days.
 - [ ] Export the one-page pitch to PDF (`SBA_7a_LOAN_PITCH.md`)
 - [ ] Run `python pitch_numbers.py` and replace the targets with your **real** numbers
       (construction pipeline + hospitality bookings)
-- [ ] ~~Confirm your $10K equity~~ — **it was never real.** Actual: ~$1,000 in February 2026 on labor help. Chase February receipts and/or a personal statement
+- [ ] ~~Confirm your $10K equity~~ — **it was never real, and it is now out of the paperwork
+      entirely.** The replacement figure was never reconciled against a bank record either, so
+      no owner-contribution number appears in the pitch or the emails. The bank-documented
+      $31,900 / $28,700 carries the argument instead. Only reintroduce a figure once a PNC
+      record confirms it.
 - [ ] Email the **SBDC** first for a free prep call — a coached file converts better
 - [ ] Save all emails as templates so every lender gets the identical, consistent story

@@ -103,3 +103,37 @@ def test_endpoint_maps_it_to_503():
     assert "ModelUnavailable" in src
     assert "status_code=503" in src
     assert "billing" in src
+
+
+# --- the retry classifier ----------------------------------------------------
+# A false positive here is worse than a miss. Dropping into the free Zen loop
+# burns the remaining candidates and degrades the answer to a general chat
+# model, so a failure that was never transient must never be treated as one.
+
+RETRYABLE = [
+    "Error code: 503 - {'error': {'message': 'The server is overloaded'}}",
+    "APIStatusError: Error code: 503 - {'error': {'message': 'Service Unavailable'}}",
+    "Error code: 502 - Bad Gateway",
+    "RateLimitError: Rate limit reached",
+    "APITimeoutError: Request timed out",
+    "APIConnectionError: Connection reset by peer",
+]
+
+NOT_RETRYABLE = [
+    # An auth failure is never retried: a wrong key fails on every model, so
+    # retrying only multiplies one clear error across several confusing ones.
+    "AuthenticationError: {'error': {'message': 'Incorrect API key provided'}}",
+    "Error code: 401 - {'error': {'message': 'Incorrect API key'}}",
+    # A caller-side error is not transient either.
+    "BadRequestError: Error code: 400 - too many tokens",
+]
+
+
+@pytest.mark.parametrize("message", RETRYABLE)
+def test_transient_failures_are_retried(message):
+    assert BusinessAIAgent._unavailable_model(Exception(message))
+
+
+@pytest.mark.parametrize("message", NOT_RETRYABLE)
+def test_permanent_failures_are_not_retried(message):
+    assert not BusinessAIAgent._unavailable_model(Exception(message))

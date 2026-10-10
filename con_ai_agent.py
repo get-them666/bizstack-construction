@@ -24,12 +24,16 @@ class ToolBudgetExhausted(RuntimeError):
 class ModelUnavailable(RuntimeError):
     """The model API refused the request for a reason the owner must act on.
 
-    Almost always an exhausted OpenAI credit balance. This used to be swallowed
-    into the generic fallback, which for the Copilot is the customer-facing
-    "Message received. Our team will follow up with you shortly." -- that reads
-    as a working assistant with nothing to say, and hides a dead API behind a
-    polite sentence. The SMS/voice assistant still gets the fallback, because
-    there the audience is a customer rather than the owner.
+    Almost always an exhausted credit balance, on OpenAI or on Zen. This used
+    to be swallowed into the generic fallback, which for the Copilot is the
+    customer-facing "Message received. Our team will follow up with you
+    shortly." -- that reads as a working assistant with nothing to say, and hides
+    a dead API behind a polite sentence. The SMS/voice assistant still gets the
+    fallback, because there the audience is a customer rather than the owner.
+
+    Deliberately NOT raised for a rate limit or a 5xx. Those are transient, the
+    free Zen models absorb them in `_complete`, and only an outage that
+    outran every candidate gets here.
     """
 
 
@@ -867,6 +871,121 @@ OPERATING MANUAL:
         except (TypeError, ValueError):
             return 90.0
 
+    # --- Model routing ----------------------------------------------------
+    # OpenCode Zen serves an OpenAI-compatible /chat/completions at
+    # https://opencode.ai/zen/v1, so setting OPENAI_BASE_URL retargets every
+    # model call in this class with no code change -- the OpenAI SDK reads that
+    # variable when the client is constructed.
+    ZEN_BASE_URL = "https://opencode.ai/zen/v1"
+
+    # Zen's free models are the safety net for when the configured model is
+    # unavailable. They are heavily rate limited, and OpenCode documents each as
+    # "available on OpenCode for a limited time", so this list is expected to
+    # rot: COPILOT_FREE_FALLBACK_MODELS overrides it, comma separated.
+    _DEFAULT_FREE_MODELS = (
+        "space-bunny-free",
+        "big-pickle",
+        "ling-3.1-flash-free",
+        "nemotron-3.5-lightning-free",
+    )
+
+    @classmethod
+    def _free_fallback_models(cls) -> list:
+        raw = os.getenv("COPILOT_FREE_FALLBACK_MODELS")
+        if raw is None:
+            raw = ",".join(cls._DEFAULT_FREE_MODELS)
+        return [m.strip() for m in raw.split(",") if m.strip()]
+
+    @classmethod
+    def _on_zen(cls) -> bool:
+        """True when the SDK is pointed at Zen rather than at OpenAI.
+
+        Compared on the host, not the whole URL: a trailing slash or a
+        version-stamped path must not silently read as "not Zen", which would
+        turn the free fallback off.
+        """
+        base = (os.getenv("OPENAI_BASE_URL") or "").strip().rstrip("/")
+        host = base.split("://", 1)[-1].split("/", 1)[0].lower()
+        return host == cls.ZEN_BASE_URL.split("://", 1)[-1].split("/", 1)[0]
+
+    def _model_candidates(self) -> list:
+        """The configured model first, then free Zen models as a fallback.
+
+        The free tier only engages on Zen. Retrying opencode.ai with an OpenAI
+        key is a guaranteed 401, so elsewhere the fallback is skipped rather
+        than spending a round trip to be told the key is wrong.
+        """
+        models = [self._model]
+        if self._on_zen():
+            models += [m for m in self._free_fallback_models() if m != self._model]
+        return models
+
+    @staticmethod
+    def _unavailable_model(exc: Exception) -> str:
+        """Empty string unless the model itself is unusable right now.
+
+        Separate from _billing_failure on purpose. This is the transient class
+        -- rate limit, endpoint down, overload, timeout -- where trying a
+        different model is the correct move. An auth failure is NOT matched: a
+        wrong key fails identically on every model, so retrying would just
+        spread one clear error across several confusing ones.
+
+        IMPORTANT: bare status codes are not enough. "503" alone is ambiguous
+        -- OpenAI returns 503 for genuine outages, but Zen and most gateways
+        also return it with an HTML or JSON body that merely mentions the
+        upstream provider. Matching on the digits therefore fired on messages
+        that were not actually retriable, and on this path a false positive
+        does not merely retry: it silently skips the primary model and drops
+        the caller into the free-tier loop for a failure that was never
+        transient. The transient signals are matched on their words; the codes
+        are kept only alongside a provider/service word so "503 Service
+        Unavailable" still matches while "503 from api.provider" does not.
+        """
+        text = f"{type(exc).__name__} {exc}".lower()
+        if any(w in text for w in ("rate limit", "rate_limit", "too many requests",
+                                   "overloaded", "server is busy", "try again",
+                                   "service unavailable", "temporarily unavailable",
+                                   "timeout", "timed out", "connection reset",
+                                   "connection error", "bad gateway",
+                                   "endpoint is unavailable")):
+            return "transient"
+        # Codes, but only when the message also reads as an outage.
+        code_hit = next((c for c in ("429", "500", "502", "503", "504")
+                         if c in text), "")
+        if code_hit and any(w in text for w in ("error", "unavailable", "overloaded",
+                                                "upstream", "service", "gateway",
+                                                "bad gateway", "status")):
+            return code_hit
+        return ""
+
+    def _complete(self, messages: list, max_tokens: int, tools=None,
+                  tool_choice=None, deadline: Optional[float] = None):
+        """One model call, dropping to a free Zen model if this one is unavailable.
+
+        Re-raises the last failure when every candidate fails, so the caller
+        keeps its existing billing and transient handling unchanged.
+        """
+        last: Optional[Exception] = None
+        for model in self._model_candidates():
+            if deadline is not None and time.monotonic() > deadline:
+                break
+            kwargs = {"model": model, "messages": messages,
+                      "max_tokens": max_tokens, "temperature": 0.7}
+            if tools:
+                kwargs["tools"] = tools
+                kwargs["tool_choice"] = tool_choice or "auto"
+            try:
+                return self.client.chat.completions.create(**kwargs)
+            except Exception as e:
+                last = e
+                reason = self._unavailable_model(e)
+                if not reason:
+                    raise
+                print(f"⚠️ Model {model} unavailable ({reason}); trying the next one.")
+        if last is not None:
+            raise last
+        raise ModelUnavailable("No model was available to answer this request.")
+
     @staticmethod
     def _billing_failure(exc: Exception) -> str:
         """Empty string unless this is a credits/quota failure the owner must fix.
@@ -937,13 +1056,12 @@ OPERATING MANUAL:
                         f"Stopped after {int(self._tool_deadline())}s of tool calls "
                         f"without finishing. Narrow the request to one lead or address."
                     )
-                response = self.client.chat.completions.create(
-                    model=self._model,
-                    messages=messages,
+                response = self._complete(
+                    messages,
+                    max_tokens,
                     tools=self._tools(),
                     tool_choice="auto",
-                    max_tokens=max_tokens,
-                    temperature=0.7,
+                    deadline=deadline,
                 )
                 message_obj = response.choices[0].message
                 if not message_obj.tool_calls:
@@ -1003,10 +1121,12 @@ OPERATING MANUAL:
             # paths keep their polite fallback.
             if self._subset == "copilot" and self._billing_failure(e):
                 raise ModelUnavailable(
-                    "OpenAI refused the request: out of credits "
-                    f"({self._billing_failure(e)}). Add credit at "
-                    "platform.openai.com/settings/organization/billing/ — the "
-                    "Copilot cannot run until you do."
+                    f"{'OpenCode Zen' if self._on_zen() else 'OpenAI'} refused the "
+                    f"request: out of credits ({self._billing_failure(e)}). "
+                    + ("Add credit at opencode.ai/zen — the "
+                       if self._on_zen() else "Add credit at "
+                       "platform.openai.com/settings/organization/billing/ — the ")
+                    + "Copilot cannot run until you do."
                 ) from e
             print(f"⚠️ AI agent fallback triggered: {e}")
             return fallback
@@ -1037,13 +1157,11 @@ OPERATING MANUAL:
         max_tokens = 800 if self._subset == "copilot" else 300
         try:
             for _ in range(6):
-                response = self.client.chat.completions.create(
-                    model=self._model,
-                    messages=messages,
+                response = self._complete(
+                    messages,
+                    max_tokens,
                     tools=self._tools(),
                     tool_choice="auto",
-                    max_tokens=max_tokens,
-                    temperature=0.7,
                 )
                 message = response.choices[0].message
                 if not message.tool_calls:
@@ -1084,13 +1202,9 @@ OPERATING MANUAL:
         """No tools wired: single model call over the prepared message list."""
         fallback = "Message received. Our team will follow up with you shortly."
         try:
-            response = self.client.chat.completions.create(
-                model=self._model,
-                messages=messages,
-                max_tokens=800 if self._subset == "copilot" else 300,
-                temperature=0.7,
-            )
-            return response.choices[0].message.content or fallback
+            return self._complete(
+                messages, 800 if self._subset == "copilot" else 300
+            ).choices[0].message.content or fallback
         except Exception as e:
             print(f"⚠️ AI agent fallback triggered: {e}")
             return fallback
