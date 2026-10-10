@@ -7946,7 +7946,15 @@ async def copilot_page(request: Request, db=Depends(get_db)):
     is_authed, user_email = require_auth(request)
     if not is_authed:
         return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
-    return templates.TemplateResponse(request=request, name="copilot.html", context={"user": {"email": user_email}})
+    response = templates.TemplateResponse(
+        request=request, name="copilot.html", context={"user": {"email": user_email}})
+    # This page's JavaScript decides how a failure is displayed, so a cached copy
+    # is a correctness problem and not just a stale asset: a browser holding the
+    # pre-fix version renders every 503 as an empty "(no response)" bubble,
+    # because it only ever looks at json.reply. The Copilot is an operator tool
+    # used one at a time, so re-fetching it costs nothing.
+    response.headers["Cache-Control"] = "no-store, must-revalidate"
+    return response
 
 
 def _copilot_owner_email(request: Request) -> str:
