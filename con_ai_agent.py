@@ -21,6 +21,18 @@ class ToolBudgetExhausted(RuntimeError):
     """
 
 
+class ModelUnavailable(RuntimeError):
+    """The model API refused the request for a reason the owner must act on.
+
+    Almost always an exhausted OpenAI credit balance. This used to be swallowed
+    into the generic fallback, which for the Copilot is the customer-facing
+    "Message received. Our team will follow up with you shortly." -- that reads
+    as a working assistant with nothing to say, and hides a dead API behind a
+    polite sentence. The SMS/voice assistant still gets the fallback, because
+    there the audience is a customer rather than the owner.
+    """
+
+
 class BusinessAIAgent:
     """Conversational assistant for Buildstack Construction Co.
 
@@ -855,6 +867,23 @@ OPERATING MANUAL:
         except (TypeError, ValueError):
             return 90.0
 
+    @staticmethod
+    def _billing_failure(exc: Exception) -> str:
+        """Empty string unless this is a credits/quota failure the owner must fix.
+
+        Matched on the message because the SDK raises one exception type for
+        every HTTP failure; the code strings (insufficient_quota,
+        credit_balance_exhausted) are what distinguish "you are out of money"
+        from a transient 5xx worth retrying.
+        """
+        text = f"{type(exc).__name__} {exc}".lower()
+        for needle in ("insufficient_quota", "credit_balance_exhausted",
+                       "no credits remaining", "exceeded your current quota",
+                       "billing_hard_limit_reached"):
+            if needle in text:
+                return needle
+        return ""
+
     def _execute_tool(self, name: str, arguments: str) -> str:
         handler = self._tool_handlers.get(name)
         if handler is None:
@@ -966,7 +995,19 @@ OPERATING MANUAL:
             return fallback
         except ToolBudgetExhausted:
             raise
+        except ModelUnavailable:
+            raise
         except Exception as e:
+            # A dead credit balance must not masquerade as a working assistant.
+            # Only the owner-facing Copilot surfaces it; the customer-facing
+            # paths keep their polite fallback.
+            if self._subset == "copilot" and self._billing_failure(e):
+                raise ModelUnavailable(
+                    "OpenAI refused the request: out of credits "
+                    f"({self._billing_failure(e)}). Add credit at "
+                    "platform.openai.com/settings/organization/billing/ — the "
+                    "Copilot cannot run until you do."
+                ) from e
             print(f"⚠️ AI agent fallback triggered: {e}")
             return fallback
 

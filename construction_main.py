@@ -41,7 +41,7 @@ from fastapi.templating import Jinja2Templates
 import aiosmtplib
 from email.message import EmailMessage
 
-from con_ai_agent import BusinessAIAgent
+from con_ai_agent import BusinessAIAgent, ModelUnavailable, ToolBudgetExhausted
 from loan_outreach import start_outreach_tasks
 import copilot_memory
 import copilot_tasks
@@ -7964,6 +7964,15 @@ async def copilot_chat(request: Request, message: str = Form(...), db=Depends(ge
         return JSONResponse(
             status_code=502,
             content={"error": str(exc), "tooling": True},
+        )
+    except ModelUnavailable as exc:
+        # Almost always an exhausted OpenAI balance. The old fallback told the
+        # owner "Message received. Our team will follow up with you shortly",
+        # which reads like a working assistant with nothing to say.
+        print(f"🚨 Copilot model unavailable: {exc}")
+        return JSONResponse(
+            status_code=503,
+            content={"error": str(exc), "billing": True},
         )
     copilot_memory.append_turn(db, "copilot", owner_email, "user", message)
     copilot_memory.append_turn(db, "copilot", owner_email, "assistant", reply)
