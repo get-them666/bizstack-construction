@@ -77,6 +77,44 @@ Note the two sources Copilot *offered* when search was down — LinkedIn and
 search ever fails again, that offer is the model falling back to the boundary, not
 a workaround.
 
+## A handler without a schema is invisible, and it fails silently
+
+This is the most expensive wiring mistake in this repo, because nothing errors.
+`build_copilot_handlers` populates a plain dict, `_operator_tools()` builds the
+schema list the API actually offers the model, and **the two are reconciled by
+hand**. A handler with no schema is dead code that looks wired.
+
+The Copilot answered "I am unable to access the property information and names
+for the leads" on 2026-10-10. Not a provider outage: `skip_trace_owner` and
+`save_contact` had handlers but no schemas, and `lookup_zip`, `pdl_contact` and
+`draft_lead_email` did not exist at all. Four of five pipeline steps were
+unreachable. The model reports a missing capability rather than erroring, so the
+only symptom is that it says it cannot do the thing.
+
+The same bug runs the other way, and did: `send_email_message`'s handler was
+popped from the Copilot on 2026-10-03 (correctly — it had looped and sent three
+identical emails to a public office), but its **schema was left behind**. The
+model was offered a send button whose only possible result was `No handler for
+tool`. Fixed by filtering it out of `_full_tools()`.
+
+**Check both directions before believing either is done:**
+
+```python
+advertised = {t["function"]["name"] for t in BusinessAIAgent(subset="copilot")._tools()}
+dead        = advertised - set(build_copilot_handlers(db, owner_email))  # can only fail
+unreachable = set(build_copilot_handlers(db, owner_email)) - advertised  # does nothing
+```
+
+`test_lead_pipeline_tools.py` pins this for the permit pipeline. Six handlers
+remain unreachable (`find_people`, `get_inventory`, `navigation_guide`,
+`reorder_report`, `sync_calendars`, `update_inventory`) — all benign internal
+lookups, none left off on purpose.
+
+`send_sms_message` is still fully wired to the Copilot, with the same hazard
+profile as the email tool that was withheld: no rate limit, no per-recipient
+dedupe, no allowlist, no confirmation. It was not named in the 2026-10-03
+withholding so it was left alone — but it is the obvious next thing to decide.
+
 ## OpenAI retired the search-preview models
 
 `gpt-4o-mini-search-preview` / `gpt-4o-search-preview` and the

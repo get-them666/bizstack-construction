@@ -504,20 +504,31 @@ def build_task_tools(db, owner_email: str):
     return {"add_task": add_task, "list_tasks": list_tasks, "complete_task": complete_task}
 
 # --- Skip trace + contact capture -------------------------------------------
-# The pipeline the owner actually needs, in two halves that were both missing:
+# The pipeline the owner actually needs, and every step of it was unreachable:
+#   address -> ZIP          (zip_lookup, free, keyless)
 #   address -> owner NAME   (skiptrace_service, cached)
-#   name   -> email         (the model's own web_search, bounded by the blocklist)
-# and then a way to PERSIST the result, which is what never happened. Contacts
-# used to be reported in chat and evaporate, so there was no lead row, no dedupe
-# and no touch history, and the same research had to be redone every session.
+#   address -> email/phone  (pdl_contact_service, cached, audited, ZIP-required)
+#   -> PERSIST onto the lead row, which is what never happened
+#   -> stage a DRAFT for the owner to send
+# Contacts used to be reported in chat and evaporate, so there was no lead row,
+# no dedupe and no touch history, and the same research had to be redone every
+# session.
+#
+# Email/phone deliberately comes from PDL rather than the model's own web_search.
+# That tool is fenced off people-search domains by _BLOCKED_CONTACT_DOMAINS --
+# business contacts only, decided 2026-10-02 -- and these leads are homeowners.
 def build_contact_tools(db, owner_email: str):
     """Owner-scoped. These WRITE to leads but CANNOT send anything.
 
     send_email_message stays withheld from the Copilot. A tool that records a
     contact is far less dangerous than one that transmits: a wrong address
     written to a lead is a bug the owner sees on the leads page, whereas a wrong
-    address emailed is unsendable. That asymmetry is the whole reason these two
-    are here and the send tool is not.
+    address emailed is unsendable. That asymmetry is the whole reason these are
+    here and the send tool is not.
+
+    draft_lead_email sits on that same line: it writes leads.draft_reply and
+    nothing else. It cannot transmit, and the draft waits on the leads page for
+    a human to press send.
     """
 
     def skip_trace_owner(address: str = "") -> dict:
@@ -606,4 +617,135 @@ def build_contact_tools(db, owner_email: str):
             "note": "Nothing was sent. The owner reviews and sends from the leads page.",
         }
 
-    return {"skip_trace_owner": skip_trace_owner, "save_contact": save_contact}
+    def lookup_zip(address: str = "") -> dict:
+        """Resolve the ZIP code for a street address. Free geocoder, no key, no quota.
+
+        This is the step the rest of the pipeline stands on. The open permit feeds
+        publish the street address but not always the ZIP, and PDL refuses to match
+        without one -- a city-level match can return a different person's contact
+        details. So the ZIP is resolved first, not as an afterthought.
+        """
+        import skiptrace_service as sts
+        import zip_lookup
+
+        raw = (address or "").strip()
+        if not raw:
+            return {"ok": False, "error": "Need an address, e.g. '8494 Lynn River Road, Norfolk, VA'."}
+        parsed = sts.parse_address(raw)
+        if not parsed["ok"]:
+            return {"ok": False, "error": f"Could not read that address: {parsed['why']}."}
+        try:
+            return zip_lookup.lookup_zip(parsed["street"], parsed["city"], parsed["state"])
+        except zip_lookup.ZipLookupError as exc:
+            return {"ok": False, "error": f"ZIP lookup failed: {exc}"}
+
+    def pdl_contact(address: str = "", owner_name: str = "") -> dict:
+        """Look up an EMAIL and PHONE for a homeowner address, via People Data Labs.
+
+        This is the contact step, and it is deliberately NOT web_search. That tool
+        is fenced off from people-search domains by _BLOCKED_CONTACT_DOMAINS,
+        because lead sourcing is business contacts only. skip_trace_owner returns
+        a name from the assessor record; no public record in the US carries an
+        email or a phone, so a name alone is not a channel.
+
+        Fetches a ZIP itself when the address lacks one. Results are cached per
+        address -- a repeat costs nothing -- and every lookup is written to
+        pdl_contact_audit with the requesting user.
+
+        The phone is RECORDED, never dialled. These are residential numbers, and a
+        do-not-call check is a legal requirement before calling one.
+        """
+        import pdl_contact_service
+        import skiptrace_service as sts
+
+        raw = (address or "").strip()
+        if not raw:
+            return {"ok": False, "error": "Need an address, e.g. '8494 Lynn River Road, Norfolk, VA 23518'."}
+        parsed = sts.parse_address(raw)
+        if not parsed["ok"]:
+            return {"ok": False, "error": f"Could not read that address: {parsed['why']}."}
+
+        street, city = parsed["street"], parsed["city"]
+        state, zipcode = parsed["state"], (parsed.get("zipcode") or "").strip()
+
+        if not zipcode:
+            import zip_lookup
+            try:
+                found = zip_lookup.lookup_zip(street, city, state)
+            except zip_lookup.ZipLookupError as exc:
+                return {"ok": False,
+                        "error": f"PDL needs a ZIP and the lookup failed: {exc}"}
+            zipcode = (found.get("zipcode") or "").strip()
+            if not zipcode:
+                return {"ok": False,
+                        "error": "PDL needs a ZIP and none resolved for this address. "
+                                 "No lookup was made and nothing was billed."}
+
+        try:
+            with db.cursor() as cur:
+                result = pdl_contact_service.lookup(
+                    street, city, state, zipcode,
+                    owner_name=(owner_name or "").strip(),
+                    cur=cur, requested_by=owner_email,
+                )
+                db.commit()
+        except Exception as exc:
+            db.rollback()
+            return {"ok": False, "error": f"PDL lookup failed: {type(exc).__name__}: {exc}"}
+        return {"ok": bool(result.get("found")), **result}
+
+    def draft_lead_email(lead_id: str = "", subject: str = "", body: str = "") -> dict:
+        """Write an email DRAFT onto a lead card for the owner to review.
+
+        STAGES ONLY -- this cannot send. The text is written to leads.draft_reply
+        and shows up on the leads page, where sending is a separate, deliberate
+        click. Give a subject and body to write your own wording; leave them blank
+        for the standard first-touch note built from the lead's name and address.
+        """
+        try:
+            lid = int(lead_id)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": f"Lead id must be a number, got {lead_id!r}."}
+
+        with db.cursor() as cur:
+            cur.execute("SELECT id, name, email, address FROM leads WHERE id = %s;", (lid,))
+            lead = cur.fetchone()
+        if not lead:
+            return {"ok": False, "error": f"No lead #{lid}. Check the id -- do not invent one."}
+
+        # A permit lead carries a placeholder con-permit-<digest>@lead.local until a
+        # real address is found. Drafting to one would report a contact that cannot
+        # receive anything, which is worse than saying nothing.
+        email = (lead.get("email") or "").strip()
+        if not email or email.lower().endswith("@lead.local"):
+            return {"ok": False,
+                    "error": f"Lead #{lid} has no real email address yet "
+                             f"({email or 'none'}). Save a real contact first."}
+
+        subject = (subject or "").strip() or "Hello from Buildstack Construction"
+        address = (lead.get("address") or "").strip()
+        if not (body or "").strip():
+            first = ((lead.get("name") or "").strip() or "there").split()[0]
+            body = (
+                f"Hi {first},\n\n"
+                f"I hope this message finds you well! I'm reaching out from Buildstack "
+                f"Construction, as we noticed your property at {address}. "
+                f"If you're considering any renovations or improvements, we'd love to help "
+                f"you with your project.\n\n"
+                f"Feel free to reply to this email or give us a call at "
+                f"+1 (757) 908-7121 to discuss your ideas!\n\n"
+                f"Best regards,\n"
+                f"Buildstack Construction"
+            )
+
+        with db.cursor() as cur:
+            cur.execute("UPDATE leads SET draft_reply = %s WHERE id = %s;",
+                        (f"{subject}\n{body}", lid))
+            db.commit()
+        return {"ok": True, "staged": True, "lead_id": lid, "to": email,
+                "subject": subject,
+                "note": "Nothing was sent. The owner reviews and sends from the leads page."}
+
+    return {"skip_trace_owner": skip_trace_owner, "save_contact": save_contact,
+            "lookup_zip": lookup_zip, "pdl_contact": pdl_contact,
+            "draft_lead_email": draft_lead_email}

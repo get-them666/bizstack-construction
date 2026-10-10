@@ -690,8 +690,118 @@ OPERATING MANUAL:
                     ),
                 },
             },
+            # --- Permit lead enrichment -------------------------------------
+            # The pipeline for turning a permit lead into a contactable one:
+            #   ZIP -> owner name -> email/phone -> save -> draft
+            # Each step is cached, so re-running the pipeline is free. The model's
+            # web_search is NOT part of this: it is fenced off people-search
+            # domains because these leads are homeowners, not businesses.
+            {
+                "type": "function",
+                "function": {
+                    "name": "skip_trace_owner",
+                    "description": (
+                        "Look up the OWNER OF RECORD for a property address from the public "
+                        "assessor record. Returns a name plus property facts (total value, year "
+                        "built, square footage). It does NOT return an email or a phone -- no "
+                        "public record carries those; use pdl_contact for them. Cached per "
+                        "address, so a repeat lookup is free."
+                    ),
+                    "parameters": self._props(
+                        {"address": "string"}, ["address"],
+                        "Full property address, e.g. '8494 Lynn River Road, Norfolk, VA'.",
+                    ),
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "lookup_zip",
+                    "description": (
+                        "Resolve the ZIP code for a street address. Free geocoder, no key, no "
+                        "quota. Needed because the permit feeds publish the street address but "
+                        "not always the ZIP, and the contact lookup refuses to run without one."
+                    ),
+                    "parameters": self._props(
+                        {"address": "string"}, ["address"],
+                        "Full street address, e.g. '8494 Lynn River Road, Norfolk, VA'.",
+                    ),
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "pdl_contact",
+                    "description": (
+                        "Look up an EMAIL and PHONE for a homeowner address via People Data "
+                        "Labs. This is the contact step that skip_trace_owner cannot do. Use "
+                        "web_search instead ONLY for businesses -- it is fenced off "
+                        "people-search sites. Fetches a ZIP itself if the address lacks one. "
+                        "Cached per address and every lookup is audited. The phone is "
+                        "RECORDED, never dialled: these are residential lines and calling one "
+                        "requires a do-not-call check first."
+                    ),
+                    "parameters": self._props(
+                        {"address": "string", "owner_name": "string"},
+                        ["address"],
+                        "Full property address, ZIP preferred. owner_name is the name from "
+                        "skip_trace_owner, if you already have it.",
+                    ),
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "save_contact",
+                    "description": (
+                        "Attach a researched email, and optionally a name and phone, to an "
+                        "existing lead. Use this the moment you have a contact -- research that "
+                        "is only reported in chat is lost, and the same work gets redone next "
+                        "session. Real values are never overwritten. Writes only; sends nothing."
+                    ),
+                    "parameters": self._props(
+                        {"lead_id": "string", "email": "string", "name": "string", "phone": "string"},
+                        ["lead_id"],
+                        "lead_id from lookup_leads or list_leads -- never invent one. At least "
+                        "one of email or phone is required.",
+                    ),
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "draft_lead_email",
+                    "description": (
+                        "Write an email DRAFT onto a lead card for the owner to review. Stages "
+                        "only -- this cannot send, and the draft waits on the leads page for a "
+                        "human to press send. Pass subject and body to write your own wording, "
+                        "or leave them blank for the standard first-touch note. Requires the "
+                        "lead to already have a real email address."
+                    ),
+                    "parameters": self._props(
+                        {"lead_id": "string", "subject": "string", "body": "string"},
+                        ["lead_id"],
+                        "lead_id from lookup_leads or list_leads. Blank subject and body use the "
+                        "standard note built from the lead's owner name and property address.",
+                    ),
+                },
+            },
         ]
         tools += self._operator_tools()
+
+        # send_email_message is deliberately withheld from the Copilot as of
+        # 2026-10-03, and build_copilot_handlers pops the handler to match. The
+        # SCHEMA was left behind, so the model was still offered a send tool whose
+        # only possible result was "No handler for tool: send_email_message" --
+        # burning a tool-loop iteration and reporting a capability that does not
+        # exist. Dropping it here completes the withholding.
+        #
+        # This list is copilot-only. send_email_message lives in _full_tools(),
+        # not _safe_tools(), so the public widget never saw it -- and the handler
+        # in build_tool_handlers is untouched for the paths that enforce
+        # contact_policy_allows (auto_reply, send-once, the digest mails).
+        tools = [t for t in tools
+                 if t.get("function", {}).get("name") != "send_email_message"]
         return tools
 
     def _tools(self) -> list:
