@@ -265,3 +265,72 @@ def test_the_client_defaults_to_openai_when_unset(monkeypatch):
     monkeypatch.delenv("COPILOT_BASE_URL", raising=False)
     a = BusinessAIAgent(subset="copilot")
     assert "api.openai.com" in str(a.client.base_url)
+
+
+# --- keyless Zen -------------------------------------------------------
+# Zen's free models are authenticated with an EMPTY bearer. Verified live on
+# 2026-10-10: POST /zen/v1/chat/completions returns 200 with no Authorization
+# header, and 401 the moment a non-empty one is sent. So the placeholder string
+# in ~/.local/share/opencode/auth.json ("opencode auth login") was not a
+# missing credential to fill in -- it was actively breaking the request.
+#
+# This matters because the old gate was `if not os.getenv("OPENAI_API_KEY"):
+# return fallback`, which is exactly the silent-no-op that made the Copilot
+# look alive while doing nothing.
+
+def test_zen_needs_no_api_key(monkeypatch):
+    monkeypatch.setenv("COPILOT_BASE_URL", "https://opencode.ai/zen/v1")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    a = BusinessAIAgent(subset="copilot")
+    assert a.client.base_url == "https://opencode.ai/zen/v1/", "client must build with no key"
+
+
+def test_zen_sends_an_empty_bearer_not_a_placeholder(monkeypatch):
+    """A placeholder string 401s on Zen, so the header must be emptied."""
+    monkeypatch.setenv("COPILOT_BASE_URL", "https://opencode.ai/zen/v1")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    a = BusinessAIAgent(subset="copilot")
+    assert a.client.default_headers.get("Authorization") == ""
+
+
+def test_no_key_still_raises_off_zen(monkeypatch):
+    """The zero-key path is Zen-only. Off Zen there is genuinely nothing to
+    call, and silently returning a client would hide that."""
+    monkeypatch.delenv("COPILOT_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    with pytest.raises(RuntimeError):
+        BusinessAIAgent(subset="copilot").client
+
+
+def test_a_real_key_is_still_used_when_present(monkeypatch):
+    """The empty-bearer trick must not override a genuine credential."""
+    monkeypatch.setenv("COPILOT_BASE_URL", "https://opencode.ai/zen/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-real-key")
+    assert BusinessAIAgent(subset="copilot").client.api_key == "sk-real-key"
+
+
+def test_a_keyless_zen_run_does_not_short_circuit(monkeypatch):
+    """The regression this whole change exists for: no key used to return the
+    polite fallback without ever calling a model."""
+    monkeypatch.setenv("COPILOT_BASE_URL", "https://opencode.ai/zen/v1")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    a = _agent({})
+    a._model = "space-bunny-free"
+    assert a.process_conversation([], "hello") == "answered by space-bunny-free"
+
+
+def test_copilot_model_is_scoped_so_loan_outreach_is_untouched(monkeypatch):
+    """OPENAI_MODEL is shared with loan_outreach.py, which drafts real SBA
+    lender replies against OpenAI. Pointing it at a Zen model id would 404
+    every lender draft, so the Copilot reads its own variable first.
+    """
+    monkeypatch.setenv("OPENAI_MODEL", "gpt-4o-mini")
+    monkeypatch.setenv("COPILOT_MODEL", "space-bunny-free")
+    assert BusinessAIAgent(subset="copilot")._model == "space-bunny-free"
+    monkeypatch.delenv("COPILOT_MODEL")
+    assert BusinessAIAgent(subset="copilot")._model == "gpt-4o-mini"
+
+
+def test_an_explicit_model_argument_still_wins(monkeypatch):
+    monkeypatch.setenv("COPILOT_MODEL", "space-bunny-free")
+    assert BusinessAIAgent(subset="copilot", model="gpt-5.5")._model == "gpt-5.5"

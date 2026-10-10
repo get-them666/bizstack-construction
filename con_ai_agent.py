@@ -59,7 +59,11 @@ class BusinessAIAgent:
         self._client = None
         self._knowledge = self._load_knowledge(knowledge_path)
         self._tool_handlers = tool_handlers or {}
-        self._model = model or os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+        # COPILOT_MODEL is Copilot-scoped on purpose. OPENAI_MODEL is shared
+        # with loan_outreach.py, which drafts real SBA lender replies against
+        # OpenAI -- pointing that at a Zen model id would 404 every lender
+        # draft, so the Copilot's model gets its own variable.
+        self._model = model or os.getenv("COPILOT_MODEL") or os.getenv("OPENAI_MODEL", "gpt-4o-mini")
         self._subset = subset
 
     @staticmethod
@@ -79,14 +83,24 @@ class BusinessAIAgent:
     #
     # Set COPILOT_BASE_URL=https://opencode.ai/zen/v1 to move the Copilot only.
     # _on_zen() reads the same variable, so the free-model fallback engages.
+    #
+    # Zen's free models are authenticated with an EMPTY bearer: they answer with
+    # no key at all, but reject a wrong one with 401. Verified live -- sending
+    # the real `Authorization: ""` header works, and a placeholder string 401s.
+    # The SDK refuses to be constructed with an empty api_key at all, hence the
+    # dummy value plus the header override below.
     @property
     def client(self) -> OpenAI:
         if self._client is None:
             api_key = os.getenv("OPENAI_API_KEY")
+            extra: dict = {}
             if not api_key:
-                raise RuntimeError("OPENAI_API_KEY is not configured.")
+                if not self._on_zen():
+                    raise RuntimeError("OPENAI_API_KEY is not configured.")
+                api_key = "unused"
+                extra["default_headers"] = {"Authorization": ""}
             base_url = (os.getenv("COPILOT_BASE_URL") or "").strip() or None
-            self._client = OpenAI(api_key=api_key, base_url=base_url)
+            self._client = OpenAI(api_key=api_key, base_url=base_url, **extra)
         return self._client
 
     # --- Brain assembly ----------------------------------------------------
@@ -1047,7 +1061,9 @@ OPERATING MANUAL:
         against what was actually said.
         """
         fallback = "Message received. Our team will follow up with you shortly."
-        if not os.getenv("OPENAI_API_KEY"):
+        # Zen's free models need no key, so the key check is a provider check:
+        # off Zen this is the original "no key, no model" bail-out.
+        if not os.getenv("OPENAI_API_KEY") and not self._on_zen():
             return fallback
 
         messages: list = [{"role": "system", "content": self._build_system_prompt()}]
@@ -1154,7 +1170,7 @@ OPERATING MANUAL:
         The Copilot and the web widget use `process_conversation` instead.
         """
         fallback = "Message received. Our team will follow up with you shortly."
-        if not os.getenv("OPENAI_API_KEY"):
+        if not os.getenv("OPENAI_API_KEY") and not self._on_zen():
             return fallback
 
         if not self._tool_handlers:

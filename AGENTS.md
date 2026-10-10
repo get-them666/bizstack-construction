@@ -178,11 +178,31 @@ Env: `OPENAI_API_KEY`, `OPENAI_MODEL` (default `gpt-4o-mini`), `OPENAI_VOICE_MOD
 
 ### Retargeting the model at OpenCode Zen
 
-`OPENAI_BASE_URL=https://opencode.ai/zen/v1` repoints every chat-completions call in
-`BusinessAIAgent` at Zen. No code change: the OpenAI SDK reads that variable when the
-client is built. The key still goes in `OPENAI_API_KEY`. This does **not** move the
-voice path (`construction_main.py` builds its own client) or `web_search`, which uses
-the Responses API and stays on OpenAI.
+`COPILOT_BASE_URL=https://opencode.ai/zen/v1` repoints the Copilot at Zen. Deliberately
+**not** `OPENAI_BASE_URL`: that would drag the voice path and `web_search` along too.
+Voice builds its own client (`construction_main.py:4827`) and search uses the Responses
+API — neither is Zen-compatible, and both stay on OpenAI.
+
+**Zen's free models need no key.** They authenticate with an *empty* bearer: verified
+live on 2026-10-10, `POST /zen/v1/chat/completions` returns 200 with no `Authorization`
+header and 401 the instant a non-empty one is sent. Two consequences:
+
+- `OPENAI_API_KEY` is optional on Zen. The old `if not os.getenv("OPENAI_API_KEY"):
+  return fallback` gate meant a keyless run never called a model at all and returned the
+  polite fallback — an assistant that looks alive and does nothing.
+- The placeholder in `~/.local/share/opencode/auth.json` (`opencode` → the literal
+  string `"opencode auth login"`) was **causing** the 401, not missing a credential to
+  fill in. Do not "fix" it by pasting a real key; the free tier needs none.
+- The SDK refuses to construct with an empty `api_key`, hence a dummy plus
+  `default_headers={"Authorization": ""}` in the `client` property. Off Zen a missing
+  key still raises.
+
+Tool calling works on the free tier — confirmed end-to-end against a live 41-tool
+Copilot prompt, which ran `list_leads` → `calculate` and answered correctly. These are
+still general chat models though, and they **loop**: two separate live runs re-called a
+tool it had already been given, tripping `ToolBudgetExhausted` → HTTP 502. That guard is
+the reason this is visible rather than an infinite grind, but budget failures on Zen are
+usually model confusion, not a broken provider.
 
 On a rate limit, 5xx or timeout, `BusinessAIAgent._complete` falls through
 `COPILOT_FREE_FALLBACK_MODELS` (default `space-bunny-free`, `big-pickle`,
@@ -194,9 +214,7 @@ On a rate limit, 5xx or timeout, `BusinessAIAgent._complete` falls through
   retrying only multiplies one clear error.
 
 The default list will rot: Zen documents every free model as "available for a limited
-time". Re-check `https://opencode.ai/zen/v1/models` and update it. Model quality on the
-free tier is unproven for this workload — general chat models are being asked to drive
-161 tool handlers, so the tool-call path is only as good as the stealth model behind it.
+time". Re-check `https://opencode.ai/zen/v1/models` and update it.
 
 `ToolBudgetExhausted` → HTTP 502, `ModelUnavailable` → HTTP 503. These are surfaced to the
 owner on purpose, not swallowed. Everything else returns a soft fallback.
