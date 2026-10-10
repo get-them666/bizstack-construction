@@ -810,6 +810,20 @@ def _format_currency(cents) -> str:
         return "—"
 
 
+def purge_pdl_negative_cache(cur) -> int:
+    """Delete PDL rows cached as 'no contact found'. Returns the count.
+
+    Needed because the cache deliberately stores misses so a dead address is not
+    re-billed, and it cannot tell a real miss from one recorded while the API key
+    was rejected. Until this runs, every address that was looked up with a bad key
+    keeps answering 'no contact' from cache even after the key is repaired.
+
+    Only negative rows are touched -- real hits are worth keeping.
+    """
+    cur.execute("DELETE FROM pdl_contact_cache WHERE found = FALSE;")
+    return cur.rowcount
+
+
 def _map_embed(address: str | None) -> str:
     """Iframe map for a job address.
 

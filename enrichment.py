@@ -95,10 +95,29 @@ def _enrich_address(address: str) -> dict:
     try:
         client = PDLPY(api_key=os.getenv("PDL_API_KEY", ""))
         resp = client.person.search(sql=sql, size=1, pretty=False)
+        status = getattr(resp, "status_code", None)
         data = resp.json() if hasattr(resp, "json") else resp
     except Exception as e:
         print(f"[pdl] lookup failed for {address!r}: {e}", flush=True)
         return {}
+
+    # PDL answers a rejected key with byte-identical 401 bodies: the real key, a
+    # deliberately invalid one and an empty one all return "Your request is
+    # missing an api key". So it cannot be told apart from a typo by reading the
+    # response -- it has to be reported rather than collapsed into a miss. Left as
+    # {} it reads as "no contact for this address" on every single lead, forever,
+    # which looks like thin data rather than a dead credential.
+    if status in (401, 403):
+        return {
+            "_auth_failed": True,
+            "_status": status,
+            "message": (
+                f"People Data Labs rejected the API key (HTTP {status}). The key is not "
+                "authorised, so EVERY address reports no contact until it is fixed. "
+                "Check PDL_API_KEY and the plan's dataset access."
+            ),
+        }
+
     if not data.get("total"):
         return {}
     rec = data["data"][0]

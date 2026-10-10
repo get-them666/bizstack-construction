@@ -155,6 +155,15 @@ def fetch_contact(address: str, owner_name: str = "") -> dict:
 
     email = (got.get("email") or "").strip()
     phone = (got.get("phone") or "").strip()
+
+    # A rejected key must never be reported as "this person has no contact
+    # details". It is a credential fault that affects every address, and
+    # reporting it as a miss trains the operator to believe the data is thin.
+    if got.get("_auth_failed"):
+        return {"found": False, "source": "pdl", "auth_failed": True,
+                "status": got.get("_status"),
+                "message": got.get("message", "People Data Labs rejected the API key.")}
+
     if not (email or phone):
         return {"found": False, "source": "pdl", "owner_name": owner_name,
                 "checked_at": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -220,8 +229,13 @@ def lookup(street: str, city: str, state: str, zip_code: str,
     if cur is not None:
         try:
             ensure_schema(cur)
-            cache_put(cur, key, result)
-            audit(cur, requested_by, key, result, cached=False)
+            # A credential fault is deliberately NOT cached. A miss is worth
+            # caching so a dead address is not re-billed; a bad key is not, or
+            # fixing it would change nothing and every address would stay
+            # negative until someone cleared the table by hand.
+            if not result.get("auth_failed"):
+                cache_put(cur, key, result)
+                audit(cur, requested_by, key, result, cached=False)
         except Exception as exc:
             print(f"⚠️ PDL cache/audit write failed: {exc}")
 
