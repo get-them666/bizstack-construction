@@ -16,14 +16,12 @@ certifi>=2024.2.2
 # Server-side RudderStack ingestion. Analytics must never be able to break a
 # page, so every call in analytics_service.py is wrapped and fails soft.
 rudder-sdk-python>=2.1.9
-# enrichment.py: reverse-address a permit lead to owner email/phone. Same
-# module the hosts repo runs; both apps share one database, so it has to be
-# installed on both sides.
+# enrichment.py: reverse-address a permit lead to owner email/phone.
 peopledatalabs>=6.0.0
-# The shared lead pipeline (lifecycle, intake, work queue, outreach). One
-# definition both this app and the hosts app import, replacing the hand-copied
-# lead code that used to drift between them.
-bizstack-leads @ git+https://github.com/get-them666/bizstack-leads.git@main
+# The lead pipeline (lifecycle, intake, work queue, outreach) is vendored in
+# this repo at bizstack_leads/ and imported as `from bizstack_leads import ...`.
+# It is deliberately NOT a pip dependency: this app is its own company, so its
+# build must not reach out to any other repository to succeed.
 # Local-only manual research tool. Drives a visible Chrome window to open an
 # interactive search; nothing is extracted programmatically and the operator
 # reads the results. Requires a local Chrome install and a display.

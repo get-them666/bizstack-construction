@@ -80,23 +80,6 @@ if __name__ == "__main__":
           auto_reply.blocked_reason("a@b.com", "sam-gov") != "")
     os.environ.pop("BLOCK_GOV_MIL_EMAIL")
 
-    print("\n[6] the research loop now skips leads that already have an email")
-    import inspect  # noqa: E402
-
-    hosts = pathlib.Path("/Users/shaunoleary/bizstack-hosts")
-    lr = hosts / "lead_research.py"
-    if lr.exists():
-        src = lr.read_text()
-        check("the SELECT includes the email column", "email" in src.split("ORDER BY")[0])
-        check("the query requires no usable email",
-              "email IS NULL" in src or "BTRIM(email) = ''" in src,
-              "a lead with an email is still being researched")
-        check("an unresolved lead is recorded only once",
-              "already" in src and "marker" in src,
-              "the note still repeats on every pass")
-    else:
-        check("hosts repo lead_research.py present", False, "not found")
-
     print()
     if FAILS:
         print(f"FAILED ({len(FAILS)}): {FAILS}")

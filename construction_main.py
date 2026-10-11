@@ -70,9 +70,9 @@ import skiptrace_service
 import skip_sherpa_service
 import pdl_contact_service
 import resimply_service
-# Shared lead pipeline (github.com/get-them666/bizstack-leads). Both this app
-# and the hosts app import it, so the lifecycle, intake and work queue are
-# defined once. See the lead routes below for the cutover.
+# Lead pipeline (lifecycle, intake, work queue, store). Vendored in this repo at
+# bizstack_leads/ -- it is this company's own code, not a dependency on another
+# repository. See the lead routes below for the cutover.
 from bizstack_leads import lifecycle as lead_lifecycle
 from bizstack_leads import intake as lead_intake
 from bizstack_leads import queue as lead_queue
@@ -712,11 +712,11 @@ async def lifecycle(app: FastAPI):
     except Exception as exc:
         print(f"⚠️ copilot memory init skipped: {exc}", flush=True)
 
-    # Shared lead pipeline (github.com/get-them666/bizstack-leads). Adds the
+    # Lead pipeline (vendored at bizstack_leads/). Adds the
     # queue-state columns and tags every lead that predates them, so the work
     # queue ("what do I do next?") is a single indexed query. Idempotent: after
     # the first boot the backfill has nothing to do. Imported here rather than at
-    # module scope so a missing package degrades to a warning, not a boot crash --
+    # module scope so a problem degrades to a warning, not a boot crash --
     # the same pattern as every other optional subsystem above.
     try:
         from bizstack_leads import schema as leads_schema, store as leads_store

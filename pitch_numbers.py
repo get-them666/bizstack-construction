@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Pull the real numbers you need for the $50K loan pitch from your live database.
 
-Read-only. Safe to run against production. Works against EITHER database:
-run it from the buildstack-construction folder (construction tables) or the
-bizstack-hosts folder (Broom Service / hospitality tables) — it auto-detects.
+Read-only. Safe to run against production. Reads this app's own tables via
+DATABASE_URL -- construction and hosts run against separate databases now, so
+this is pointed at construction's DATABASE_URL only.
 
 Usage:
     cd <project folder>
