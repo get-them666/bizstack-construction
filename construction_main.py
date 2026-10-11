@@ -2540,6 +2540,61 @@ async def inventory_page(request: Request, company: str = "construction", db=Dep
 # Prices are typed in dollars because that is what is printed on the receipt.
 
 
+@app.get("/api/_diag/smtp")
+async def diag_smtp(key: str = "", db=Depends(get_db)):
+    """TEMPORARY diagnostic. Authenticate to SMTP without sending anything.
+
+    Proves whether this host can reach smtp.gmail.com at all, which is the
+    question that decides whether EMAIL_TRANSPORT=legacy is viable on Railway
+    or whether outbound mail is impossible without the Gmail API.
+
+    Connects and authenticates only -- no message is transmitted, so it is safe
+    to run. Keyed on DIAG_KEY so it is not callable by the public.
+    """
+    expected = os.getenv("DIAG_KEY", "")
+    if not expected or key != expected:
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    import smtplib
+    cfg = documents_service.smtp_config_from_env()
+    host = cfg.get("SMTP_HOST") or ""
+    port = int(cfg.get("SMTP_PORT") or 587)
+    out = {
+        "transport_env": os.getenv("EMAIL_TRANSPORT", "gmail"),
+        "host": host, "port": port,
+        "user": cfg.get("SMTP_USER", ""),
+        "has_password": bool(cfg.get("SMTP_PASS")),
+        "attempt": [],
+    }
+    if not host:
+        out["attempt"].append({"step": "config", "ok": False, "error": "SMTP_HOST empty"})
+        return JSONResponse(out)
+    for mode in ("starttls", "ssl", "none"):
+        entry = {"step": mode}
+        try:
+            if mode == "starttls":
+                s = smtplib.SMTP(host, port, timeout=20)
+                s.ehlo(); s.starttls(); s.ehlo()
+            elif mode == "ssl":
+                s = smtplib.SMTP_SSL(host, port, timeout=20)
+                s.ehlo()
+            else:
+                s = smtplib.SMTP(host, port, timeout=20); s.ehlo()
+            entry["greeting_ok"] = True
+            s.login(cfg.get("SMTP_USER", ""), cfg.get("SMTP_PASS", ""))
+            entry["login_ok"] = True
+            s.quit()
+            entry["ok"] = True
+            out["attempt"].append(entry)
+            break
+        except Exception as exc:
+            entry["ok"] = False
+            entry["error"] = f"{type(exc).__name__}: {exc}"[:200]
+            out["attempt"].append(entry)
+    out["verdict"] = ("SMTP WORKS from this host" if any(a.get("ok") for a in out["attempt"])
+                      else "SMTP BLOCKED — all modes failed")
+    return JSONResponse(out)
+
+
 @app.get("/materials", response_class=HTMLResponse)
 async def materials_page(request: Request, search: str = "", store: str = "",
                          category: str = "", notice: str = "", error: str = "",
