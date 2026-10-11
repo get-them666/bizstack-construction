@@ -70,6 +70,13 @@ import skiptrace_service
 import skip_sherpa_service
 import pdl_contact_service
 import resimply_service
+# Shared lead pipeline (github.com/get-them666/bizstack-leads). Both this app
+# and the hosts app import it, so the lifecycle, intake and work queue are
+# defined once. See the lead routes below for the cutover.
+from bizstack_leads import lifecycle as lead_lifecycle
+from bizstack_leads import intake as lead_intake
+from bizstack_leads import queue as lead_queue
+from bizstack_leads import store as lead_store
 import accurate_append
 logger = logging.getLogger("construction")
 
@@ -705,6 +712,21 @@ async def lifecycle(app: FastAPI):
     except Exception as exc:
         print(f"⚠️ copilot memory init skipped: {exc}", flush=True)
 
+    # Shared lead pipeline (github.com/get-them666/bizstack-leads). Adds the
+    # queue-state columns and tags every lead that predates them, so the work
+    # queue ("what do I do next?") is a single indexed query. Idempotent: after
+    # the first boot the backfill has nothing to do. Imported here rather than at
+    # module scope so a missing package degrades to a warning, not a boot crash --
+    # the same pattern as every other optional subsystem above.
+    try:
+        from bizstack_leads import schema as leads_schema, store as leads_store
+        with psycopg.connect(db_url, row_factory=dict_row) as conn:
+            leads_schema.ensure_schema(conn)
+            tagged = leads_store.backfill(conn, "construction")
+        print(f"🧭 Lead pipeline ready ({tagged} lead(s) tagged).", flush=True)
+    except Exception as exc:
+        print(f"⚠️ lead pipeline init skipped: {exc}", flush=True)
+
     yield
 
 
@@ -996,15 +1018,16 @@ def build_tool_handlers(db, stripe_svc):
     """DB/Stripe tool handlers that let the AI agent capture and manage leads."""
 
     def register_lead(name, phone, email="", project_type="", address="", budget="", timeline="", notes=""):
-        with db.cursor() as cur:
-            cur.execute(
-                "INSERT INTO leads (name, phone, email, project_type, address, budget, timeline, description, source, status, company) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'ai-assistant', 'new', 'construction') RETURNING id;",
-                (name, phone, email, project_type, address, budget, timeline, notes),
-            )
-            lead_id = cur.fetchone()["id"]
-            db.commit()
-        return {"ok": True, "lead_id": lead_id, "message": f"Lead saved for {name}."}
+        # Same intake path as the website: the AI assistant is just another
+        # source, and the queue state comes from the same rules.
+        res = lead_intake.intake_lead(
+            db, company="construction", source="ai-assistant", name=name,
+            phone=phone, email=email, address=address, description=notes,
+            project_type=project_type,
+            extra={"budget": budget, "timeline": timeline},
+        )
+        return {"ok": True, "lead_id": res["lead_id"],
+                "message": f"Lead saved for {name}."}
 
     def lookup_leads(phone):
         digits = "".join(ch for ch in str(phone or "") if ch.isdigit())
@@ -1981,14 +2004,17 @@ async def submit_lead(
     db=Depends(get_db),
 ):
     src = (source or "").strip().lower() or "website"
-    with db.cursor() as cur:
-        cur.execute(
-"INSERT INTO leads (name, phone, email, project_type, address, budget, timeline, description, source, status, company) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'new', 'construction') RETURNING id;",
-            (name, phone, email, project_type, address, budget, timeline, description, src),
-        )
-        lead_id = cur.fetchone()["id"]
-        db.commit()
+    res = lead_intake.intake_lead(
+        db, company="construction", source=src, name=name, phone=phone,
+        email=(email or "").strip(), address=address, description=description,
+        project_type=project_type,
+        extra={"budget": budget, "timeline": timeline},
+    )
+    lead_id = res["lead_id"]
+    created = res["created"]
+    if not created:
+        # A duplicate or merged lead: nothing new to notify, draft, or schedule.
+        return JSONResponse(content={"status": "success", "lead_id": lead_id, "duplicate": True})
     try:
         auto_reply.notify_owner_email(
             "construction", lead_id=lead_id, name=name, phone=phone, email=(email or "").strip(),
@@ -2239,35 +2265,34 @@ async def read_dashboard(request: Request, db=Depends(get_db)):
 
 
 @app.get("/leads", response_class=HTMLResponse)
-async def leads_page(request: Request, status_filter: str = "", q: str = "", lane: str = "contactable", db=Depends(get_db)):
+async def leads_page(request: Request, status_filter: str = "", q: str = "", lane: str = "contactable",
+                     action: str = "", closed: str = "", db=Depends(get_db)):
     is_authed, user_email = require_auth(request)
     if not is_authed:
         return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
 
-    where, params = [], []
-    if status_filter in LEAD_STATUSES:
-        where.append("status = %s")
-        params.append(status_filter)
-    if q.strip():
-        where.append("(name ILIKE %s OR phone ILIKE %s OR email ILIKE %s OR address ILIKE %s)")
-        like = f"%{q.strip()}%"
-        params += [like, like, like, like]
-    where.append("company = 'construction'")
+    # Contactable lane = the shared work queue. Leads are grouped by the one
+    # thing to do with them next (reply, follow up, first contact, get contact
+    # info), most urgent first, instead of a flat list the owner triages by hand.
+    # The app's own source-visibility policy is layered onto the shared query, so
+    # a hidden source stays hidden without the package knowing about it.
     vis = source_visibility_clause()
+    vis_where = vis[len(" AND "):] if vis.startswith(" AND ") else vis.strip()
     vis_params = source_visibility_params()
-    clause = ("WHERE " + " AND ".join(where) + vis)
-    all_params = tuple(params + vis_params)
-    with db.cursor() as cur:
-        cur.execute(f"SELECT * FROM leads {clause} ORDER BY created_at DESC LIMIT 500;", all_params)
-        leads = cur.fetchall()
-        cur.execute(f"SELECT status, COUNT(*) AS c FROM leads WHERE company = 'construction'{vis} GROUP BY status;",
-                    tuple(vis_params))
-        counts = {r["status"]: r["c"] for r in cur.fetchall()}
-        cur.execute("SELECT COUNT(*) AS c FROM leads WHERE company = 'construction'"
-                    " AND draft_reply IS NOT NULL AND LOWER(COALESCE(draft_reply, '')) <> ''"
-                    + vis + ";", tuple(vis_params))
-        draft_count = cur.fetchone()["c"]
+    rows = lead_store.list_leads(
+        db, "construction", q=q, limit=500,
+        include_closed=(closed == "1"),
+        stage=(status_filter or None),
+        where_extra=vis_where, extra_params=tuple(vis_params),
+    )
+    all_buckets = lead_queue.group(rows)
+    action_counts = lead_queue.action_counts(all_buckets)
+    buckets = ([b for b in all_buckets if b["action"] == action]
+               if action in lead_lifecycle.ACTION_ORDER else all_buckets)
+    draft_count = lead_store.draft_count(
+        db, "construction", where_extra=vis_where, extra_params=tuple(vis_params))
 
+    with db.cursor() as cur:
         # Intel lane: permits, which have no phone or email by nature.
         p_where, p_params = [], []
         if status_filter in PERMIT_STATUSES:
@@ -2312,10 +2337,16 @@ async def leads_page(request: Request, status_filter: str = "", q: str = "", lan
 
     return templates.TemplateResponse(request=request, name="leads.html", context={
         "user": {"email": user_email},
-        "leads": leads,
-        "statuses": LEAD_STATUSES,
-        "status_labels": STATUS_LABELS,
-        "counts": counts,
+        "buckets": buckets,
+        "action_counts": action_counts,
+        "action_labels": lead_lifecycle.ACTION_LABELS,
+        "active_action": action,
+        "closed": closed == "1",
+        # The status control on a card is the canonical lifecycle stage, not the
+        # old seven-value property status. Business state (a deposit, a project)
+        # is tracked by its own control, not by overloading this column.
+        "stages": list(lead_lifecycle.STAGES),
+        "stage_labels": lead_lifecycle.STAGE_LABELS,
         "active_status": status_filter,
         "q": q,
         "draft_count": draft_count,
@@ -2553,11 +2584,18 @@ async def inventory_update(
 @app.post("/api/leads/{lead_id}/status")
 async def update_lead_status_route(lead_id: int, request: Request, status_val: str = Form("new"), db=Depends(get_db)):
     require_admin(request)
-    if status_val not in LEAD_STATUSES:
+    stage = lead_lifecycle.to_stage(status_val)
+    if stage not in lead_lifecycle.STAGES:
         raise HTTPException(status_code=400, detail="Unknown status")
+    store = lead_store.get_lead(db, lead_id, company="construction")
+    if not store:
+        raise HTTPException(status_code=404, detail="No such lead")
     with db.cursor() as cur:
-        cur.execute("UPDATE leads SET status = %s WHERE id = %s;", (status_val, lead_id))
+        allowed = lead_store._columns(cur, "leads")
+        if "status" in allowed:
+            cur.execute("UPDATE leads SET status = %s WHERE id = %s;", (stage, lead_id))
         db.commit()
+    lead_store.recompute(db, lead_id)
     return RedirectResponse(url=request.headers.get("referer") or "/leads", status_code=status.HTTP_303_SEE_OTHER)
 
 
@@ -2922,18 +2960,22 @@ async def update_lead_notes(lead_id: int, request: Request, notes: str = Form(""
 @app.post("/api/leads/{lead_id}/touch")
 async def record_lead_touch(lead_id: int, request: Request, channel: str = Form(""),
                             detail: str = Form(""), db=Depends(get_db)):
-    """Log an owner-initiated contact (letter, door knock, phone) as a real touch.
-
-    Without this the lead still reads as untouched to contact_policy_allows, so
-    the email sweep would contact someone the owner has already reached in
-    person. See auto_reply.record_manual_touch.
-    """
     require_admin(request)
-    result = auto_reply.record_manual_touch(db, lead_id, channel, detail)
-    if result.get("ok") and request.headers.get("hx-request"):
-        return JSONResponse(content=result)
-    if not result.get("ok"):
-        return JSONResponse(content=result, status_code=400)
+    ch = channel.strip().lower() if channel else "sms"
+    if ch not in {"letter", "door-knock", "phone", "sms", "in-person", "text"}:
+        ch = "sms"
+    if ch == "text":
+        ch = "sms"
+    detail = (detail or "").strip()
+    lead = lead_store.get_lead(db, lead_id, company="construction")
+    if not lead:
+        return JSONResponse({"ok": False, "error": "Not found"}, status_code=404)
+    # Use the package's touch recorder so comms_logs and touch_count stay in
+    # sync, then recompute the queue state (first_touch -> contacted/waiting).
+    lead_store.record_touch(db, lead_id, ch, detail)
+    lead_store.recompute(db, lead_id)
+    if request.headers.get("hx-request"):
+        return JSONResponse({"ok": True})
     return RedirectResponse(url=request.headers.get("referer") or "/leads",
                             status_code=status.HTTP_303_SEE_OTHER)
 
@@ -3754,7 +3796,10 @@ async def bot_health_route(request: Request, db=Depends(get_db)):
 @app.post("/api/leads/fire-all-drafts")
 async def fire_all_drafts_route(request: Request, db=Depends(get_db)):
     require_admin(request)
-    result = auto_reply.fire_all_drafts(db)
+    # Scoped to this company. Without the scope this button on the construction
+    # site also sent whatever drafts were staged for the broom site -- two
+    # businesses sharing one table.
+    result = auto_reply.fire_all_drafts(db, "construction")
     if request.headers.get("hx-request"):
         return JSONResponse(content=result)
     return RedirectResponse(url=request.headers.get("referer") or "/leads", status_code=status.HTTP_303_SEE_OTHER)
@@ -5221,20 +5266,27 @@ async def instant_quote_submit(
         return templates.TemplateResponse(request=request, name="instant_quote.html", context=ctx)
 
     lead_id = None
+    created = False
     try:
-        with db.cursor() as cur:
-            cur.execute(
-                "INSERT INTO leads (name, phone, email, project_type, address, description, source, status, "
-                "property_sqft, estimate_low_cents, estimate_high_cents, estimate_json, company) "
-                "VALUES (%s, %s, %s, %s, %s, %s, 'instant_quote', 'new', %s, %s, %s, %s, 'construction') RETURNING id;",
-                (name, phone, email, project_type, address,
-                 f"Instant ballpark {est['label']} on a {est['sqft']:,} sq ft property.",
-                 est["sqft"] or None, est["low_cents"], est["high_cents"], json.dumps(est)),
-            )
-            lead_id = cur.fetchone()["id"]
-            db.commit()
+        res = lead_intake.intake_lead(
+            db, company="construction", source="instant_quote", name=name,
+            phone=phone, email=email, address=address, project_type=project_type,
+            description=f"Instant ballpark {est['label']} on a {est['sqft']:,} sq ft property.",
+            extra={
+                "property_sqft": est["sqft"] or None,
+                "estimate_low_cents": est["low_cents"],
+                "estimate_high_cents": est["high_cents"],
+                "estimate_json": json.dumps(est),
+            },
+        )
+        lead_id, created = res["lead_id"], res["created"]
     except Exception as e:
         print(f"⚠️ instant quote lead save failed: {e}", flush=True)
+
+    if not lead_id:
+        # No lead saved: leave the on-page quote in place so they can retry or
+        # use /get-started instead.
+        return templates.TemplateResponse(request=request, name="instant_quote.html", context={**ctx, "error": "We hit a glitch saving your request — please try again or use the get-started form."})
 
     try:
         auto_reply.notify_owner_email(
@@ -5244,17 +5296,19 @@ async def instant_quote_submit(
     except Exception as e:
         print(f"⚠️ instant quote owner notify failed: {e}", flush=True)
 
-    try:
-        auto_reply.auto_reply_to_lead(
-            db, "construction", name=name, phone=phone, email=email,
-            service=project_type, address=address,
-            message=f"Instant ballpark {est['label']} on a {est['sqft']:,} sq ft property.",
-            source="instant_quote", sqft=est.get("sqft"), lead_id=lead_id,
-        )
-    except Exception as e:
-        print(f"⚠️ instant quote auto-reply failed: {e}", flush=True)
+    if created:
+        # A merged/duplicate quote request already has a bot draft and a
+        # follow-up scheduled; staging a second one would double send.
+        try:
+            auto_reply.auto_reply_to_lead(
+                db, "construction", name=name, phone=phone, email=email,
+                service=project_type, address=address,
+                message=f"Instant ballpark {est['label']} on a {est['sqft']:,} sq ft property.",
+                source="instant_quote", sqft=est.get("sqft"), lead_id=lead_id,
+            )
+        except Exception as e:
+            print(f"⚠️ instant quote auto-reply failed: {e}", flush=True)
 
-    if lead_id:
         try:
             _follow_up_new_lead(lead_id)
         except Exception as e:
@@ -5329,17 +5383,19 @@ async def get_started_submit(
             ref_code = ""
 
     try:
-        with db.cursor() as cur:
-            cur.execute(
-                "INSERT INTO leads (name, phone, email, project_type, address, budget, timeline, description, "
-                "source, status, referral_code, partner_id, campaign, company) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'acquisition', 'new', %s, %s, 'get-started', 'construction') RETURNING id;",
-                (name, phone, (email or "").strip(), project_type, (address or "").strip(),
-                 (budget or "").strip(), (timeline or "").strip(), (message or "").strip()[:2000],
-                 ref_code or None, partner_id),
-            )
-            lead_id = cur.fetchone()["id"]
-            db.commit()
+        res = lead_intake.intake_lead(
+            db, company="construction", source="acquisition", name=name,
+            phone=phone, email=(email or "").strip(), address=(address or "").strip(),
+            description=(message or "").strip()[:2000], project_type=project_type,
+            extra={
+                "budget": (budget or "").strip(),
+                "timeline": (timeline or "").strip(),
+                "referral_code": ref_code or None,
+                "partner_id": partner_id,
+                "campaign": "get-started",
+            },
+        )
+        lead_id = res["lead_id"]
     except Exception as e:
         print(f"⚠️ get-started lead save failed: {e}", flush=True)
         return RedirectResponse(url="/get-started?error=Something+went+wrong+—+please+try+again+or+call+us+directly", status_code=status.HTTP_303_SEE_OTHER)
@@ -6040,28 +6096,31 @@ def ingest_permits(conn, permits):
                 "permit_id": p.get("_id", ""), "work_type": p["work_type"],
                 "contractor_name": p["contractor_name"], "value": est_val, "source": "permits",
             })
-            cur.execute(
-                "INSERT INTO leads (name, phone, email, address, listing_url, status, source, referral_code, campaign, analysis_json, company) "
-                "VALUES (%s, %s, %s, %s, %s, 'new', %s, %s, 'permit-radar', %s, 'construction') RETURNING id;",
-                (
-                    f"Permit · {p['property_address'] or p['city'] or 'Hampton Roads'}",
-                    # leads.phone is NOT NULL, but no permit source publishes a
-                    # homeowner phone number. These leads are address-based and
-                    # worked as canvass/direct-mail targets, not call targets.
-                    p.get("phone") or "",
-                    f"con-permit-{digest[:15]}@lead.local",
-                    # Was NULL on all 367 rows before: the address was written only
-                    # into analysis_json, so mail_letters.py (which reads the
-                    # address column) could never see these leads. 337 doors
-                    # were invisible to the mail pool for this reason alone.
-                    (p["property_address"] or "").strip(),
-                    listing,
-                    "permit_finder",
-                    p["permit_number"],
-                    meta,
-                ),
+            res = lead_intake.intake_lead(
+                conn, company="construction", source="permit_finder",
+                name=f"Permit · {p['property_address'] or p['city'] or 'Hampton Roads'}",
+                # leads.phone is NOT NULL, but no permit source publishes a
+                # homeowner phone number. These leads are address-based and
+                # worked as canvass/direct-mail targets, not call targets.
+                phone=p.get("phone") or "",
+                # Placeholder mailbox, not a reachable address: is_reachable()
+                # treats @lead.local as "no contact yet", so these fold into the
+                # "needs contact info" bucket of the one work queue.
+                email=f"con-permit-{digest[:15]}@lead.local",
+                # Was NULL on all 367 rows before: the address was written only
+                # into analysis_json, so mail_letters.py (which reads the
+                # address column) could never see these leads. 337 doors
+                # were invisible to the mail pool for this reason alone.
+                address=(p["property_address"] or "").strip(),
+                source_ref=f"{p['permit_number']}:{p['property_address']}",
+                extra={
+                    "listing_url": listing,
+                    "referral_code": p["permit_number"],
+                    "campaign": "permit-radar",
+                    "analysis_json": meta,
+                },
             )
-            lead_id = cur.fetchone()["id"]
+            lead_id = res["lead_id"]
             created_leads.append({
                 "lead_id": lead_id,
                 "name": p["contractor_name"] or "Homeowner",
@@ -6242,21 +6301,16 @@ async def job_lead_reach(
         est_val = float(job.get("estimated_value") or 0)
     except (TypeError, ValueError):
         est_val = 0
+    res = lead_intake.intake_lead(
+        db, company="construction", source="permit_finder", name=contact_name,
+        phone=phone or "", email=email or "",
+        project_type=job.get("work_type") or "Renovation",
+        address=job.get("address") or "",
+        description=f"Permit #{job.get('permit_number') or ''}: {job.get('job_description') or ''} (est. value ${est_val:,.0f})",
+        source_ref=f"{job.get('permit_number')}:{job.get('address')}",
+    )
+    lead_id = res["lead_id"]
     with db.cursor() as cur:
-        cur.execute(
-            "INSERT INTO leads (name, phone, email, project_type, address, description, source, status, company) "
-            "VALUES (%s, %s, %s, %s, %s, %s, 'permit_finder', 'contacted', 'construction') RETURNING id;",
-            (
-                contact_name,
-                phone or "",
-                email or "",
-                job.get("work_type") or "Renovation",
-                job.get("address") or "",
-                f"Permit #{job.get('permit_number') or ''}: {job.get('job_description') or ''} "
-                f"(est. value ${est_val:,.0f})",
-            ),
-        )
-        lead_id = cur.fetchone()["id"]
         cur.execute("UPDATE job_leads SET status = 'contacted' WHERE id = %s;", (job_id,))
         db.commit()
     return RedirectResponse(
@@ -6273,17 +6327,17 @@ async def job_lead_convert(job_id: int, request: Request, db=Depends(get_db)):
         job = cur.fetchone()
     if not job:
         raise HTTPException(status_code=404, detail="Job lead not found")
+    res = lead_intake.intake_lead(
+        db, company="construction", source="permit_finder",
+        name=job["contractor_name"] or job["city"] or "Property owner",
+        phone=job["owner_contact"] or "", email=job["owner_contact"] or "",
+        project_type=job["work_type"] or "Renovation",
+        address=job["address"] or "",
+        description=f"Permit #{job['permit_number'] or ''}: {job['job_description'] or ''} (est. value ${job['estimated_value'] or 0:,.0f})",
+        source_ref=f"{job.get('permit_number')}:{job.get('address')}",
+    )
+    lead_id = res["lead_id"]
     with db.cursor() as cur:
-        cur.execute(
-            "INSERT INTO leads (name, phone, email, project_type, address, description, source, status, company) "
-            "VALUES (%s, %s, %s, %s, %s, %s, 'permit_finder', 'new', 'construction') RETURNING id;",
-            (job["contractor_name"] or job["city"] or "Property owner",
-             job["owner_contact"] or "", job["owner_contact"] or "",
-             job["work_type"] or "Renovation",
-             job["address"] or "",
-             f"Permit #{job['permit_number'] or ''}: {job['job_description'] or ''} (est. value ${job['estimated_value'] or 0:,.0f})"),
-        )
-        lead_id = cur.fetchone()["id"]
         cur.execute("UPDATE job_leads SET status = 'contacted' WHERE id = %s;", (job_id,))
         db.commit()
     try:

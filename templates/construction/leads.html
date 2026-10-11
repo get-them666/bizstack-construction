@@ -17,7 +17,7 @@
         <div class="flex flex-wrap items-center gap-2 mb-5">
             <a href="/leads?lane=contactable"
                class="px-4 py-2.5 text-sm font-bold rounded-xl border transition-colors {% if lane != 'permits' %}bg-slate-900 text-white border-slate-900{% else %}bg-white text-slate-600 border-slate-200 hover:border-slate-400{% endif %}">
-                Can call or email <span class="opacity-70 font-semibold">({{ leads | length }})</span>
+                Work queue <span class="opacity-70 font-semibold">({{ action_counts.values() | sum }})</span>
             </a>
             <a href="/leads?lane=permits"
                class="px-4 py-2.5 text-sm font-bold rounded-xl border transition-colors {% if lane == 'permits' %}bg-slate-900 text-white border-slate-900{% else %}bg-white text-slate-600 border-slate-200 hover:border-slate-400{% endif %}">
@@ -25,7 +25,7 @@
                 <span id="permit-doors-live" class="opacity-70 font-semibold">({{ permit_open }})</span>
             </a>
             <p class="text-xs text-slate-500 ml-1">
-                {% if lane == 'permits' %}Permits have no phone or email. Work the address, then record who you reached.{% else %}People with a real phone number or email. These move through quoting and deposits.{% endif %}
+                {% if lane == 'permits' %}Permits have no phone or email. Work the address, then record who you reached.{% else %}Grouped by what to do next — reply, follow up, first contact, or get contact info. Most urgent first.{% endif %}
             </p>
         </div>
 

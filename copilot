@@ -1,0 +1,135 @@
+#!/usr/bin/env python3
+"""Drive the website's Copilot from a terminal.
+
+Mirrors POST /api/copilot exactly: same BusinessAIAgent, same subset, same tool
+handlers, same transcript memory. It is the same agent, not a lookalike.
+
+    ./copilot "how many leads came in this week?"
+    ./copilot --interactive
+    ./copilot "what's the status of lead 12?" --db "postgresql://..."
+
+Requires DATABASE_URL (or --db) and OPENAI_API_KEY. Run it from the repo root so
+construction_knowledge.md and the sibling modules resolve.
+
+Why this is safe enough to run locally even though it holds the full owner
+toolkit: the tools are the same ones the web Copilot already has. What it adds is
+that they are reachable from your shell, so keep the database pointed at a
+scratch DB unless you mean to touch production.
+"""
+
+import argparse
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+BANNER = "copilot | ctrl-c or /exit to quit, /history to replay the transcript"
+
+
+def build():
+    """Import late so --help works even without a key or a database."""
+    os.environ.setdefault("OPENAI_API_KEY", "sk-test")
+    import copilot_memory
+    from con_ai_agent import BusinessAIAgent
+    import construction_main
+    from construction_main import build_copilot_handlers
+    import psycopg
+
+    owner_email = os.environ.get("COPILOT_OWNER_EMAIL", "").strip()
+    if not owner_email:
+        sys.exit(
+            "COPILOT_OWNER_EMAIL is not set.\n"
+            "It is the memory scope key and must match the owner's login email,\n"
+            "otherwise this writes a second, separate transcript:\n"
+            "    COPILOT_OWNER_EMAIL=you@example.com ./copilot \"...\""
+        )
+
+    db_url = os.environ.get("DATABASE_URL", "").strip()
+    if not db_url:
+        sys.exit("DATABASE_URL is not set. Pass --db or export it.")
+
+    conn = psycopg.connect(db_url, row_factory=psycopg.rows.dict_row)
+    handlers = build_copilot_handlers(conn, owner_email)
+    agent = BusinessAIAgent(
+        knowledge_path="construction_knowledge.md",
+        tool_handlers=handlers,
+        subset="copilot",
+    )
+    return agent, copilot_memory, conn, owner_email
+
+
+def ask(agent, memory, conn, owner_email, text):
+    """One turn, through the same path the web route uses."""
+    from con_ai_agent import ToolBudgetExhausted, ModelUnavailable
+
+    history = memory.load_history(conn, "copilot", owner_email)
+    try:
+        reply = agent.process_conversation(history, text)
+    except ToolBudgetExhausted as exc:
+        print(f"\n[tool budget exhausted] {exc}", file=sys.stderr)
+        return None
+    except ModelUnavailable as exc:
+        print(f"\n[model unavailable] {exc}", file=sys.stderr)
+        return None
+    memory.append_turn(conn, "copilot", owner_email, "user", text)
+    memory.append_turn(conn, "copilot", owner_email, "assistant", reply)
+    return reply
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("message", nargs="?", help="one prompt; omit with --interactive")
+    ap.add_argument("--interactive", action="store_true")
+    ap.add_argument("--db", help="DATABASE_URL override")
+    ap.add_argument("--history", type=int, default=0,
+                    help="print the last N stored turns and exit")
+    args = ap.parse_args()
+
+    if args.db:
+        os.environ["DATABASE_URL"] = args.db
+
+    agent, memory, conn, owner_email = build()
+
+    try:
+        if args.history:
+            rows = memory.load_history(conn, "copilot", owner_email)
+            for row in rows[-args.history:]:
+                who = row.get("role", "?")
+                print(f"\n[{who}]\n{row.get('content','')}")
+            return
+
+        if args.message:
+            reply = ask(agent, memory, conn, owner_email, args.message)
+            if reply is not None:
+                print(reply)
+            return
+
+        if not args.interactive:
+            ap.print_help()
+            return
+
+        print(BANNER)
+        while True:
+            try:
+                line = input("\n> ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print()
+                return
+            if not line:
+                continue
+            if line in ("/exit", "/quit"):
+                return
+            if line == "/history":
+                for row in memory.load_history(conn, "copilot", owner_email)[-6:]:
+                    print(f"\n[{row.get('role')}]\n{row.get('content','')}")
+                continue
+            reply = ask(agent, memory, conn, owner_email, line)
+            if reply is not None:
+                print(reply)
+    finally:
+        conn.close()
+
+
+if __name__ == "__main__":
+    main()
