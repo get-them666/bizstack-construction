@@ -2,6 +2,22 @@
 
 ## Project facts that aren't obvious from the code
 
+**Construction and Hosts are now two separate companies.** On 2026-10-11 the
+owner split them: separate domains (`construction.bizstackperks.com` /
+`bizstackperks.com`), separate Railway projects (`281375d7-…` /
+`d5ed0396-…`), separate Postgres databases, and no shared package. This repo is
+Construction. It imports nothing from `../bizstack-hosts` and `requirements.txt`
+must never name a git URL. See the topology table in `AGENTS.md`.
+
+What that split cost, and what it did **not** fix: the databases are cleanly
+partitioned (construction holds 0 rows tagged `company='broom'`; the hosts
+database holds 0 tagged `construction'`), but `construction_main.py` is still
+the forked monolith and contains the entire Broom application — `crew`,
+`timesheets`, `payroll_runs`, `clock_events`, the crew admin and training-quiz
+routes, and a Broom branch in the Google OAuth callback at `:2194`. Both apps
+still create all 52 tables at startup. Anyone assuming "construction repo =
+construction business" will be wrong about the code, though right about the data.
+
 **Two phone numbers, and which is which.** `757-908-7121` is the business line
 and appears on every homeowner- and customer-facing surface: lead auto-replies,
 bid inquiries, the website, printed letters, invoices, receipts, the photo log.
@@ -284,8 +300,9 @@ is what makes the *next* loan easier, not this one.
 ## Open threads
 
 - `ATTIC_API_KEY` / `SERVICEKANI_API_KEY` / `REGRID_API_KEY` / `BATCHLEADS_API_KEY`
-  are all unset, and `lead_research.py` in the **hosts** repo is the thing to
-  point a key at — not the PDL path in that same repo. It runs live and returns
+  are all unset. `lead_research.py` in the **hosts** repo is the thing to
+  point a key at — not the PDL path in that same repo, which now lives in
+  *this* repo as `enrichment.py`. It runs live and returns
   `0 enriched, 10 unresolved` on every pass purely because skip-trace is inert.
   It is the only code that produces a homeowner name/phone. `RENTCAST_API_KEY`
   is now in use by `skiptrace_service.py` — see above for the one line to set.

@@ -10,6 +10,45 @@ Treat it as authoritative and keep it current.
 
 ---
 
+## This is ONE of TWO separate companies — do not merge them
+
+BuildStack Construction and BuildStack Hosts (`../bizstack-hosts`) are **separate businesses
+with separate domains, separate Railway projects and separate databases.** They were
+un-separated on 2026-10-11. They are not a monorepo, not a shared package, and not two
+services over one database.
+
+| | Construction (this repo) | Hosts |
+|---|---|---|
+| Railway project | **BuildStack Construction** `281375d7-2f13-43bb-813d-c6f048ead3f3` | **BuildStack Hosts** `d5ed0396-4729-442c-b38e-cdeedb2fe815` |
+| App service | `Construction` `f0831991-898a-46a2-8b96-35bf89af912f` | `Hosts` `9ff95d24-ad4c-41c1-a217-a5d1d663aae3` |
+| Postgres | `86bda89f-4620-44ef-b450-612ca2de6f11`, db `construction` | `5027eac7-620c-4cc0-a331-e99263bef206`, db `hosts` |
+| Domain | `construction.bizstackperks.com` | `bizstackperks.com` |
+| Repo | `get-them666/bizstack-construction` | `get-them666/bizstack-hosts` |
+
+**Rules that follow from that:**
+
+- **Never add a dependency on another repository.** `requirements.txt` must not name a git
+  URL. The lead pipeline was `bizstack-leads @ git+...` until `3b4fd69`, which vendored it to
+  `bizstack_leads/` in this tree. That package is **dead** — nothing consumes it. Do not
+  reintroduce it, and do not import from `../bizstack-hosts`.
+- **Never point this app at the hosts database, or vice versa.** Each has one `DATABASE_URL`
+  and they differ.
+- **Never assume a file exists in both repos because it used to.** 63 paths were duplicated
+  across the two; 31 had already drifted. They now evolve independently and will keep
+  diverging. That is correct, not a bug to fix by syncing.
+- **`railway up` from this directory deploys to BuildStack Construction.** The CLI links are
+  per-directory and were repointed on 2026-10-11; confirm with `railway status` before deploying.
+
+**Still not fully separated — know this before you assume otherwise.** `construction_main.py`
+was forked from the hosts monolith and still contains the entire Broom/hosts application:
+292 references to `crew`/`timesheets`/`payroll_runs`/`clock_events`, 30 `broom` mentions, the
+crew admin and training-quiz routes, and `construction_main.py:2194` `# Broom - check crew
+table` in the shared Google OAuth callback (`:2222` then routes a non-construction sign-in
+into it). Both apps therefore still create all 52 tables. The *data* is fully split; the *code*
+is not. Extracting it is a real refactor of a live 8,176-line app — see `MEMORY.md`.
+
+---
+
 ## Commands
 
 **Only `venv/bin/python` works.** Python 3.10.11, has `fastapi`/`psycopg`/`jinja2`/`openai`
@@ -24,14 +63,14 @@ venv/bin/python -m pytest test_lead_pipeline_tools.py -v     # single file
 venv/bin/python -m pytest test_model_unavailable.py::test_copilot_raises_on_empty_credits -v
 ```
 
-**The trap: `pytest` alone runs less than half the suite.** 36 `test_*.py` files, and there is
+**The trap: `pytest` alone runs less than half the suite.** 39 `test_*.py` files, and there is
 no `conftest.py`, `pytest.ini`, or `pyproject.toml` to unify them.
 
-- 19 files are pure pytest/unittest — collected normally. 342 tests total.
-- 24 files carry an `if __name__ == "__main__":` block. For **17** of those the tests live
-  *inside* that block, so **pytest collects 0 from them and still reports success.** The other
-  7 have tests at module level too and are collected normally, so the guard alone is not the
-  signal — test what pytest actually collects.
+- 22 files are pure pytest/unittest — collected normally. **395 tests total.**
+- The other 17 files carry an `if __name__ == "__main__":` block with the tests *inside* it,
+  so **pytest collects 0 from them and still reports success.** Some carry module-level tests
+  too and are collected normally, so the guard alone is not the signal — test what pytest
+  actually collects.
 
 Zero-collected — run these by hand, or they are simply never run: `test_bid_inquiry`
 `test_contact_policy` `test_email_send_accuracy` `test_federal_block` `test_flag_semantics`
@@ -51,31 +90,35 @@ done
 
 No CI exists (`.github/` is absent) — nothing runs these for you.
 
-### Known failures at HEAD `1a42bcc` (clean tree)
+### Known failures at HEAD `3b4fd69` (clean tree)
 
-Do not assume you broke these:
+Do not assume you broke these — all five were failing before the separation:
 
 - `test_flag_semantics.py` → `AttributeError: module 'construction_main' has no attribute '_disabled'`
   The test expects a `_disabled()` helper; the source still uses bare
-  `os.getenv("DISABLE_*")` truthiness at `construction_main.py:673,680,686`. Test is stale.
+  `os.getenv("DISABLE_*")` truthiness. Test is stale.
 - `test_sql_safety.py` → 2 failures. Its AST scan flags `%s` inside quoted SQL literals and a
   pattern still present in `copilot_tasks`.
-
-`test_schema_safety`, `test_send_guard`, `test_template_js` pass. `test_template_js` needs
-`node` on PATH (exit 2 if absent).
-
+- `test_lob_send.py` → its real-batch assertions need `/tmp/letters_final/manifest.csv`,
+  an artifact of the already-mailed 177-letter run. Fails anywhere but the original machine.
+- `test_site_smoke.py` → 2 failures on permit-card assertions; see the warning below.
 - `test_open_geo.py::test_geocode_survives_a_broken_upstream` fails **only when this machine
   has working outbound network.** It stubs `_nominatim` to raise, but `open_geo.geocode()`
   tries the Census/`zip_lookup` path *first* (`open_geo.py:104-120`) and that path is not
   stubbed — so it makes a live call, gets a hit, and returns `ok=True`. The test's premise
   only holds offline. Incomplete mocking, not a regression.
 
+`test_schema_safety`, `test_send_guard`, `test_template_js` pass. `test_template_js` needs
+`node` on PATH (exit 2 if absent).
+
 ### `test_site_smoke.py` is the only real-DB test — don't run it casually
 
 It **writes rows** and imports the app, which fires the `lifecycle` startup and all background
 threads. It `setdefault`s `DISABLE_PERMIT_IMPORT=1`, `DISABLE_LEAD_SCAN=1`,
-`DISABLE_LOAN_OUTREACH=1` for that reason. Prior runs seeded 24 junk leads, 6 junk permits and
-1,598 scraped `job_leads` into a live database. Always point it at a scratch DB:
+`DISABLE_LOAN_OUTREACH=1` for that reason, and it `setdefault`s
+`DATABASE_URL=postgresql://localhost/bz_scratch` — so with `DATABASE_URL` unset in your
+shell it lands on a disposable scratch DB, **not** production. Prior runs seeded 24 junk
+leads, 6 junk permits and 1,598 scraped `job_leads` into a live database. Always be explicit:
 
 ```bash
 createdb bz_test
@@ -103,37 +146,41 @@ permit feeds only when `PERMIT_LIVE=1`.
 
 ## Architecture
 
-`construction_main.py` is ~8,100 lines with **161 inline route handlers** and no `APIRouter`
+`construction_main.py` is 8,176 lines with **169 inline route handlers** and no `APIRouter`
 — one module scope, divided by `# --- Section ---` banner comments. Notable blocks:
-`lifecycle()` at `:304` (startup DDL + every background thread), `app` at `:711`,
-AI tool handlers `:995-1810`, pipeline board `:2564-3836`, live voice/SWML agent `:4230-5158`.
+`lifecycle()` at `:312` (startup DDL + every background thread), `app` at `:733`,
+AI tool handlers `:1017-1830`, lead pipeline board `:2267+`, live voice/SWML agent `:4275+`
+(its own OpenAI client at `:4872`).
 
 Everything else is a flat sibling module. Read `MEMORY.md` plus the relevant module rather
 than expecting a clean layered architecture — there isn't one.
 
 ### Database
 
-`psycopg` v3, raw SQL, no ORM, **no connection pool**. `get_db()` (`construction_main.py:743`)
+`psycopg` v3, raw SQL, no ORM, **no connection pool**. `get_db()` (`construction_main.py:765`)
 opens a connection per request; ~45 modules open their own ad hoc.
 
-`DATABASE_URL` (27 call sites, fallback at `:76`). `CON_DATABASE_URL` overrides it in
-`google_oauth.py` only.
+`DATABASE_URL` (27 call sites, fallback at `:83`). `CON_DATABASE_URL` overrides it in
+`google_oauth.py` only. This is **construction's own database** (`construction` in Railway
+project `281375d7-…`); it is not shared with hosts. `max_connections` was raised to 500 —
+the old shared server ran at 500, and the new one defaulted to 100, which is too tight for an
+app that opens a connection per request.
 
 **Schema is created at startup**, not migrated: the lifespan runs a large idempotent
 `CREATE TABLE IF NOT EXISTS` / `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` block
-(`:308-661`), plus `_ensure_schema` in `inbound_email`, `copilot_memory`, `copilot_tasks`.
+(`:318-667`), plus `_ensure_schema` in `inbound_email`, `copilot_memory`, `copilot_tasks`.
 ~12 other modules lazily self-init their own tables on first use.
 
 That whole DDL block is **one transaction**. An `ALTER` placed before its `CREATE` aborts the
 entire block and rolls back all of it — there's an explicit comment about this past bug at
-`:383-399`. `test_schema_safety.py` pins it: DDL must route through `_safe_ddl`, retry a lock
+`:393-409`. `test_schema_safety.py` pins it: DDL must route through `_safe_ddl`, retry a lock
 deadlock once, and tolerate a missing `leads` table.
 
 ### AI agents — handlers and schemas are reconciled by hand
 
-Schemas live in `con_ai_agent.py` (`_safe_tools:230` guest subset, `_full_tools:521` copilot,
-`_operator_tools:354` copilot-only). Handlers live in `construction_main.py`
-(`build_tool_handlers:995`, `build_copilot_handlers:1767`) and `copilot_ops.py`.
+Schemas live in `con_ai_agent.py` (`_safe_tools:258` guest subset, `_full_tools:549` copilot,
+`_operator_tools:382` copilot-only). Handlers live in `construction_main.py`
+(`build_tool_handlers:1017`, `build_copilot_handlers:1790`) and `copilot_ops.py`.
 
 **Nothing enforces that the two agree.** A handler with no schema is dead code that looks
 wired; a schema with no handler is a button whose only outcome is `No handler for tool`. The
@@ -155,9 +202,9 @@ because it looped and sent three identical emails, but its schema was left behin
 the model a send button that could only error.
 
 **There is a third place: the knowledge files are the system prompt.**
-`con_ai_agent.py:82-83` concatenates `bot_knowledge.md` + `construction_knowledge.md` into the
-prompt, and `construction_knowledge.md` §15 ("Available owner tools") hand-lists the toolkit in
-prose. Nothing checks it, and **it is currently drifted** as of `1a42bcc`: it advertises
+`con_ai_agent.py:110-111` concatenates `bot_knowledge.md` + `construction_knowledge.md` into
+the prompt, and `construction_knowledge.md` §15 ("Available owner tools") hand-lists the toolkit
+in prose. Nothing checks it, and **it is currently drifted** as of `3b4fd69`: it advertises
 `send_email`, which no longer exists under any name, and omits the whole permit pipeline
 (`skip_trace_owner`, `lookup_zip`, `pdl_contact`, `save_contact`, `draft_lead_email`) that
 `6f5b336` made reachable. So a tool is live only when all three agree: **schema
@@ -249,22 +296,30 @@ or confirmation — the same hazard profile as the withheld email tool, and the 
 Much of this repo is real money and real people's data. It is **not** reproducible.
 
 **Already tracked in git (irreversible — treat as public):**
-`pnc_statement.pdf` (real bank statements), `LOAN_PACKAGE.pdf`, `docs/SBA_7a_LOAN_PITCH.pdf`,
-and `docs/INVOICE_*` / `RECEIPT_*` / `OWNER-EQUITY-STATEMENT` / `NO-EMPLOYEE-OWNER-LETTER`
+`pnc_statement.pdf` **and both `pnc_statement copy*.pdf` duplicates** (real bank statements),
+`send_today/LOAN_PACKAGE.pdf` (the active loan package — note it is **not** at the repo root),
+`stale/LOAN_PACKAGE.SUPERSEDED-2026-10-06.pdf`, `docs/SBA_7a_LOAN_PITCH.pdf`, and
+`docs/INVOICE_*` / `RECEIPT_*` / `OWNER-EQUITY-STATEMENT` / `NO-EMPLOYEE-OWNER-LETTER`
 HTML, which name real customers (Barbara Mastic, Carl Simmons) and carry the EIN.
-`static/listing/projects/*.jpg` are the real before/after job photos that the portfolio page
-renders — `test_site_smoke.py` will fail if templates stop resolving them.
+
+**`static/listing/projects/` — 63 real before/after customer job photos — are also tracked
+and pushed.** They were added in `afa662c` (not by the separation work) and `test_site_smoke.py`
+will fail if the templates stop resolving them. Treat the repo as public and do not add
+further customer media; if photo privacy matters, that needs a hosting decision, not a commit.
+
+**All loan paperwork belongs to this company and must stay here.** The hosts repo has no PDFs
+at all. Loan data in the database (`outreach_touches`, `outreach_replies`, `ledger_entries`)
+lives in the `construction` database only.
 
 **Untracked but NOT gitignored — `git add -A` would commit these:**
 
 | Path | What |
 |---|---|
 | `Hampton_Roads_Regional_Parcels.csv` | 179 MB of parcel/owner data |
-| `static/listing/projects/`, `static/listing/past jobs.jpeg` | real job photos |
-| `pnc_statement copy.pdf`, `pnc_statement copy 2.pdf` | duplicate bank statements |
-| `fe898c9f-... (1).html`, `static/listing/compressed-files.pdf` | scraped artifacts |
-| `my_agent/` | agent config |
-| `Dockerfile.enrich`, `enrich_api.py` | work in progress |
+
+That is the *only* remaining untracked file. Everything else previously listed here
+(`static/listing/projects/`, `past jobs.jpeg`, `my_agent/`, `Dockerfile.enrich`,
+`enrich_api.py`, `compressed-files.pdf`) has since been committed and is already public.
 
 **Correctly gitignored — never commit, never delete:**
 `outbox/` (278 generated letters with real customer addresses and names — regenerate with
