@@ -2560,6 +2560,7 @@ def _smtp_egress_probe():
     if (os.getenv("EMAIL_TRANSPORT", "") or "").lower() != "legacy":
         return
     import smtplib
+    import documents_service  # imported locally elsewhere in this module too
     cfg = documents_service.smtp_config_from_env()
     host = cfg.get("SMTP_HOST") or ""
     if not host:
