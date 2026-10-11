@@ -78,6 +78,11 @@ from bizstack_leads import intake as lead_intake
 from bizstack_leads import queue as lead_queue
 from bizstack_leads import store as lead_store
 import accurate_append
+import abc_supply
+import lowes_api
+import materials_service
+import quoting
+import suppression
 logger = logging.getLogger("construction")
 
 db_url = os.getenv("DATABASE_URL", "postgresql://shaun:secret@localhost:5432/buildstack")
@@ -2525,6 +2530,85 @@ async def inventory_page(request: Request, company: str = "construction", db=Dep
     return templates.TemplateResponse(request=request, name="inventory.html", context={
         "active_company": co, "items": items, "user": {"email": user_email},
     })
+
+
+# --- Materials catalog (owner price book) ---------------------------------
+# The supplier feeds are the destination, not the starting point: ABC Supply
+# needs a credit account plus an approved enrollment, Lowe's a partner
+# agreement, and Richards/Kempsville/Builders FirstSource have no feed at all.
+# This page is how the price book gets real numbers before any of that lands.
+# Prices are typed in dollars because that is what is printed on the receipt.
+
+
+@app.get("/materials", response_class=HTMLResponse)
+async def materials_page(request: Request, search: str = "", store: str = "",
+                         category: str = "", notice: str = "", error: str = "",
+                         db=Depends(get_db)):
+    require_admin(request)
+    materials_service.seed_materials_catalog(db)
+    return templates.TemplateResponse(request=request, name="materials.html", context={
+        "rows": materials_service.catalog_rows(
+            db, search=search, store=store, category=category),
+        "facets": materials_service.catalog_facets(db),
+        "search": search, "store": store, "category": category,
+        "notice": notice, "error": error,
+        "abc_configured": abc_supply.configured(),
+        "lowes_configured": lowes_api.configured(),
+    })
+
+
+@app.post("/materials/save")
+async def materials_save(
+    request: Request,
+    item_id: int = Form(0),
+    name: str = Form(""),
+    price: str = Form(""),
+    store: str = Form(""),
+    brand: str = Form(""),
+    category: str = Form(""),
+    model: str = Form(""),
+    sku: str = Form(""),
+    unit: str = Form("each"),
+    notes: str = Form(""),
+    db=Depends(get_db),
+):
+    require_admin(request)
+    res = materials_service.upsert_catalog_item(
+        db, name=name, price_dollars=price, store=store, brand=brand,
+        category=category, model=model, sku=sku, unit=unit, notes=notes,
+        item_id=item_id or None)
+    if res.get("ok"):
+        return RedirectResponse(url="/materials?notice=Saved", status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(url=f"/materials?error={res.get('error','could not save')}",
+                            status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/materials/import")
+async def materials_import(request: Request, text: str = Form(""),
+                           default_store: str = Form(""), db=Depends(get_db)):
+    """Bulk paste. A single bad line rejects the whole batch -- see
+    materials_service.bulk_import_catalog for why it is all-or-nothing."""
+    require_admin(request)
+    res = materials_service.bulk_import_catalog(db, text, default_store=default_store)
+    if res.get("imported"):
+        notice = f"Imported {res['imported']} item(s)"
+        if res.get("skipped"):
+            notice += f", skipped {res['skipped']}"
+        return RedirectResponse(url=f"/materials?notice={notice}",
+                                status_code=status.HTTP_303_SEE_OTHER)
+    err = "; ".join(res.get("errors") or ["nothing imported"]) or "nothing imported"
+    return RedirectResponse(url=f"/materials?error={err}",
+                            status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/materials/delete")
+async def materials_delete(request: Request, item_id: int = Form(0),
+                           db=Depends(get_db)):
+    """Disable, never delete -- a wrong price should not erase the fact that
+    the item was quoted."""
+    require_admin(request)
+    materials_service.delete_catalog_item(db, item_id)
+    return RedirectResponse(url="/materials?notice=Removed", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.post("/inventory/update")

@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="wrap">
+  <h1>Materials price book</h1>
+  <p class="muted">
+    Prices here drive the itemized quote. Enter them in dollars, exactly as they
+    appear on the receipt, the shelf tag or the invoice.
+  </p>
+
+  {% if notice %}<div class="flash ok">{{ notice }}</div>{% endif %}
+  {% if error %}<div class="flash bad">{{ error }}</div>{% endif %}
+
+  {% if not abc_configured and not lowes_configured %}
+  <div class="flash warn">
+    No supplier feed is connected yet, so this price book is the only thing
+    making your quotes accurate. ABC Supply needs a credit account and an
+    approved API enrollment; Lowe's needs a partner agreement through their
+    Developer Hub. Until then, typing real prices here is the fastest path to a
+    quote you can stand behind.
+  </div>
+  {% endif %}
+
+  <section class="card">
+    <h2>Add or update one item</h2>
+    <form method="post" action="/materials/save" class="grid">
+      <input type="hidden" name="item_id" value="0">
+      <label>Item name *<input name="name" required placeholder="3/4in PVC elbow"></label>
+      <label>Price *<input name="price" required inputmode="decimal" placeholder="2.47"></label>
+      <label>Supplier<input name="store" placeholder="Kempsville / Lowe's / ABC Supply"></label>
+      <label>Brand<input name="brand" placeholder="Charlotte / Simpson"></label>
+      <label>Category<input name="category" placeholder="plumbing"></label>
+      <label>Model<input name="model"></label>
+      <label>SKU<input name="sku" placeholder="supplier item number"></label>
+      <label>Unit<input name="unit" value="each"></label>
+      <label class="wide">Notes<input name="notes"></label>
+      <button type="submit">Save item</button>
+    </form>
+  </section>
+
+  <section class="card">
+    <h2>Bulk paste</h2>
+    <p class="muted">
+      Copy straight off a receipt. Comma or tab separated. Header row optional.
+      Columns: <code>name, price, store, brand, category, sku, model, unit, notes</code>.
+      One bad price rejects the whole batch rather than half-importing it.
+    </p>
+    <form method="post" action="/materials/import">
+      <textarea name="text" rows="8" placeholder="name,price,store,brand,category&#10;2x4 stud,3.28,Kempsville,Southern Pine,lumber&#10;Joist hanger,1.15,Lowe's,Simpson,hardware"></textarea>
+      <label>Default supplier (used when a row has none)<input name="default_store" placeholder="Kempsville"></label>
+      <button type="submit">Import</button>
+    </form>
+  </section>
+
+  <section class="card">
+    <form method="get" action="/materials" class="filters">
+      <input name="search" value="{{ search }}" placeholder="search name, brand, SKU">
+      <select name="store">
+        <option value="">all suppliers</option>
+        {% for s in facets.stores %}
+        <option value="{{ s }}" {% if s == store %}selected{% endif %}>{{ s }}</option>
+        {% endfor %}
+      </select>
+      <select name="category">
+        <option value="">all categories</option>
+        {% for c in facets.categories %}
+        <option value="{{ c }}" {% if c == category %}selected{% endif %}>{{ c }}</option>
+        {% endfor %}
+      </select>
+      <button type="submit">Filter</button>
+    </form>
+
+    <table>
+      <thead>
+        <tr><th>Item</th><th>Brand</th><th>Supplier</th><th>Category</th><th>SKU</th><th>Price</th><th></th></tr>
+      </thead>
+      <tbody>
+      {% for r in rows %}
+        <tr>
+          <td>{{ r.name }}</td>
+          <td>{{ r.brand }}</td>
+          <td>{{ r.store }}</td>
+          <td>{{ r.category }}</td>
+          <td class="mono">{{ r.sku }}</td>
+          <td class="price">${{ '%.2f'|format((r.price_cents or 0) / 100) }} / {{ r.unit }}</td>
+          <td>
+            <form method="post" action="/materials/delete" onsubmit="return confirm('Remove this item from the price book?')">
+              <input type="hidden" name="item_id" value="{{ r.id }}">
+              <button type="submit" class="link danger">Remove</button>
+            </form>
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="7" class="muted">Nothing in the price book yet. Add a few real prices above and quotes stop being guesses.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </section>
+</div>
+{% endblock %}

@@ -558,3 +558,245 @@ class BusinessMaterialsService:
                      "the free on-site walkthrough."
             ),
         }
+
+
+# --------------------------------------------------------------------------
+# Owner-facing catalog editing
+# --------------------------------------------------------------------------
+# Why this exists: the supplier feeds are the destination, not the starting
+# point. ABC Supply needs a credit account and an approved enrollment; Lowe's
+# needs a partner agreement; Richards, Kempsville and Builders FirstSource have
+# no feed at all. Until any of those land, the only way a quote is accurate is
+# if a human types the real numbers in -- and that has to be fast enough that
+# they actually do it. So: one row at a time from a receipt, or a paste of
+# many rows at once, into the same table the feeds write to.
+#
+# Prices are entered in DOLLARS because that is what is printed on the invoice
+# and what anyone reads off Lowe's' shelf or a Kempsville ticket. They are
+# stored in cents, which is what quoting multiplies.
+
+_CATALOG_FIELDS = ("store", "brand", "category", "name", "model", "sku",
+                   "unit", "notes")
+
+
+def _to_cents(dollars) -> int | None:
+    """Dollars (string or number) -> integer cents, or None if unusable."""
+    if dollars in (None, ""):
+        return None
+    s = str(dollars).strip().replace("$", "").replace(",", "").replace(" ", "")
+    if s.startswith("(") and s.endswith(")"):      # accounting negative
+        s = "-" + s[1:-1]
+    try:
+        return int(round(float(s) * 100))
+    except (TypeError, ValueError):
+        return None
+
+
+def catalog_rows(conn, *, limit: int = 500, search: str = "",
+                 store: str = "", category: str = "") -> list[dict]:
+    """Rows for the admin table, newest-updated first."""
+    if conn is None:
+        return []
+    where, params = ["enabled"], []
+    if search:
+        where.append("(name ILIKE %s OR brand ILIKE %s OR sku ILIKE %s)")
+        params += [f"%{search}%"] * 3
+    if store:
+        where.append("store = %s")
+        params.append(store)
+    if category:
+        where.append("category = %s")
+        params.append(category)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, store, brand, category, name, model, sku, unit, "
+                "price_cents, notes, updated_at FROM materials_catalog "
+                f"WHERE {' AND '.join(where)} "
+                "ORDER BY updated_at DESC LIMIT %s;",
+                params + [int(limit)],
+            )
+            return [dict(r) for r in cur.fetchall()]
+    except Exception as exc:
+        print(f"[materials] catalog_rows failed: {exc}", flush=True)
+        return []
+
+
+def catalog_facets(conn) -> dict:
+    """Distinct stores/categories, for the filter dropdowns."""
+    out = {"stores": [], "categories": []}
+    if conn is None:
+        return out
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT DISTINCT store FROM materials_catalog "
+                        "WHERE store <> '' ORDER BY store;")
+            out["stores"] = [r["store"] for r in cur.fetchall()]
+            cur.execute("SELECT DISTINCT category FROM materials_catalog "
+                        "WHERE category <> '' ORDER BY category;")
+            out["categories"] = [r["category"] for r in cur.fetchall()]
+    except Exception:
+        pass
+    return out
+
+
+def upsert_catalog_item(conn, *, name: str, price_dollars, store: str = "",
+                        brand: str = "", category: str = "", model: str = "",
+                        sku: str = "", unit: str = "each", notes: str = "",
+                        item_id: int | None = None) -> dict:
+    """Add or update one catalog row.
+
+    A blank price is rejected rather than stored as 0. Zero is a real price in
+    this system -- a giveaway line, a free item -- and defaulting a forgotten
+    price to it would put a $0 on a customer's quote.
+    """
+    if conn is None:
+        return {"ok": False, "error": "no database"}
+    name = (name or "").strip()
+    if not name:
+        return {"ok": False, "error": "name is required"}
+    cents = _to_cents(price_dollars)
+    if cents is None:
+        return {"ok": False, "error": "price is required and must be a number"}
+    if cents < 0:
+        return {"ok": False, "error": "price cannot be negative"}
+    try:
+        with conn.cursor() as cur:
+            if item_id:
+                cur.execute(
+                    "UPDATE materials_catalog SET store=%s, brand=%s, category=%s, name=%s, "
+                    "model=%s, sku=%s, unit=%s, price_cents=%s, notes=%s, updated_at=NOW() "
+                    "WHERE id=%s RETURNING id;",
+                    (store or "", brand or "", category or "", name, model or "",
+                     sku or "", unit or "each", cents, notes or "", int(item_id)),
+                )
+                if not cur.fetchone():
+                    item_id = None
+            if not item_id:
+                cur.execute(
+                    "INSERT INTO materials_catalog (store, brand, category, name, model, sku, "
+                    "style, color, unit, price_cents, price_high_cents, notes, enabled) "
+                    "VALUES (%s,%s,%s,%s,%s,%s,'','',%s,%s,NULL,%s,TRUE) RETURNING id;",
+                    (store or "", brand or "", category or "", name, model or "",
+                     sku or "", unit or "each", cents, notes or ""),
+                )
+                item_id = (cur.fetchone() or {}).get("id")
+        conn.commit()
+        return {"ok": True, "id": item_id, "price_cents": cents}
+    except Exception as exc:
+        conn.rollback()
+        return {"ok": False, "error": str(exc)}
+
+
+def bulk_import_catalog(conn, text: str, *, default_store: str = "") -> dict:
+    """Paste many rows at once.
+
+    Accepts CSV or TSV. Header row optional; recognised columns are
+    name/item, price, store/supplier, brand, category, sku, model, unit, notes.
+    Blank lines and lines starting with # are skipped.
+
+    Whole-file parse before any write, so one bad line cannot leave the catalog
+    half-imported -- the whole batch is rejected with the offending row named.
+    """
+    result = {"imported": 0, "skipped": 0, "errors": [], "total": 0}
+    if conn is None:
+        result["errors"].append("no database")
+        return result
+    if not (text or "").strip():
+        result["errors"].append("nothing to import")
+        return result
+
+    rows, header = [], None
+    for lineno, raw in enumerate(text.splitlines(), start=1):
+        line = raw.rstrip()
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        delim = "\t" if "\t" in line else ","
+        cells = [c.strip().strip('"') for c in line.split(delim)]
+        low = [c.lower().strip() for c in cells]
+        if header is None and any(c in ("name", "item", "description") for c in low):
+            header = {name: i for i, name in enumerate(low)}
+            continue
+        rows.append((lineno, cells))
+
+    if not rows:
+        result["errors"].append("no data rows found")
+        return result
+
+    # With no header there is nothing to look a name up by, so fall back to the
+    # documented column order. Pasting straight off a receipt usually has no
+    # header row, and "header row optional" has to actually mean optional.
+    POSITIONAL = ["name", "price", "store", "brand", "category",
+                  "sku", "model", "unit", "notes"]
+
+    def col(cells, *names):
+        if header:
+            for n in names:
+                if n in header and header[n] < len(cells):
+                    return cells[header[n]]
+            return ""
+        for n in names:
+            if n in POSITIONAL:
+                i = POSITIONAL.index(n)
+                return cells[i] if i < len(cells) else ""
+        return ""
+
+    parsed = []
+    for lineno, cells in rows:
+        name = col(cells, "name", "item", "description")
+        price = col(cells, "price", "cost", "amount", "unit_price")
+        if not name or price == "":
+            result["skipped"] += 1
+            continue
+        cents = _to_cents(price)
+        if cents is None or cents < 0:
+            result["errors"].append(f"line {lineno}: bad price {price!r}")
+            continue
+        parsed.append({
+            "name": name, "price_cents": cents,
+            "store": col(cells, "store", "supplier") or default_store or "",
+            "brand": col(cells, "brand"), "category": col(cells, "category", "type"),
+            "sku": col(cells, "sku", "item_number", "upc"), "model": col(cells, "model"),
+            "unit": col(cells, "unit") or "each", "notes": col(cells, "notes"),
+        })
+
+    if result["errors"]:
+        return result                       # reject the whole batch, write nothing
+    result["total"] = len(parsed)
+    try:
+        with conn.cursor() as cur:
+            for p in parsed:
+                cur.execute(
+                    "INSERT INTO materials_catalog (store, brand, category, name, model, "
+                    "sku, style, color, unit, price_cents, price_high_cents, notes, enabled) "
+                    "VALUES (%s,%s,%s,%s,%s,%s,'','',%s,%s,NULL,%s,TRUE);",
+                    (p["store"], p["brand"], p["category"], p["name"], p["model"],
+                     p["sku"], p["unit"], p["price_cents"], p["notes"]),
+                )
+                result["imported"] += 1
+        conn.commit()
+    except Exception as exc:
+        conn.rollback()
+        result["errors"].append(str(exc))
+        result["imported"] = 0
+    return result
+
+
+def delete_catalog_item(conn, item_id: int) -> dict:
+    """Disable rather than delete.
+
+    A price that turned out to be wrong should not erase the fact that the item
+    was quoted, and `enabled` is what every read path already filters on.
+    """
+    if conn is None:
+        return {"ok": False, "error": "no database"}
+    try:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE materials_catalog SET enabled = FALSE, updated_at = NOW() "
+                        "WHERE id = %s RETURNING id;", (int(item_id),))
+            ok = cur.fetchone() is not None
+        conn.commit()
+        return {"ok": ok}
+    except Exception as exc:
+        conn.rollback()
+        return {"ok": False, "error": str(exc)}
