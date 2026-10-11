@@ -732,6 +732,12 @@ async def lifecycle(app: FastAPI):
     except Exception as exc:
         print(f"⚠️ lead pipeline init skipped: {exc}", flush=True)
 
+    # Probes SMTP egress once at boot. Auth-only, sends nothing.
+    try:
+        _smtp_egress_probe()
+    except Exception as exc:
+        print(f"[smtp-probe] crashed: {type(exc).__name__}: {exc}"[:180], flush=True)
+
     yield
 
 
@@ -2540,59 +2546,41 @@ async def inventory_page(request: Request, company: str = "construction", db=Dep
 # Prices are typed in dollars because that is what is printed on the receipt.
 
 
-@app.get("/api/_diag/smtp")
-async def diag_smtp(key: str = "", db=Depends(get_db)):
-    """TEMPORARY diagnostic. Authenticate to SMTP without sending anything.
+def _smtp_egress_probe():
+    """Startup probe: can this host reach smtp.gmail.com, and does auth work?
 
-    Proves whether this host can reach smtp.gmail.com at all, which is the
-    question that decides whether EMAIL_TRANSPORT=legacy is viable on Railway
-    or whether outbound mail is impossible without the Gmail API.
+    Railway commonly blocks outbound SMTP on 25/465/587, which would make
+    EMAIL_TRANSPORT=legacy unusable and leave outbound mail dependent on the
+    Gmail API. This answers it once at boot and logs the verdict, because the
+    Gmail API's own preflight cannot: refreshing a token succeeds even when
+    every real API call is rejected.
 
-    Connects and authenticates only -- no message is transmitted, so it is safe
-    to run. Keyed on DIAG_KEY so it is not callable by the public.
+    Authenticates only. No message is transmitted.
     """
-    expected = os.getenv("DIAG_KEY", "")
-    if not expected or key != expected:
-        return JSONResponse({"error": "forbidden"}, status_code=403)
+    if (os.getenv("EMAIL_TRANSPORT", "") or "").lower() != "legacy":
+        return
     import smtplib
     cfg = documents_service.smtp_config_from_env()
     host = cfg.get("SMTP_HOST") or ""
-    port = int(cfg.get("SMTP_PORT") or 587)
-    out = {
-        "transport_env": os.getenv("EMAIL_TRANSPORT", "gmail"),
-        "host": host, "port": port,
-        "user": cfg.get("SMTP_USER", ""),
-        "has_password": bool(cfg.get("SMTP_PASS")),
-        "attempt": [],
-    }
     if not host:
-        out["attempt"].append({"step": "config", "ok": False, "error": "SMTP_HOST empty"})
-        return JSONResponse(out)
+        print("[smtp-probe] SKIP: SMTP_HOST is empty", flush=True)
+        return
+    port = int(cfg.get("SMTP_PORT") or 587)
     for mode in ("starttls", "ssl", "none"):
-        entry = {"step": mode}
         try:
             if mode == "starttls":
-                s = smtplib.SMTP(host, port, timeout=20)
-                s.ehlo(); s.starttls(); s.ehlo()
+                c = smtplib.SMTP(host, port, timeout=15); c.ehlo(); c.starttls(); c.ehlo()
             elif mode == "ssl":
-                s = smtplib.SMTP_SSL(host, port, timeout=20)
-                s.ehlo()
+                c = smtplib.SMTP_SSL(host, port, timeout=15); c.ehlo()
             else:
-                s = smtplib.SMTP(host, port, timeout=20); s.ehlo()
-            entry["greeting_ok"] = True
-            s.login(cfg.get("SMTP_USER", ""), cfg.get("SMTP_PASS", ""))
-            entry["login_ok"] = True
-            s.quit()
-            entry["ok"] = True
-            out["attempt"].append(entry)
-            break
+                c = smtplib.SMTP(host, port, timeout=15); c.ehlo()
+            c.login(cfg.get("SMTP_USER", ""), cfg.get("SMTP_PASS", ""))
+            c.quit()
+            print(f"[smtp-probe] SMTP WORKS via {mode} to {host}:{port}", flush=True)
+            return
         except Exception as exc:
-            entry["ok"] = False
-            entry["error"] = f"{type(exc).__name__}: {exc}"[:200]
-            out["attempt"].append(entry)
-    out["verdict"] = ("SMTP WORKS from this host" if any(a.get("ok") for a in out["attempt"])
-                      else "SMTP BLOCKED — all modes failed")
-    return JSONResponse(out)
+            print(f"[smtp-probe] {mode} failed: {type(exc).__name__}: {exc}"[:180], flush=True)
+    print("[smtp-probe] VERDICT: all modes failed - Railway blocks SMTP egress", flush=True)
 
 
 @app.get("/materials", response_class=HTMLResponse)
