@@ -233,10 +233,25 @@ def mail_ready() -> bool:
             services = (os.getenv("GMAIL_SEND_SERVICES", "construction,broom") or "")
             for svc in [s.strip() for s in services.split(",") if s.strip()]:
                 try:
-                    if google_oauth.get_valid_access_token(svc, sender):
-                        ok = True
-                        detail = f"Gmail token valid for {svc}"
-                        break
+                    token = google_oauth.get_valid_access_token(svc, sender)
+                    if token:
+                        # A refreshable token is not proof of working mail.
+                        # oauth2.googleapis.com happily hands one back for a
+                        # deleted consumer project, so every subsequent Gmail
+                        # call fails 403. Verify against a real endpoint or
+                        # this reports OK while all sends are dead.
+                        import urllib.request as _u
+                        _req = _u.Request(
+                            "https://gmail.googleapis.com/gmail/v1/users/me/profile",
+                            headers={"Authorization": f"Bearer {token}"})
+                        try:
+                            with _u.urlopen(_req, timeout=20):
+                                ok = True
+                                detail = f"Gmail send verified for {svc}"
+                        except Exception as exc:
+                            detail = f"{svc}: token refreshes but API call fails -- {exc}"
+                    else:
+                        detail = f"{svc}: no valid token"
                 except Exception as exc:
                     detail = f"{svc}: {exc}"
     except Exception as exc:

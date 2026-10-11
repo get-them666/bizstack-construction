@@ -732,12 +732,6 @@ async def lifecycle(app: FastAPI):
     except Exception as exc:
         print(f"⚠️ lead pipeline init skipped: {exc}", flush=True)
 
-    # Probes SMTP egress once at boot. Auth-only, sends nothing.
-    try:
-        _smtp_egress_probe()
-    except Exception as exc:
-        print(f"[smtp-probe] crashed: {type(exc).__name__}: {exc}"[:180], flush=True)
-
     yield
 
 
@@ -2544,44 +2538,6 @@ async def inventory_page(request: Request, company: str = "construction", db=Dep
 # agreement, and Richards/Kempsville/Builders FirstSource have no feed at all.
 # This page is how the price book gets real numbers before any of that lands.
 # Prices are typed in dollars because that is what is printed on the receipt.
-
-
-def _smtp_egress_probe():
-    """Startup probe: can this host reach smtp.gmail.com, and does auth work?
-
-    Railway commonly blocks outbound SMTP on 25/465/587, which would make
-    EMAIL_TRANSPORT=legacy unusable and leave outbound mail dependent on the
-    Gmail API. This answers it once at boot and logs the verdict, because the
-    Gmail API's own preflight cannot: refreshing a token succeeds even when
-    every real API call is rejected.
-
-    Authenticates only. No message is transmitted.
-    """
-    if (os.getenv("EMAIL_TRANSPORT", "") or "").lower() != "legacy":
-        return
-    import smtplib
-    import documents_service  # imported locally elsewhere in this module too
-    cfg = documents_service.smtp_config_from_env()
-    host = cfg.get("SMTP_HOST") or ""
-    if not host:
-        print("[smtp-probe] SKIP: SMTP_HOST is empty", flush=True)
-        return
-    port = int(cfg.get("SMTP_PORT") or 587)
-    for mode in ("starttls", "ssl", "none"):
-        try:
-            if mode == "starttls":
-                c = smtplib.SMTP(host, port, timeout=15); c.ehlo(); c.starttls(); c.ehlo()
-            elif mode == "ssl":
-                c = smtplib.SMTP_SSL(host, port, timeout=15); c.ehlo()
-            else:
-                c = smtplib.SMTP(host, port, timeout=15); c.ehlo()
-            c.login(cfg.get("SMTP_USER", ""), cfg.get("SMTP_PASS", ""))
-            c.quit()
-            print(f"[smtp-probe] SMTP WORKS via {mode} to {host}:{port}", flush=True)
-            return
-        except Exception as exc:
-            print(f"[smtp-probe] {mode} failed: {type(exc).__name__}: {exc}"[:180], flush=True)
-    print("[smtp-probe] VERDICT: all modes failed - Railway blocks SMTP egress", flush=True)
 
 
 @app.get("/materials", response_class=HTMLResponse)
