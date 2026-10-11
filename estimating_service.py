@@ -61,15 +61,19 @@ MODELS = {
     "kitchen": {
         "label": "Kitchen Remodel",
         "kind": "fixed",
-        "low": _env_float("EST_KITCHEN_LOW", 18000.0),
-        "high": _env_float("EST_KITCHEN_HIGH", 45000.0),
+        # VA 2026: $14,400-41,600, typical $28,000 (Rafter); Hampton Roads runs
+        # under the statewide average. Was 18-45 (mid 31,500), +12% over typical.
+        "low": _env_float("EST_KITCHEN_LOW", 17000.0),
+        "high": _env_float("EST_KITCHEN_HIGH", 34000.0),
         "unit": "project",
     },
     "bath": {
         "label": "Bathroom Remodel",
         "kind": "fixed",
-        "low": _env_float("EST_BATH_LOW", 9000.0),
-        "high": _env_float("EST_BATH_HIGH", 25000.0),
+        # VA 2026: $8,900-17,800, typical $13,400 (Rafter). Was 9-25 (mid 17,000),
+        # +27% over typical -- the furthest off of any band in the table.
+        "low": _env_float("EST_BATH_LOW", 8500.0),
+        "high": _env_float("EST_BATH_HIGH", 17000.0),
         "unit": "project",
     },
     "fence": {
