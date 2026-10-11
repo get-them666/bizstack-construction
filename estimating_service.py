@@ -26,8 +26,15 @@ MODELS = {
     "whole-home": {
         "label": "Whole-Home Renovation",
         "kind": "sqft",
-        "low": _env_float("EST_WHOLE_HOME_LOW", 95.0),
-        "high": _env_float("EST_WHOLE_HOME_HIGH", 175.0),
+        # Hampton Roads / Virginia 2026 benchmarks: mid-range full renovation
+        # $40-100/sqft (BenchCalcs, Radford, AmeriSave), cosmetic $15-40,
+        # gut $100-250. VA cost index 0.99-1.09, and Hampton Roads is repeatedly
+        # called out as cheaper than Northern Virginia. This band was 95-175
+        # (mid $135), which priced an 1,800 sqft job at $243k -- the top of the
+        # market, not the middle. Owner set it to sit just under the local
+        # mid-range average. See MEMORY.md for the full comparison.
+        "low": _env_float("EST_WHOLE_HOME_LOW", 45.0),
+        "high": _env_float("EST_WHOLE_HOME_HIGH", 90.0),
         "unit": "interior sq ft",
     },
     "refresh": {
