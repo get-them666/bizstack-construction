@@ -198,8 +198,7 @@ assistant and a robot that forgets:
                 "You act with full authority over the owner's business database: "
                 "review and update the lead pipeline, summarize performance, run "
                 "payroll + direct deposit, look up permits and city codes, estimate "
-                "materials, review accounting, and summarize the sister company "
-                "(Broom Service). You also track crew safety + skills training — use "
+                "materials, and review accounting. You also track crew safety + skills training — use "
                 "training_status to report who has and hasn't completed training, and "
                 "remind_crew_training to text reminders to workers who haven't passed "
                 "safety orientation (that IS a send; if asked to text every "
@@ -481,7 +480,7 @@ OPERATING MANUAL:
                     "name": "schedule_event",
                     "description": (
                         "Put something on the owner's calendar: a walkthrough, crew shift, "
-                        "host turnover or training session. This WRITES -- confirm the "
+                        "or a training session. This WRITES -- confirm the "
                         "title, date and time with the owner before calling it."
                     ),
                     "parameters": self._props(
@@ -688,16 +687,8 @@ OPERATING MANUAL:
             {
                 "type": "function",
                 "function": {
-                    "name": "sister_business_summary",
-                    "description": "Summary report for the sister company (Broom Service — bizstackperks.com STR turnover cleaning): jobs/leads, revenue, crew, payroll, bank status.",
-                    "parameters": self._props({}, [], ""),
-                },
-            },
-            {
-                "type": "function",
-                "function": {
                     "name": "run_site_health_check",
-                    "description": "Run a health check across both websites (public pages, logins, APIs, Stripe, email/SMS services).",
+                    "description": "Run a health check across the construction site (public pages, logins, APIs, Stripe, email/SMS services).",
                     "parameters": self._props({}, [], ""),
                 },
             },
@@ -705,9 +696,9 @@ OPERATING MANUAL:
                 "type": "function",
                 "function": {
                     "name": "generate_training_deck",
-                    "description": "Generate a crew orientation PowerPoint training deck. Kinds: construction-trades (Tools of the Trade), construction-safety (Job Site Safety / OSHA-10 baseline), construction-app (Crew App install & time reporting), construction-ethics (Workplace Ethics & Conduct), construction (combined orientation), worker, host.",
+                    "description": "Generate a crew orientation PowerPoint training deck. Kinds: construction-trades (Tools of the Trade), construction-safety (Job Site Safety / OSHA-10 baseline), construction-app (Crew App install & time reporting), construction-ethics (Workplace Ethics & Conduct), construction (combined orientation), worker.",
                     "parameters": self._props(
-                        {"kind": "string"}, ["kind"], "kind: construction-trades, construction-safety, construction-app, construction-ethics, construction, worker, or host."
+                        {"kind": "string"}, ["kind"], "kind: construction-trades, construction-safety, construction-app, construction-ethics, construction, or worker."
                     ),
                 },
             },

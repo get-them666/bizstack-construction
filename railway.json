@@ -5,7 +5,6 @@
     "watchPatterns": [
       "construction_main.py",
       "con_ai_agent.py",
-      "ai_agent.py",
       "copilot_ops.py",
       "copilot_memory.py",
       "copilot_tasks.py",

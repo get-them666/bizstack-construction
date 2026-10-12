@@ -376,7 +376,7 @@ def build_calendar_tools(db):
         summary: str = "", start: str = "", end: str = "", description: str = "",
         attendees: str = "", location: str = "",
     ) -> dict:
-        """Create a calendar event (walkthrough, crew shift, host turnover, training)."""
+        """Create a calendar event (walkthrough, crew shift, training)."""
         gc = _impl()
         if not summary.strip():
             return {"ok": False, "error": "The event needs a title."}
@@ -387,7 +387,7 @@ def build_calendar_tools(db):
         if end_dt is None or end_dt <= start_dt:
             end_dt = start_dt + timedelta(hours=1)
 
-        # Raw Google Calendar event shape, matching _bizstack_event_to_google().
+        # Raw Google Calendar event shape for the primary calendar.
         event = {
             "summary": summary.strip(),
             "start": {"dateTime": start_dt.isoformat(), "timeZone": TZ},
@@ -427,19 +427,10 @@ def build_calendar_tools(db):
             return {"ok": False, "error": f"Could not delete that event: {e}"}
         return {"ok": True, "message": f"Removed event {event_id.strip()}."}
 
-    def sync_calendars() -> dict:
-        """Two-way sync of all host property bookings to Google Calendar."""
-        gc = _impl()
-        try:
-            return {"ok": True, **(gc.sync_all_properties("google", "owner", db) or {})}
-        except Exception as e:
-            return {"ok": False, "error": f"Calendar sync failed: {e}"}
-
     return {
         "list_calendar_events": list_calendar_events,
         "schedule_event": schedule_event,
         "cancel_event": cancel_event,
-        "sync_calendars": sync_calendars,
     }
 
 

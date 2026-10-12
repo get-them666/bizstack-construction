@@ -58,13 +58,6 @@ TRADE_TYPES = {
         "plumber",
         "electrician",
     ],
-    "broom": [
-        "cleaning-service",
-        "house-cleaning-service",
-        "laundry-service",
-        "property-management-company",
-        "landscaping-service",
-    ],
 }
 
 _TRUE = ("1", "true", "yes", "on")

@@ -55,37 +55,6 @@ ROOM_CUES = {
     ),
 }
 
-CLEAN_BASE_MINUTES = {
-    "kitchen": _env_float("VQ_CLEAN_KITCHEN_MIN", 45),
-    "bathroom": _env_float("VQ_CLEAN_BATH_MIN", 35),
-    "bedroom": _env_float("VQ_CLEAN_BEDROOM_MIN", 20),
-    "living_room": _env_float("VQ_CLEAN_LIVING_MIN", 25),
-    "dining_room": _env_float("VQ_CLEAN_DINING_MIN", 20),
-    "office": _env_float("VQ_CLEAN_OFFICE_MIN", 20),
-    "garage": _env_float("VQ_CLEAN_GARAGE_MIN", 30),
-    "basement": _env_float("VQ_CLEAN_BASEMENT_MIN", 35),
-    "exterior": _env_float("VQ_CLEAN_EXTERIOR_MIN", 60),
-}
-
-CLEAN_ITEM_MINUTES = {
-    "refrigerator": 10,
-    "oven": 20,
-    "microwave": 8,
-    "dishwasher": 10,
-    "bathtub": 15,
-    "shower": 15,
-    "toilet": 8,
-    "window": 6,
-    "cabinet": 5,
-    "cabinetry": 5,
-    "counter top": 4,
-    "countertop": 4,
-    "sink": 4,
-    "mirror": 3,
-    "toilet paper": 2,
-    "towel": 3,
-}
-
 CONDITION_CUES = {
     "heavy soil": 1.35,
     "stained": 1.25,
@@ -185,53 +154,6 @@ def detect_scope(vision: dict) -> dict:
     }
 
 
-def _condition_multiplier(condition):
-    multiplier = 1.0
-    for item in condition or []:
-        multiplier *= float(item.get("multiplier") or 1.0)
-    return round(multiplier, 3)
-
-
-def cleaning_quote(scope: dict) -> dict:
-    """Labor-hour range for the detected room, plus per-item adders.
-
-    Priced only when a billing rate is configured, so an unset rate can never
-    invent a number the owner did not agree to.
-    """
-    room = scope.get("room") or ""
-    base = CLEAN_BASE_MINUTES.get(room)
-    if base is None:
-        return {"available": False, "why": "no recognizable room in the photo"}
-    item_minutes = 0.0
-    adders = []
-    for item in scope.get("items") or []:
-        minutes = CLEAN_ITEM_MINUTES.get(item["name"])
-        if minutes:
-            item_minutes += minutes
-            adders.append({"item": item["name"], "minutes": minutes})
-    multiplier = _condition_multiplier(scope.get("condition"))
-    low = (base + item_minutes * 0.6) * multiplier
-    high = (base + item_minutes * 1.4) * multiplier
-    result = {
-        "available": True,
-        "room": room,
-        "hours": {"low": round(low / 60.0, 1), "high": round(high / 60.0, 1)},
-        "base_minutes": base,
-        "item_minutes": round(item_minutes, 1),
-        "condition_multiplier": multiplier,
-        "adders": adders[:8],
-    }
-    rate_low = _env_float("CLEAN_HOURLY_LOW", 0)
-    rate_high = _env_float("CLEAN_HOURLY_HIGH", 0)
-    if rate_low > 0 and rate_high > 0:
-        result["price"] = {
-            "low_cents": int(round(low / 60.0 * rate_low * 100)),
-            "high_cents": int(round(high / 60.0 * rate_high * 100)),
-            "rate_low": rate_low,
-            "rate_high": rate_high,
-        }
-    return result
-
 
 def construction_quote(scope: dict) -> dict:
     """Ballpark for the detected room via the existing estimating engine."""
@@ -258,7 +180,7 @@ def construction_quote(scope: dict) -> dict:
     }
 
 
-def quote_from_vision(vision: dict | None, company: str = "broom", sqft: float | None = None) -> dict:
+def quote_from_vision(vision: dict | None, sqft: float | None = None) -> dict:
     """Full photo -> scope -> quote. Returns an `available: False` shape when
     Vision is unconfigured, the API failed, or nothing recognizable was found,
     so the caller can always fall back to the normal manual quote path."""
@@ -274,8 +196,8 @@ def quote_from_vision(vision: dict | None, company: str = "broom", sqft: float |
             "why": "could not identify the room with enough confidence",
             "scope": scope,
         }
-    quote = construction_quote(scope) if company == "construction" else cleaning_quote(scope)
-    if company == "construction" and sqft and quote.get("available"):
+    quote = construction_quote(scope)
+    if sqft and quote.get("available"):
         quote = {
             "available": True,
             "room": scope["room"],
@@ -284,7 +206,7 @@ def quote_from_vision(vision: dict | None, company: str = "broom", sqft: float |
         }
     return {
         "available": bool(quote.get("available")),
-        "company": company,
+        "company": "construction",
         "scope": scope,
         "quote": quote,
         "disclaimer": DISCLAIMER,

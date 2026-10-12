@@ -433,7 +433,7 @@ async def lifecycle(app: FastAPI):
                 cur.execute("""
                 CREATE TABLE IF NOT EXISTS supplies_inventory (
                     id SERIAL PRIMARY KEY,
-                    company VARCHAR(40) NOT NULL DEFAULT 'broom',
+                    company VARCHAR(40) NOT NULL DEFAULT 'construction',
                     item_name VARCHAR(255) NOT NULL,
                     sku VARCHAR(120),
                     category VARCHAR(120),
@@ -446,31 +446,6 @@ async def lifecycle(app: FastAPI):
                 );
                 """)
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_supplies_company ON supplies_inventory(company);")
-                cur.execute("""
-                CREATE TABLE IF NOT EXISTS hosts (
-                    id SERIAL PRIMARY KEY,
-                    name VARCHAR(255) NOT NULL,
-                    phone VARCHAR(50),
-                    email VARCHAR(255),
-                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-                );
-                """)
-                cur.execute("ALTER TABLE hosts ADD COLUMN IF NOT EXISTS allergens TEXT;")
-                cur.execute("ALTER TABLE hosts ADD COLUMN IF NOT EXISTS cleaning_supplies TEXT;")
-                cur.execute("ALTER TABLE hosts ADD COLUMN IF NOT EXISTS special_instructions TEXT;")
-                cur.execute("ALTER TABLE hosts ADD COLUMN IF NOT EXISTS property_address VARCHAR(255);")
-                cur.execute("ALTER TABLE hosts ADD COLUMN IF NOT EXISTS property_name VARCHAR(255);")
-                cur.execute("""
-                CREATE TABLE IF NOT EXISTS properties (
-                    id SERIAL PRIMARY KEY,
-                    name VARCHAR(255),
-                    address VARCHAR(255),
-                    host_id INTEGER,
-                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-                );
-                """)
-                cur.execute("ALTER TABLE properties ADD COLUMN IF NOT EXISTS allergens TEXT;")
-                cur.execute("ALTER TABLE properties ADD COLUMN IF NOT EXISTS cleaning_supplies TEXT;")
                 cur.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS listing_url VARCHAR(512);")
                 cur.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS campaign VARCHAR(80);")
                 cur.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS referral_code VARCHAR(120);")
@@ -914,7 +889,7 @@ def _set_setting(db, key, value):
         db.commit()
 
 
-# --- Crew feature toggles (namespaced away from Broom's perms_worker) -------
+# --- Crew feature toggles (namespaced per-role) ------------------------------
 CREW_PERMS_KEY = "perms_crew"
 
 
@@ -1376,28 +1351,9 @@ f"The mail transport did not accept the message. This usually means the "
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
-    def sister_business_summary():
-        with db.cursor() as cur:
-            cur.execute("SELECT COUNT(*) AS c FROM leads WHERE company = 'broom';")
-            leads = cur.fetchone()["c"]
-            cur.execute("SELECT COUNT(*) AS c FROM bookings;")
-            bookings = cur.fetchone()["c"]
-            cur.execute("SELECT COUNT(*) AS c FROM workers WHERE is_active = TRUE;")
-            workers = cur.fetchone()["c"]
-            cur.execute("SELECT COALESCE(SUM(gross_cents),0) AS amt FROM worker_paychecks;")
-            payroll = cur.fetchone()["amt"]
-        return {
-            "ok": True,
-            "company": "Broom Service (bizstackperks.com)",
-            "leads": leads,
-            "bookings": bookings,
-            "active_workers": workers,
-            "payroll_paid_total_cents": payroll,
-        }
-
     def run_site_health_check():
         site = f"https://{company()['domain']}"
-        checks = {"construction_site": True, "broom_site": True, "sms": True, "stripe": True, "database": True}
+        checks = {"construction_site": True, "sms": True, "stripe": True, "database": True}
         try:
             with db.cursor() as cur:
                 cur.execute("SELECT 1;")
@@ -1409,14 +1365,13 @@ f"The mail transport did not accept the message. This usually means the "
             "ok": True,
             "sites": {
                 "construction": f"{site} ✓",
-                "broom": "https://bizstackperks.com ✓",
             },
             "checks": checks,
         }
 
     def generate_training_deck(kind="worker"):
         kind = training_service.CONSTRUCTION_DECK_KINDS.get(kind, kind)
-        if kind not in ("worker", "host", "construction",
+        if kind not in ("worker", "construction",
                         "construction-trades", "construction-safety",
                         "construction-app", "construction-ethics"):
             return {"ok": False, "error": f"Unknown deck kind: {kind}"}
@@ -1431,7 +1386,6 @@ f"The mail transport did not accept the message. This usually means the "
             "construction-app": "Crew App — Install & Time Reporting",
             "construction-ethics": "Workplace Ethics & Professional Conduct",
             "worker": "Worker Orientation",
-            "host": "Host & Lead Onboarding",
         }
         label = DECK_LABELS.get(kind, kind)
         with db.cursor() as cur:
@@ -1620,9 +1574,8 @@ f"The mail transport did not accept the message. This usually means the "
         return out
 
     def get_inventory(company="construction", category="", low_only=False):
-        """List supply inventory for construction (or broom), optionally at/below reorder level."""
-        co = "construction" if (company or "").lower() in ("construction", "buildstack", "build") else (
-            "broom" if (company or "").lower() in ("broom", "hosts", "cleaning") else "construction")
+        """List supply inventory for construction, optionally at/below reorder level."""
+        co = "construction"
         with db.cursor() as cur:
             cur.execute("SELECT * FROM supplies_inventory WHERE company = %s ORDER BY category, item_name;", (co,))
             rows = cur.fetchall()
@@ -1644,8 +1597,7 @@ f"The mail transport did not accept the message. This usually means the "
         """Adjust supply quantity (add/remove via qty_delta, or set absolute)."""
         if not str(item_name or "").strip():
             return {"ok": False, "error": "Which supply item?"}
-        co = "construction" if (company or "").lower() in ("construction", "buildstack", "build", "") else (
-            "broom" if (company or "").lower() in ("broom", "hosts", "cleaning") else "construction")
+        co = "construction"
         with db.cursor() as cur:
             cur.execute("SELECT * FROM supplies_inventory WHERE company = %s AND item_name ILIKE %s;",
                         (co, str(item_name).strip()))
@@ -1670,8 +1622,7 @@ f"The mail transport did not accept the message. This usually means the "
 
     def reorder_report(company="construction"):
         """Every supply at/below its reorder level — the restock shopping list."""
-        co = "construction" if (company or "").lower() in ("construction", "buildstack", "build", "") else (
-            "broom" if (company or "").lower() in ("broom", "hosts", "cleaning") else "construction")
+        co = "construction"
         with db.cursor() as cur:
             cur.execute("SELECT * FROM supplies_inventory WHERE company = %s "
                         "AND qty_on_hand <= reorder_level ORDER BY category, item_name;", (co,))
@@ -1719,11 +1670,9 @@ f"The mail transport did not accept the message. This usually means the "
         role = (role or "").lower().strip()
         if "work" in role or "employ" in role or "crew" in role or "staff" in role or "team" in role:
             role = "employee"
-        elif "host" in role or "propert" in role:
-            role = "host"
         elif "own" in role or "admin" in role or "boss" in role or "shaun" in role:
             role = "owner"
-        elif "customer" in role or "client" in role or "caller" in role or "prospect" in role or "guest" in role:
+        elif "customer" in role or "client" in role or "caller" in role or "prospect" in role:
             role = "customer"
         else:
             role = "anyone"
@@ -1736,17 +1685,11 @@ f"The mail transport did not accept the message. This usually means the "
                 "Construction site: construction.bizstackperks.com — free-estimate form at /quote and the instant-quote tool that ballparks a range in minutes from an address.",
                 "Call or text the same number any time: +1 (757) 908-7121.",
             ],
-            "host": [
-                "Broom host portal: bizstackperks.com/host-portal — your properties, cleaning schedules, photo verification, and payment status.",
-                "Call or text the same number any time: +1 (757) 908-7121.",
-            ],
             "owner": [
                 "Construction dashboard: construction.bizstackperks.com — project pipeline, deposits, crew, accounting, permits, radar at /dashboard, /leads, /payments.",
-                "Master dashboard: bizstackperks.com — accounting, labor, payroll, hosts, customers, leads, documents, both companies.",
             ],
             "anyone": [
                 "Construction: construction.bizstackperks.com — instant-quote from an address, free-estimate form at /quote, portfolio, crew app.",
-                "Broom: bizstackperks.com — book cleanings, host portal, pay by link.",
                 "Call or text the same number any time: +1 (757) 908-7121.",
             ],
         }
@@ -1775,7 +1718,6 @@ f"The mail transport did not accept the message. This usually means the "
         "estimate_materials": estimate_materials,
         "get_material_price": get_material_price,
         "search_materials": search_materials,
-        "sister_business_summary": sister_business_summary,
         "make_outbound_call": make_outbound_call,
         "run_site_health_check": run_site_health_check,
         "generate_training_deck": generate_training_deck,
@@ -1944,8 +1886,7 @@ async def vision_quote_endpoint(
             content={"available": False, "why": "image analysis unavailable, please send the photo to us directly"},
             status_code=200,
         )
-    company_key = "construction" if (company or "").strip().lower() == "construction" else "broom"
-    result = vision_quote.quote_from_vision(vision, company_key, sqft)
+    result = vision_quote.quote_from_vision(vision, sqft)
     result["vision"] = vision
     if len(_vision_quote_cache) >= VISION_QUOTE_CACHE_MAX:
         _vision_quote_cache.pop(next(iter(_vision_quote_cache)), None)
@@ -2157,7 +2098,7 @@ async def api_logout():
 @app.get("/auth/google")
 async def google_oauth_start(request: Request, service: str = "construction"):
     """Initiate Google OAuth flow."""
-    if service not in ("broom", "construction"):
+    if service != "construction":
         return RedirectResponse(url="/login?error=Invalid+service", status_code=status.HTTP_303_SEE_OTHER)
     auth_url, state = google_oauth.start_google_oauth(service)
     resp = RedirectResponse(url=auth_url, status_code=status.HTTP_303_SEE_OTHER)
@@ -2181,33 +2122,19 @@ async def google_oauth_callback(request: Request, code: str = None, error: str =
         user_name = user["user_name"]
         # Resolve or create local account
         actor = None
-        if service == "construction":
+        with db.cursor() as cur:
+            cur.execute("SELECT * FROM users WHERE email ILIKE %s;", (user_email,))
+            actor = cur.fetchone()
+        if not actor:
+            admin_email = os.getenv("ADMIN_EMAIL", "").lower()
+            role = "admin" if user_email == admin_email else "worker"
             with db.cursor() as cur:
-                cur.execute("SELECT * FROM users WHERE email ILIKE %s;", (user_email,))
+                cur.execute("""
+                    INSERT INTO users (email, name, role, created_at)
+                    VALUES (%s, %s, %s, NOW()) RETURNING *;
+                """, (user_email, user_name, role))
                 actor = cur.fetchone()
-            if not actor:
-                admin_email = os.getenv("ADMIN_EMAIL", "").lower()
-                role = "admin" if user_email == admin_email else "worker"
-                with db.cursor() as cur:
-                    cur.execute("""
-                        INSERT INTO users (email, name, role, created_at)
-                        VALUES (%s, %s, %s, NOW()) RETURNING *;
-                    """, (user_email, user_name, role))
-                    actor = cur.fetchone()
-                    db.commit()
-        else:
-            # Broom - check crew table
-            with db.cursor() as cur:
-                cur.execute("SELECT * FROM crew WHERE email ILIKE %s;", (user_email,))
-                actor = cur.fetchone()
-            if not actor:
-                with db.cursor() as cur:
-                    cur.execute("""
-                        INSERT INTO crew (email, name, is_active, created_at)
-                        VALUES (%s, %s, TRUE, NOW()) RETURNING *;
-                    """, (user_email, user_name))
-                    actor = cur.fetchone()
-                    db.commit()
+                db.commit()
         if not actor:
             return RedirectResponse(url="/login?error=Failed+to+create+account", status_code=status.HTTP_303_SEE_OTHER)
         role = actor.get("role", "worker")
@@ -2224,7 +2151,7 @@ async def google_revoke_access(request: Request, db=Depends(get_db)):
     actor = auth_service.actor_from_token(request.cookies.get(auth_service.SESSION_COOKIE))
     if not actor:
         return JSONResponse({"status": "error", "message": "Not logged in"}, status_code=401)
-    service = "construction" if actor.get("role") == "admin" and request.query_params.get("service") == "construction" else "broom"
+    service = "construction"
     google_oauth.revoke_google_access(service, actor["email"])
     return JSONResponse({"status": "success", "message": "Google access revoked"})
 
@@ -2513,8 +2440,7 @@ async def inventory_page(request: Request, company: str = "construction", db=Dep
     is_authed, user_email = require_auth(request)
     if not is_authed:
         return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
-    co = "construction" if company and company.lower() == "construction" else (
-        "broom" if company and company.lower() == "broom" else "construction")
+    co = "construction"
     with db.cursor() as cur:
         cur.execute("SELECT * FROM supplies_inventory WHERE company = %s ORDER BY category, item_name;", (co,))
         rows = cur.fetchall()
@@ -2626,8 +2552,7 @@ async def inventory_update(
     is_authed, _ = require_auth(request)
     if not is_authed:
         return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
-    co = "construction" if company and company.lower() == "construction" else (
-        "broom" if company and company.lower() == "broom" else "construction")
+    co = "construction"
     try:
         change = float(delta or quantity or "0")
     except ValueError:
@@ -3880,9 +3805,8 @@ async def bot_health_route(request: Request, db=Depends(get_db)):
 @app.post("/api/leads/fire-all-drafts")
 async def fire_all_drafts_route(request: Request, db=Depends(get_db)):
     require_admin(request)
-    # Scoped to this company. Without the scope this button on the construction
-    # site also sent whatever drafts were staged for the broom site -- two
-    # businesses sharing one table.
+    # Scoped to this company. Without the scope this button would send every
+    # staged draft on this site.
     result = auto_reply.fire_all_drafts(db, "construction")
     if request.headers.get("hx-request"):
         return JSONResponse(content=result)
@@ -4597,11 +4521,6 @@ def _build_voice_swml(prompt: str, ai_params_extra: dict | None = None) -> dict:
                                     "parameters": _swaig_parameters({}, []),
                                 },
                                 {
-                                    "function": "sister_business_summary",
-                                    "description": "Describe the sister company Broom Service (short-term rental cleaning). Use when asked about what our sister company does.",
-                                    "parameters": _swaig_parameters({}, []),
-                                },
-                                {
                                     "function": "make_outbound_call",
                                     "description": "Place an outgoing phone call to a number RIGHT NOW and answer it as the voice agent (AI). Use when you promised to call someone back, or the owner asks the bot to reach out by phone.",
                                     "parameters": _swaig_parameters(
@@ -4643,7 +4562,7 @@ def _build_voice_swml(prompt: str, ai_params_extra: dict | None = None) -> dict:
                                     "description": "List construction supply inventory on hand, optionally by category or only items at/below reorder level. Use for 'what supplies do we have' / 'what do we need' questions.",
                                     "parameters": _swaig_parameters(
                                         {
-                                            "company": {"type": "string", "description": "construction or broom."},
+                                            "company": {"type": "string", "description": "construction."},
                                             "category": {"type": "string", "description": "Optional category filter, e.g. roofing, lumber."},
                                             "low_only": {"type": "boolean", "description": "Only show items at or below reorder level."},
                                         },
@@ -4657,7 +4576,7 @@ def _build_voice_swml(prompt: str, ai_params_extra: dict | None = None) -> dict:
                                         {
                                             "item_name": {"type": "string", "description": "Exact inventory item name."},
                                             "qty_delta": {"type": "number", "description": "Signed change: +5 for restock, -2 for used."},
-                                            "company": {"type": "string", "description": "construction or broom."},
+                                            "company": {"type": "string", "description": "construction."},
                                             "category": {"type": "string", "description": "Optional category when creating the item."},
                                             "set_qty": {"type": "number", "description": "Optional absolute quantity to set."},
                                         },
@@ -4668,7 +4587,7 @@ def _build_voice_swml(prompt: str, ai_params_extra: dict | None = None) -> dict:
                                     "function": "reorder_report",
                                     "description": "List every construction supply at or below its reorder level — the restock shopping list.",
                                     "parameters": _swaig_parameters(
-                                        {"company": {"type": "string", "description": "construction or broom."}},
+                                        {"company": {"type": "string", "description": "construction."}},
                                         [],
                                     ),
                                 },
@@ -4686,7 +4605,7 @@ def _build_voice_swml(prompt: str, ai_params_extra: dict | None = None) -> dict:
                                     "parameters": _swaig_parameters(
                                         {
                                             "role": {"type": "string", "description": "employee, customer, or owner."},
-                                            "company": {"type": "string", "description": "Optional: construction or broom to narrow."},
+                                            "company": {"type": "string", "description": "Optional: construction."},
                                         },
                                         [],
                                     ),
@@ -4997,7 +4916,6 @@ VOICE_ALLOWED_TOOLS = {
     "lookup_crew_timesheets",
     "get_accounting_summary",
     "get_business_summary",
-    "sister_business_summary",
     "make_outbound_call",
     "lookup_property",
     "quote_project",
@@ -5128,10 +5046,6 @@ def _swaig_tool_response_text(name: str, result) -> str:
         if result.get("ok"):
             return f"{result.get('total_leads')} total leads, {result.get('open_leads')} open, {result.get('deposits_collected') or 0} deposits collected."
         return str(result.get("error") or "Couldn't pull the summary right now.")
-    if name == "sister_business_summary":
-        if result.get("ok"):
-            return str(result.get("message") or "Broom Service keeps short-term rentals stay-ready for guests.")
-        return str(result.get("error") or "Couldn't pull that right now.")
     if name == "make_outbound_call":
         if result.get("ok"):
             return f"I'm calling {result.get('to')} now."
@@ -7443,7 +7357,7 @@ async def worker_app_messages(request: Request, after: int = 0, db=Depends(get_d
 
 
 def _crew_message_visible_and_serialize(m, worker):
-    """Mirror Broom's _message_visible semantics for construction crew: a DM is
+    """Visibility semantics for construction crew: a DM is
     shown if this crew member wrote it or it is addressed to them; office
     announcements show whenever the scope covers construction/all."""
     kind = m.get("kind") or "announcement"
@@ -7572,7 +7486,6 @@ DECK_FILENAMES = {
     "construction-app": "crew-app-install-and-time-reporting.pptx",
     "construction-ethics": "workplace-ethics-and-conduct.pptx",
     "worker": "worker-orientation.pptx",
-    "host": "host-onboarding.pptx",
 }
 
 
@@ -7915,7 +7828,7 @@ async def leads_addresses_csv(request: Request, company: str = "construction",
     export is the right answer.
     """
     require_admin(request)
-    co = company if company in ("construction", "broom") else "construction"
+    co = "construction"
     with db.cursor() as cur:
         # No city/state/zip columns on `leads` -- the whole postal address lives
         # in `address` as one string. (job_leads has city/state; leads does
@@ -8177,7 +8090,7 @@ async def docs_download(doc_id: int, request: Request, db=Depends(get_db)):
 async def training_deck_build(request: Request, kind: str = Form("worker"), db=Depends(get_db)):
     require_admin(request)
     kind = "construction" if kind in ("construction", "construction-osha", "osha") else kind
-    if kind not in ("worker", "host", "construction"):
+    if kind not in ("worker", "construction"):
         return JSONResponse({"ok": False, "error": f"Unknown deck kind: {kind}"})
     try:
         data = training_service.build_deck(kind)
@@ -8185,7 +8098,7 @@ async def training_deck_build(request: Request, kind: str = Form("worker"), db=D
         return JSONResponse({"ok": False, "error": f"Could not build deck: {e}"})
     label = (
         "Crew Orientation + OSHA-10 Baseline" if kind == "construction"
-        else ("Worker Orientation" if kind == "worker" else "Host & Lead Onboarding")
+        else "Worker Orientation"
     )
     with db.cursor() as cur:
         cur.execute(

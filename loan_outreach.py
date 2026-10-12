@@ -16,7 +16,7 @@ from email.utils import parseaddr
 import psycopg
 from psycopg.rows import dict_row
 
-from ai_agent import BusinessAIAgent
+from con_ai_agent import BusinessAIAgent
 from documents_service import send_email as _shared_send_email, smtp_config_from_env
 
 CAMPAIGN_START_KEY = "loan_campaign_start"
@@ -168,7 +168,7 @@ def _mailer_cfg() -> dict:
 
     Reuses the app mailer so outreach rides the same delivery ladder as every
     other email, and pins the sender name to BizStack so lender mail never
-    inherits a per-service name like "Broom Service".
+    inherits a per-service name.
     """
     cfg = smtp_config_from_env()
     if FROM_ADDR:
@@ -230,7 +230,7 @@ def mail_ready() -> bool:
             detail = "no SMTP_FROM set"
         else:
             import google_oauth
-            services = (os.getenv("GMAIL_SEND_SERVICES", "construction,broom") or "")
+            services = (os.getenv("GMAIL_SEND_SERVICES", "construction") or "")
             for svc in [s.strip() for s in services.split(",") if s.strip()]:
                 try:
                     token = google_oauth.get_valid_access_token(svc, sender)

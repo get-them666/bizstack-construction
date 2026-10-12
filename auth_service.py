@@ -7,8 +7,8 @@ email delivery is actually configured (see _otp_enabled in main.py).
 
 Crew members see a restricted toolset. An admin can toggle each tool on
 or off; the toggles are stored in app_settings as JSON under `perms_crew`.
-This key is namespaced away from Broom Service's `perms_worker`/`perms_host`
-so the two companies' toggles never collide in the shared app_settings table.
+This key is namespaced under `perms_crew` so role toggles never collide with
+other namespaced settings in app_settings.
 """
 
 import os
@@ -28,8 +28,8 @@ MAX_OTP_ATTEMPTS = 6
 ROLES = ("admin", "worker")
 
 # Construction crew feature catalogue: key -> human label on the Access page.
-# Namespaced under `perms_crew` in app_settings so it never clobbers Broom
-# Service's `perms_worker` / `perms_host` keys in the shared database.
+# Namespaced under `perms_crew` in app_settings so it never collides with other
+# role-permission keys.
 CREW_FEATURES = {
     "jobs": "Assigned jobs & tasks",
     "timeclock": "Time clock (clock in / out)",

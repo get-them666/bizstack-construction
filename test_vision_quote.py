@@ -149,41 +149,9 @@ if __name__ == "__main__":
         check("empty vision is safe", vision_quote.detect_scope({})["room"] == "")
 
 
-    # --- 5. cleaning quote -------------------------------------------------------
-    def test_cleaning_quote():
-        print("\n[5] cleaning labor quote")
-        os.environ.pop("CLEAN_HOURLY_LOW", None)
-        os.environ.pop("CLEAN_HOURLY_HIGH", None)
-        scope = vision_quote.detect_scope(vision(
-            objects=[("Kitchen", 0.95), ("Refrigerator", 0.9), ("Oven", 0.85), ("Dishwasher", 0.8)],
-        ))
-        quote = vision_quote.cleaning_quote(scope)
-        check("available", quote["available"] is True)
-        check("base is kitchen minutes", quote["base_minutes"] == vision_quote.CLEAN_BASE_MINUTES["kitchen"])
-        check("appliance adders counted", quote["item_minutes"] > 0, quote["item_minutes"])
-        check("hours low < high", quote["hours"]["low"] < quote["hours"]["high"], quote["hours"])
-        check("no price invented when rate unset", "price" not in quote, quote.get("price"))
-
-        os.environ["CLEAN_HOURLY_LOW"] = "60"
-        os.environ["CLEAN_HOURLY_HIGH"] = "95"
-        priced = vision_quote.cleaning_quote(scope)
-        check("priced once rate configured", "price" in priced)
-        check("price low < high", priced["price"]["low_cents"] < priced["price"]["high_cents"])
-        os.environ.pop("CLEAN_HOURLY_LOW")
-        os.environ.pop("CLEAN_HOURLY_HIGH")
-
-        heavy = vision_quote.detect_scope(vision(
-            objects=[("Kitchen", 0.9), ("Mold", 0.8), ("Grime", 0.7)],
-        ))
-        check("condition multiplies up",
-              vision_quote.cleaning_quote(heavy)["condition_multiplier"] > 1.0)
-        check("unknown room -> unavailable",
-              vision_quote.cleaning_quote({"room": "", "items": []})["available"] is False)
-
-
-    # --- 6. construction quote ---------------------------------------------------
+    # --- 5. construction quote ---------------------------------------------------
     def test_construction_quote():
-        print("\n[6] construction quote via estimating_service")
+        print("\n[5] construction quote via estimating_service")
         scope = vision_quote.detect_scope(vision(
             objects=[("Kitchen", 0.95), ("Refrigerator", 0.9), ("Cabinet", 0.8)],
         ))
@@ -206,22 +174,19 @@ if __name__ == "__main__":
             check(f"{room} -> {expected} (via {project_type!r})", resolved == expected, f"got {resolved}")
 
 
-    # --- 7. top-level ------------------------------------------------------------
+    # --- 6. top-level ------------------------------------------------------------
     def test_top_level():
-        print("\n[7] quote_from_vision contract")
+        print("\n[6] quote_from_vision contract")
         v = vision(objects=[("Kitchen", 0.95), ("Oven", 0.85)])
-        broom = vision_quote.quote_from_vision(v, "broom")
-        check("broom -> cleaning hours", broom["quote"]["hours"]["low"] > 0)
-        check("disclaimer always present", "not a bid" in broom["disclaimer"].lower())
-
-        con = vision_quote.quote_from_vision(v, "construction")
+        con = vision_quote.quote_from_vision(v)
+        check("disclaimer always present", "not a bid" in con["disclaimer"].lower())
         check("construction -> money range", con["quote"]["estimate"]["low_est"] > 0)
 
-        sqfted = vision_quote.quote_from_vision(v, "construction", sqft=2400)
+        sqfted = vision_quote.quote_from_vision(v, sqft=2400)
         check("explicit sqft is used, not the 1750 assumption",
               sqfted["quote"]["estimate"]["sqft"] == 2400, sqfted["quote"]["estimate"]["sqft"])
 
-        weak = vision_quote.quote_from_vision(vision(objects=[("Zebra", 0.99)]), "broom")
+        weak = vision_quote.quote_from_vision(vision(objects=[("Zebra", 0.99)]))
         check("unrecognizable -> available False", weak["available"] is False)
         check("unrecognizable explains why", bool(weak.get("why")))
 
@@ -230,7 +195,7 @@ if __name__ == "__main__":
         os.environ["VISION_QUOTE_ENABLED"] = "1"
 
 
-    # --- 8. abuse controls on the public endpoint --------------------------------
+    # --- 7. abuse controls on the public endpoint --------------------------------
     def test_throttle_and_cache():
         print("\n[8] endpoint abuse controls")
         try:
@@ -265,7 +230,6 @@ if __name__ == "__main__":
             test_fail_soft,
             test_downscale,
             test_scope,
-            test_cleaning_quote,
             test_construction_quote,
             test_top_level,
             test_throttle_and_cache,

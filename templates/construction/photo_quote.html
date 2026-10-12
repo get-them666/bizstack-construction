@@ -35,7 +35,6 @@
                 <select id="vq-company"
                         class="w-full px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 text-sm">
                     <option value="construction">Construction — project estimate</option>
-                    <option value="broom">Cleaning — labour hours</option>
                 </select>
             </div>
             <div>
@@ -103,19 +102,6 @@ document.addEventListener('DOMContentLoaded', function() {
             if (e.assumptions && e.assumptions.length) {
                 h += '<ul class="mt-2 text-xs text-slate-500 list-disc pl-4">'
                    + e.assumptions.slice(0, 4).map(a => '<li>' + esc(a) + '</li>').join('') + '</ul>';
-            }
-            h += '</div>';
-        } else if (q.hours) {
-            h += '<div class="px-5 py-4 border-b border-slate-100">';
-            h += '<p class="text-xs font-semibold text-slate-500">' + esc(q.room || '') + ' — cleaning</p>';
-            h += '<p class="text-2xl font-extrabold text-slate-900 mt-0.5">'
-               + esc(q.hours.low) + '–' + esc(q.hours.high) + ' hrs</p>';
-            if (q.price) {
-                h += '<p class="text-sm font-semibold text-emerald-700 mt-1">'
-                   + money(q.price.low_cents) + ' – ' + money(q.price.high_cents) + '</p>';
-            } else {
-                h += '<p class="text-xs text-slate-500 mt-1">Hours only — set CLEAN_HOURLY_LOW/HIGH '
-                   + 'in the environment to get a price out of this.</p>';
             }
             h += '</div>';
         }

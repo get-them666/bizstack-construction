@@ -5,7 +5,7 @@ from signalwire.rest.client import RestClient
 
 
 class SignalWireService:
-    """Outbound voice/SMS helper for the Broom Service AI guest assistant."""
+    """Outbound voice/SMS helper for the Buildstack Construction assistant."""
 
     def __init__(self):
         self.project_id = os.getenv("SIGNALWIRE_PROJECT_ID", "")
@@ -38,7 +38,7 @@ class SignalWireService:
         )
 
     def send_sms(self, to: str, body: str) -> bool:
-        """Send an outbound SMS to a guest via SignalWire."""
+        """Send an outbound SMS to a contact via SignalWire."""
         if not self.is_configured() or not to or not body:
             return False
         try:
@@ -51,14 +51,6 @@ class SignalWireService:
         except Exception as e:
             print(f"❌ SignalWire SMS send failure: {e}")
             return False
-
-    def send_link_sms(self, to: str, entry_link: str) -> bool:
-        """Send a secure digital entry link mid-call."""
-        body = (
-            "Hi! Here is your secure entry link for your stay: "
-            f"{entry_link}. Your host (Broom Service) wishes you a great stay!"
-        )
-        return self.send_sms(to, body)
 
     def create_outbound_call(self, to: str, twiml_url: str) -> str:
         """Place an outbound AI call to a lead; returns the SignalWire CallSid."""

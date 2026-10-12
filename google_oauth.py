@@ -19,8 +19,8 @@ from psycopg.rows import dict_row
 # Config
 # ──────────────────────────────────────────────
 
-def _get_oauth_config(service: str = "broom") -> Dict[str, str]:
-    """Get OAuth config for 'broom' or 'construction' service."""
+def _get_oauth_config(service: str = "construction") -> Dict[str, str]:
+    """Get OAuth config for the construction service."""
     prefix = "CON_" if service == "construction" else ""
     return {
         "client_id": os.getenv(f"{prefix}GOOGLE_CLIENT_ID", ""),
@@ -48,7 +48,7 @@ SCOPE_STRING = " ".join(SCOPES)
 # Database helpers
 # ──────────────────────────────────────────────
 
-def _db_url(service: str = "broom") -> str:
+def _db_url(service: str = "construction") -> str:
     if service == "construction":
         return os.getenv("CON_DATABASE_URL") or os.getenv("DATABASE_URL", "")
     return os.getenv("DATABASE_URL", "")
@@ -134,7 +134,7 @@ def delete_google_tokens(service: str, user_email: str) -> None:
 # OAuth flow
 # ──────────────────────────────────────────────
 
-def build_auth_url(service: str = "broom", state: Optional[str] = None) -> str:
+def build_auth_url(service: str = "construction", state: Optional[str] = None) -> str:
     """Build the Google OAuth authorization URL."""
     cfg = _get_oauth_config(service)
     params = {
@@ -221,7 +221,7 @@ def get_user_info(service: str, access_token: str) -> Dict[str, Any]:
 # High-level helpers for main.py
 # ──────────────────────────────────────────────
 
-def start_google_oauth(service: str = "broom") -> tuple[str, str]:
+def start_google_oauth(service: str = "construction") -> tuple[str, str]:
     """Generate auth URL with CSRF state."""
     state = secrets.token_urlsafe(32)
     return build_auth_url(service, state), state

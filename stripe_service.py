@@ -51,55 +51,6 @@ class StripeService:
                     pass
         return DEFAULT_PRICES.get(service_type, 0)
 
-    def create_checkout_session(
-        self,
-        event_id: int,
-        customer_name: str,
-        customer_email: str,
-        service_type: str,
-        start_time: datetime,
-        discount_coupon: str = None,
-    ) -> str:
-        """Create a Stripe Checkout Session for a single booking. Returns the checkout URL."""
-        if not self.is_configured():
-            raise RuntimeError("STRIPE_SECRET_KEY is not configured.")
-
-        amount_cents = self.get_price(service_type)
-        if amount_cents <= 0:
-            raise ValueError(f"No price configured for service type: {service_type}")
-
-        session = stripe.checkout.Session.create(
-            mode="payment",
-            payment_method_types=["card"],
-            line_items=[
-                {
-                    "price_data": {
-                        "currency": "usd",
-                        "unit_amount": amount_cents,
-                        "product_data": {
-                            "name": f"Broom Service – {service_type}",
-                            "description": (
-                                f"Booking #{event_id} · {customer_name} · "
-                                f"{start_time.strftime('%B %d, %Y at %I:%M %p')}"
-                            ),
-                        },
-                    },
-                    "quantity": 1,
-                }
-            ],
-            metadata={
-                "event_id": str(event_id),
-                "service_type": service_type,
-                "customer_name": customer_name,
-                "scheduled_start": start_time.isoformat(),
-            },
-            discounts=[{"coupon": discount_coupon}] if discount_coupon else None,
-            customer_email=customer_email or None,
-            success_url=self._base_url() + "/payments/success?session_id={CHECKOUT_SESSION_ID}",
-            cancel_url=self._base_url() + "/payments/cancel",
-        )
-        return session.url
-
     def construct_webhook_event(self, payload: bytes, signature: str):
         """Validate an incoming webhook and return the Stripe event object."""
         if not self.webhook_secret:

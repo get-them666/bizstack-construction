@@ -8,10 +8,9 @@ normalized list the app turns into leads (with the posted point-of-contact).
 
 Presets:
   construction  residential / light-commercial remodel & trade work (default)
-  broom         janitorial, grounds, and building-services contracts
 
 Tuning knobs (env):
-  LEAD_SOURCE_PRESET     "construction" | "broom" (default construction)
+  LEAD_SOURCE_PRESET     "construction" (default)
   LEAD_STATES            comma list, default "VA,NC"
   LEAD_LOOKBACK_DAYS     default 30
   LEAD_NAICS             pipe-separated override for the NAICS list
@@ -55,18 +54,6 @@ PRESETS = {
         ],
         "per_query": 50,
         "pages": 1,
-    },
-    "broom": {
-        # Short-term-rental turnover cleaning & co-hosting; building services.
-        "naics": [
-            "561720",  # Janitorial Services
-            "561790",  # Other Services to Buildings and Dwellings (power washing)
-            "561730",  # Landscaping Services (groundskeeping)
-            "561210",  # Facilities Support Services
-            "561740",  # Carpet and Upholstery Cleaning
-        ],
-        "per_query": 100,
-        "pages": 2,
     },
 }
 

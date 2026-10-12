@@ -49,6 +49,7 @@ def _api_request(
 def _send_with_attachment(
     service, user_email, to, subject, body_text, body_html,
     cc, bcc, thread_id, attachment: bytes, filename: str,
+    from_addr: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Send with one file attached, built as a real MIME multipart message.
 
@@ -62,7 +63,7 @@ def _send_with_attachment(
     head = [
         f"To: {to}",
         f"Subject: {subject}",
-        f"From: {user_email}",
+        f"From: {from_addr or user_email}",
         "MIME-Version: 1.0",
     ]
     if cc:
@@ -120,19 +121,27 @@ def send_email(
     thread_id: Optional[str] = None,
     attachment: Optional[bytes] = None,
     filename: str = "document.pdf",
+    from_addr: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Send an email via Gmail API.
 
     attachment/filename are optional; the lender sequence attaches a one-page
     pitch PDF, which plain RFC-822 building in this function could not express.
+
+    `user_email` is the account whose stored OAuth token authorises the call
+    (usually GMAIL_OWNER). `from_addr` is the address written into the From
+    header, which may be a send-as alias on that account; it defaults to
+    user_email when they are the same.
     """
     if attachment:
         return _send_with_attachment(
             service, user_email, to, subject, body_text, body_html,
             cc, bcc, thread_id, attachment, filename,
+            from_addr=from_addr,
         )
     # Build MIME message
     lines = [
+        f"From: {from_addr or user_email}",
         f"To: {to}",
         f"Subject: {subject}",
     ]
@@ -263,40 +272,3 @@ def fetch_recent_emails(service: str, user_email: str, max_results: int = 20) ->
         full = get_message(service, user_email, m["id"], format="full")
         messages.append(_parse_message(full))
     return messages
-
-
-def send_booking_confirmation(
-    service: str,
-    user_email: str,
-    to_email: str,
-    customer_name: str,
-    property_name: str,
-    start_time: str,
-    end_time: str,
-    service_type: str,
-) -> Dict[str, Any]:
-    """Send a booking confirmation email."""
-    subject = f"Booking Confirmed: {service_type} at {property_name}"
-    body_text = (
-        f"Hi {customer_name},\n\n"
-        f"Your booking is confirmed:\n\n"
-        f"  Property: {property_name}\n"
-        f"  Service: {service_type}\n"
-        f"  Start: {start_time}\n"
-        f"  End: {end_time}\n\n"
-        f"Thank you for choosing Broom Service!\n\n"
-        f"— Broom Service"
-    )
-    body_html = f"""
-    <p>Hi {customer_name},</p>
-    <p>Your booking is confirmed:</p>
-    <ul>
-      <li><strong>Property:</strong> {property_name}</li>
-      <li><strong>Service:</strong> {service_type}</li>
-      <li><strong>Start:</strong> {start_time}</li>
-      <li><strong>End:</strong> {end_time}</li>
-    </ul>
-    <p>Thank you for choosing Broom Service!</p>
-    <p>— Broom Service</p>
-    """
-    return send_email(service, user_email, to_email, subject, body_text, body_html)

@@ -108,7 +108,6 @@ def notify_owner_email(company_key, *, lead_id, name="", phone="", email="", ser
     return ok
 
 COMPANIES = {
-    "broom": {"name": "Broom Service", "cta": "Call or text us at (757) 908-7121 anytime."},
     "construction": {"name": "Buildstack Construction", "cta": "Call or text us at (757) 908-7121 anytime."},
 }
 
@@ -246,11 +245,6 @@ def _auto_quote(company_key, service, sqft):
                     note = ""
                 text = f"{_usd(est['low_cents'])}–{_usd(est['high_cents'])} for a {est['label']}{note}"
                 return text, est
-        elif company_key == "broom" and service:
-            cents = stripe_service.StripeService().get_price(service)
-            if cents:
-                text = f"{_usd(cents)} for {service}"
-                return text, {"low_cents": cents, "high_cents": cents, "label": service}
     except Exception as exc:
         print(f"[auto-reply {company_key}] quote failed: {exc}", flush=True)
     return None, None
@@ -750,7 +744,7 @@ def ensure_lead_reply(db, company_key, *, name="", phone="", email="", service="
     owner to fire manually. Returns {"sent": bool, "staged": bool, "msg": str}."""
     _ensure_draft_column(db)
     auto = not _review_mode()
-    company_key = company_key if company_key in COMPANIES else "broom"
+    company_key = company_key if company_key in COMPANIES else "construction"
     email = (email or "").strip()
     service = (service or "").strip()
 
@@ -1025,9 +1019,6 @@ def build_bid_inquiry(company_key, *, title="", solicitation="", contact_name=""
         "Buildstack Construction is a licensed and insured general contractor serving Virginia "
         "and North Carolina, specializing in residential and light-commercial remodeling, roofing, "
         "and specialty trade work."
-        if company_key == "construction" else
-        "Broom Service provides janitorial, custodial, grounds, and building-services support across "
-        "Virginia and North Carolina."
     )
     lines = [
         greeting,
