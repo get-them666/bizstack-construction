@@ -499,8 +499,8 @@ document.addEventListener('DOMContentLoaded', function() {
             try { json = JSON.parse(text); }
             catch (err) {
                 box.innerHTML = '<div class="rounded-xl bg-rose-50 border border-rose-200 p-3 text-sm text-rose-700">'
-                    + 'The server returned an unreadable response (HTTP ' + res.status
-                    + '). No contact was saved.</div>';
+                    + 'The server returned HTTP ' + res.status + '. The page could not read the response.'
+                    + '<span class="block mt-1 text-[11px] font-mono text-rose-500">' + esc(text.slice(0, 240)) + '</span></div>';
                 return;
             }
             box.innerHTML = renderPdlContact(json);
@@ -543,8 +543,8 @@ document.addEventListener('DOMContentLoaded', function() {
             try { json = JSON.parse(text); }
             catch (err) {
                 box.innerHTML = '<div class="rounded-xl bg-rose-50 border border-rose-200 p-3 text-sm text-rose-700">'
-                    + 'The server returned an unreadable response (HTTP ' + res.status
-                    + '). No contact was saved.</div>';
+                    + 'The server returned HTTP ' + res.status + '. The page could not read the response.'
+                    + '<span class="block mt-1 text-[11px] font-mono text-rose-500">' + esc(text.slice(0, 240)) + '</span></div>';
                 return;
             }
             if (!json.ok) {
@@ -577,8 +577,9 @@ document.addEventListener('DOMContentLoaded', function() {
             let json;
             try { json = JSON.parse(text); }
             catch (err) {
-                box.innerHTML = '<div class="rounded-xl bg-rose-50 border border-rose-200 p-3 text-sm text-rose-700">The server returned an unreadable response (HTTP '
-                    + res.status + '). No contact was saved. Please retry; if it repeats, share this status with support.</div>';
+                box.innerHTML = '<div class="rounded-xl bg-rose-50 border border-rose-200 p-3 text-sm text-rose-700">The server returned HTTP '
+                    + res.status + '. The page could not read the response.'
+                    + '<span class="block mt-1 text-[11px] font-mono text-rose-500">' + esc(text.slice(0, 240)) + '</span></div>';
                 return;
             }
             box.innerHTML = renderContact(json);
@@ -622,8 +623,9 @@ document.addEventListener('DOMContentLoaded', function() {
             let json;
             try { json = JSON.parse(text); }
             catch (err) {
-                box.innerHTML = '<div class="rounded-xl bg-rose-50 border border-rose-200 p-3 text-sm text-rose-700">The server returned an unreadable response (HTTP '
-                    + res.status + '). No contact was saved. Please retry; if it repeats, share this status with support.</div>';
+                box.innerHTML = '<div class="rounded-xl bg-rose-50 border border-rose-200 p-3 text-sm text-rose-700">The server returned HTTP '
+                    + res.status + '. The page could not read the response.'
+                    + '<span class="block mt-1 text-[11px] font-mono text-rose-500">' + esc(text.slice(0, 240)) + '</span></div>';
                 return;
             }
             if (!json.ok) {

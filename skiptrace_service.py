@@ -36,6 +36,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+import zip_lookup
+
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
 
@@ -884,9 +886,24 @@ def enrich_address_only_leads(cur, company: str = "construction", cap: int = Non
             result = cached
         else:
             parsed = by_key[key]
+            # Same owner-lookup chain as the /skiptrace page: a lead whose
+            # address has no ZIP gets one resolved from Census/ArcGIS before the
+            # trace, so HRGEO can disambiguate and RentCast never has to fall
+            # back to a city-level guess. Free and keyless. If geography is
+            # down, fall through anyway: HRGEO is still street-precise with no
+            # ZIP, and the existing guidance already flags a no-zip RentCast hit.
+            zipcode = parsed["zipcode"]
+            if not zipcode:
+                try:
+                    zipped = zip_lookup.lookup_zip(
+                        parsed["street"], parsed["city"], parsed["state"])
+                    if zipped.get("ok") and zipped.get("zipcode"):
+                        zipcode = zipped["zipcode"]
+                except zip_lookup.ZipLookupError:
+                    zipcode = ""
             try:
                 result = trace_address(parsed["street"], parsed["city"],
-                                       parsed["state"], parsed["zipcode"])
+                                       parsed["state"], zipcode)
             except ProviderError as exc:
                 # Stop rather than skip ahead: a 429 means the month is gone and
                 # every remaining address would fail the same way.
