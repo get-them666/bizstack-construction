@@ -965,7 +965,12 @@ def fire_all_drafts(db, company_key=None):
                     "AND LOWER(COALESCE(draft_reply, '')) <> '' ORDER BY id;",
                     (company_key,),
                 )
-                pending = [r["id"] for r in cur.fetchall()]
+                # Always (company_key, lead_id) tuples: the loop below unpacks a
+                # pair. This branch used to append bare ids while the else branch
+                # appended pairs, so a company-scoped call -- the only one the
+                # construction site makes -- raised "cannot unpack non-sequence
+                # int" and the Fire all drafts button 500'd.
+                pending = [(company_key, r["id"]) for r in cur.fetchall()]
             else:
                 for ck in COMPANIES:
                     cur.execute(

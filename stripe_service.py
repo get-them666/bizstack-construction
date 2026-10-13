@@ -115,7 +115,31 @@ class StripeService:
         amount_cents: int = 0,
         base_url: str = "",
     ) -> str:
-        """Create a Stripe Checkout Session for a project deposit. Returns the URL."""
+        """Create a Stripe Checkout Session for a project deposit. Returns the URL.
+
+        Kept for callers that only need the URL. Prefer create_deposit_checkout,
+        which also returns the session id so the caller can persist it and tell a
+        live session apart from a failed one.
+        """
+        return self.create_deposit_checkout(
+            lead_id=lead_id,
+            customer_name=customer_name,
+            customer_email=customer_email,
+            project_type=project_type,
+            amount_cents=amount_cents,
+            base_url=base_url,
+        )["url"]
+
+    def create_deposit_checkout(
+        self,
+        lead_id: int,
+        customer_name: str,
+        customer_email: str,
+        project_type: str,
+        amount_cents: int = 0,
+        base_url: str = "",
+    ) -> dict:
+        """Create a deposit Checkout Session. Returns {"url", "session_id", "amount_cents"}."""
         if not self.is_configured():
             raise RuntimeError("STRIPE_SECRET_KEY is not configured.")
 
@@ -154,7 +178,11 @@ class StripeService:
             success_url=base + "/payments/success?session_id={CHECKOUT_SESSION_ID}",
             cancel_url=base + "/payments/cancel",
         )
-        return session.url
+        return {
+            "url": session.url,
+            "session_id": session.id,
+            "amount_cents": amount_cents,
+        }
 
     def create_worker_account(self, name: str, email: str = "", phone: str = "") -> str:
         """Create a Stripe Connect Express account for a crew member. Returns the account id."""

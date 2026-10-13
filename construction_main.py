@@ -34,6 +34,10 @@ from contextlib import asynccontextmanager
 import asyncio
 import psycopg
 from psycopg.rows import dict_row
+try:
+    from psycopg_pool import ConnectionPool
+except ImportError:  # psycopg_pool is optional; falls back to per-request connections
+    ConnectionPool = None
 from fastapi import FastAPI, Request, Form, UploadFile, File, Response, Depends, HTTPException, status, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -316,6 +320,9 @@ templates.env.filters["money"] = _money
 @asynccontextmanager
 async def lifecycle(app: FastAPI):
     print("📡 Initing cloud-native table migration layer check...")
+    # Warm the pool before the startup DDL block and the background threads, so
+    # the first real request isn't the one paying to build a connection.
+    _db_pool()
     try:
         with psycopg.connect(db_url) as conn:
             with conn.cursor() as cur:
@@ -732,7 +739,12 @@ async def lifecycle(app: FastAPI):
     except Exception as exc:
         print(f"⚠️ lead pipeline init skipped: {exc}", flush=True)
 
-    yield
+    try:
+        yield
+    finally:
+        # Drain the pool on shutdown so redeploys don't leave sockets in
+        # TIME_WAIT against Postgres.
+        close_db_pool()
 
 
 app = FastAPI(title="Buildstack Construction Co.", lifespan=lifecycle)
@@ -767,7 +779,87 @@ WORKER_COOKIE = "worker_session"
 
 
 # --- DB + auth plumbing -----------------------------------------------------
+# Connection pool.
+#
+# get_db() used to call psycopg.connect() per request, so every page cost a
+# full TCP + TLS + auth handshake against Postgres before any SQL ran. It also
+# meant a fresh backend process per concurrent request instead of a reused
+# session. A pool keeps warm, already-authenticated connections and hands them
+# back; psycopg resets the session (rollback, no open txn) on release.
+#
+# Sized small on purpose: the app is single-process (Procfile runs one uvicorn
+# worker), so max_size is a ceiling on concurrency, not a throughput target.
+# POOL_MAX_SIZE is the one knob if request concurrency ever goes up.
+_pool = None
+_pool_warned = False
+
+
+def _pool_max_size() -> int:
+    try:
+        return max(1, int(os.getenv("DB_POOL_MAX_SIZE", "10")))
+    except (TypeError, ValueError):
+        return 10
+
+
+def _db_pool():
+    """Lazily build the pool. Returns None when pooling is unavailable."""
+    global _pool, _pool_warned
+    if _pool is not None:
+        return _pool
+    if ConnectionPool is None:
+        if not _pool_warned:
+            logger.warning("psycopg_pool not installed - falling back to per-request connections")
+            _pool_warned = True
+        return None
+    try:
+        _pool = ConnectionPool(
+            conninfo=db_url,
+            min_size=1,
+            max_size=_pool_max_size(),
+            timeout=float(os.getenv("DB_POOL_TIMEOUT", "10")),
+            kwargs={"row_factory": dict_row},
+            open=False,  # opened in lifespan, so a bad DSN can't kill import
+        )
+        _pool.open()
+        _pool.wait(timeout=15)
+        logger.info("db pool ready min=1 max=%s", _pool_max_size())
+    except Exception as exc:
+        if not _pool_warned:
+            logger.warning("db pool unavailable (%s) - using per-request connections", exc)
+            _pool_warned = True
+        _pool = None
+    return _pool
+
+
+def close_db_pool():
+    global _pool
+    if _pool is not None:
+        try:
+            _pool.close()
+        except Exception:
+            pass
+        _pool = None
+
+
 def get_db():
+    pool = _db_pool()
+    if pool is not None:
+        # getconn blocks up to DB_POOL_TIMEOUT, then raises PoolTimeout. Fall
+        # back to a direct connection so a saturated pool degrades into slowness
+        # instead of a 500.
+        try:
+            conn = pool.getconn()
+        except Exception as exc:
+            logger.warning("pool exhausted, opening a direct connection: %s", exc)
+        else:
+            try:
+                yield conn
+            finally:
+                # Hand the session back rather than closing it. psycopg rolls
+                # back any transaction the route left open, so a failed request
+                # cannot poison the next one that gets this connection.
+                pool.putconn(conn)
+            return
     conn = psycopg.connect(db_url, row_factory=dict_row)
     try:
         yield conn
@@ -3924,11 +4016,16 @@ async def create_deposit_link_route(lead_id: int, request: Request, amount: str 
         except ValueError:
             return JSONResponse(content={"error": "Invalid amount"}, status_code=400)
 
-    with db.cursor() as cur:
-        cur.execute("UPDATE leads SET deposit_status = 'pending', deposit_cents = %s WHERE id = %s;", (amount_cents, lead_id))
-        db.commit()
+    # Create the Stripe session FIRST, then persist 'pending'.
+    #
+    # This used to UPDATE + commit 'pending' before calling Stripe. When Stripe
+    # failed, the row stayed 'pending' with an empty stripe_session_id forever:
+    # the board showed money coming in that no checkout session could ever
+    # complete, and the deposit link was a dead 500. 24 rows were in that state.
+    # The webhook that flips 'pending' -> 'paid' only fires for a session that
+    # exists, so a failure here has to leave the lead untouched.
     try:
-        url = stripe_svc.create_deposit_session(
+        checkout = stripe_svc.create_deposit_checkout(
             lead_id=lead["id"],
             customer_name=lead["name"],
             customer_email=lead.get("email") or "",
@@ -3936,9 +4033,33 @@ async def create_deposit_link_route(lead_id: int, request: Request, amount: str 
             amount_cents=amount_cents,
             base_url=f"https://{company()['domain']}",
         )
-        return JSONResponse(content={"url": url, "amount_cents": amount_cents})
     except Exception as e:
-        return JSONResponse(content={"error": str(e)}, status_code=500)
+        logger.warning("[deposit] session creation failed for lead=%s: %s", lead_id, e)
+        db.rollback()
+        return JSONResponse(
+            content={
+                "error": str(e),
+                "detail": (
+                    "Stripe did not create a checkout session, so the deposit was "
+                    "not started and this lead was left unchanged. Nothing is owed."
+                ),
+                "credit_spent": False,
+            },
+            status_code=502,
+        )
+
+    with db.cursor() as cur:
+        cur.execute(
+            "UPDATE leads SET deposit_status = 'pending', deposit_cents = %s, "
+            "stripe_session_id = %s WHERE id = %s;",
+            (amount_cents, checkout["session_id"], lead_id),
+        )
+        db.commit()
+    return JSONResponse(content={
+        "url": checkout["url"],
+        "amount_cents": amount_cents,
+        "session_id": checkout["session_id"],
+    })
 
 
 @app.get("/payments", response_class=HTMLResponse)
