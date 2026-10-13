@@ -4,6 +4,10 @@ jinja2==3.1.6
 python-multipart==0.0.32
 signalwire-sdk>=3.4.1
 psycopg[binary]>=3.1.18
+# Connection pooling. The app serves every request through get_db() and ~45
+# module-level helpers open their own connection; without a pool each of those
+# pays a full TCP + TLS + auth handshake. psycopg_pool ships with psycopg 3.
+psycopg_pool>=3.2.0
 openai>=3.0.0
 aiosmtplib==5.1.3
 stripe>=8.0.0
