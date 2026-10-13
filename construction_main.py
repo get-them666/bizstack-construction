@@ -303,6 +303,9 @@ def company() -> dict:
             "SERVICE_AREA",
             "Williamsburg–Hampton Roads, VA · Currituck County & Elizabeth City, NC",
         ),
+        # "Founded 2026" contradicted the owner's own copy -- 32 years in the
+        # trade, six of them as a federal construction inspector. The company
+        # formed recently; the experience did not.
         "founded": "2026",
     }
 
