@@ -192,7 +192,7 @@ class DegradedLadderBoundTests(unittest.TestCase):
 
 
 class GmailTransportTests(unittest.TestCase):
-    """The default transport is now Gmail only, since SES/Resend/Zoho are retired."""
+    """Gmail is the default and preferred transport; SES/Resend/Zoho stay retired."""
 
     def _call(self, gmail_ok):
         cfg = dict(BASE_CFG)
@@ -213,13 +213,55 @@ class GmailTransportTests(unittest.TestCase):
         ses.assert_not_called()
         smtp.assert_not_awaited()
 
-    def test_no_fallback_when_gmail_fails(self):
-        """No retired provider may quietly take over and throttle us again."""
+    def test_no_retired_provider_takes_over_when_gmail_fails(self):
+        """Resend and SES stay out of it; only the owner's own SMTP credentials may.
+
+        The original guardrail here was written when Gmail failing had to be
+        fatal, because the only things behind it were the retired providers:
+        Resend's daily quota is shared with the lead bot, and SES is a sandbox
+        that cannot reach external recipients. Both are still refused here.
+
+        What changed is the tail of the ladder. The Google Cloud project behind
+        this app's OAuth client was deleted, so Gmail began answering 403
+        CONSUMER_INVALID on every call and every outbound message was silently
+        dropped -- no lead reply, no bid inquiry, no owner notification. A dead
+        primary transport must not be a dead end, so a Gmail failure now walks
+        the SMTP ladder, which for this deployment is smtp.gmail.com with an
+        app password: the same mailbox, reached over a different protocol, with
+        no shared quota and no sandbox restriction.
+        """
         result, gmail, resend, ses, smtp = self._call(False)
-        self.assertFalse(result)
         gmail.assert_awaited_once()
         resend.assert_not_awaited()
         ses.assert_not_called()
+        self.assertTrue(smtp.await_count >= 1, "Gmail failure must degrade to SMTP")
+        self.assertTrue(result)
+
+    def test_gmail_failure_stays_fatal_when_opted_out(self):
+        """EMAIL_FALLBACK_SMTP=0 restores the old hard stop, in case that is ever wanted."""
+        cfg = dict(BASE_CFG)
+        gmail = mock.AsyncMock(return_value=False)
+        with mock.patch.dict("os.environ", {"EMAIL_FALLBACK_SMTP": "0"}, clear=True), \
+             mock.patch.object(ds, "_send_via_gmail", gmail), \
+             mock.patch.object(ds, "_send_via_resend_api", mock.AsyncMock()) as resend, \
+             mock.patch.object(ds, "_send_via_ses", mock.MagicMock()) as ses, \
+             mock.patch.object(ds.aiosmtplib, "send", mock.AsyncMock()) as smtp:
+            result = asyncio.run(ds.send_email(cfg, TO, "Subject", "Body"))
+        self.assertFalse(result)
+        resend.assert_not_awaited()
+        ses.assert_not_called()
+        smtp.assert_not_awaited()
+
+    def test_gmail_failure_stays_fatal_without_smtp_credentials(self):
+        """Nothing configured to fall back to means nothing to try."""
+        cfg = dict(BASE_CFG)
+        cfg["SMTP_HOST"] = ""
+        gmail = mock.AsyncMock(return_value=False)
+        with mock.patch.dict("os.environ", {}, clear=True), \
+             mock.patch.object(ds, "_send_via_gmail", gmail), \
+             mock.patch.object(ds.aiosmtplib, "send", mock.AsyncMock()) as smtp:
+            result = asyncio.run(ds.send_email(cfg, TO, "Subject", "Body"))
+        self.assertFalse(result)
         smtp.assert_not_awaited()
 
     def test_legacy_ladder_still_reachable_explicitly(self):
