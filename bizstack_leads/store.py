@@ -26,7 +26,7 @@ WRITABLE_FIELDS = (
     # real table before use, so a column one app's schema lacks is simply
     # ignored rather than failing the insert.
     "budget", "timeline", "referral_code", "partner_id", "created_at",
-    "funding_needed", "funding_use", "analysis_json",
+    "funding_needed", "funding_use", "funding_amount_cents", "analysis_json",
     "property_sqft", "estimate_low_cents", "estimate_high_cents", "estimate_json",
 )
 

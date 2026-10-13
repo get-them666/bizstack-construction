@@ -484,6 +484,10 @@ async def lifecycle(app: FastAPI):
                 cur.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS analysis_json TEXT;")
                 cur.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS funding_needed BOOLEAN DEFAULT FALSE;")
                 cur.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS funding_use TEXT;")
+                # The /finance form asks for an amount. This column already exists
+                # on the live table but nothing created it on a fresh database,
+                # so a new environment would silently drop the field.
+                cur.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS funding_amount_cents INTEGER;")
                 cur.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS partner_id INTEGER;")
                 cur.execute("""
                 CREATE TABLE IF NOT EXISTS lead_posts (
@@ -2134,6 +2138,119 @@ async def submit_lead(
     except Exception as e:
         print(f"⚠️ submit-lead follow-up failed: {e}", flush=True)
     return JSONResponse(content={"status": "success", "lead_id": lead_id})
+
+
+@app.get("/finance", response_class=HTMLResponse)
+async def finance_page(request: Request):
+    """Project-financing application page.
+
+    This template has existed since before the public site went live and the nav
+    has linked it from every page, but no route was ever registered for it -- so
+    "Financing" 404'd sitewide and the intake form underneath it was unreachable.
+    Unlike /instant-quote, financing is usually the reason someone cannot start a
+    project at all, which makes this one of the few pages that turns a stalled
+    "maybe later" into a live lead.
+    """
+    return templates.TemplateResponse(request=request, name="finance.html", context={})
+
+
+@app.post("/finance")
+async def finance_submit(
+    full_name: str = Form(""),
+    phone: str = Form(""),
+    project_type: str = Form(""),
+    email: str = Form(""),
+    address: str = Form(""),
+    amount_needed: str = Form(""),
+    when_start: str = Form(""),
+    message: str = Form(""),
+    db=Depends(get_db),
+):
+    """Record a financing application as a lead, then confirm in-page.
+
+    Mirrors /submit-lead exactly -- same intake, same owner notification, same
+    auto-reply, same follow-up scheduling -- so an application is worked by the
+    pipeline like any other inbound lead. The funding_* columns are what the rest
+    of the app already keys off to flag and sort money-motivated leads.
+
+    The three required fields are declared optional on purpose so a blank
+    submission lands on this page's own ?error= banner. Marking them
+    Form(...) would hand a homeowner who just pressed Submit a raw JSON
+    validation error instead.
+    """
+    name = (full_name or "").strip()
+    if not name or not (phone or "").strip() or not (project_type or "").strip():
+        return RedirectResponse(url="/finance?error=Name%2C+phone+and+project+type+are+required",
+                                status_code=status.HTTP_303_SEE_OTHER)
+
+    amount_cents = None
+    raw_amount = (amount_needed or "").strip()
+    if raw_amount:
+        try:
+            amount_cents = int(float(raw_amount) * 100)
+        except ValueError:
+            # A budget is a nice-to-have; never lose the application over one.
+            amount_cents = None
+
+    try:
+        res = lead_intake.intake_lead(
+            db, company="construction", source="financing", name=name, phone=phone,
+            email=(email or "").strip(), address=address,
+            description=message, project_type=project_type,
+            extra={
+                "budget": raw_amount,
+                "timeline": when_start,
+                "funding_needed": True,
+                "funding_amount_cents": amount_cents,
+                "funding_use": message or project_type,
+            },
+        )
+    except Exception as exc:
+        logger.warning("[finance] intake failed: %s", exc)
+        return RedirectResponse(url="/finance?error=We+could+not+save+that+just+now",
+                                status_code=status.HTTP_303_SEE_OTHER)
+
+    lead_id = res["lead_id"]
+    if res.get("created"):
+        # Same side effects as /submit-lead. Each is isolated: a failed
+        # notification must not cost us the lead we just captured.
+        try:
+            auto_reply.notify_owner_email(
+                "construction", lead_id=lead_id, name=name, phone=phone,
+                email=(email or "").strip(), service=project_type, address=address,
+                budget=raw_amount, timeline=when_start, message=message,
+                source="financing",
+            )
+        except Exception as e:
+            print(f"[finance] owner notify failed: {e}", flush=True)
+        try:
+            auto_reply.auto_reply_to_lead(
+                db, "construction", name=name, phone=phone, email=(email or "").strip(),
+                service=project_type, address=address, budget=raw_amount,
+                timeline=when_start, message=message, source="financing",
+                lead_id=lead_id,
+            )
+        except Exception as e:
+            print(f"[finance] auto-reply failed: {e}", flush=True)
+        try:
+            _follow_up_new_lead(lead_id)
+        except Exception as e:
+            print(f"[finance] follow-up failed: {e}", flush=True)
+    else:
+        # A repeat application is still worth flagging to the owner -- it is a
+        # second signal of intent, not a duplicate to discard silently.
+        try:
+            auto_reply.notify_owner_email(
+                "construction", lead_id=lead_id, name=name, phone=phone,
+                email=(email or "").strip(), service=project_type, address=address,
+                budget=raw_amount, timeline=when_start,
+                message=f"[repeat financing application] {message}".strip(),
+                source="financing",
+            )
+        except Exception as e:
+            print(f"[finance] repeat notify failed: {e}", flush=True)
+
+    return RedirectResponse(url="/finance?sent=1", status_code=status.HTTP_303_SEE_OTHER)
 
 
 # --- Auth -------------------------------------------------------------------
