@@ -1,0 +1,46 @@
+deal_id,date,customer_name,project_type,sales_rep,region,deal_value,cost_of_goods,profit_margin,status,lead_source,payment_status
+DL-1001,2026-01-08,Chesapeake Commercial Logistics,Commercial Buildout,Shaun O'Leary,Norfolk,84500,52000,0.385,Closed Won,Direct Outreach,Paid
+DL-1002,2026-01-14,Harborview Medical Center,Electrical Services,Elena Ward,Virginia Beach,32000,19500,0.391,Closed Won,Website,Paid
+DL-1003,2026-01-19,Atlantic Bay Residences,Roofing & Waterproofing,Marcus Vance,Chesapeake,46500,28000,0.398,Closed Won,Referral,Paid
+DL-1004,2026-01-26,Oceanfront Retail Strip,Framing & Structural,Carlos Mendez,Virginia Beach,68000,43000,0.368,Closed Won,City Permits,Paid
+DL-1005,2026-02-02,Norfolk Maritime Museum Annex,Commercial Buildout,Shaun O'Leary,Norfolk,112000,71000,0.366,Closed Won,Direct Outreach,Paid
+DL-1006,2026-02-07,Colonial Heritage HOA,Roofing & Waterproofing,Marcus Vance,Richmond Metro,54000,31500,0.417,Closed Won,Website,Paid
+DL-1007,2026-02-12,Old Dominion Logistics Depot,Plumbing & Mechanical,Elena Ward,Norfolk,29500,17200,0.417,Closed Won,Commercial Broker,Paid
+DL-1008,2026-02-18,Kempsville Shopping Plaza,Electrical Services,Elena Ward,Virginia Beach,41200,24800,0.398,Closed Won,Website,Paid
+DL-1009,2026-02-24,Tidewater Custom Homes,Framing & Structural,Carlos Mendez,Chesapeake,78500,48000,0.389,Closed Won,Referral,Paid
+DL-1010,2026-03-03,Bayside Office Suites,Commercial Buildout,Shaun O'Leary,Virginia Beach,95000,59000,0.379,Closed Won,Direct Outreach,Paid
+DL-1011,2026-03-09,Lynnhaven Cove Marina,Roofing & Waterproofing,Marcus Vance,Virginia Beach,38000,22500,0.408,Closed Won,Website,Paid
+DL-1012,2026-03-15,Downtown Tech Hub Phase 1,Electrical Services,Elena Ward,Norfolk,62000,37000,0.403,Closed Won,Commercial Broker,Paid
+DL-1013,2026-03-21,Cavalier Golf Clubhouse,Plumbing & Mechanical,Elena Ward,Virginia Beach,34500,20000,0.420,Closed Won,Referral,Paid
+DL-1014,2026-03-28,Great Bridge Business Park,Framing & Structural,Carlos Mendez,Chesapeake,89000,54500,0.388,Closed Won,City Permits,Paid
+DL-1015,2026-04-04,Sentara Healthcare Pavilion,Commercial Buildout,Shaun O'Leary,Norfolk,145000,91000,0.372,Closed Won,Direct Outreach,Paid
+DL-1016,2026-04-11,Broad Bay Estates,Roofing & Waterproofing,Marcus Vance,Virginia Beach,48500,28500,0.412,Closed Won,Website,Paid
+DL-1017,2026-04-18,Riverside Industrial Warehouse,Electrical Services,Elena Ward,Richmond Metro,52000,31000,0.404,Closed Won,City Permits,Paid
+DL-1018,2026-04-24,Ghent Historic Restoration,Framing & Structural,Carlos Mendez,Norfolk,64000,38000,0.406,Closed Won,Referral,Paid
+DL-1019,2026-05-02,Suffolk Cold Storage Facility,Commercial Buildout,Shaun O'Leary,Chesapeake,128000,81000,0.367,Closed Won,Commercial Broker,Paid
+DL-1020,2026-05-09,Cape Henry Marketplace,Roofing & Waterproofing,Marcus Vance,Virginia Beach,57500,33800,0.412,Closed Won,Website,Paid
+DL-1021,2026-05-15,Midtown Financial Tower,Electrical Services,Elena Ward,Norfolk,73000,43500,0.404,Closed Won,Direct Outreach,Paid
+DL-1022,2026-05-22,Sandbridge Ocean Villas,Roofing & Waterproofing,Marcus Vance,Virginia Beach,61000,36000,0.410,Closed Won,Referral,Paid
+DL-1023,2026-05-29,Hampton Roads Tech Center,Commercial Buildout,Shaun O'Leary,Norfolk,160000,101000,0.369,Closed Won,Direct Outreach,Paid
+DL-1024,2026-06-05,Deep Creek Logistics Hub,Framing & Structural,Carlos Mendez,Chesapeake,92000,56000,0.391,Closed Won,City Permits,Paid
+DL-1025,2026-06-12,Greenbrier Corporate Park,Electrical Services,Elena Ward,Chesapeake,44000,26000,0.409,Closed Won,Website,Paid
+DL-1026,2026-06-19,Portsmouth Marine Terminals,Plumbing & Mechanical,Elena Ward,Norfolk,51000,30500,0.402,Closed Won,Commercial Broker,Paid
+DL-1027,2026-06-27,Princess Anne Country Club,Roofing & Waterproofing,Marcus Vance,Virginia Beach,53000,31200,0.411,Closed Won,Referral,Paid
+DL-1028,2026-07-06,Chic's Beach Mixed-Use,Commercial Buildout,Shaun O'Leary,Virginia Beach,135000,84500,0.374,Closed Won,Direct Outreach,Paid
+DL-1029,2026-07-14,Dominion Energy Substation,Electrical Services,Elena Ward,Richmond Metro,68000,40500,0.404,Closed Won,City Permits,Paid
+DL-1030,2026-07-22,Western Branch Medical Center,Framing & Structural,Carlos Mendez,Chesapeake,86000,52500,0.390,Closed Won,Website,Paid
+DL-1031,2026-08-01,Newport News Shipping Center,Commercial Buildout,Shaun O'Leary,Norfolk,142000,88500,0.377,Closed Won,Direct Outreach,Paid
+DL-1032,2026-08-10,Red Mill Commons Phase 3,Roofing & Waterproofing,Marcus Vance,Virginia Beach,59000,34500,0.415,Closed Won,Website,Paid
+DL-1033,2026-08-19,Harbor Heights Towers,Electrical Services,Elena Ward,Norfolk,76500,45500,0.405,Closed Won,Commercial Broker,Paid
+DL-1034,2026-08-28,Edinburgh Commons Commercial,Framing & Structural,Carlos Mendez,Chesapeake,94000,57500,0.388,Closed Won,City Permits,Paid
+DL-1035,2026-09-04,Virginia Beach Town Center Suite,Commercial Buildout,Shaun O'Leary,Virginia Beach,118000,73500,0.377,Closed Won,Referral,Paid
+DL-1036,2026-09-12,East Beach Marina Pavilion,Roofing & Waterproofing,Marcus Vance,Norfolk,47000,27800,0.409,Closed Won,Website,Paid
+DL-1037,2026-09-20,Chesapeake Bay Science Lab,Plumbing & Mechanical,Elena Ward,Virginia Beach,58000,34000,0.414,Closed Won,City Permits,Paid
+DL-1038,2026-09-29,Kilmarnock Waterfront Estate,Framing & Structural,Carlos Mendez,Richmond Metro,105000,64000,0.390,Closed Won,Referral,Paid
+DL-1039,2026-10-04,Norfolk Industrial Park Bldg 7,Commercial Buildout,Shaun O'Leary,Norfolk,175000,109000,0.377,Closed Won,Direct Outreach,Invoiced
+DL-1040,2026-10-09,Hilltop Village Center,Roofing & Waterproofing,Marcus Vance,Virginia Beach,63500,37000,0.417,Closed Won,Website,Invoiced
+DL-1041,2026-10-12,Granby Street Arts Complex,Electrical Services,Elena Ward,Norfolk,82000,48500,0.409,In Negotiation,Direct Outreach,Pending
+DL-1042,2026-10-15,Chesapeake Logistics Expansion,Commercial Buildout,Shaun O'Leary,Chesapeake,190000,118000,0.379,In Negotiation,Commercial Broker,Pending
+DL-1043,2026-10-18,Shore Drive Resort Renovations,Roofing & Waterproofing,Marcus Vance,Virginia Beach,72000,42500,0.410,Proposal Sent,Website,Pending
+DL-1044,2026-10-22,North Suffolk Tech Center,Framing & Structural,Carlos Mendez,Chesapeake,115000,70500,0.387,Proposal Sent,City Permits,Pending
+DL-1045,2026-10-26,Fort Monroe Historic Annex,Commercial Buildout,Shaun O'Leary,Norfolk,130000,81000,0.377,Qualified Lead,Referral,Pending
