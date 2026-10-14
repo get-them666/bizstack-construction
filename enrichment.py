@@ -118,7 +118,31 @@ def _enrich_address(address: str) -> dict:
             ),
         }
 
-    if not data.get("total"):
+    # Every OTHER non-200 is a provider fault, not an answer. Before this, they
+    # fell through to `if not data.get("total")` and came back as {}, which the
+    # caller reports as "no contact for this address" -- so a 400 from a query
+    # the plan cannot serve looked identical to a homeowner who simply is not in
+    # the dataset. That is how an integration can be broken for months while
+    # reporting "thin data". Only a 200 with zero results is a real miss.
+    if status is not None and status != 200:
+        hint = ""
+        if status == 400:
+            hint = (" A 400 on datasets=\"person\" usually means the plan does not "
+                    "include the Person dataset, or the query syntax is not accepted "
+                    "-- check dataset access on the account, not the address.")
+        elif status == 429:
+            hint = " Rate limited; back off before retrying."
+        return {
+            "_provider_error": True,
+            "_status": status,
+            "message": (
+                f"People Data Labs returned HTTP {status} rather than a result. "
+                "This is a provider fault, not 'no contact for this address'."
+                + hint
+            ),
+        }
+
+    if not isinstance(data, dict) or not data.get("total"):
         return {}
     rec = data["data"][0]
     email = _pick_email(rec.get("emails"))

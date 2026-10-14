@@ -164,6 +164,15 @@ def fetch_contact(address: str, owner_name: str = "") -> dict:
                 "status": got.get("_status"),
                 "message": got.get("message", "People Data Labs rejected the API key.")}
 
+    # Same reasoning for any other non-200: a 400 (plan cannot serve the query)
+    # or a 429 (rate limited) is the integration failing, not the address lacking
+    # a contact. Collapsing these into "no contact" is what let a broken PDL
+    # integration read as sparse data for as long as it did.
+    if got.get("_provider_error"):
+        return {"found": False, "source": "pdl", "provider_error": True,
+                "status": got.get("_status"),
+                "message": got.get("message", "People Data Labs returned an error.")}
+
     if not (email or phone):
         return {"found": False, "source": "pdl", "owner_name": owner_name,
                 "checked_at": time.strftime("%Y-%m-%d %H:%M:%S"),
