@@ -22,13 +22,20 @@ import psycopg  # noqa: E402
 from psycopg.rows import dict_row  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
+DSN = os.environ.get("DATABASE_URL") or ""
+if not DSN or ("localhost" not in DSN and "127.0.0.1" not in DSN):
+    # This guard has to run BEFORE `import construction_main`, which reaches out
+    # to a database on import. pytest.skip rather than raise SystemExit(0): the
+    # latter aborts the whole run with an INTERNALERROR before any test executes.
+    _msg = "SKIP: set TEST_DATABASE_URL to a throwaway database"
+    print(_msg)
+    if "pytest" in sys.modules:
+        import pytest
+        pytest.skip(_msg, allow_module_level=True)
+    raise SystemExit(0)
+
 import construction_main as m  # noqa: E402
 import auto_reply  # noqa: E402
-
-DSN = os.environ["DATABASE_URL"]
-if not DSN or ("localhost" not in DSN and "127.0.0.1" not in DSN):
-    print("SKIP: set TEST_DATABASE_URL to a throwaway database")
-    raise SystemExit(0)
 
 sent = {"notify": 0, "autoreply": 0, "followup": 0}
 auto_reply.notify_owner_email = lambda *a, **k: sent.__setitem__("notify", sent["notify"] + 1)

@@ -24,7 +24,14 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 DSN = os.environ.get("TEST_DATABASE_URL") or os.environ.get("DATABASE_URL")
 if not DSN:
-    print("SKIP: set TEST_DATABASE_URL")
+    # pytest.skip so collection skips this module cleanly. A bare
+    # raise SystemExit(0) here aborts the ENTIRE run with an INTERNALERROR
+    # before a single test runs, which is what this did.
+    _msg = "SKIP: set TEST_DATABASE_URL"
+    print(_msg)
+    if "pytest" in sys.modules:
+        import pytest
+        pytest.skip(_msg, allow_module_level=True)
     raise SystemExit(0)
 
 import stripe_service  # noqa: E402
