@@ -720,12 +720,30 @@ async def send_email(cfg: dict, to: str, subject: str, body: str, attachment: by
     )
     degraded_to_fallback = False
 
-    # Gmail is the only transport. The operator retired SES, Resend and Zoho:
-    # SES sits in a sandbox that cannot mail external recipients, Resend's daily
-    # quota is shared with the lead bot and gets exhausted, and Zoho times out
-    # on every port from Railway's egress. The Gmail API is HTTPS and rides the
-    # OAuth token already stored for inbound mail, so it is the one path that
-    # works. EMAIL_TRANSPORT=legacy re-enables the old ladder if ever needed.
+    def _fallback_smtp_enabled(cfg: dict) -> bool:
+        """May a Gmail failure degrade to the SMTP ladder below?
+
+        On by default. This app has already lost outbound mail for days to a
+        single dead transport with nothing behind it, and the SMTP settings it
+        needs are usually already present. Opt out explicitly with
+        EMAIL_FALLBACK_SMTP=0 when Gmail failure should stay fatal.
+        """
+        flag = (os_getenv("EMAIL_FALLBACK_SMTP", "1") or "1").strip().lower()
+        if flag in ("0", "false", "no", "off"):
+            return False
+        return bool((cfg.get("SMTP_HOST") or "").strip() and (cfg.get("SMTP_USER") or "").strip())
+
+    # Gmail is the PREFERRED transport. The operator retired SES, Resend and
+    # Zoho as primaries: SES sits in a sandbox that cannot mail external
+    # recipients, Resend's daily quota is shared with the lead bot and gets
+    # exhausted, and Zoho times out on every port from Railway's egress. Gmail is
+    # HTTPS and rides the OAuth token already stored for inbound mail.
+    #
+    # That makes Gmail the first attempt, not the only one. It stopped working
+    # entirely when the Google Cloud project behind the OAuth client was deleted
+    # (the API answers 403 CONSUMER_INVALID), and because nothing stood behind
+    # it every outbound message was dropped. A Gmail failure now degrades to the
+    # SMTP ladder below. EMAIL_TRANSPORT=legacy still skips Gmail entirely.
     transport = (os_getenv("EMAIL_TRANSPORT", "gmail") or "gmail").strip().lower()
     if transport != "legacy":
         sent_ok = await _send_via_gmail(cfg, to, subject, body, cc=cc,
@@ -733,8 +751,20 @@ async def send_email(cfg: dict, to: str, subject: str, body: str, attachment: by
                                         physical=physical)
         if sent_ok:
             return True
-        print("[EMAIL] Gmail transport unavailable; no fallback transport is enabled", flush=True)
-        return False
+        # Gmail failed. Previously this returned False outright, which is how a
+        # deleted Google Cloud project (Gmail API answering 403
+        # CONSUMER_INVALID) silently swallowed every outbound message: lead
+        # replies, bid inquiries, owner notifications. A dead primary transport
+        # must not be a dead end when a working SMTP ladder sits right below.
+        #
+        # Degrade to that ladder instead. Gmail is still tried first, so if the
+        # Google project is ever restored it takes over again with no config
+        # change. Set EMAIL_FALLBACK_SMTP=0 to restore the old hard stop.
+        if not _fallback_smtp_enabled(cfg):
+            print("[EMAIL] Gmail transport unavailable; no fallback transport is enabled", flush=True)
+            return False
+        print("[EMAIL] Gmail transport unavailable; degrading to the SMTP ladder", flush=True)
+        degraded_to_fallback = True
 
     # --- legacy ladder below, retained behind EMAIL_TRANSPORT=legacy ---
 

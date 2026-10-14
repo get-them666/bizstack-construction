@@ -34,6 +34,10 @@ from contextlib import asynccontextmanager
 import asyncio
 import psycopg
 from psycopg.rows import dict_row
+try:
+    from psycopg_pool import ConnectionPool
+except ImportError:  # psycopg_pool is optional; falls back to per-request connections
+    ConnectionPool = None
 from fastapi import FastAPI, Request, Form, UploadFile, File, Response, Depends, HTTPException, status, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -296,6 +300,9 @@ def company() -> dict:
             "SERVICE_AREA",
             "Williamsburg–Hampton Roads, VA · Currituck County & Elizabeth City, NC",
         ),
+        # "Founded 2026" contradicted the owner's own copy -- 32 years in the
+        # trade, six of them as a federal construction inspector. The company
+        # formed recently; the experience did not.
         "founded": "2026",
     }
 
@@ -313,6 +320,9 @@ templates.env.filters["money"] = _money
 @asynccontextmanager
 async def lifecycle(app: FastAPI):
     print("📡 Initing cloud-native table migration layer check...")
+    # Warm the pool before the startup DDL block and the background threads, so
+    # the first real request isn't the one paying to build a connection.
+    _db_pool()
     try:
         with psycopg.connect(db_url) as conn:
             with conn.cursor() as cur:
@@ -449,6 +459,10 @@ async def lifecycle(app: FastAPI):
                 cur.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS analysis_json TEXT;")
                 cur.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS funding_needed BOOLEAN DEFAULT FALSE;")
                 cur.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS funding_use TEXT;")
+                # The /finance form asks for an amount. This column already exists
+                # on the live table but nothing created it on a fresh database,
+                # so a new environment would silently drop the field.
+                cur.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS funding_amount_cents INTEGER;")
                 cur.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS partner_id INTEGER;")
                 cur.execute("""
                 CREATE TABLE IF NOT EXISTS lead_posts (
@@ -704,7 +718,12 @@ async def lifecycle(app: FastAPI):
     except Exception as exc:
         print(f"⚠️ lead pipeline init skipped: {exc}", flush=True)
 
-    yield
+    try:
+        yield
+    finally:
+        # Drain the pool on shutdown so redeploys don't leave sockets in
+        # TIME_WAIT against Postgres.
+        close_db_pool()
 
 
 app = FastAPI(title="Buildstack Construction Co.", lifespan=lifecycle)
@@ -739,7 +758,87 @@ WORKER_COOKIE = "worker_session"
 
 
 # --- DB + auth plumbing -----------------------------------------------------
+# Connection pool.
+#
+# get_db() used to call psycopg.connect() per request, so every page cost a
+# full TCP + TLS + auth handshake against Postgres before any SQL ran. It also
+# meant a fresh backend process per concurrent request instead of a reused
+# session. A pool keeps warm, already-authenticated connections and hands them
+# back; psycopg resets the session (rollback, no open txn) on release.
+#
+# Sized small on purpose: the app is single-process (Procfile runs one uvicorn
+# worker), so max_size is a ceiling on concurrency, not a throughput target.
+# POOL_MAX_SIZE is the one knob if request concurrency ever goes up.
+_pool = None
+_pool_warned = False
+
+
+def _pool_max_size() -> int:
+    try:
+        return max(1, int(os.getenv("DB_POOL_MAX_SIZE", "10")))
+    except (TypeError, ValueError):
+        return 10
+
+
+def _db_pool():
+    """Lazily build the pool. Returns None when pooling is unavailable."""
+    global _pool, _pool_warned
+    if _pool is not None:
+        return _pool
+    if ConnectionPool is None:
+        if not _pool_warned:
+            logger.warning("psycopg_pool not installed - falling back to per-request connections")
+            _pool_warned = True
+        return None
+    try:
+        _pool = ConnectionPool(
+            conninfo=db_url,
+            min_size=1,
+            max_size=_pool_max_size(),
+            timeout=float(os.getenv("DB_POOL_TIMEOUT", "10")),
+            kwargs={"row_factory": dict_row},
+            open=False,  # opened in lifespan, so a bad DSN can't kill import
+        )
+        _pool.open()
+        _pool.wait(timeout=15)
+        logger.info("db pool ready min=1 max=%s", _pool_max_size())
+    except Exception as exc:
+        if not _pool_warned:
+            logger.warning("db pool unavailable (%s) - using per-request connections", exc)
+            _pool_warned = True
+        _pool = None
+    return _pool
+
+
+def close_db_pool():
+    global _pool
+    if _pool is not None:
+        try:
+            _pool.close()
+        except Exception:
+            pass
+        _pool = None
+
+
 def get_db():
+    pool = _db_pool()
+    if pool is not None:
+        # getconn blocks up to DB_POOL_TIMEOUT, then raises PoolTimeout. Fall
+        # back to a direct connection so a saturated pool degrades into slowness
+        # instead of a 500.
+        try:
+            conn = pool.getconn()
+        except Exception as exc:
+            logger.warning("pool exhausted, opening a direct connection: %s", exc)
+        else:
+            try:
+                yield conn
+            finally:
+                # Hand the session back rather than closing it. psycopg rolls
+                # back any transaction the route left open, so a failed request
+                # cannot poison the next one that gets this connection.
+                pool.putconn(conn)
+            return
     conn = psycopg.connect(db_url, row_factory=dict_row)
     try:
         yield conn
@@ -1980,6 +2079,119 @@ async def submit_lead(
     except Exception as e:
         print(f"⚠️ submit-lead follow-up failed: {e}", flush=True)
     return JSONResponse(content={"status": "success", "lead_id": lead_id})
+
+
+@app.get("/finance", response_class=HTMLResponse)
+async def finance_page(request: Request):
+    """Project-financing application page.
+
+    This template has existed since before the public site went live and the nav
+    has linked it from every page, but no route was ever registered for it -- so
+    "Financing" 404'd sitewide and the intake form underneath it was unreachable.
+    Unlike /instant-quote, financing is usually the reason someone cannot start a
+    project at all, which makes this one of the few pages that turns a stalled
+    "maybe later" into a live lead.
+    """
+    return templates.TemplateResponse(request=request, name="finance.html", context={})
+
+
+@app.post("/finance")
+async def finance_submit(
+    full_name: str = Form(""),
+    phone: str = Form(""),
+    project_type: str = Form(""),
+    email: str = Form(""),
+    address: str = Form(""),
+    amount_needed: str = Form(""),
+    when_start: str = Form(""),
+    message: str = Form(""),
+    db=Depends(get_db),
+):
+    """Record a financing application as a lead, then confirm in-page.
+
+    Mirrors /submit-lead exactly -- same intake, same owner notification, same
+    auto-reply, same follow-up scheduling -- so an application is worked by the
+    pipeline like any other inbound lead. The funding_* columns are what the rest
+    of the app already keys off to flag and sort money-motivated leads.
+
+    The three required fields are declared optional on purpose so a blank
+    submission lands on this page's own ?error= banner. Marking them
+    Form(...) would hand a homeowner who just pressed Submit a raw JSON
+    validation error instead.
+    """
+    name = (full_name or "").strip()
+    if not name or not (phone or "").strip() or not (project_type or "").strip():
+        return RedirectResponse(url="/finance?error=Name%2C+phone+and+project+type+are+required",
+                                status_code=status.HTTP_303_SEE_OTHER)
+
+    amount_cents = None
+    raw_amount = (amount_needed or "").strip()
+    if raw_amount:
+        try:
+            amount_cents = int(float(raw_amount) * 100)
+        except ValueError:
+            # A budget is a nice-to-have; never lose the application over one.
+            amount_cents = None
+
+    try:
+        res = lead_intake.intake_lead(
+            db, company="construction", source="financing", name=name, phone=phone,
+            email=(email or "").strip(), address=address,
+            description=message, project_type=project_type,
+            extra={
+                "budget": raw_amount,
+                "timeline": when_start,
+                "funding_needed": True,
+                "funding_amount_cents": amount_cents,
+                "funding_use": message or project_type,
+            },
+        )
+    except Exception as exc:
+        logger.warning("[finance] intake failed: %s", exc)
+        return RedirectResponse(url="/finance?error=We+could+not+save+that+just+now",
+                                status_code=status.HTTP_303_SEE_OTHER)
+
+    lead_id = res["lead_id"]
+    if res.get("created"):
+        # Same side effects as /submit-lead. Each is isolated: a failed
+        # notification must not cost us the lead we just captured.
+        try:
+            auto_reply.notify_owner_email(
+                "construction", lead_id=lead_id, name=name, phone=phone,
+                email=(email or "").strip(), service=project_type, address=address,
+                budget=raw_amount, timeline=when_start, message=message,
+                source="financing",
+            )
+        except Exception as e:
+            print(f"[finance] owner notify failed: {e}", flush=True)
+        try:
+            auto_reply.auto_reply_to_lead(
+                db, "construction", name=name, phone=phone, email=(email or "").strip(),
+                service=project_type, address=address, budget=raw_amount,
+                timeline=when_start, message=message, source="financing",
+                lead_id=lead_id,
+            )
+        except Exception as e:
+            print(f"[finance] auto-reply failed: {e}", flush=True)
+        try:
+            _follow_up_new_lead(lead_id)
+        except Exception as e:
+            print(f"[finance] follow-up failed: {e}", flush=True)
+    else:
+        # A repeat application is still worth flagging to the owner -- it is a
+        # second signal of intent, not a duplicate to discard silently.
+        try:
+            auto_reply.notify_owner_email(
+                "construction", lead_id=lead_id, name=name, phone=phone,
+                email=(email or "").strip(), service=project_type, address=address,
+                budget=raw_amount, timeline=when_start,
+                message=f"[repeat financing application] {message}".strip(),
+                source="financing",
+            )
+        except Exception as e:
+            print(f"[finance] repeat notify failed: {e}", flush=True)
+
+    return RedirectResponse(url="/finance?sent=1", status_code=status.HTTP_303_SEE_OTHER)
 
 
 # --- Auth -------------------------------------------------------------------
@@ -3845,11 +4057,16 @@ async def create_deposit_link_route(lead_id: int, request: Request, amount: str 
         except ValueError:
             return JSONResponse(content={"error": "Invalid amount"}, status_code=400)
 
-    with db.cursor() as cur:
-        cur.execute("UPDATE leads SET deposit_status = 'pending', deposit_cents = %s WHERE id = %s;", (amount_cents, lead_id))
-        db.commit()
+    # Create the Stripe session FIRST, then persist 'pending'.
+    #
+    # This used to UPDATE + commit 'pending' before calling Stripe. When Stripe
+    # failed, the row stayed 'pending' with an empty stripe_session_id forever:
+    # the board showed money coming in that no checkout session could ever
+    # complete, and the deposit link was a dead 500. 24 rows were in that state.
+    # The webhook that flips 'pending' -> 'paid' only fires for a session that
+    # exists, so a failure here has to leave the lead untouched.
     try:
-        url = stripe_svc.create_deposit_session(
+        checkout = stripe_svc.create_deposit_checkout(
             lead_id=lead["id"],
             customer_name=lead["name"],
             customer_email=lead.get("email") or "",
@@ -3857,9 +4074,33 @@ async def create_deposit_link_route(lead_id: int, request: Request, amount: str 
             amount_cents=amount_cents,
             base_url=f"https://{company()['domain']}",
         )
-        return JSONResponse(content={"url": url, "amount_cents": amount_cents})
     except Exception as e:
-        return JSONResponse(content={"error": str(e)}, status_code=500)
+        logger.warning("[deposit] session creation failed for lead=%s: %s", lead_id, e)
+        db.rollback()
+        return JSONResponse(
+            content={
+                "error": str(e),
+                "detail": (
+                    "Stripe did not create a checkout session, so the deposit was "
+                    "not started and this lead was left unchanged. Nothing is owed."
+                ),
+                "credit_spent": False,
+            },
+            status_code=502,
+        )
+
+    with db.cursor() as cur:
+        cur.execute(
+            "UPDATE leads SET deposit_status = 'pending', deposit_cents = %s, "
+            "stripe_session_id = %s WHERE id = %s;",
+            (amount_cents, checkout["session_id"], lead_id),
+        )
+        db.commit()
+    return JSONResponse(content={
+        "url": checkout["url"],
+        "amount_cents": amount_cents,
+        "session_id": checkout["session_id"],
+    })
 
 
 @app.get("/payments", response_class=HTMLResponse)
