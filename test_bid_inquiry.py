@@ -115,17 +115,23 @@ if __name__ == "__main__":
 
 
     def _gov_attempt(addr):
-        """send_bid_inquiry is the SAM.gov-only path, so it has no source param:
-        every address it is handed is a federal solicitation POC by definition."""
+        """A federal address must be refused on its DOMAIN, not its source.
+
+        The source used to be sam-gov, which LEAD_SOURCE_EMAIL_BLOCK defaulted to.
+        SAM.gov was removed on 2026-10-13 and that default is gone, so the
+        protection that matters now is the .gov/.mil domain check, which fires
+        regardless of provenance. These attempts are therefore made as
+        permit_finder leads -- the commercial source -- to prove the domain rule
+        alone stops them."""
         sent = _stub_transport([True])
         db = FakeDb()
         res = auto_reply.send_bid_inquiry(db, "construction", title="Roof", email=addr,
-                                          lead_id=99, source="sam-gov")
+                                          lead_id=99, source="permit_finder")
         return res, sent, db
 
 
     for addr in ("chamel.r.adams.civ@us.navy.mil", "Ellie_Delerme-Velez@ios.doi.gov",
-                 "someone@va.gov", "buyer@arlington.va.us"):
+                 "someone@va.gov"):
         res, sent, db = _gov_attempt(addr)
         check(f"{addr} is refused", res is False, res)
         # A refused recipient must not even reach the transport. `sent` collects the
@@ -133,9 +139,17 @@ if __name__ == "__main__":
         check(f"{addr} never reached the transport", sent == [], sent)
         check(f"{addr} logged no touch", not db.inserts(), db.inserts())
 
+    # arlington.va.us is a Virginia county, not a federal buyer, and
+    # test_federal_block asserts it is allowed. It used to be refused here only
+    # because the sam-gov source block caught it by default; with SAM.gov gone
+    # that no longer applies, and the two tests must agree.
+    res, sent, db = _gov_attempt("buyer@arlington.va.us")
+    check("a .va.us county domain is not treated as federal", res is True, res)
+
     res, sent, db = _gov_attempt("contractor@roofers.com")
-    check("this path refuses every recipient, not just .gov ones", res is False, res)
-    check("...and nothing was sent", sent == [], sent)
+    check("a commercial address is NOT refused -- those are the customers we want",
+          res is True, res)
+    check("...and it does reach the transport", sent == ["contractor@roofers.com"], sent)
 
     print("\n[2] the refusal is recorded so it is auditable")
     res, sent, db = _gov_attempt("buyer@va.gov")
@@ -154,12 +168,12 @@ if __name__ == "__main__":
     os.environ["BLOCK_GOV_MIL_EMAIL"] = "0"
     os.environ["LEAD_SOURCE_EMAIL_BLOCK"] = ""
     res = auto_reply.send_bid_inquiry(db, "construction", title="Roof",
-                                      email="buyer@va.gov", lead_id=7, source="sam-gov")
+                                      email="buyer@va.gov", lead_id=7, source="permit_finder")
     check("with the block off, a federal address may be emailed", res is True, res)
     check("...and exactly that address reached the transport",
           sent == ["buyer@va.gov"], sent)
     os.environ["BLOCK_GOV_MIL_EMAIL"] = "1"
-    os.environ["LEAD_SOURCE_EMAIL_BLOCK"] = "sam-gov"
+    os.environ["LEAD_SOURCE_EMAIL_BLOCK"] = ""
 
     print("\n[4] a send that did not deliver is not logged as sent")
     # The defect: send_email returning False still produced a comms_logs row and a

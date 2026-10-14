@@ -161,14 +161,11 @@ if __name__ == "__main__":
           s._state_code({"location_state": "Texas"}) == "TX"
           and s._state_code({"location_admin1_code": "ma", "location_state": "Massachusetts"}) == "MA")
 
-    import lead_sources  # noqa: E402
-    sam_keys = set(lead_sources._normalize({
-        "title": "x", "pointOfContacts": [{"email": "a@b.co", "phone": "1", "fullName": "n"}],
-        "placeOfPerformance": [{"streetAddress": "1 A", "city": "B", "state": "VA", "zipCode": "2"}],
-        "naics": [{"value": "236118"}],
-    }).keys())
-    check("sam-gov and scrap-io agree on the ingest contract", set(m.keys()) == sam_keys,
-          f"scrap={sorted(set(m.keys()))} sam={sorted(sam_keys)}")
+    check("the ingest contract is complete and carries no second source",
+          set(m.keys()) == {"external_id", "title", "contact_name", "phone", "email",
+                            "service", "address", "state", "description", "url", "source"}
+          and m["source"] == "scrap-io",
+          sorted(set(m.keys())))
 
     print("\n[6] city parsing")
     os.environ["SCRAP_IO_CITIES"] = "Arlington,VA;Richmond, VA\nFalls Church"

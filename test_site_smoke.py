@@ -210,12 +210,13 @@ if __name__ == "__main__":
           f"expected exactly 1, got {r.text.count(_dup_needle)}")
 
     print("\n[5] a disabled lead source is hidden everywhere, and reversible")
-    # The operator switched SAM.gov off for both companies. Leads must disappear
-    # from every owner-facing view without being deleted, and come back on one flag.
+    # Scrap.io is now the only gated source: SAM.gov was removed on 2026-10-13, so
+    # LEAD_SOURCES_SAM_GOV no longer exists and cannot hide anything. This exercises
+    # the same hide/reveal contract against the source that still implements it.
     import os  # noqa: E402
-    os.environ["LEAD_SOURCES_SAM_GOV"] = "0"
-    check("sam-gov is hidden when disabled",
-          "sam-gov" in m.hidden_lead_sources(), str(m.hidden_lead_sources()))
+    os.environ["LEAD_SOURCES_SCRAP_IO"] = "0"
+    check("scrap-io is hidden when disabled",
+          "scrap-io" in m.hidden_lead_sources(), str(m.hidden_lead_sources()))
     check("visibility clause is emitted",
           "source" in m.source_visibility_clause(), m.source_visibility_clause())
     check("params line up with placeholders",
@@ -224,8 +225,8 @@ if __name__ == "__main__":
     with pdb.cursor() as cur:
         cur.execute("""INSERT INTO leads (name, phone, email, address, project_type, source,
                                       status, company, created_at)
-                       VALUES ('Sam Gov Hidden Co', '', 'x@lead.local', '1 Fed Way', 'Roof',
-                               'sam-gov', 'new', 'construction', NOW()) RETURNING id;""")
+                       VALUES ('Scrap Hidden Co', '', 'x@lead.local', '1 Fed Way', 'Roof',
+                               'scrap-io', 'new', 'construction', NOW()) RETURNING id;""")
         sam_id = note_lead(cur.fetchone()["id"])
         cur.execute("""INSERT INTO leads (name, phone, email, address, project_type, source,
                                       status, company, created_at)
@@ -236,22 +237,23 @@ if __name__ == "__main__":
 
     for url in ("/leads", "/pipeline", "/dashboard"):
         body = client.get(url).text
-        check(f"{url} hides the sam-gov lead", "Sam Gov Hidden Co" not in body)
+        check(f"{url} hides the disabled lead", "Scrap Hidden Co" not in body)
         check(f"{url} still shows other leads", "Visible Local Co" in body)
 
-    # And it must come back when re-enabled. Asserted per-source, not on the whole
-    # list: scrap-io is independently gated and off by default (it spends credits,
-    # and SCRAP_IO_API_KEY is unset here), so the list is legitimately non-empty and
-    # asserting `not hidden_lead_sources()` only passed while sam-gov was the sole
-    # gated source. That assertion failed the moment a second gated source landed.
-    os.environ["LEAD_SOURCES_SAM_GOV"] = "1"
-    check("sam-gov is no longer hidden when re-enabled",
-          "sam-gov" not in m.hidden_lead_sources())
-    check("leads list shows the sam-gov lead again",
-          "Sam Gov Hidden Co" in client.get("/leads").text)
-    os.environ["LEAD_SOURCES_SAM_GOV"] = "0"
-    check("sam-gov is hidden again once switched off",
-          "sam-gov" in m.hidden_lead_sources())
+    # And it must come back when re-enabled.
+    os.environ["LEAD_SOURCES_SCRAP_IO"] = "1"
+    check("scrap-io is no longer hidden when re-enabled",
+          "scrap-io" not in m.hidden_lead_sources())
+    check("leads list shows the scrap-io lead again",
+          "Scrap Hidden Co" in client.get("/leads").text)
+    os.environ["LEAD_SOURCES_SCRAP_IO"] = "0"
+    check("scrap-io is hidden again once switched off",
+          "scrap-io" in m.hidden_lead_sources())
+    os.environ.pop("LEAD_SOURCES_SCRAP_IO", None)
+
+    check("SAM.gov is gone entirely, not merely disabled",
+          "sam-gov" not in m.hidden_lead_sources()
+          and not hasattr(__import__("lead_sources"), "scan_sam_gov"))
 
     print("\n[6] lead auto-reply does not crash on a lead with no valid phone")
     # Regression: `to` was only bound inside the SMS branch but read unconditionally,
@@ -316,12 +318,12 @@ if __name__ == "__main__":
                                '8494 LYNN RIVER ROAD, Norfolk, VA', 'Fence', 'permit_finder',
                                'new', 'construction', NOW()) RETURNING id;""")
         placeholder_id = note_lead(cur.fetchone()["id"])
-        # A hidden source. 128 of the real contacts are sam-gov, switched off by the
-        # operator; surfacing one here would leak it through a side door.
+        # A hidden source. scrap-io is gated and off by default here (no
+        # SCRAP_IO_API_KEY), so surfacing this row would leak it through a side door.
         cur.execute("""INSERT INTO leads (name, phone, email, address, project_type, source,
                                       status, company, created_at)
                        VALUES ('Hidden Federal Vendor', '202-555-0100', 'hidden@gov.example',
-                               '8494 LYNN RIVER ROAD, Norfolk, VA', 'Roof', 'sam-gov',
+                               '8494 LYNN RIVER ROAD, Norfolk, VA', 'Roof', 'scrap-io',
                                'new', 'construction', NOW()) RETURNING id;""")
         hidden_id = note_lead(cur.fetchone()["id"])
         # The permits lane renders job_leads rows, so the card under test needs a
@@ -346,7 +348,7 @@ if __name__ == "__main__":
           len(got.get(1, [])) == 1, got.get(1))
     check("a synthetic @lead.local tracking address is never shown as an email",
           not any("lead.local" in c["email"] for c in got.get(1, [])), got.get(1))
-    check("a hidden sam-gov contact is not surfaced",
+    check("a contact from a hidden source is not surfaced",
           not any("gov.example" in c["email"] for c in got.get(1, [])), got.get(1))
     check("an address with no contact yields nothing", 2 not in got, sorted(got))
 

@@ -749,7 +749,7 @@ def enrich_cap() -> int:
 
 _PLACEHOLDER_TOKENS = (
     "permit", "homeowner", "asleep", "morning", "lead.local", "backlog",
-    "instant_quote", "reddit", "website", "linkedin", "shovels", "sam-gov",
+    "instant_quote", "reddit", "website", "linkedin", "shovels",
     "n/a", "not available", "tbd", "applicant", "owner name", "n/a name",
     # Words that are common fragments of REAL names -- "test" in "Testament",
     # "city" in "Cityscape", "unknown" in "Unknown Soldier", "owner" in

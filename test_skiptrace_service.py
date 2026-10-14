@@ -440,7 +440,7 @@ def test_city_in_name_is_a_placeholder():
 def test_source_slug_is_a_placeholder():
     # \bword\b does not match these -- "_" is a word character -- so an earlier
     # word-boundary version silently missed every slug and overwrote them.
-    for slug in ("permit_finder", "instant_quote", "lead.local", "sam-gov"):
+    for slug in ("permit_finder", "instant_quote", "lead.local"):
         assert svc.is_placeholder_name(slug) is True, slug
 
 

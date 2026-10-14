@@ -136,8 +136,9 @@ _NOT_A_PERSON = {
 def _person_first(name):
     """First name from a lead name field, or "" when it is not a person.
 
-    SAM.gov leads store name as "{title} · {contact name}", web/inbound
-    leads usually as a plain person name. Always prefer the actual person.
+    Public-contract leads used to store name as "{title} · {contact name}";
+    that source (SAM.gov) was removed on 2026-10-13. Web/inbound and commercial
+    source leads usually store a plain person name. Always prefer the actual person.
 
     A place name must return "" so the caller falls back to "Hi there" rather
     than greeting a homeowner by the city they live in. This fired in real
@@ -196,17 +197,6 @@ def _build_message(company_key, co_name, quote=None, **ctx):
             "Buildstack Construction is available for an estimate"
             + quote_line
             + " We'd love to walk through it with you this week. Free, no obligation.",
-        ]
-        return " ".join(lines) + footer
-
-    if source == "sam-gov":
-        lines = [
-            greeting,
-            f"Thank you for the solicitation at {address}." if address else "Thank you for the solicitation.",
-            "We are reviewing the requirements and intend to submit a response"
-            + (f" for {service}" if service else "")
-            + ". Please let us know if additional documentation or a site visit is needed to complete our bid.",
-            "Our team is available at (757) 908-7121 to coordinate next steps.",
         ]
         return " ".join(lines) + footer
 
@@ -586,19 +576,24 @@ def note_withheld(db, lead_id, reason: str) -> None:
 def _blocked_sources() -> set:
     """Lead sources that must never enter the automated email cadence.
 
-    LEAD_SOURCE_AUTO_EMAIL only stops new ingestion from these sources; it does
-    nothing about rows already in the table.
+    Empty by default. It used to default to "sam-gov", but SAM.gov was removed
+    from the app on 2026-10-13 so that source can no longer be ingested. The
+    standing protection against mailing a government buyer is the .gov/.mil
+    domain check in blocked_reason(), which does not depend on `source` at all
+    and therefore still covers any row imported by hand or by a future source.
     """
-    raw = os.getenv("LEAD_SOURCE_EMAIL_BLOCK", "sam-gov") or ""
+    raw = os.getenv("LEAD_SOURCE_EMAIL_BLOCK", "") or ""
     return {p.strip().lower() for p in raw.split(",") if p.strip()}
 
 
 def blocked_reason(email: str, source: str = "") -> str:
     """Why this lead/address must not be auto-contacted, or "" if it may be.
 
-    Federal procurement contacts are excluded by default: a .gov/.mil buyer is
-    not a customer lead, and auto-emailing them is the same category of conduct
-    as the original runaway-send incident, at smaller scale.
+    Federal procurement contacts are excluded by the domain check below: a
+    .gov/.mil buyer is not a customer lead, and auto-emailing them is the same
+    category of conduct as the original runaway-send incident, at smaller scale.
+    This stays in place even though the federal scanner is gone, because it keys
+    off the address rather than the lead source.
     """
     if (source or "").strip().lower() in _blocked_sources():
         return f"source '{source}' is blocked from automated email"
@@ -1114,17 +1109,17 @@ def send_owner_lead_digest(db, company_key, items):
 
 def send_bid_inquiry(db, company_key, *, title="", solicitation="", contact_name="", email="",
                      service="", address="", state="", url="", lead_id=None, source=""):
-    """Send a professional bid-inquiry email to a public-contract point of contact.
+    """Send a professional bid-inquiry email to a solicitation point of contact.
 
-    For outbound public-sector opportunities (e.g. SAM.gov). This is NOT the
-    inbound auto-reply: the recipient is a buyer, so we express interest and ask
-    for the full solicitation package. Email only — never SMS or AI-call a
-    government contracting officer.
+    Used to be written for outbound public-sector (SAM.gov) opportunities, but
+    the federal source was removed on 2026-10-13 -- the owner does not pursue
+    government work. It now serves only the commercial sources (permit_finder
+    and scrap-io), where the recipient is a property owner or a local trade
+    business rather than a buyer. Email only -- never SMS or an AI call.
 
-    `source` is the lead's provenance. It is not defaulted to sam-gov: this
-    function is also the send path for permit and Scrap.io leads, and hardcoding
-    the federal source blocked every recipient including the residential ones
-    this business actually wants.
+    `source` is the lead's provenance. It is deliberately not defaulted to any
+    particular source: hardcoding one blocked every recipient including the
+    residential ones this business actually wants.
     """
     company_key = company_key if company_key in COMPANIES else "construction"
     co_name = COMPANIES[company_key]["name"]
@@ -1133,11 +1128,11 @@ def send_bid_inquiry(db, company_key, *, title="", solicitation="", contact_name
         return False
     # The federal block has to be enforced HERE, not just on the auto-reply
     # path. auto_reply_to_lead calls blocked_reason and the emailbot logged
-    # "withheld" correctly, but this function never did -- so SAM.gov leads were
+    # "withheld" correctly, but this function never did -- so federal leads were
     # emailed straight to .gov and .mil points of contact anyway, which is the
-    # exact conduct the block exists to prevent. 194,660 of those sends are in
-    # comms_logs. Only auto_reply_to_lead consulted it, so the guard looked
-    # armed from the outside while this path walked straight past it.
+    # exact conduct the block exists to prevent. The federal scanner is gone, but
+    # a hand-imported or otherwise sourced .gov address must still never send
+    # from here, so the guard stays.
     blocked = blocked_reason(email, source)
     if blocked:
         print(f"[bid-inquiry {company_key}] withheld — {blocked}", flush=True)

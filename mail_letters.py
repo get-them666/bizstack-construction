@@ -71,11 +71,6 @@ ADDRESS_ONLY_SQL = """
       -- first printed batch would have gone to two customers whose work is
       -- already finished and billed, addressed as if they were cold prospects.
       AND status = 'new'
-      -- sam-gov rows are solicitation records, not properties. One of them
-      -- carries address "57000, VA, 23551" -- a zip with a stray 57000 in the
-      -- street slot -- which renders as an undeliverable envelope. The owner
-      -- does not want federal solicitations mailed on letterhead at all.
-      AND COALESCE(source, '') <> 'sam-gov'
       AND address IS NOT NULL AND BTRIM(address) <> ''
       -- The percent below is doubled for psycopg's paramstyle, where a bare
       -- one starts a placeholder. The single form raises ProgrammingError on

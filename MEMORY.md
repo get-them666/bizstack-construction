@@ -76,6 +76,31 @@ Outbound TLS from this machine needs `SSL_CERT_FILE=/etc/ssl/cert.pem`; the
 system Python has no CA bundle. The same gap is why commit ff8e842 added
 ca-certificates to the image.
 
+## SAM.gov is GONE — the owner does not do government work
+
+On 2026-10-13 the owner removed the federal lead source entirely: "I don't want
+to work government jobs." This is a business decision, not a bug, and it is
+**removal, not a flag**:
+
+- `lead_sources.py` is now Scrap.io only. The SAM.gov scanner, its NAICS
+  presets, the `LEAD_SOURCES_SAM_GOV` toggle and `SAM_SEARCH` endpoint are
+  deleted. Do not reintroduce them — a disabled scanner is one env var away from
+  resurrecting itself, which is why it was cut out.
+- All 78 `sam-gov` rows were deleted from the `leads` table (77 carried real
+  `.mil`/`.gov` addresses), plus their 78 `lead_source_seen` rows. Backup:
+  `~/bizstack-construction-backups/sam-gov-leads-2026-10-13.csv`.
+- `auto_reply`'s federal **template** is gone. The federal **domain** block
+  (`blocked_reason` → `_is_federal_domain`) deliberately STAYS: it keys off the
+  address rather than the lead source, so it still stops a hand-imported or
+  otherwise-sourced `.gov`/`.mil` address from ever being mailed. That guard is
+  not about SAM.gov and should not be removed with it.
+- `send_bid_inquiry` was **kept** — it is misleadingly named but also serves
+  `permit_finder` and `scrap-io`, which are the customers actually wanted.
+  Removing it would have cut commercial outreach too.
+
+Consequence: remaining lead sources are `permit_finder` (948), `reddit` (210),
+`backlog` (2), `ai-assistant` (1).
+
 ## Lead sourcing is business contacts only
 
 The owner chose the narrow path on 2026-10-02: Copilot researches **business**

@@ -118,19 +118,17 @@ PERMIT_STATUS_COLORS = {
 
 
 # --- Lead source visibility ------------------------------------------------
-# The operator switched the federal (SAM.gov) source off for both companies.
-# Existing sam-gov leads are hidden from every owner-facing view rather than
-# deleted, so nothing is destroyed and the source can come back with one env
-# var (LEAD_SOURCES_SAM_GOV=1).
+# Scrap.io is the only gated source left. The federal (SAM.gov) scanner was
+# removed outright on 2026-10-13 along with its rows -- the operator does not
+# pursue government work -- so there is no source here to toggle back on.
 def hidden_lead_sources() -> list:
     """Lead `source` values to exclude from owner-facing lists and counts.
 
     Each source is gated on its own env var, so turning one off hides only its
-    own leads.
+    own leads. SAM.gov is gone entirely (see lead_sources) -- the operator does
+    not pursue government work -- so it is no longer a toggle here.
     """
     hidden = []
-    if not lead_sources.enabled():
-        hidden.append("sam-gov")
     if not scrap_io.enabled():
         hidden.append("scrap-io")
     return hidden
@@ -213,10 +211,9 @@ def contacts_at_addresses(cur, rows, id_key: str = "id",
     dead address on the card and make the app look like it had contact data it
     does not. Same for the junk phone tokens ('unknown', 'n/a', '-').
 
-    Hidden sources are excluded too. 128 of the 142 contacts in the table are
-    sam-gov, which the operator switched off; surfacing them onto permit cards
-    would leak a deliberately hidden source through a side door, and would show
-    federal-contractor contacts next to a homeowner address.
+    Hidden sources are excluded too. Scrap.io spends credits and is gated off
+    by default, so surfacing its contacts onto permit cards would leak a
+    deliberately hidden source through a side door.
 
     One query for the whole page, not one per row. Contacts are deduped per
     address: the same person can hold several rows at one house.

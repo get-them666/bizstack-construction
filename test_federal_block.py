@@ -66,18 +66,27 @@ if __name__ == "__main__":
     check("a bare '.gov' is not a domain", auto_reply._is_federal_domain(".gov") is False)
     check("a bare label is not federal", auto_reply._is_federal_domain("localhost") is False)
 
-    print("\n[4] the source block still applies independently")
-    check("sam-gov source blocked", auto_reply.blocked_reason("a@b.com", "sam-gov") != "")
+    print("\n[4] the source block still applies when explicitly configured")
+    # SAM.gov was removed on 2026-10-13, so LEAD_SOURCE_EMAIL_BLOCK no longer
+    # defaults to "sam-gov". The mechanism itself is retained, so an operator can
+    # still name a source to keep out of the automated cadence.
+    check("no source is blocked by default",
+          auto_reply.blocked_reason("a@b.com", "sam-gov") == "")
+    os.environ["LEAD_SOURCE_EMAIL_BLOCK"] = "sam-gov"
+    check("sam-gov source blocked once named", auto_reply.blocked_reason("a@b.com", "sam-gov") != "")
     check("a private address on sam-gov is still blocked",
           auto_reply.blocked_reason("contractor@roofers.com", "sam-gov") != "")
     check("permit_finder is not blocked", auto_reply.blocked_reason("a@b.com", "permit_finder") == "")
+    os.environ.pop("LEAD_SOURCE_EMAIL_BLOCK")
 
     print("\n[5] the block can be lifted deliberately")
     os.environ["BLOCK_GOV_MIL_EMAIL"] = "0"
     check("federal domain allowed when the flag is off",
           auto_reply.blocked_reason("buyer@va.gov") == "")
-    check("but a blocked source is still blocked",
-          auto_reply.blocked_reason("a@b.com", "sam-gov") != "")
+    os.environ["LEAD_SOURCE_EMAIL_BLOCK"] = "permit_finder"
+    check("but a source named in LEAD_SOURCE_EMAIL_BLOCK is still blocked",
+          auto_reply.blocked_reason("a@b.com", "permit_finder") != "")
+    os.environ.pop("LEAD_SOURCE_EMAIL_BLOCK")
     os.environ.pop("BLOCK_GOV_MIL_EMAIL")
 
     print()

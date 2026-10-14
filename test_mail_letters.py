@@ -63,8 +63,8 @@ if __name__ == "__main__":
     check("query is scoped to status = 'new'", "status = 'new'" in m.ADDRESS_ONLY_SQL)
     check("completed / host / contacted are excluded",
           "status = 'new'" in m.ADDRESS_ONLY_SQL and "status <> 'archived'" not in m.ADDRESS_ONLY_SQL)
-    check("sam-gov is excluded from printed mail",
-          "sam-gov" in m.ADDRESS_ONLY_SQL)
+    check("no federal source filter remains (SAM.gov removed 2026-10-13)",
+          "sam-gov" not in m.ADDRESS_ONLY_SQL)
 
     print("\n[2] a place name in leads.name is not treated as a person")
     # The permit feeds publish no applicant, so `name` holds the city. These printed
