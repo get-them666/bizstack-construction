@@ -57,6 +57,7 @@ import email_fetcher
 import material_picker
 import takeoff
 import supplier_prices
+import ledger
 import bid_opportunities
 import bid_sources
 import enrichment
@@ -687,6 +688,10 @@ async def lifecycle(app: FastAPI):
             bid_costing.ensure_accounting_schema(conn)
             takeoff.ensure_schema(conn)
             supplier_prices.ensure_schema(conn)
+            # Chart of accounts and journal tables. Its own ensure_schema also
+            # seeds the chart, so a new account added to ledger.CHART appears
+            # on the next boot without a migration.
+            ledger.ensure_schema(conn)
         print("🎯 bid_opportunities ready.")
     except Exception as e:
         print(f"⚠️ bid_opportunities init skipped: {e}")

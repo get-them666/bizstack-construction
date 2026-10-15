@@ -16,7 +16,9 @@
       "static/**",
       "bid_costing.py",
       "abc_supply.py",
-      "supplier_prices.py"
+      "supplier_prices.py",
+      "ledger.py",
+      "ledger_bridge.py"
     ],
     "buildEnvironment": "V3"
   },
