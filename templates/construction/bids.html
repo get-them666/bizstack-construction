@@ -1,0 +1,159 @@
+{% extends "base.html" %}
+{% set co = company() %}
+{% block title %}Bids | {{ co.name }}{% endblock %}
+{% block meta %}<meta name="robots" content="noindex, nofollow">{% endblock %}
+
+{% block content %}
+<section class="py-10 bg-slate-50 min-h-[80vh]">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+
+        <div class="flex flex-wrap items-end justify-between gap-4 mb-6">
+            <div>
+                <p class="text-sm font-bold text-indigo-600 uppercase tracking-widest">Pipeline · Solicitations</p>
+                <h1 class="text-3xl font-black tracking-tight text-slate-900">Bids</h1>
+                <p class="text-sm text-slate-500 mt-1">
+                    Work you are chasing. Nothing here contacts anyone — no email, no calls.
+                </p>
+            </div>
+            <a href="/dashboard" class="px-4 py-2.5 text-sm font-semibold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 rounded-xl transition-colors">← Dashboard</a>
+        </div>
+
+        {# ── Tiles ─────────────────────────────────────────────────────── #}
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+            <div class="bg-white rounded-2xl border border-slate-200 p-5">
+                <p class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Open</p>
+                <p class="text-3xl font-black text-slate-900 mt-1">{{ stats.open }}</p>
+            </div>
+            <div class="bg-white rounded-2xl border border-slate-200 p-5">
+                <p class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Open value</p>
+                <p class="text-3xl font-black text-indigo-600 mt-1">${{ "{:,.0f}".format(stats.open_value) }}</p>
+            </div>
+            {% for s in ("drafting", "sent", "shortlist") %}
+            {% set row = stats.by_status.get(s) %}
+            <div class="bg-white rounded-2xl border border-slate-200 p-5">
+                <p class="text-xs font-semibold text-slate-500 uppercase tracking-wide">{{ s }}</p>
+                <p class="text-3xl font-black text-slate-900 mt-1">{{ row.count if row else 0 }}</p>
+            </div>
+            {% endfor %}
+        </div>
+
+        {# ── Filter ─────────────────────────────────────────────────────── #}
+        <div class="flex flex-wrap items-center gap-2 mb-4">
+            <a href="/bids" class="px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors
+               {{ 'bg-slate-900 text-white border-slate-900' if not sel else 'bg-white text-slate-700 border-slate-200 hover:border-indigo-300' }}">All</a>
+            {% for s in statuses %}
+            <a href="/bids?status={{ s }}" class="px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors
+               {{ 'bg-slate-900 text-white border-slate-900' if sel == s else 'bg-white text-slate-700 border-slate-200 hover:border-indigo-300' }}">{{ s }}</a>
+            {% endfor %}
+        </div>
+
+        {% if not rows %}
+        <div class="bg-white rounded-2xl border border-slate-200 p-10 text-center">
+            <p class="text-sm text-slate-500">No bids{{ ' with status ' ~ sel if sel else '' }}.</p>
+            <p class="text-xs text-slate-400 mt-2">Add one below.</p>
+        </div>
+        {% endif %}
+
+        {# ── Rows ───────────────────────────────────────────────────────── #}
+        {% for b in rows %}
+        {% set days = (b.due_date - today).days if b.due_date else None %}
+        {% set overdue = days is not none and days < 0 and b.status not in ('won','lost','withdrawn') %}
+        {% set urgent  = days is not none and 0 <= days <= 10 and b.status not in ('won','lost','withdrawn') %}
+        <div class="bg-white rounded-2xl border {% if overdue %}border-red-300{% elif urgent %}border-amber-300{% else %}border-slate-200{% endif %} p-5 mb-4">
+            <div class="flex flex-wrap items-start justify-between gap-4">
+                <div class="min-w-0">
+                    <div class="flex flex-wrap items-center gap-2 mb-1">
+                        {% if b.trade %}<span class="px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide bg-indigo-50 text-indigo-700 rounded">{{ b.trade }}</span>{% endif %}
+                        {% if b.role == 'sub' %}
+                        <span class="px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide bg-slate-100 text-slate-600 rounded">Sub</span>
+                        {% else %}
+                        <span class="px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide bg-amber-100 text-amber-800 rounded">Prime</span>
+                        {% endif %}
+                        <span class="px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide
+                              {% if b.status == 'won' %}bg-emerald-100 text-emerald-800
+                              {% elif b.status == 'lost' %}bg-red-100 text-red-800
+                              {% elif b.status == 'sent' %}bg-blue-100 text-blue-800
+                              {% else %}bg-slate-100 text-slate-600{% endif %} rounded">{{ b.status }}</span>
+                        {% if b.reference %}<span class="text-[11px] font-mono text-slate-400">{{ b.reference }}</span>{% endif %}
+                    </div>
+                    <h2 class="text-base font-bold text-slate-900">{{ b.name }}</h2>
+                    <p class="text-xs text-slate-500 mt-0.5">
+                        {% if b.owner %}{{ b.owner }}{% endif %}
+                        {% if b.location %} · {{ b.location }}{% endif %}
+                    </p>
+                    {% if b.contact_name or b.contact_email %}
+                    <p class="text-xs text-slate-400 mt-1">
+                        {{ b.contact_name }}{% if b.contact_email %} · {{ b.contact_email }}{% endif %}{% if b.contact_phone %} · {{ b.contact_phone }}{% endif %}
+                    </p>
+                    {% endif %}
+                </div>
+
+                <div class="text-right shrink-0">
+                    <p class="text-2xl font-black text-slate-900">{{ "${:,.0f}".format(b.bid_amount) if b.bid_amount else "—" }}</p>
+                    <p class="text-xs {% if overdue %}text-red-600 font-bold{% elif urgent %}text-amber-600 font-semibold{% else %}text-slate-400{% endif %}">
+                        {% if b.due_date %}
+                            {{ b.due_date.strftime("%b %d") }}{% if days is not none %} · {{ "overdue" if days < 0 else (days ~ "d" if days == 1 else days ~ "d left") }}{% endif %}
+                        {% else %}no due date{% endif %}
+                    </p>
+                </div>
+            </div>
+
+            {% if b.notes %}
+            <details class="mt-3">
+                <summary class="text-xs font-semibold text-slate-500 cursor-pointer hover:text-indigo-600">Notes</summary>
+                <pre class="mt-2 text-xs text-slate-600 bg-slate-50 rounded-lg p-3 whitespace-pre-wrap font-sans">{{ b.notes }}</pre>
+            </details>
+            {% endif %}
+
+            <div class="flex flex-wrap items-center gap-2 mt-4 pt-4 border-t border-slate-100">
+                <form method="post" action="/api/bids/{{ b.id }}/status" class="flex items-center gap-1">
+                    <select name="status" class="text-xs border border-slate-200 rounded-lg px-2 py-1.5 bg-white">
+                        {% for s in statuses %}<option value="{{ s }}" {% if s == b.status %}selected{% endif %}>{{ s }}</option>{% endfor %}
+                    </select>
+                    <button class="text-xs font-semibold px-3 py-1.5 bg-slate-900 text-white rounded-lg hover:bg-slate-700">Set</button>
+                </form>
+
+                <form method="post" action="/api/bids/{{ b.id }}/amount" class="flex items-center gap-1">
+                    <input name="amount" value="{{ b.bid_amount or '' }}" placeholder="amount"
+                           class="text-xs border border-slate-200 rounded-lg px-2 py-1.5 w-28">
+                    <button class="text-xs font-semibold px-3 py-1.5 bg-white border border-slate-200 rounded-lg hover:border-indigo-300">Update</button>
+                </form>
+
+                <form method="post" action="/api/bids/{{ b.id }}/delete" class="ml-auto"
+                      onsubmit="return confirm('Delete this bid?')">
+                    <button class="text-xs font-semibold px-3 py-1.5 text-red-600 border border-red-200 rounded-lg hover:bg-red-50">Delete</button>
+                </form>
+            </div>
+        </div>
+        {% endfor %}
+
+        {# ── Add ────────────────────────────────────────────────────────── #}
+        <details class="bg-white rounded-2xl border border-slate-200 p-5">
+            <summary class="text-sm font-bold text-slate-700 cursor-pointer hover:text-indigo-600">+ Add a bid</summary>
+            <form method="post" action="/api/bids" class="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-4">
+                <input name="name" required placeholder="Project name"
+                       class="text-sm border border-slate-200 rounded-lg px-3 py-2 col-span-2">
+                <input name="trade" placeholder="Trade / package" class="text-sm border border-slate-200 rounded-lg px-3 py-2">
+                <input name="reference" placeholder="Bid or RFP number" class="text-sm border border-slate-200 rounded-lg px-3 py-2">
+                <input name="owner" placeholder="Owner / GC" class="text-sm border border-slate-200 rounded-lg px-3 py-2">
+                <input name="location" placeholder="Location" class="text-sm border border-slate-200 rounded-lg px-3 py-2">
+                <input name="due_date" type="date" class="text-sm border border-slate-200 rounded-lg px-3 py-2">
+                <input name="bid_amount" placeholder="Bid amount" class="text-sm border border-slate-200 rounded-lg px-3 py-2">
+                <select name="role" class="text-sm border border-slate-200 rounded-lg px-3 py-2">
+                    <option value="sub">Sub — another GC holds the contract</option>
+                    <option value="prime">Prime — we hold the contract</option>
+                </select>
+                <textarea name="notes" rows="3" placeholder="Notes, open questions, exclusions"
+                          class="text-sm border border-slate-200 rounded-lg px-3 py-2 col-span-2"></textarea>
+                <button class="text-sm font-semibold px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 sm:col-span-2">Add bid</button>
+            </form>
+        </details>
+
+        <p class="text-xs text-slate-400 mt-6">
+            A bid is a solicitation you are pursuing. It is deliberately not a lead —
+            nothing on this page sends email or places a call.
+        </p>
+
+    </div>
+</section>
+{% endblock %}

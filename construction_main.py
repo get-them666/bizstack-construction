@@ -54,6 +54,7 @@ from stripe_service import StripeService, default_deposit_cents
 import permit_enricher
 import permit_stats
 import email_fetcher
+import bid_opportunities
 import enrichment
 from signalwire_service import SignalWireService
 import vapi_service
@@ -667,6 +668,17 @@ async def lifecycle(app: FastAPI):
             print(f"📦 materials_catalog ready ({count} rows).")
     except Exception as e:
         print(f"⚠️ materials_catalog refresh skipped: {e}")
+
+    # Bid board is its own module with its own idempotent DDL, so it is not in
+    # the startup block above -- that block is one transaction and an ordering
+    # slip there rolls back 52 tables. Rows are entered through /bids, never
+    # seeded at boot: live pipeline does not belong in version control.
+    try:
+        with psycopg.connect(db_url, row_factory=dict_row) as conn:
+            bid_opportunities.ensure_schema(conn)
+        print("🎯 bid_opportunities ready.")
+    except Exception as e:
+        print(f"⚠️ bid_opportunities init skipped: {e}")
 
     if not os.getenv("DISABLE_LOAN_OUTREACH"):
         _outreach_tasks = start_outreach_tasks()
@@ -6609,6 +6621,123 @@ async def job_lead_delete(job_id: int, request: Request, db=Depends(get_db)):
         cur.execute("DELETE FROM job_leads WHERE id = %s;", (job_id,))
         db.commit()
     return RedirectResponse(url=request.headers.get("referer") or "/job-leads", status_code=status.HTTP_303_SEE_OTHER)
+
+
+# --- Bid opportunities (solicitations we are chasing) ----------------------
+# Separate from `leads` on purpose. Creating a `leads` row fires
+# auto_reply.auto_reply_to_lead and the outbound voice agent, and a general
+# contractor is not a customer. Nothing below sends email or dials.
+_BID_COMPANY = "construction"
+
+
+@app.get("/api/bids")
+async def bids_api(request: Request, status: str = "", db=Depends(get_db)):
+    require_admin(request)
+    return JSONResponse(content=bid_opportunities.list_bids(db, _BID_COMPANY, status))
+
+
+@app.get("/api/bids/stats")
+async def bids_stats_api(request: Request, db=Depends(get_db)):
+    """Auth-gated: exposes unworked contract value."""
+    require_admin(request)
+    return JSONResponse(content=bid_opportunities.stats(db, _BID_COMPANY))
+
+
+@app.post("/api/bids")
+async def bid_create(
+    request: Request,
+    name: str = Form(...),
+    trade: str = Form(""),
+    owner: str = Form(""),
+    reference: str = Form(""),
+    role: str = Form("sub"),
+    due_date: str = Form(""),
+    bid_amount: str = Form(""),
+    location: str = Form(""),
+    notes: str = Form(""),
+    db=Depends(get_db),
+):
+    require_admin(request)
+    if role not in bid_opportunities.ROLES:
+        raise HTTPException(status_code=400, detail=f"role must be one of {bid_opportunities.ROLES}")
+    fields = dict(name=name.strip(), trade=trade.strip(), owner=owner.strip(),
+                  reference=reference.strip(), role=role, location=location.strip(),
+                  notes=notes.strip())
+    if due_date.strip():
+        try:
+            fields["due_date"] = date.fromisoformat(due_date.strip())
+        except ValueError:
+            raise HTTPException(status_code=400, detail="due_date must be YYYY-MM-DD")
+    if bid_amount.strip():
+        try:
+            fields["bid_amount"] = float(bid_amount.replace("$", "").replace(",", "").strip())
+        except ValueError:
+            raise HTTPException(status_code=400, detail="bid_amount must be a number")
+    try:
+        bid_id = bid_opportunities.create_bid(db, _BID_COMPANY, **fields)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return RedirectResponse(url="/bids?added=1", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/api/bids/{bid_id}/status")
+async def bid_set_status(bid_id: int, request: Request, status: str = Form(...),
+                         db=Depends(get_db)):
+    require_admin(request)
+    try:
+        if not bid_opportunities.set_status(db, bid_id, status, _BID_COMPANY):
+            raise HTTPException(status_code=404, detail="Bid not found")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    back = request.headers.get("referer") or "/bids"
+    return RedirectResponse(url=back, code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/api/bids/{bid_id}/amount")
+async def bid_set_amount(bid_id: int, request: Request, amount: str = Form(...),
+                         db=Depends(get_db)):
+    require_admin(request)
+    try:
+        val = float(amount.replace("$", "").replace(",", "").strip())
+    except ValueError:
+        raise HTTPException(status_code=400, detail="amount must be a number")
+    if not bid_opportunities.set_bid_amount(db, bid_id, val, _BID_COMPANY):
+        raise HTTPException(status_code=404, detail="Bid not found")
+    back = request.headers.get("referer") or "/bids"
+    return RedirectResponse(url=back, code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/api/bids/{bid_id}/note")
+async def bid_add_note(bid_id: int, request: Request, note: str = Form(...),
+                       db=Depends(get_db)):
+    require_admin(request)
+    if not note.strip():
+        raise HTTPException(status_code=400, detail="note is empty")
+    if not bid_opportunities.add_note(db, bid_id, note.strip(), _BID_COMPANY):
+        raise HTTPException(status_code=404, detail="Bid not found")
+    back = request.headers.get("referer") or "/bids"
+    return RedirectResponse(url=back, code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/api/bids/{bid_id}/delete")
+async def bid_delete(bid_id: int, request: Request, db=Depends(get_db)):
+    require_admin(request)
+    if not bid_opportunities.delete_bid(db, bid_id, _BID_COMPANY):
+        raise HTTPException(status_code=404, detail="Bid not found")
+    return RedirectResponse(url="/bids?deleted=1", code=status.HTTP_303_SEE_OTHER)
+
+
+@app.get("/bids", response_class=HTMLResponse)
+async def bids_page(request: Request, status: str = "", db=Depends(get_db)):
+    require_admin(request)
+    rows = bid_opportunities.list_bids(db, _BID_COMPANY, status)
+    return templates.TemplateResponse(
+        request, "construction/bids.html",
+        {"rows": rows, "statuses": bid_opportunities.STATUSES,
+         "roles": bid_opportunities.ROLES, "sel": status,
+         "today": date.today(),
+         "stats": bid_opportunities.stats(db, _BID_COMPANY)},
+    )
 
 
 # --- Projects (active jobs for the crew) ------------------------------------
