@@ -177,6 +177,17 @@ def ensure_schema(conn) -> None:
                 created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # CREATE TABLE IF NOT EXISTS will happily skip a table that already
+        # exists from an earlier shape, and the indexes below then fail on a
+        # column that was never added. That is not hypothetical: it is what
+        # happens on any database where a partial version of this module ran
+        # once. So every column the indexes rely on is added explicitly before
+        # the index is attempted.
+        cur.execute("ALTER TABLE ledger_entries ADD COLUMN IF NOT EXISTS source_type VARCHAR(40);")
+        cur.execute("ALTER TABLE ledger_entries ADD COLUMN IF NOT EXISTS source_id VARCHAR(80);")
+        cur.execute("ALTER TABLE ledger_entries ADD COLUMN IF NOT EXISTS memo TEXT;")
+        cur.execute("ALTER TABLE ledger_entries ADD COLUMN IF NOT EXISTS company VARCHAR(40) DEFAULT 'construction';")
+
         # Idempotency. A repost of the same source record is a no-op rather
         # than a duplicate, which is what makes it safe to call on every save.
         cur.execute("""
@@ -205,6 +216,10 @@ def ensure_schema(conn) -> None:
                 created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # Same reason as the ALTERs above, and same ordering trap: this one has
+        # to come after the CREATE TABLE, not before it.
+        cur.execute("ALTER TABLE ledger_lines ADD COLUMN IF NOT EXISTS bid_id INTEGER;")
+        cur.execute("ALTER TABLE ledger_lines ADD COLUMN IF NOT EXISTS description TEXT;")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_ledger_lines_entry ON ledger_lines(entry_id);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_ledger_lines_bid ON ledger_lines(bid_id);")
         cur.execute("""
