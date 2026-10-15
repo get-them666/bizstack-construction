@@ -178,15 +178,23 @@ def ensure_schema(conn) -> None:
             )
         """)
         # CREATE TABLE IF NOT EXISTS will happily skip a table that already
-        # exists from an earlier shape, and the indexes below then fail on a
-        # column that was never added. That is not hypothetical: it is what
-        # happens on any database where a partial version of this module ran
-        # once. So every column the indexes rely on is added explicitly before
-        # the index is attempted.
-        cur.execute("ALTER TABLE ledger_entries ADD COLUMN IF NOT EXISTS source_type VARCHAR(40);")
-        cur.execute("ALTER TABLE ledger_entries ADD COLUMN IF NOT EXISTS source_id VARCHAR(80);")
-        cur.execute("ALTER TABLE ledger_entries ADD COLUMN IF NOT EXISTS memo TEXT;")
-        cur.execute("ALTER TABLE ledger_entries ADD COLUMN IF NOT EXISTS company VARCHAR(40) DEFAULT 'construction';")
+        # exists from an earlier shape, and the indexes below then fail on
+        # columns that were never added. That is not hypothetical -- it is
+        # what production hit, where a partial ledger_entries survived from a
+        # deploy that failed partway. Enumerating columns one at a time as
+        # each new error appears is how you ship three fixes for one problem,
+        # so every column the CREATE TABLE declares and the indexes rely on
+        # is asserted here in one go.
+        for _col, _decl in (
+            ("entry_no", "VARCHAR(40)"),
+            ("entry_date", "DATE"),
+            ("memo", "TEXT"),
+            ("source_type", "VARCHAR(40)"),
+            ("source_id", "VARCHAR(80)"),
+            ("company", "VARCHAR(40) DEFAULT 'construction'"),
+            ("created_at", "TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP"),
+        ):
+            cur.execute(f"ALTER TABLE ledger_entries ADD COLUMN IF NOT EXISTS {_col} {_decl};")
 
         # Idempotency. A repost of the same source record is a no-op rather
         # than a duplicate, which is what makes it safe to call on every save.
@@ -216,10 +224,18 @@ def ensure_schema(conn) -> None:
                 created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        # Same reason as the ALTERs above, and same ordering trap: this one has
+        # Same reason as the ALTERs above, and same ordering trap: these have
         # to come after the CREATE TABLE, not before it.
-        cur.execute("ALTER TABLE ledger_lines ADD COLUMN IF NOT EXISTS bid_id INTEGER;")
-        cur.execute("ALTER TABLE ledger_lines ADD COLUMN IF NOT EXISTS description TEXT;")
+        for _col, _decl in (
+            ("entry_id", "INTEGER"),
+            ("account_code", "VARCHAR(10)"),
+            ("debit_cents", "BIGINT NOT NULL DEFAULT 0"),
+            ("credit_cents", "BIGINT NOT NULL DEFAULT 0"),
+            ("description", "TEXT"),
+            ("bid_id", "INTEGER"),
+            ("created_at", "TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP"),
+        ):
+            cur.execute(f"ALTER TABLE ledger_lines ADD COLUMN IF NOT EXISTS {_col} {_decl};")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_ledger_lines_entry ON ledger_lines(entry_id);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_ledger_lines_bid ON ledger_lines(bid_id);")
         cur.execute("""
