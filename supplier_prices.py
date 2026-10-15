@@ -98,6 +98,8 @@ def ensure_schema(conn) -> None:
                 feed_auth_header VARCHAR(120),
                 feed_token VARCHAR(255),
                 default_uom VARCHAR(40) DEFAULT 'each',
+                public_ok BOOLEAN NOT NULL DEFAULT FALSE,
+                category VARCHAR(60) NOT NULL DEFAULT '',
                 company VARCHAR(40) DEFAULT 'construction',
                 enabled BOOLEAN DEFAULT TRUE,
                 last_synced_at TIMESTAMP WITH TIME ZONE,
@@ -109,6 +111,18 @@ def ensure_schema(conn) -> None:
         cur.execute("ALTER TABLE material_suppliers ADD COLUMN IF NOT EXISTS feed_auth_header VARCHAR(120);")
         cur.execute("ALTER TABLE material_suppliers ADD COLUMN IF NOT EXISTS feed_token VARCHAR(255);")
         cur.execute("ALTER TABLE material_suppliers ADD COLUMN IF NOT EXISTS default_uom VARCHAR(40) DEFAULT 'each';")
+        cur.execute("ALTER TABLE material_suppliers ADD COLUMN IF NOT EXISTS public_ok BOOLEAN NOT NULL DEFAULT FALSE;")
+        cur.execute("ALTER TABLE material_suppliers ADD COLUMN IF NOT EXISTS category VARCHAR(60) NOT NULL DEFAULT '';")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_material_suppliers_public ON material_suppliers(public_ok, category);")
+        # Deliberately default FALSE. account-specific distributor pricing is
+        # confidential, and the safe default means a new supplier is private
+        # until somebody consciously decides otherwise. Flipping it to true is
+        # a deliberate act, not an oversight.
+        cur.execute("""
+            COMMENT ON COLUMN material_suppliers.public_ok IS
+            'May these prices appear on a public customer-facing page? Retail '
+            'shelf prices: yes. Account-specific contract pricing: no.'
+        """)
         cur.execute("ALTER TABLE material_suppliers ADD COLUMN IF NOT EXISTS last_synced_at TIMESTAMP WITH TIME ZONE;")
         cur.execute("ALTER TABLE material_suppliers ADD COLUMN IF NOT EXISTS last_sync_note TEXT;")
         cur.execute("""
@@ -154,6 +168,7 @@ def list_suppliers(conn, company: str = "construction", include_disabled: bool =
 def upsert_supplier(conn, name: str, kind: str = "feed", feed_url: str = "",
                     default_uom: str = "each", supplier_id: int | None = None,
                     feed_auth_header: str = "", feed_token: str = "",
+                    public_ok: bool = False, category: str = "",
                     company: str = "construction") -> int:
     if kind not in SOURCE_TYPES:
         raise ValueError(f"kind must be one of {SOURCE_TYPES}")
@@ -161,19 +176,30 @@ def upsert_supplier(conn, name: str, kind: str = "feed", feed_url: str = "",
         raise ValueError("supplier name is required")
     if kind == "feed" and not str(feed_url).strip():
         raise ValueError("a feed supplier needs a URL")
+    if kind == "api" and public_ok:
+        # An authenticated API price is per-account by definition. Allowing a
+        # supplier to be both api and public_ok is how confidential pricing
+        # ends up on a public page.
+        raise ValueError(
+            "an api supplier cannot be public: api prices are account-specific. "
+            "ABC Supply and any contract pricing are confidential by contract.")
     with conn.cursor() as cur:
         cur.execute("""
             INSERT INTO material_suppliers
-                (name, kind, feed_url, default_uom, company, feed_auth_header, feed_token)
-            VALUES (%s,%s,%s,%s,%s,%s,%s)
+                (name, kind, feed_url, default_uom, company, feed_auth_header,
+                 feed_token, public_ok, category)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
             ON CONFLICT (company, lower(name)) DO UPDATE SET
                 kind = EXCLUDED.kind, feed_url = EXCLUDED.feed_url,
                 default_uom = EXCLUDED.default_uom,
                 feed_auth_header = EXCLUDED.feed_auth_header,
-                feed_token = EXCLUDED.feed_token, enabled = TRUE
+                feed_token = EXCLUDED.feed_token,
+                public_ok = EXCLUDED.public_ok,
+                category = EXCLUDED.category, enabled = TRUE
             RETURNING id
         """, (name.strip(), kind, feed_url.strip() or None, default_uom or "each",
-              company, feed_auth_header.strip() or None, feed_token.strip() or None))
+              company, feed_auth_header.strip() or None, feed_token.strip() or None,
+              bool(public_ok), (category or "").strip()))
         sid = cur.fetchone()["id"]
     conn.commit()
     return sid
@@ -393,3 +419,71 @@ def staleness(conn, company: str = "construction") -> list[dict]:
         r["stale"] = age is None or age > MAX_AGE_DAYS
         r["items"] = r["items"] or 0
     return rows
+
+# --- customer-facing surface -------------------------------------------------
+# Everything below this line is reachable without a login, so it only ever
+# touches suppliers flagged public_ok. The filter lives in the SQL rather than
+# in the template on purpose: a forgotten {% if %} in a template leaks
+# confidential contract pricing, whereas a WHERE clause cannot be skipped by
+# forgetting to guard a column.
+
+PUBLIC_CATEGORIES = ["all"]
+
+
+def public_categories(conn, company: str = "construction") -> list[str]:
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT DISTINCT COALESCE(NULLIF(s.category,''), 'other') AS cat
+            FROM material_supplier_prices p
+            JOIN material_suppliers s ON s.id = p.supplier_id
+            WHERE s.public_ok AND s.enabled AND s.company = %s
+            ORDER BY 1
+        """, (company,))
+        return [r["cat"] for r in cur.fetchall()]
+
+
+def public_prices(conn, term: str = "", category: str = "", limit: int = 60) -> list[dict]:
+    """Items safe to show a customer. Public shelf prices only.
+
+    Note the supplier join carries the public_ok predicate rather than
+    filtering afterwards, so a private price is never even loaded into memory.
+    """
+    where = ["s.public_ok", "s.enabled", "p.price_cents > 0"]
+    params: list = []
+    if term.strip():
+        where.append("(p.description ILIKE %s OR p.item_number ILIKE %s)")
+        params += [f"%{term.strip()}%", f"%{term.strip()}%"]
+    if category and category != "all":
+        where.append("COALESCE(NULLIF(s.category,''),'other') = %s")
+        params.append(category)
+    params.append(max(1, min(int(limit), 200)))
+    with conn.cursor() as cur:
+        cur.execute(f"""
+            SELECT p.item_number, p.description, p.uom, p.price_cents,
+                   s.name AS supplier, s.category,
+                   (now() - p.observed_at) AS age
+            FROM material_supplier_prices p
+            JOIN material_suppliers s ON s.id = p.supplier_id
+            WHERE {' AND '.join(where)}
+            ORDER BY p.description
+            LIMIT %s
+        """, params)
+        rows = cur.fetchall()
+    for r in rows:
+        age = r["age"].days if r.get("age") is not None else 0
+        r["age_days"] = age
+        r["stale"] = age > MAX_AGE_DAYS
+        # Never publish a stale price as if it were current.
+        r["price_cents"] = None if r["stale"] else r["price_cents"]
+    return rows
+
+
+def public_price_count(conn, company: str = "construction") -> int:
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT count(*) AS n
+            FROM material_supplier_prices p
+            JOIN material_suppliers s ON s.id = p.supplier_id
+            WHERE s.public_ok AND s.enabled AND p.price_cents > 0 AND s.company = %s
+        """, (company,))
+        return cur.fetchone()["n"]
