@@ -54,6 +54,7 @@ from stripe_service import StripeService, default_deposit_cents
 import permit_enricher
 import permit_stats
 import email_fetcher
+import bid_costing
 import material_picker
 import takeoff
 import supplier_prices
