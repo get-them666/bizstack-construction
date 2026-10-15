@@ -8,8 +8,11 @@
       "copilot_ops.py",
       "copilot_memory.py",
       "copilot_tasks.py",
+      "bid_opportunities.py",
       "bot_knowledge.md",
-      "construction_knowledge.md"
+      "construction_knowledge.md",
+      "templates/construction/*.html",
+      "static/**"
     ],
     "buildEnvironment": "V3"
   },
