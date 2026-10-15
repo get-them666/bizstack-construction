@@ -9,6 +9,7 @@
       "copilot_memory.py",
       "copilot_tasks.py",
       "bid_opportunities.py",
+      "bid_sources.py",
       "bot_knowledge.md",
       "construction_knowledge.md",
       "templates/construction/*.html",

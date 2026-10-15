@@ -18,6 +18,84 @@
             <a href="/dashboard" class="px-4 py-2.5 text-sm font-semibold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 rounded-xl transition-colors">← Dashboard</a>
         </div>
 
+        {# ── Pull from source ─────────────────────────────────────────────── #}
+        {% set usable = sources | selectattr('configured') | list %}
+        <div class="bg-white rounded-2xl border border-slate-200 p-5 mb-6">
+            <div class="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                    <p class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Pull from source</p>
+                    <p class="text-sm text-slate-500 mt-1">
+                        Fetches solicitations from the server and stores them here. Rows you already have are
+                        updated, never duplicated — and a pull never changes a bid's status.
+                    </p>
+                </div>
+                {% if usable %}
+                <button onclick="pullBids('{{ usable[0].key }}', this)"
+                        class="px-5 py-2.5 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition-colors">
+                    Pull latest bids
+                </button>
+                {% endif %}
+            </div>
+
+            <div id="pullOut" class="hidden mt-4 px-4 py-3 rounded-xl text-sm font-semibold"></div>
+
+            <div class="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                {% for s in sources %}
+                <div class="rounded-xl border px-3 py-2.5
+                            {% if s.configured %}border-emerald-200 bg-emerald-50
+                            {% elif s.unavailable %}border-slate-200 bg-slate-50
+                            {% else %}border-amber-200 bg-amber-50{% endif %}">
+                    <p class="text-xs font-bold text-slate-800">{{ s.label }}</p>
+                    {% if s.configured %}
+                        <p class="text-[11px] font-semibold text-emerald-700 mt-0.5">Ready to pull</p>
+                    {% elif s.unavailable %}
+                        <p class="text-[11px] text-slate-500 mt-0.5 leading-snug">{{ s.unavailable }}</p>
+                    {% else %}
+                        <p class="text-[11px] font-semibold text-amber-800 mt-0.5">
+                            Needs {{ s.missing | join(', ') }}
+                        </p>
+                    {% endif %}
+                </div>
+                {% endfor %}
+            </div>
+
+            {% if pulls %}
+            <details class="mt-4">
+                <summary class="cursor-pointer text-xs font-semibold text-slate-500 hover:text-indigo-600">
+                    Pull history ({{ pulls | length }})
+                </summary>
+                <div class="mt-2 overflow-x-auto">
+                    <table class="w-full text-xs">
+                        <thead>
+                            <tr class="text-left text-slate-400 uppercase tracking-wide">
+                                <th class="py-1 pr-3 font-semibold">When</th>
+                                <th class="py-1 pr-3 font-semibold">Source</th>
+                                <th class="py-1 pr-3 font-semibold text-right">Fetched</th>
+                                <th class="py-1 pr-3 font-semibold text-right">New</th>
+                                <th class="py-1 pr-3 font-semibold text-right">Updated</th>
+                                <th class="py-1 font-semibold">Result</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for p in pulls %}
+                            <tr class="border-t border-slate-100">
+                                <td class="py-1.5 pr-3 text-slate-600 whitespace-nowrap">{{ p.started_at.strftime('%b %d %H:%M') }}</td>
+                                <td class="py-1.5 pr-3 text-slate-600">{{ p.source }}</td>
+                                <td class="py-1.5 pr-3 text-right text-slate-600">{{ p.fetched }}</td>
+                                <td class="py-1.5 pr-3 text-right font-bold {% if p.created_count %}text-emerald-700{% else %}text-slate-400{% endif %}">{{ p.created_count }}</td>
+                                <td class="py-1.5 pr-3 text-right text-slate-600">{{ p.updated_count }}</td>
+                                <td class="py-1.5 {% if p.ok %}text-emerald-700{% else %}text-rose-700{% endif %}">
+                                    {% if p.ok %}ok{% else %}{{ (p.error or 'failed')[:90] }}{% endif %}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </details>
+            {% endif %}
+        </div>
+
         {# ── Tiles ─────────────────────────────────────────────────────── #}
         <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
             <div class="bg-white rounded-2xl border border-slate-200 p-5">
@@ -75,6 +153,12 @@
                               {% elif b.status == 'sent' %}bg-blue-100 text-blue-800
                               {% else %}bg-slate-100 text-slate-600{% endif %} rounded">{{ b.status }}</span>
                         {% if b.reference %}<span class="text-[11px] font-mono text-slate-400">{{ b.reference }}</span>{% endif %}
+                        {# New == the first time this source has ever shown us this
+                           solicitation. first_seen_at is set on insert and never
+                           moves, so it stays true after later pulls. #}
+                        {% if b.first_seen_at and b.first_seen_at >= pulls_since %}
+                        <span class="px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide bg-amber-100 text-amber-900 rounded">New</span>
+                        {% endif %}
                     </div>
                     <h2 class="text-base font-bold text-slate-900">{{ b.name }}</h2>
                     <p class="text-xs text-slate-500 mt-0.5">
@@ -156,4 +240,50 @@
 
     </div>
 </section>
+{% endblock %}
+{% block scripts %}
+<script>
+function pullBids(source, btn) {
+    var out = document.getElementById('pullOut');
+    if (btn.dataset.busy) return;
+    btn.dataset.busy = '1';
+    var label = btn.textContent;
+    btn.textContent = 'Pulling…';
+    btn.classList.add('opacity-60', 'pointer-events-none');
+    out.className = 'mt-4 px-4 py-3 rounded-xl text-sm font-semibold bg-slate-100 text-slate-700';
+    out.textContent = 'Fetching from ' + source + '…';
+    out.classList.remove('hidden');
+
+    var body = new URLSearchParams({ source: source });
+    fetch('/api/bids/pull', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: body
+    })
+        .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+        .then(function (res) {
+            var j = res.j;
+            if (!res.ok) {
+                out.className = 'mt-4 px-4 py-3 rounded-xl text-sm font-semibold bg-rose-50 text-rose-800 border border-rose-200';
+                out.textContent = 'Pull failed — ' + (j.detail || 'unknown error');
+                return;
+            }
+            var e = (j.errors || []).length;
+            out.className = 'mt-4 px-4 py-3 rounded-xl text-sm font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200';
+            out.textContent = 'Pulled ' + j.loaded + ' bid' + (j.loaded === 1 ? '' : 's') +
+                              ' — ' + j.created + ' new, ' + j.updated + ' updated' +
+                              (e ? ', ' + e + ' rejected.' : '.');
+            setTimeout(function () { location.reload(); }, 1400);
+        })
+        .catch(function () {
+            out.className = 'mt-4 px-4 py-3 rounded-xl text-sm font-semibold bg-rose-50 text-rose-800 border border-rose-200';
+            out.textContent = 'Could not reach the server.';
+        })
+        .then(function () {
+            delete btn.dataset.busy;
+            btn.textContent = label;
+            btn.classList.remove('opacity-60', 'pointer-events-none');
+        });
+}
+</script>
 {% endblock %}

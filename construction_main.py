@@ -55,6 +55,7 @@ import permit_enricher
 import permit_stats
 import email_fetcher
 import bid_opportunities
+import bid_sources
 import enrichment
 from signalwire_service import SignalWireService
 import vapi_service
@@ -6845,10 +6846,54 @@ async def bid_delete(bid_id: int, request: Request, db=Depends(get_db)):
     return RedirectResponse(url="/bids?deleted=1", code=status.HTTP_303_SEE_OTHER)
 
 
+@app.get("/api/bids/sources")
+async def bid_sources_api(request: Request, db=Depends(get_db)):
+    """Which external bid sources are wired and which env vars each needs.
+
+    Admin only, and it reports configuration state rather than values -- never
+    echoes a token back out.
+    """
+    require_admin(request)
+    return JSONResponse(content={
+        "sources": bid_sources.source_status(),
+        "recent": bid_opportunities.recent_pulls(db, _BID_COMPANY),
+    })
+
+
+@app.post("/api/bids/pull")
+async def bid_pull(request: Request, source: str = Form("json_feed"), db=Depends(get_db)):
+    """Pull solicitations from an external source into bid_opportunities.
+
+    Admin only. This is the button on /bids. Everything is logged to
+    bid_pull_runs whether it succeeds or fails, so a failed pull shows you why
+    instead of silently leaving the board stale.
+    """
+    require_admin(request)
+    run_id = bid_opportunities.start_pull(db, source, _BID_COMPANY)
+    try:
+        rows = bid_sources.pull(source)
+    except Exception as e:
+        bid_opportunities.finish_pull(db, run_id, ok=False, error=str(e))
+        return JSONResponse(content={"ok": False, "source": source,
+                                     "detail": str(e)}, status_code=502)
+    result = bid_opportunities.upsert_pulled(db, rows, _BID_COMPANY)
+    detail = None
+    if result["errors"]:
+        detail = f"{len(result['errors'])} row(s) rejected; see the log."
+    bid_opportunities.finish_pull(
+        db, run_id, fetched=len(rows), created=result["created"],
+        updated=result["updated"], ok=True, error=detail)
+    return JSONResponse(content={"ok": True, "source": source, **result})
+
+
 @app.get("/bids", response_class=HTMLResponse)
 async def bids_page(request: Request, status: str = "", db=Depends(get_db)):
     require_admin(request)
     rows = bid_opportunities.list_bids(db, _BID_COMPANY, status)
+    pulls = bid_opportunities.recent_pulls(db, _BID_COMPANY, 6)
+    # "New" means first seen in the most recent pull. No pulls yet means nothing
+    # is new, which is right: a hand-entered bid did not arrive from a source.
+    pulls_since = next((p["started_at"] for p in pulls if p.get("ok")), None)
     return templates.TemplateResponse(
         request=request, name="bids.html",
         context={
@@ -6858,6 +6903,9 @@ async def bids_page(request: Request, status: str = "", db=Depends(get_db)):
             "sel": status,
             "today": date.today(),
             "stats": bid_opportunities.stats(db, _BID_COMPANY),
+            "sources": bid_sources.source_status(),
+            "pulls": pulls,
+            "pulls_since": pulls_since,
         },
     )
 

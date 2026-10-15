@@ -17,7 +17,7 @@ import hmac
 import json
 import os
 import re
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 # Bid lifecycle. `drafting` -> `sent` -> `shortlist` -> `won` / `lost` / `withdrawn`.
 STATUSES = [
@@ -133,6 +133,24 @@ def upsert_many(conn, rows: list[dict], company: str = "construction") -> dict:
     status IS applied here, unlike the webhook path -- this is an explicit
     owner action ("load my bids"), not an untrusted sender.
     """
+    return _upsert(conn, rows, company, apply_status=True)
+
+
+def upsert_pulled(conn, rows: list[dict], company: str = "construction") -> dict:
+    """Upsert rows fetched from an external source. Never touches status.
+
+    An external listing does not know we shortlisted, priced, won or lost a
+    solicitation, so a pull that reset status would quietly destroy the
+    pipeline it was supposed to refresh. Status is honoured on insert only.
+
+    Also stamps first_seen_at (insert only) and last_seen_at (every touch), so
+    a returned list can report which solicitations are genuinely new.
+    """
+    return _upsert(conn, rows, company, apply_status=False)
+
+
+def _upsert(conn, rows: list[dict], company: str = "construction",
+            apply_status: bool = True) -> dict:
     created = updated = 0
     errors: list[dict] = []
     for row in rows:
@@ -146,7 +164,12 @@ def upsert_many(conn, rows: list[dict], company: str = "construction") -> dict:
         if vals["role"] not in ROLES:
             errors.append({"name": vals.get("name"), "error": f"role must be one of {ROLES}"})
             continue
-        if vals["status"] not in STATUSES:
+        if not apply_status:
+            # Pull path: whatever status the source claims is only a default
+            # for a row we have never seen. Validate it only if it was given.
+            if vals["status"] not in STATUSES:
+                vals["status"] = "new"
+        elif vals["status"] not in STATUSES:
             errors.append({"name": vals.get("name"),
                            "error": f"status must be one of {STATUSES}"})
             continue
@@ -154,31 +177,71 @@ def upsert_many(conn, rows: list[dict], company: str = "construction") -> dict:
                   "contact_phone", "reference", "trade", "location", "notes"):
             vals[k] = str(vals.get(k) or "").strip()
 
-        cols = list(vals) + ["due_date", "bid_amount", "status", "company"]
+        # A pull must not blank a field it simply did not return. Only overwrite
+        # with a non-empty value; that keeps partial feeds from erasing notes
+        # the owner typed in themselves.
+        if not apply_status:
+            updates = []
+            params: list = []
+            for k in ("name", "owner", "reference", "trade", "location", "notes"):
+                if vals.get(k):
+                    updates.append(f"{k} = EXCLUDED.{k}")
+                    params.append(vals[k])
+            if _num_ok(vals.get("bid_amount")) is not None:
+                updates.append("bid_amount = EXCLUDED.bid_amount")
+                params.append(_coerce_amount(vals.get("bid_amount")))
+            if _coerce_date(vals.get("due_date")) is not None:
+                updates.append("due_date = EXCLUDED.due_date")
+                params.append(_coerce_date(vals.get("due_date")))
+            updates.append("last_seen_at = now()")
+            set_clause = ", ".join(updates)
+        else:
+            set_clause = (
+                "  name = EXCLUDED.name, owner = EXCLUDED.owner, "
+                "  contact_name = EXCLUDED.contact_name, contact_email = EXCLUDED.contact_email, "
+                "  contact_phone = EXCLUDED.contact_phone, role = EXCLUDED.role, "
+                "  due_date = EXCLUDED.due_date, bid_amount = EXCLUDED.bid_amount, "
+                "  status = EXCLUDED.status, location = EXCLUDED.location, "
+                "  notes = EXCLUDED.notes, updated_at = now()"
+            )
+
+        # Build the column list as a dict so it cannot contain duplicates.
+        # due_date, bid_amount and status are in _WEBHOOK_FIELDS *and* were
+        # being appended explicitly, which produced
+        #   ERROR: column "due_date" specified more than once
+        # and failed every row in the batch.
+        colvals: dict = {k: vals.get(k) for k in vals}
+        colvals["due_date"] = _coerce_date(vals.get("due_date"))
+        colvals["bid_amount"] = _coerce_amount(vals.get("bid_amount"))
+        colvals["status"] = vals["status"]
+        colvals["company"] = company
+        colvals["source"] = "pull" if not apply_status else "local"
+        # Stamped on insert. first_seen_at is deliberately absent from every
+        # ON CONFLICT set clause, so it records when we first ever saw the
+        # solicitation and stays true across later pulls -- that is what makes
+        # the board's "New" badge mean "new to us" rather than "new today".
+        colvals["first_seen_at"] = datetime.now(timezone.utc)
+        if not apply_status:
+            colvals["last_seen_at"] = datetime.now(timezone.utc)
+        cols = list(colvals)
         sql = (
-            f"INSERT INTO bid_opportunities ({','.join(cols)}, source) "
-            f"VALUES ({','.join(['%s'] * len(cols))}, 'local') "
+            f"INSERT INTO bid_opportunities ({','.join(cols)}) "
+            f"VALUES ({','.join(['%s'] * len(cols))}) "
             f"ON CONFLICT (company, COALESCE(reference,''), COALESCE(trade,'')) "
-            f"DO UPDATE SET "
-            f"  name = EXCLUDED.name, owner = EXCLUDED.owner, "
-            f"  contact_name = EXCLUDED.contact_name, contact_email = EXCLUDED.contact_email, "
-            f"  contact_phone = EXCLUDED.contact_phone, role = EXCLUDED.role, "
-            f"  due_date = EXCLUDED.due_date, bid_amount = EXCLUDED.bid_amount, "
-            f"  status = EXCLUDED.status, location = EXCLUDED.location, "
-            f"  notes = EXCLUDED.notes, updated_at = now() "
+            f"DO UPDATE SET {set_clause} "
             f"RETURNING id, (xmax = 0) AS inserted"
         )
-        params = [vals[c] for c in vals] + [
-            _coerce_date(vals.get("due_date")),
-            _coerce_amount(vals.get("bid_amount")),
-            vals["status"],
-            company,
-        ]
+        params = [colvals[c] for c in cols]
         try:
-            with conn.cursor() as cur:
-                cur.execute(sql, params)
-                row = cur.fetchone()
-            if row.get("inserted"):
+            # Savepoint per row. Without one, a single malformed row aborts the
+            # whole transaction and every later row fails with
+            # "current transaction is aborted" -- so one bad record silently
+            # emptied the batch instead of being skipped.
+            with conn.transaction():
+                with conn.cursor() as cur:
+                    cur.execute(sql, params)
+                    row = cur.fetchone()
+            if row["inserted"]:
                 created += 1
             else:
                 updated += 1
@@ -187,6 +250,44 @@ def upsert_many(conn, rows: list[dict], company: str = "construction") -> dict:
     conn.commit()
     return {"created": created, "updated": updated, "errors": errors,
             "loaded": created + updated}
+
+
+def _num_ok(v):
+    if v in (None, ""):
+        return None
+    try:
+        return float(str(v).replace("$", "").replace(",", "").strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def start_pull(conn, source: str, company: str = "construction") -> int:
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO bid_pull_runs (source, company) VALUES (%s, %s) RETURNING id",
+            (source, company))
+        rid = cur.fetchone()["id"]
+    conn.commit()
+    return rid
+
+
+def finish_pull(conn, run_id: int, fetched: int = 0, created: int = 0,
+                updated: int = 0, ok: bool = True, error: str | None = None) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE bid_pull_runs SET finished_at = now(), fetched = %s, "
+            "created_count = %s, updated_count = %s, ok = %s, error = %s WHERE id = %s",
+            (fetched, created, updated, ok, (error or "")[:2000] or None, run_id))
+    conn.commit()
+
+
+def recent_pulls(conn, company: str = "construction", limit: int = 8) -> list[dict]:
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT id, source, started_at, finished_at, fetched, created_count, "
+            "updated_count, ok, error FROM bid_pull_runs WHERE company = %s "
+            "ORDER BY started_at DESC LIMIT %s", (company, limit))
+        return cur.fetchall()
 
 
 def upsert_from_webhook(conn, payload: dict, company: str = "construction") -> dict:
@@ -319,6 +420,31 @@ def ensure_schema(conn) -> None:
         cur.execute("ALTER TABLE bid_opportunities ADD COLUMN IF NOT EXISTS notes TEXT;")
         cur.execute("ALTER TABLE bid_opportunities ADD COLUMN IF NOT EXISTS source VARCHAR(40) DEFAULT 'manual';")
         cur.execute("ALTER TABLE bid_opportunities ADD COLUMN IF NOT EXISTS company VARCHAR(40) DEFAULT 'construction';")
+        # first_seen_at never moves; last_seen_at moves on every pull. Comparing
+        # them is how the board knows a solicitation is one it has never seen
+        # before, which is the whole point of pulling on a button rather than
+        # keeping a manually maintained list.
+        cur.execute("ALTER TABLE bid_opportunities ADD COLUMN IF NOT EXISTS first_seen_at TIMESTAMP WITH TIME ZONE;")
+        cur.execute("ALTER TABLE bid_opportunities ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMP WITH TIME ZONE;")
+        cur.execute("UPDATE bid_opportunities SET first_seen_at = COALESCE(first_seen_at, created_at) WHERE first_seen_at IS NULL;")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_bid_opportunities_first_seen ON bid_opportunities(first_seen_at DESC);")
+        # Pull history, so the button can report "3 new since you last looked"
+        # instead of just dumping a count.
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS bid_pull_runs (
+                id SERIAL PRIMARY KEY,
+                source VARCHAR(40) NOT NULL,
+                company VARCHAR(40) DEFAULT 'construction',
+                started_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                finished_at TIMESTAMP WITH TIME ZONE,
+                fetched INTEGER DEFAULT 0,
+                created_count INTEGER DEFAULT 0,
+                updated_count INTEGER DEFAULT 0,
+                ok BOOLEAN DEFAULT TRUE,
+                error TEXT
+            )
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_bid_pull_runs_company ON bid_pull_runs(company, started_at DESC);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_bid_opportunities_company ON bid_opportunities(company);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_bid_opportunities_status ON bid_opportunities(status);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_bid_opportunities_due ON bid_opportunities(due_date);")
