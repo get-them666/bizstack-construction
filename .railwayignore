@@ -1,6 +1,79 @@
+# Railway upload exclusion list.
+#
+# This governs `railway up` from a working directory, which uploads the local
+# tree as build context. It is a DIFFERENT path from git: a file in .gitignore
+# is never pushed, but it is still uploaded here unless it is also listed
+# below. Anything sensitive needs BOTH.
+#
+# Keep the app's own runtime files OUT of this list, or the deploy breaks:
+#   *.py (module files), templates/, static/, requirements.txt, Procfile,
+#   railway.json, railway.toml
+
+# --- Python envs and caches -------------------------------------------------
 .venv
 venv
 myenv
 __pycache__
 *.pyc
+*.pyo
+.pytest_cache
+.mypy_cache
+.ruff_cache
+
+# --- Secrets and local config ----------------------------------------------
+# .env is gitignored but was NOT here before, so it rode along in every upload.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+secrets*.json
+credentials*.json
+
+# --- Live commercial data, local only ---------------------------------------
+# Live bid pricing and GC contacts. Loaded by the button on /bids.
+bids_local.json
+
+# --- Generated and customer material ---------------------------------------
+# 278 mailed letters with real names and addresses. Regenerate with mail_letters.py
+outbox
+# Real customer names in Stripe charge metadata
+docs/stripe/*
+# Vendor estimate docs and the merged PDF/docx pairs
+docs/subcontractor_application*
+docs/build_subapplication.py
+
+# --- Agent and local session state -----------------------------------------
+.agents/*
+.claude/*
+opencode.json
+eva_intel.json
+SESSION_STATE.md
+SESSION_NOTES.md
+AGENTS.md
+
+# --- Duplicate trees and scratch --------------------------------------------
+# A stale 143 MB copy of this repo nested inside itself. Breaks builds on
+# upload size and is not referenced by the Procfile.
+bizstack-construction/*
+*.bak
+*.orig
+scratch
+tmp
+
+# --- Unrelated Flask apps that live in this directory -----------------------
+# Separate inventory tracker, not part of construction_main:app
+app.py
+main.py
+mail_batch.py
+
+# --- Data dumps -------------------------------------------------------------
+*.csv
+*.sql
+*.dump
+
+# --- OS ---------------------------------------------------------------------
 .DS_Store
+Thumbs.db
+desktop.ini

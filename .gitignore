@@ -30,3 +30,7 @@ outbox/
 # metadata, and financial figures that do not belong in a public repo.
 # Regenerate with: python3 stripe_income_report.py
 docs/stripe/
+
+# Local bid board seed: live contract pricing and GC contact details. Loaded by
+# the "Load my current bids" button on /bids. Never enters the repo.
+bids_local.json
