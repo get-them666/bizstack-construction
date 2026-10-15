@@ -12,9 +12,12 @@ the ALTER-before-CREATE ordering trap at :393-409 cannot be reached.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
 import os
 import re
-from datetime import date
+from datetime import date, datetime, timedelta
 
 # Bid lifecycle. `drafting` -> `sent` -> `shortlist` -> `won` / `lost` / `withdrawn`.
 STATUSES = [
@@ -34,6 +37,155 @@ ROLE_NOTES = {
     "prime": "We hold the contract. Bond, RFI, insurance and references are ours.",
     "sub": "Another GC holds the contract. We price a trade package to them.",
 }
+
+# Incoming webhook payloads. Only these keys are read; anything else in the body is
+# ignored rather than mass-assigned, so a sender cannot set id/company/status freely.
+_WEBHOOK_FIELDS = {
+    "name", "owner", "contact_name", "contact_email", "contact_phone",
+    "reference", "role", "trade", "location", "due_date", "bid_amount",
+    "status", "notes",
+}
+
+
+def webhook_secret() -> str:
+    """Shared secret for inbound webhooks. Empty means the endpoint refuses everything."""
+    return (os.getenv("BIDS_WEBHOOK_SECRET", "") or "").strip()
+
+
+def webhook_enabled() -> bool:
+    return bool(webhook_secret())
+
+
+def sign_payload(raw: str, secret: str | None = None) -> str:
+    """HMAC-SHA256 over the raw body, hex. Same value the sender must send in X-Bids-Signature."""
+    secret = secret if secret is not None else webhook_secret()
+    if not secret:
+        return ""
+    return hmac.new(secret.encode("utf-8"), raw.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def verify_signature(raw: str, signature: str, secret: str | None = None) -> bool:
+    """Constant-time compare. Returns False if unconfigured -- fail closed."""
+    secret = secret if secret is not None else webhook_secret()
+    if not secret or not signature:
+        return False
+    sig = signature.strip().lower()
+    if sig.startswith("sha256="):
+        sig = sig[7:]
+    return hmac.compare_digest(sig, sign_payload(raw, secret))
+
+
+def _coerce_date(v):
+    """Accept ISO date/datetime or the common US forms. Returns None on anything else."""
+    if v is None or v == "":
+        return None
+    if isinstance(v, date) and not isinstance(v, datetime):
+        return v
+    if isinstance(v, datetime):
+        return v.date()
+    s = str(v).strip()
+    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y", "%Y/%m/%d"):
+        try:
+            return datetime.strptime(s, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _coerce_amount(v):
+    if v is None or v == "":
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    s = re.sub(r"[^0-9.\-]", "", str(v))
+    if not s:
+        return None
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+def upsert_from_webhook(conn, payload: dict, company: str = "construction") -> dict:
+    """Create or update one bid from a webhook body. Idempotent on (reference, trade).
+
+    On conflict, quantity/contact/dates/notes are refreshed but ``status`` is NOT.
+    The webhook creates the record; the owner drives the bidding workflow
+    (drafting -> sent -> shortlist -> won). A sender cannot walk a bid to "won".
+
+    Returns {"id", "created", "status_kept", "error"}. Never touches `leads` and
+    never sends anything outbound.
+    """
+    if not isinstance(payload, dict):
+        return {"id": None, "created": False, "status_kept": None,
+                "error": "payload must be an object"}
+
+    fields = {k: payload[k] for k in _WEBHOOK_FIELDS if k in payload}
+
+    name = str(fields.get("name", "")).strip()
+    if not name:
+        return {"id": None, "created": False, "status_kept": None, "error": "name is required"}
+
+    role = str(fields.get("role", "sub") or "sub").strip().lower()
+    if role not in ROLES:
+        return {"id": None, "created": False, "status_kept": None,
+                "error": f"role must be one of {ROLES}"}
+
+    status = str(fields.get("status", "new") or "new").strip().lower()
+    if status not in STATUSES:
+        return {"id": None, "created": False, "status_kept": None,
+                "error": f"status must be one of {STATUSES}"}
+
+    due = _coerce_date(fields.get("due_date"))
+    amount = _coerce_amount(fields.get("bid_amount"))
+
+    vals = {
+        "name": name,
+        "owner": str(fields.get("owner", "") or "").strip(),
+        "contact_name": str(fields.get("contact_name", "") or "").strip(),
+        "contact_email": str(fields.get("contact_email", "") or "").strip(),
+        "contact_phone": str(fields.get("contact_phone", "") or "").strip(),
+        "reference": str(fields.get("reference", "") or "").strip(),
+        "role": role,
+        "trade": str(fields.get("trade", "") or "").strip(),
+        "location": str(fields.get("location", "") or "").strip(),
+        "notes": str(fields.get("notes", "") or "").strip(),
+    }
+
+    cols = list(vals) + ["due_date", "bid_amount", "status", "company"]
+    sql = (
+        f"INSERT INTO bid_opportunities ({','.join(cols)}, source) "
+        f"VALUES ({','.join(['%s'] * len(cols))}, 'webhook') "
+        f"ON CONFLICT (company, COALESCE(reference,''), COALESCE(trade,'')) "
+        f"DO UPDATE SET "
+        f"  name = EXCLUDED.name, owner = EXCLUDED.owner, "
+        f"  contact_name = EXCLUDED.contact_name, contact_email = EXCLUDED.contact_email, "
+        f"  contact_phone = EXCLUDED.contact_phone, due_date = EXCLUDED.due_date, "
+        f"  bid_amount = EXCLUDED.bid_amount, location = EXCLUDED.location, "
+        f"  notes = EXCLUDED.notes, updated_at = now() "
+        f"RETURNING id, (xmax = 0) AS inserted"
+    )
+    params = [vals[c] for c in vals] + [due, amount, status, company]
+
+    with conn.cursor() as cur:
+        cur.execute(sql, params)
+        row = cur.fetchone()
+        inserted = bool(row.get("inserted", True))
+        kept = None
+        if not inserted:
+            cur.execute(
+                "SELECT status FROM bid_opportunities WHERE id = %s AND company = %s;",
+                (row["id"], company),
+            )
+            prev = cur.fetchone()
+            kept = prev["status"] if prev else None
+    conn.commit()
+    return {
+        "id": row["id"],
+        "created": inserted,
+        "status_kept": kept,
+        "error": None,
+    }
 
 
 def _safe(name: str) -> str:

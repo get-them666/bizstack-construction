@@ -5582,6 +5582,124 @@ PROJECT_TYPE_CHOICES = [
 ]
 
 
+# --- Embeddable quote widget ------------------------------------------------
+# A chrome-free version of the instant-quote form for an <iframe> on any site.
+# Same intake and same guardrails as /instant-quote -- it still lands in `leads`,
+# so auto_reply and the follow-up dial behave identically. Only the rendering
+# differs, which is why it reuses that route's handlers rather than duplicating
+# the estimate logic.
+_EMBED_TYPES = [
+    "Kitchen remodel", "Bathroom remodel", "Whole-home renovation", "Additions",
+    "Roofing", "Siding / windows", "Deck / porch", "Flooring", "Painting",
+    "Foundation / structural", "Garage / ADU", "Other",
+]
+
+
+@app.get("/embed/quote", response_class=HTMLResponse)
+async def embed_quote_page(request: Request):
+    return templates.TemplateResponse(request=request, name="embed_quote.html", context={
+        "project_types": _EMBED_TYPES,
+        "error": request.query_params.get("error"),
+        "name": request.query_params.get("name", ""),
+        "phone": request.query_params.get("phone", ""),
+        "email": request.query_params.get("email", ""),
+        "address": request.query_params.get("address", ""),
+        "project_type": request.query_params.get("project_type", ""),
+        "sqft": request.query_params.get("sqft", ""),
+        "posted": False,
+    })
+
+
+@app.post("/embed/quote", response_class=HTMLResponse)
+async def embed_quote_submit(
+    request: Request,
+    name: str = Form(""),
+    phone: str = Form(""),
+    email: str = Form(""),
+    address: str = Form(""),
+    project_type: str = Form(""),
+    sqft: str = Form(""),
+    db=Depends(get_db),
+):
+    def back(error=None, code=200):
+        return templates.TemplateResponse(
+            request=request, name="embed_quote.html",
+            context={
+                "project_types": _EMBED_TYPES, "error": error, "name": name,
+                "phone": phone, "email": email, "address": address,
+                "project_type": project_type, "sqft": sqft, "posted": code == 200,
+            },
+            status_code=code,
+        )
+
+    email = (email or "").strip()
+    if not email:
+        return back("Please add your email — we'll send your quote there.", 422)
+
+    prop = property_service.lookup_address(address)
+    manual_sqft = 0
+    try:
+        manual_sqft = int(re.sub(r"[^0-9]", "", sqft or "0") or 0)
+    except ValueError:
+        manual_sqft = 0
+
+    try:
+        est = estimating_service.auto_quote(project_type or "", manual_sqft or None)
+    except Exception as e:
+        print(f"⚠️ embed quote estimate failed: {e}", flush=True)
+        est = estimating_service.auto_quote(project_type or "", None)
+
+    try:
+        lead_id = lead_intake.intake_lead(
+            db, company="construction", source="embed_quote", name=name,
+            phone=phone, email=email, address=address,
+            description=f"Embed widget: {project_type}",
+            project_type=project_type,
+            extra={"budget": "", "timeline": "", "sqft": sqft},
+        )["lead_id"]
+    except Exception as e:
+        print(f"⚠️ embed quote intake failed: {e}", flush=True)
+        return back("We hit a glitch saving your request — please try again.", 500)
+
+    # Same notifications as the full form. Guarded individually so one failure
+    # does not cost the lead.
+    try:
+        auto_reply.notify_owner_email(
+            "construction", lead_id=lead_id, name=name, phone=phone, email=email,
+            service=project_type, address=address, budget="", timeline="",
+            message="Embed widget request", source="embed_quote",
+        )
+    except Exception as e:
+        print(f"⚠️ embed quote owner notify failed: {e}", flush=True)
+    try:
+        auto_reply.auto_reply_to_lead(
+            db, "construction", name=name, phone=phone, email=email,
+            service=project_type, address=address, message="Embed widget request",
+            source="embed_quote", sqft=est.get("sqft"), lead_id=lead_id,
+        )
+    except Exception as e:
+        print(f"⚠️ embed quote auto-reply failed: {e}", flush=True)
+
+    return back(None, 200)
+
+
+@app.get("/embed/snippet", response_class=HTMLResponse)
+async def embed_snippet(request: Request):
+    """Returns a copy-pasteable iframe tag with this deployment's own domain."""
+    return JSONResponse(content={
+        "iframe": (
+            '<iframe src="/embed/quote" title="Get a construction quote" '
+            'style="width:100%;max-width:460px;height:620px;border:0;border-radius:12px" '
+            'loading="lazy"></iframe>'
+        ),
+        "note": (
+            "Relative URL renders on this deployment. For another domain use the "
+            "absolute origin, e.g. https://construction.bizstackperks.com/embed/quote"
+        ),
+        "height_hint": "620px on desktop; bump to 720px if the iframe is narrower than 400px",
+    })
+
+
 # --- Public acquisition funnel (+ referral attribution) ----------------------
 @app.get("/get-started", response_class=HTMLResponse)
 async def get_started_page(request: Request):
@@ -6742,6 +6860,76 @@ async def bids_page(request: Request, status: str = "", db=Depends(get_db)):
             "stats": bid_opportunities.stats(db, _BID_COMPANY),
         },
     )
+
+
+# --- Inbound bid webhook ----------------------------------------------------
+# Auth is HMAC-SHA256 over the raw body, sent as X-Bids-Signature. Unconfigured
+# means the endpoint is closed, not open -- it returns 503 rather than accepting
+# unsigned posts. Nothing here writes to `leads`, so no lead outreach can fire.
+@app.post("/api/webhooks/bids")
+async def bids_webhook(request: Request, db=Depends(get_db)):
+    if not bid_opportunities.webhook_enabled():
+        raise HTTPException(status_code=503, detail="Bid webhook not configured")
+
+    raw = (await request.body()).decode("utf-8", errors="replace")
+    sig = request.headers.get("X-Bids-Signature", "")
+    if not bid_opportunities.verify_signature(raw, sig):
+        raise HTTPException(status_code=401, detail="Bad signature")
+
+    try:
+        payload = json.loads(raw)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Body must be valid JSON")
+
+    # A single post may carry one object or a batch under "bids".
+    items = payload.get("bids") if isinstance(payload, dict) and isinstance(payload.get("bids"), list) else [payload]
+
+    results, rejected, errors = [], [], []
+    for item in items[:100]:
+        try:
+            r = bid_opportunities.upsert_from_webhook(db, item, _BID_COMPANY)
+        except Exception as e:
+            errors.append(str(e))
+            continue
+        # upsert reports validation failures as a normal return, so they have to be
+        # split out here -- otherwise a payload with no name counts as a success and
+        # the sender gets a 200 for something that was thrown away.
+        if r.get("error"):
+            rejected.append({"error": r["error"], "name": (item or {}).get("name")})
+        else:
+            results.append(r)
+
+    created = sum(1 for r in results if r.get("created"))
+    updated = len(results) - created
+    print(f"🪝 bid webhook: {created} new, {updated} updated, "
+          f"{len(rejected)} rejected, {len(errors)} errors", flush=True)
+
+    # 200 only when at least one row actually landed.
+    status = 200 if results else (422 if rejected or errors else 400)
+    return JSONResponse(
+        content={
+            "received": len(items),
+            "created": created,
+            "updated": updated,
+            "results": results,
+            "rejected": rejected,
+            "errors": errors,
+        },
+        status_code=status,
+    )
+
+
+# Helper the sender uses to sign. Not mounted -- run it locally against the secret.
+@app.get("/api/webhooks/bids/health")
+async def bids_webhook_health(request: Request):
+    return JSONResponse(content={
+        "configured": bid_opportunities.webhook_enabled(),
+        "endpoint": "/api/webhooks/bids",
+        "signature_header": "X-Bids-Signature",
+        "algorithm": "HMAC-SHA256 over the raw request body, hex digest",
+        "accepts": sorted(bid_opportunities._WEBHOOK_FIELDS),
+        "notes": "Idempotent on (reference, trade). status is not overwritten on update.",
+    })
 
 
 # --- Projects (active jobs for the crew) ------------------------------------

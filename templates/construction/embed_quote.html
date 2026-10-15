@@ -1,0 +1,88 @@
+{% set co = company() %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Get a quote | {{ co.name }}</title>
+<style>
+  :root{
+    --ink:#0f172a; --muted:#64748b; --line:#e2e8f0; --bg:#ffffff;
+    --brand:{{ site_theme_state().accent or '#4f46e5' }};
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--ink);
+    font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  .wrap{padding:20px}
+  h1{font-size:20px;margin:0 0 4px;letter-spacing:-.01em}
+  .sub{color:var(--muted);font-size:13px;margin:0 0 18px}
+  fieldset{border:0;padding:0;margin:0 0 14px}
+  label{display:block;font-size:12px;font-weight:600;color:var(--muted);
+    text-transform:uppercase;letter-spacing:.04em;margin:0 0 5px}
+  input,select{width:100%;padding:9px 11px;border:1px solid var(--line);
+    border-radius:8px;font-size:14px;background:#fff;color:var(--ink)}
+  input:focus,select:focus{outline:2px solid var(--brand);outline-offset:-1px;border-color:transparent}
+  .row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  button{width:100%;padding:12px;border:0;border-radius:8px;background:var(--brand);
+    color:#fff;font-size:15px;font-weight:600;cursor:pointer;margin-top:4px}
+  button:hover{filter:brightness(1.08)}
+  .err{background:#fef2f2;color:#b91c1c;padding:9px 11px;border-radius:8px;
+    font-size:13px;margin-bottom:14px;border:1px solid #fecaca}
+  .fine{color:var(--muted);font-size:11px;margin:10px 0 0;text-align:center}
+  a{color:var(--brand)}
+  @media(max-width:420px){.row{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Get a fast construction quote</h1>
+  <p class="sub">Tell us about the project. We'll price it and email you back.</p>
+
+  {% if error %}
+  <div class="err">{{ error }}</div>
+  {% endif %}
+
+  <form method="post" action="/embed/quote">
+    <fieldset>
+      <label for="eq-name">Name</label>
+      <input id="eq-name" name="name" value="{{ name or '' }}" autocomplete="name" required>
+    </fieldset>
+
+    <div class="row">
+      <fieldset>
+        <label for="eq-email">Email</label>
+        <input id="eq-email" name="email" type="email" value="{{ email or '' }}" autocomplete="email" required>
+      </fieldset>
+      <fieldset>
+        <label for="eq-phone">Phone</label>
+        <input id="eq-phone" name="phone" type="tel" value="{{ phone or '' }}" autocomplete="tel">
+      </fieldset>
+    </div>
+
+    <fieldset>
+      <label for="eq-address">Project address</label>
+      <input id="eq-address" name="address" value="{{ address or '' }}" placeholder="Street, city, state">
+    </fieldset>
+
+    <div class="row">
+      <fieldset>
+        <label for="eq-type">Project type</label>
+        <select id="eq-type" name="project_type">
+          {% for t in project_types %}
+          <option value="{{ t }}" {% if t == project_type %}selected{% endif %}>{{ t }}</option>
+          {% endfor %}
+        </select>
+      </fieldset>
+      <fieldset>
+        <label for="eq-sqft">Approx. sq ft</label>
+        <input id="eq-sqft" name="sqft" inputmode="numeric" value="{{ sqft or '' }}" placeholder="Optional">
+      </fieldset>
+    </div>
+
+    <button type="submit">Get my quote</button>
+    <p class="fine">{{ co.name }} · <a href="/">{{ co.phone }}</a></p>
+  </form>
+</div>
+</body>
+</html>
