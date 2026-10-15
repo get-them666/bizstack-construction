@@ -184,7 +184,7 @@
                         {# New == the first time this source has ever shown us this
                            solicitation. first_seen_at is set on insert and never
                            moves, so it stays true after later pulls. #}
-                        {% if b.first_seen_at and b.first_seen_at >= pulls_since %}
+                        {% if pulls_since and b.first_seen_at and b.first_seen_at >= pulls_since %}
                         <span class="px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide bg-amber-100 text-amber-900 rounded">New</span>
                         {% endif %}
                     </div>

@@ -7082,7 +7082,13 @@ async def bids_page(request: Request, status: str = "", db=Depends(get_db)):
     pulls = bid_opportunities.recent_pulls(db, _BID_COMPANY, 6)
     # "New" means first seen in the most recent pull. No pulls yet means nothing
     # is new, which is right: a hand-entered bid did not arrive from a source.
-    pulls_since = next((p["started_at"] for p in pulls if p.get("ok")), None)
+    # "New" means first seen in the most recent pull. Default to the epoch
+    # rather than None: pulls_since is compared against first_seen_at in the
+    # template, and a None there raises TypeError and 500s the whole board the
+    # moment a bid exists but no successful pull has run yet -- which is exactly
+    # the state a webhook-only setup starts in.
+    pulls_since = next((p["started_at"] for p in pulls if p.get("ok")),
+                       datetime(1970, 1, 1, tzinfo=timezone.utc))
     return templates.TemplateResponse(
         request=request, name="bids.html",
         context={
