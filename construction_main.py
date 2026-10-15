@@ -6732,11 +6732,15 @@ async def bids_page(request: Request, status: str = "", db=Depends(get_db)):
     require_admin(request)
     rows = bid_opportunities.list_bids(db, _BID_COMPANY, status)
     return templates.TemplateResponse(
-        request, "construction/bids.html",
-        {"rows": rows, "statuses": bid_opportunities.STATUSES,
-         "roles": bid_opportunities.ROLES, "sel": status,
-         "today": date.today(),
-         "stats": bid_opportunities.stats(db, _BID_COMPANY)},
+        request=request, name="bids.html",
+        context={
+            "rows": rows,
+            "statuses": bid_opportunities.STATUSES,
+            "roles": bid_opportunities.ROLES,
+            "sel": status,
+            "today": date.today(),
+            "stats": bid_opportunities.stats(db, _BID_COMPANY),
+        },
     )
 
 
