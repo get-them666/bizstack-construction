@@ -1,0 +1,199 @@
+{% extends "base.html" %}
+{% block title %}Pick Your Materials{% endblock %}
+
+{% block content %}
+<section class="bg-slate-50 min-h-screen py-10">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+
+        <p class="text-sm font-bold text-indigo-600 uppercase tracking-widest">Materials</p>
+        <h1 class="text-3xl font-black tracking-tight text-slate-900 mt-1">Pick your materials</h1>
+        <p class="text-slate-600 mt-2 max-w-2xl">
+            Browse real products and real prices. Tap what you want, build your list,
+            and send it to us — we'll confirm availability and quote the job.
+        </p>
+
+        <div class="mt-6 flex flex-wrap gap-3 items-center">
+            <form method="get" class="flex flex-wrap gap-2 items-center">
+                <input name="search" value="{{ q }}" placeholder="Search drywall, shingles, tile…"
+                       class="text-sm border border-slate-300 rounded-lg px-3 py-2 w-64">
+                <select name="category" class="text-sm border border-slate-300 rounded-lg px-3 py-2">
+                    <option value="all">All categories</option>
+                    {% for c in categories %}
+                    <option value="{{ c }}" {% if sel_cat == c %}selected{% endif %}>{{ c|capitalize }}</option>
+                    {% endfor %}
+                </select>
+                <button class="px-4 py-2 text-sm font-semibold bg-slate-800 text-white rounded-lg">Search</button>
+            </form>
+            <div class="ml-auto flex items-center gap-3">
+                <span id="count" class="text-sm font-semibold text-slate-600">0 picked</span>
+                <button id="viewBtn"
+                        class="px-5 py-2.5 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl">
+                    View my list
+                </button>
+            </div>
+        </div>
+
+        {% if empty %}
+        <div class="mt-10 bg-white rounded-2xl border border-slate-200 p-10 text-center">
+            <p class="text-lg font-bold text-slate-900">Nothing to show yet</p>
+            <p class="text-sm text-slate-500 mt-2 max-w-md mx-auto">
+                Our price list is being connected to our suppliers. Call
+                <a href="tel:7579087121" class="font-semibold text-indigo-600">757-908-7121</a>
+                and we'll price anything you need by hand.
+            </p>
+        </div>
+        {% else %}
+        <div class="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {% for it in items %}
+            <div class="bg-white rounded-2xl border border-slate-200 p-4 flex flex-col">
+                <p class="text-xs font-semibold text-indigo-600">{{ it.supplier }}</p>
+                <p class="text-sm font-bold text-slate-900 mt-1 flex-1">{{ it.description }}</p>
+                <p class="text-xs text-slate-400 font-mono mt-1">{{ it.item_number }}</p>
+                <div class="mt-3 flex items-center justify-between gap-2">
+                    {% if it.price %}
+                    <span class="text-lg font-black text-slate-900">
+                        ${{ "{:,.2f}".format(it.price / 100) }}<span class="text-xs font-semibold text-slate-400">/{{ it.uom }}</span>
+                    </span>
+                    {% else %}
+                    <span class="text-xs font-semibold text-amber-700">Price on request</span>
+                    {% endif %}
+                    <button class="addBtn px-3 py-1.5 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg"
+                            data-num="{{ it.item_number }}"
+                            data-desc="{{ it.description }}"
+                            data-uom="{{ it.uom }}"
+                            data-price="{{ it.price or '' }}">+ Add</button>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+    </div>
+</section>
+
+<div id="panel" class="hidden fixed inset-0 z-50 bg-slate-900/50 overflow-y-auto">
+    <div class="min-h-full flex items-start justify-end">
+        <div class="w-full max-w-md bg-white h-full shadow-2xl p-6 overflow-y-auto">
+            <div class="flex items-center justify-between">
+                <h2 class="text-xl font-black text-slate-900">My list</h2>
+                <button id="closeBtn" class="text-2xl text-slate-400 hover:text-slate-700">&times;</button>
+            </div>
+            <div id="lines" class="mt-4 space-y-3"></div>
+            <div class="mt-5 pt-4 border-t-2 border-slate-100 flex items-baseline justify-between">
+                <span class="font-bold text-slate-700">Estimated subtotal</span>
+                <span id="subtotal" class="text-2xl font-black text-slate-900">$0.00</span>
+            </div>
+            <p class="text-xs text-slate-500 mt-2">
+                Estimate only. Freight, tax, permits and any trade work are quoted separately,
+                and we'll confirm current pricing before you commit.
+            </p>
+            <form id="sendForm" class="mt-5 space-y-3">
+                <input name="name" placeholder="Your name"
+                       class="w-full text-sm border border-slate-300 rounded-lg px-3 py-2">
+                <input name="email" placeholder="Email" type="email"
+                       class="w-full text-sm border border-slate-300 rounded-lg px-3 py-2">
+                <input name="phone" placeholder="Phone" type="tel"
+                       class="w-full text-sm border border-slate-300 rounded-lg px-3 py-2">
+                <textarea name="notes" rows="2" placeholder="What is this for? Timings, access, anything we should know."
+                          class="w-full text-sm border border-slate-300 rounded-lg px-3 py-2"></textarea>
+                <button class="w-full px-4 py-3 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl">
+                    Send my list
+                </button>
+                <p id="sendOut" class="text-sm font-semibold text-center"></p>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+    var KEY = 'bs_matlist';
+    var list = [];
+    try { list = JSON.parse(localStorage.getItem(KEY) || '[]'); } catch (e) { list = []; }
+
+    function save() {
+        try { localStorage.setItem(KEY, JSON.stringify(list)); } catch (e) {}
+        var n = list.reduce(function (a, x) { return a + (x.qty || 1); }, 0);
+        document.getElementById('count').textContent = n + ' picked';
+        render();
+    }
+
+    function money(c) { return '$' + (c / 100).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2}); }
+
+    function render() {
+        var el = document.getElementById('lines');
+        if (!list.length) { el.innerHTML = '<p class="text-sm text-slate-500">Nothing picked yet.</p>'; return; }
+        var sub = 0;
+        el.innerHTML = list.map(function (it, i) {
+            var ext = it.price ? it.price * (it.qty || 1) : null;
+            if (ext) sub += ext;
+            return '<div class="border border-slate-200 rounded-lg p-3">' +
+                '<div class="flex justify-between gap-2">' +
+                '<p class="text-sm font-semibold text-slate-900 flex-1">' + (it.description || it.item_number) + '</p>' +
+                '<button class="rm text-slate-400 hover:text-rose-600" data-i="' + i + '">&times;</button></div>' +
+                '<div class="flex items-center justify-between mt-2">' +
+                '<div class="flex items-center gap-2">' +
+                '<button class="dec w-6 h-6 rounded border border-slate-300 text-sm" data-i="' + i + '">−</button>' +
+                '<span class="text-sm font-bold w-6 text-center">' + (it.qty || 1) + '</span>' +
+                '<button class="inc w-6 h-6 rounded border border-slate-300 text-sm" data-i="' + i + '">+</button>' +
+                '</div>' +
+                '<span class="text-sm font-bold text-slate-900">' + (ext ? money(ext) : 'on request') + '</span>' +
+                '</div></div>';
+        }).join('');
+        document.getElementById('subtotal').textContent = money(sub);
+    }
+
+    document.addEventListener('click', function (e) {
+        var b = e.target.closest('.addBtn');
+        if (b) {
+            var num = b.dataset.num;
+            var hit = list.filter(function (x) { return x.item_number === num; })[0];
+            if (hit) { hit.qty = (hit.qty || 1) + 1; }
+            else { list.push({ item_number: num, description: b.dataset.desc, uom: b.dataset.uom, price: b.dataset.price ? +b.dataset.price : null, qty: 1 }); }
+            save(); return;
+        }
+        var inc = e.target.closest('.inc');
+        if (inc) { list[+inc.dataset.i].qty = (list[+inc.dataset.i].qty || 1) + 1; save(); return; }
+        var dec = e.target.closest('.dec');
+        if (dec) {
+            var d = list[+dec.dataset.i];
+            d.qty = (d.qty || 1) - 1;
+            if (d.qty < 1) list.splice(+dec.dataset.i, 1);
+            save(); return;
+        }
+        var rm = e.target.closest('.rm');
+        if (rm) { list.splice(+rm.dataset.i, 1); save(); }
+    });
+
+    var panel = document.getElementById('panel');
+    document.getElementById('viewBtn').addEventListener('click', function () { render(); panel.classList.remove('hidden'); });
+    document.getElementById('closeBtn').addEventListener('click', function () { panel.classList.add('hidden'); });
+
+    document.getElementById('sendForm').addEventListener('submit', function (e) {
+        e.preventDefault();
+        var out = document.getElementById('sendOut');
+        var f = e.target;
+        var fd = new FormData(f);
+        fd.append('items', JSON.stringify(list));
+        out.className = 'text-sm font-semibold text-center text-slate-500';
+        out.textContent = 'Sending…';
+        fetch('/api/materials-picker/submit', { method: 'POST', body: fd })
+            .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+            .then(function (res) {
+                if (!res.ok) { out.className = 'text-sm font-semibold text-center text-rose-700'; out.textContent = res.j.detail || 'Could not send that.'; return; }
+                out.className = 'text-sm font-semibold text-center text-emerald-700';
+                out.textContent = 'Got it — we\'ll be in touch about your ' + res.j.count + ' item(s).';
+                list = []; save();
+                f.reset();
+            })
+            .catch(function () {
+                out.className = 'text-sm font-semibold text-center text-rose-700';
+                out.textContent = 'Could not reach us. Call 757-908-7121.';
+            });
+    });
+
+    save();
+})();
+</script>
+{% endblock %}
