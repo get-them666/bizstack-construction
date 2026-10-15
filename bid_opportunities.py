@@ -106,6 +106,89 @@ def _coerce_amount(v):
         return None
 
 
+LOCAL_SEED_FILE = os.getenv("BIDS_LOCAL_SEED", "bids_local.json")
+
+
+def load_local_bids(path: str | None = None) -> list[dict]:
+    """Read the local seed file. Raises FileNotFoundError so the route can 404.
+
+    The file is gitignored on purpose -- it carries live contract pricing and GC
+    contacts, which must not land in a public repo. Missing file is a normal
+    state, not an error worth logging loudly.
+    """
+    p = path or os.getenv("BIDS_LOCAL_SEED", LOCAL_SEED_FILE)
+    if not os.path.exists(p):
+        raise FileNotFoundError(p)
+    with open(p, "r", encoding="utf-8") as fh:
+        data = json.load(fh)
+    rows = data.get("bids") if isinstance(data, dict) else data
+    if not isinstance(rows, list):
+        raise ValueError("seed file must contain a 'bids' list")
+    return rows
+
+
+def upsert_many(conn, rows: list[dict], company: str = "construction") -> dict:
+    """Upsert a list of bid dicts. Returns counts plus per-row errors.
+
+    status IS applied here, unlike the webhook path -- this is an explicit
+    owner action ("load my bids"), not an untrusted sender.
+    """
+    created = updated = 0
+    errors: list[dict] = []
+    for row in rows:
+        if not isinstance(row, dict) or not str(row.get("name", "")).strip():
+            errors.append({"name": row.get("name") if isinstance(row, dict) else None,
+                           "error": "name is required"})
+            continue
+        vals = {k: row.get(k) for k in _WEBHOOK_FIELDS if k in row}
+        vals["role"] = str(vals.get("role") or "sub").strip().lower()
+        vals["status"] = str(vals.get("status") or "new").strip().lower()
+        if vals["role"] not in ROLES:
+            errors.append({"name": vals.get("name"), "error": f"role must be one of {ROLES}"})
+            continue
+        if vals["status"] not in STATUSES:
+            errors.append({"name": vals.get("name"),
+                           "error": f"status must be one of {STATUSES}"})
+            continue
+        for k in ("name", "owner", "contact_name", "contact_email",
+                  "contact_phone", "reference", "trade", "location", "notes"):
+            vals[k] = str(vals.get(k) or "").strip()
+
+        cols = list(vals) + ["due_date", "bid_amount", "status", "company"]
+        sql = (
+            f"INSERT INTO bid_opportunities ({','.join(cols)}, source) "
+            f"VALUES ({','.join(['%s'] * len(cols))}, 'local') "
+            f"ON CONFLICT (company, COALESCE(reference,''), COALESCE(trade,'')) "
+            f"DO UPDATE SET "
+            f"  name = EXCLUDED.name, owner = EXCLUDED.owner, "
+            f"  contact_name = EXCLUDED.contact_name, contact_email = EXCLUDED.contact_email, "
+            f"  contact_phone = EXCLUDED.contact_phone, role = EXCLUDED.role, "
+            f"  due_date = EXCLUDED.due_date, bid_amount = EXCLUDED.bid_amount, "
+            f"  status = EXCLUDED.status, location = EXCLUDED.location, "
+            f"  notes = EXCLUDED.notes, updated_at = now() "
+            f"RETURNING id, (xmax = 0) AS inserted"
+        )
+        params = [vals[c] for c in vals] + [
+            _coerce_date(vals.get("due_date")),
+            _coerce_amount(vals.get("bid_amount")),
+            vals["status"],
+            company,
+        ]
+        try:
+            with conn.cursor() as cur:
+                cur.execute(sql, params)
+                row = cur.fetchone()
+            if row.get("inserted"):
+                created += 1
+            else:
+                updated += 1
+        except Exception as e:
+            errors.append({"name": vals.get("name"), "error": str(e)})
+    conn.commit()
+    return {"created": created, "updated": updated, "errors": errors,
+            "loaded": created + updated}
+
+
 def upsert_from_webhook(conn, payload: dict, company: str = "construction") -> dict:
     """Create or update one bid from a webhook body. Idempotent on (reference, trade).
 
