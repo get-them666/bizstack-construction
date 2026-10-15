@@ -2898,6 +2898,96 @@ async def bid_cost_create(bid_id: int, request: Request, description: str = Form
     return RedirectResponse(url="/books", code=status.HTTP_303_SEE_OTHER)
 
 
+@app.get("/api/materials-picker/quote")
+async def materials_picker_quote_form(request: Request):
+    """The quote form, served inside the sandbox. Public."""
+    return templates.TemplateResponse(
+        request=request, name="quote_form.html",
+        context={"project_types": INSTANT_PROJECT_TYPES})
+
+
+@app.post("/api/materials-picker/quote")
+async def materials_picker_quote(request: Request, items: str = Form("[]"),
+                                address: str = Form(""), project_type: str = Form(""),
+                                sqft: str = Form(""), db=Depends(get_db)):
+    """Price the picked materials and estimate the labour around them.
+
+    This is the sandbox's answer to the question a customer is actually
+    asking: what does my project cost. It reuses the same engine as
+    /instant-quote rather than inventing a second one, so a number from the
+    sandbox and a number from the quote page are computed identically.
+    """
+    try:
+        chosen = json.loads(items) if items else []
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="items must be a JSON array")
+    if not isinstance(chosen, list):
+        raise HTTPException(status_code=400, detail="items must be a JSON array")
+
+    priced = material_picker.price_list(chosen)
+    est = None
+    try:
+        manual = float(sqft or 0)
+    except ValueError:
+        manual = 0.0
+    prop = property_service.lookup_address(address) if address.strip() else None
+    if project_type.strip() and (prop or manual > 0):
+        try:
+            # Feed the picked items into the estimate as material-grade
+            # choices. estimating_service already models a supplies premium
+            # per grade, so a list of architectural shingles or premium
+            # counters moves the labour-and-supplies number. Without this the
+            # customer gets a supplies figure that ignores what they just
+            # picked, which is exactly the number they are questioning.
+            supplies = [ln.get("description") for ln in priced["lines"]
+                        if ln.get("description")][:25]
+            est = estimating_service.estimate(
+                project_type.strip(), prop, manual or 0,
+                materials=supplies or None)
+        except Exception as e:
+            logger.warning("sandbox estimate failed: %s", e)
+            est = None
+
+    return JSONResponse(content={
+        "materials_subtotal": priced["subtotal"],
+        "lines": priced["lines"],
+        "count": priced["count"],
+        "estimate": _jsonable_estimate(est),
+        "address": address.strip(),
+        "project_type": project_type.strip(),
+    })
+
+
+def _jsonable_estimate(est):
+    """The estimate is a nested model dict; make it survive JSON.
+
+    Estimated totals are labelled as estimates everywhere they appear. A
+    sandbox number that reads like a quote is how a homeowner ends up
+    believing a range is a price.
+    """
+    if not est:
+        return None
+    if hasattr(est, "model_dump"):
+        est = est.model_dump()
+    elif not isinstance(est, dict):
+        try:
+            est = dict(est)
+        except (TypeError, ValueError):
+            return None
+
+    def walk(v, depth=0):
+        if depth > 4:
+            return None
+        if isinstance(v, dict):
+            return {k: walk(x, depth + 1) for k, x in v.items()}
+        if isinstance(v, (list, tuple)):
+            return [walk(x, depth + 1) for x in v[:40]]
+        if isinstance(v, (int, float, str, bool)) or v is None:
+            return v
+        return str(v)
+    return walk(est)
+
+
 @app.get("/materials-picker", response_class=HTMLResponse)
 async def materials_picker_page(request: Request, search: str = "", category: str = ""):
     """Public material sandbox. No login.

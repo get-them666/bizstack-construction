@@ -1,0 +1,159 @@
+{% extends "base.html" %}
+{% block title %}Get a Quote{% endblock %}
+
+{% block content %}
+<section class="bg-slate-50 min-h-screen py-8">
+    <div class="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8">
+        <a href="/materials-picker" class="text-sm font-semibold text-indigo-600 hover:text-indigo-800">← Back to materials</a>
+        <h1 class="text-3xl font-black tracking-tight text-slate-900 mt-3">Get a quote</h1>
+        <p class="text-slate-600 mt-2">
+            We price the materials you picked and estimate the labour around them.
+        </p>
+
+        <div class="bg-white rounded-2xl border border-slate-200 p-6 mt-6">
+            <div class="grid gap-4 sm:grid-cols-2">
+                <div class="sm:col-span-2">
+                    <label class="block text-xs font-bold text-slate-600 mb-1">Project address</label>
+                    <input id="addr" placeholder="Start typing an address"
+                           class="w-full text-sm border border-slate-300 rounded-lg px-3 py-2.5">
+                    <p class="text-[11px] text-slate-400 mt-1">
+                        We use this to pull square footage. Leave it blank and enter a size yourself.
+                    </p>
+                </div>
+                <div>
+                    <label class="block text-xs font-bold text-slate-600 mb-1">What are you doing?</label>
+                    <select id="ptype" class="w-full text-sm border border-slate-300 rounded-lg px-3 py-2.5">
+                        {% for pt in project_types %}
+                        <option value="{{ pt }}">{{ pt }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-xs font-bold text-slate-600 mb-1">Approximate size (sq ft)</label>
+                    <input id="sqft" type="number" min="0" placeholder="e.g. 2400"
+                           class="w-full text-sm border border-slate-300 rounded-lg px-3 py-2.5">
+                </div>
+            </div>
+            <button id="go" class="mt-5 px-6 py-3 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl">
+                Price it
+            </button>
+        </div>
+
+        <div id="out" class="mt-6 space-y-4"></div>
+
+        <p class="text-xs text-slate-400 mt-8 max-w-2xl">
+            Every figure here is an estimate for planning, not a quote. Freight, tax, permits,
+            site work and anything not visible on the drawings are quoted separately once we've
+            walked the project. We'll confirm current pricing before you commit to anything.
+        </p>
+    </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+    var KEY = 'bs_matlist';
+    var list = [];
+    try { list = JSON.parse(localStorage.getItem(KEY) || '[]'); } catch (e) { list = []; }
+
+    var out = document.getElementById('out');
+    var go = document.getElementById('go');
+
+    function esc(s) {
+        return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+            return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+        });
+    }
+    function money(c) {
+        if (c == null) return '—';
+        return '$' + (c / 100).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+    }
+
+    function renderLines(lines) {
+        if (!lines.length) return '<p class="text-sm text-slate-500">Nothing picked yet — go back and add some.</p>';
+        return '<div class="bg-white rounded-2xl border border-slate-200 p-5"><p class="text-xs font-bold text-slate-500 uppercase tracking-wide mb-3">Materials</p>' +
+            lines.map(function (l) {
+                return '<div class="flex justify-between gap-3 py-1.5 text-sm border-t border-slate-100">' +
+                    '<span class="text-slate-700">' + esc(l.description || l.item_number) +
+                    ' <span class="text-slate-400">× ' + l.qty + '</span></span>' +
+                    '<span class="font-mono text-slate-800">' +
+                    (l.unavailable ? '<span class="text-amber-700 text-xs">on request</span>' : money(l.extended)) +
+                    '</span></div>';
+            }).join('') +
+            '<div class="flex justify-between pt-3 mt-1 border-t-2 border-slate-200 font-bold">' +
+            '<span>Materials subtotal</span><span class="font-mono" id="msub"></span></div></div>';
+    }
+
+    function renderEstimate(e) {
+        if (!e) {
+            return '<div class="bg-amber-50 border border-amber-200 rounded-2xl p-5 text-sm text-amber-900">' +
+                'Add an address or a square footage and pick a project type to see a labour estimate.</div>';
+        }
+        var rows = [];
+        function add(label, val) {
+            if (val != null) rows.push('<div class="flex justify-between py-1 text-sm border-t border-slate-100">' +
+                '<span class="text-slate-600">' + label + '</span><span class="font-mono text-slate-800">' + val + '</span></div>');
+        }
+        if (e.low != null && e.high != null) {
+            add('Estimated range', '<strong>' + money(e.low) + ' – ' + money(e.high) + '</strong>');
+        }
+        if (e.total_low != null && e.total_high != null) {
+            add('With your materials', '<strong>' + money(e.total_low) + ' – ' + money(e.total_high) + '</strong>');
+        }
+        add('Confidence', esc(e.confidence || 'ballpark'));
+        if (e.notes) add('Notes', esc(Array.isArray(e.notes) ? e.notes.join(' ') : e.notes));
+        return '<div class="bg-white rounded-2xl border border-slate-200 p-5">' +
+            '<p class="text-xs font-bold text-slate-500 uppercase tracking-wide mb-3">Estimate</p>' +
+            (rows.join('') || '<p class="text-sm text-slate-500">Not enough detail yet.</p>') +
+            '<p class="text-xs text-slate-400 mt-3">Range, not a price. We confirm after a site visit.</p></div>';
+    }
+
+    function draw(payload) {
+        out.innerHTML = renderLines(payload.lines || []);
+        var sub = document.getElementById('msub');
+        if (sub) sub.textContent = money(payload.materials_subtotal);
+        out.insertAdjacentHTML('beforeend', renderEstimate(payload.estimate));
+    }
+
+    go.addEventListener('click', function () {
+        if (go.dataset.busy) return;
+        go.dataset.busy = '1';
+        go.textContent = 'Working…';
+        out.innerHTML = '<p class="text-sm text-slate-500">Pricing your materials…</p>';
+        var fd = new FormData();
+        fd.append('items', JSON.stringify(list));
+        fd.append('address', document.getElementById('addr').value);
+        fd.append('project_type', document.getElementById('ptype').value);
+        fd.append('sqft', document.getElementById('sqft').value);
+        fetch('/api/materials-picker/quote', { method: 'POST', body: fd })
+            .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+            .then(function (res) {
+                if (!res.ok) {
+                    out.innerHTML = '<div class="bg-rose-50 border border-rose-200 rounded-2xl p-5 text-sm text-rose-800">' +
+                        (res.j.detail || 'Could not price that.') + '</div>';
+                    return;
+                }
+                draw(res.j);
+            })
+            .catch(function () {
+                out.innerHTML = '<div class="bg-rose-50 border border-rose-200 rounded-2xl p-5 text-sm text-rose-800">' +
+                    'Could not reach us. Call 757-908-7121.</div>';
+            })
+            .then(function () {
+                delete go.dataset.busy;
+                go.textContent = 'Price it';
+            });
+    });
+
+    // show whatever is already picked before they press anything
+    if (list.length) {
+        out.innerHTML = renderLines([]);
+        draw({ lines: list.map(function (i) {
+            return { description: i.description, item_number: i.item_number, uom: i.uom,
+                     qty: i.qty, price: i.price, extended: i.price ? i.price * (i.qty || 1) : null };
+        }), materials_subtotal: list.reduce(function (a, i) { return a + (i.price ? i.price * (i.qty || 1) : 0); }, 0), estimate: null });
+    }
+})();
+</script>
+{% endblock %}
