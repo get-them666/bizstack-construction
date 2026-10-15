@@ -115,6 +115,25 @@ class LedgerError(RuntimeError):
     """Anything that would make the books wrong. Never swallowed."""
 
 
+def table_exists(conn, name: str) -> bool:
+    """Whether a table is present.
+
+    Needed because payroll_runs / payroll_lines / crew are created by
+    construction_main's startup DDL, not by this module. On a database where
+    the app has not booted, a bare SELECT against one of them aborts the
+    caller's transaction -- so the payroll sync checks first rather than
+    failing inside a try/except that has already poisoned the connection.
+    """
+    with conn.cursor() as cur:
+        cur.execute("SELECT to_regclass(%s) AS t", (name,))
+        row = cur.fetchone()
+    return bool(row and row["t"])
+
+
+# Internal alias kept so bid_costing and ledger_sync can share one helper.
+_table_exists = table_exists
+
+
 def _now():
     return datetime.now(timezone.utc)
 

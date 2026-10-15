@@ -26,6 +26,7 @@ URL = f"postgresql://{os.getenv('USER', 'postgres')}@localhost:5432/{DB}"
 
 ledger = pytest.importorskip("ledger")
 bridge = importorskip("ledger_bridge")
+sync = importorskip("ledger_sync")
 
 BID = {"id": 7, "name": "Hilton Drywall"}
 # 40h @ $38 + 32h @ $32
@@ -232,3 +233,114 @@ def test_chart_covers_construction_costs():
         assert required in codes, f"{required} missing from the chart"
     for cat in ledger.CATEGORY_ACCOUNT:
         assert ledger.CATEGORY_ACCOUNT[cat] in codes
+
+# --- payroll and deposits, wired to the real routes ------------------------
+@pytest.fixture()
+def payroll_conn(conn):
+    """Adds the payroll tables the app's startup DDL owns."""
+    with conn.cursor() as cur:
+        cur.execute("""CREATE TABLE IF NOT EXISTS crew (id SERIAL PRIMARY KEY,
+                        name VARCHAR(255), pay_type VARCHAR(20) DEFAULT 'hourly',
+                        pay_rate NUMERIC(10,2) DEFAULT 0)""")
+        cur.execute("""CREATE TABLE IF NOT EXISTS payroll_runs (id SERIAL PRIMARY KEY,
+                        period_start DATE, period_end DATE, status VARCHAR(20) DEFAULT 'open')""")
+        cur.execute("""CREATE TABLE IF NOT EXISTS payroll_lines (id SERIAL PRIMARY KEY,
+                        run_id INT, crew_id INT, hours NUMERIC(6,2) DEFAULT 0,
+                        overtime_hours NUMERIC(6,2) DEFAULT 0, gross_cents INTEGER DEFAULT 0)""")
+        cur.execute("INSERT INTO crew (name,pay_type,pay_rate) VALUES ('Devon','hourly',38.00)")
+        cur.execute("""INSERT INTO payroll_runs (period_start,period_end,status)
+                       VALUES ('2026-10-01','2026-10-15','open') RETURNING id""")
+        run_id = cur.fetchone()["id"]
+        cur.execute("""INSERT INTO payroll_lines (run_id,crew_id,hours,overtime_hours,gross_cents)
+                       VALUES (%s,1,40,0,152000)""", (run_id,))
+    conn.commit()
+    ledger.open_books(conn, OPENING_CASH, when="2026-10-01")
+    sync.ensure_schema(conn)
+    return conn, run_id
+
+
+def test_wages_accrue_before_the_money_moves(payroll_conn):
+    """The whole reason for the accrual: the wage is an expense on the day
+    the hours are approved, and a liability until cash actually leaves."""
+    c, run_id = payroll_conn
+    assert sync.sync_payroll_accrual(c, run_id).posted
+    bs = ledger.balance_sheet(c)
+    assert bs["liabilities"]["2150"]["balance"] == 1520.00, "crew must be owed it"
+    assert bs["assets"]["1010"]["balance"] == OPENING_CASH / 100, "cash must not have moved"
+    labor = [x for x in ledger.income_statement(c)["expense"] if x["code"] == "5020"]
+    assert labor and labor[0]["amount"] == 1520.00, "wage must already be an expense"
+
+
+def test_paying_relieves_only_the_liability(payroll_conn):
+    c, run_id = payroll_conn
+    sync.sync_payroll_accrual(c, run_id)
+    assert sync.sync_payroll_paid(c, run_id).posted
+    bs = ledger.balance_sheet(c)
+    assert bs["liabilities"]["2150"]["balance"] == 0
+    assert bs["assets"]["1010"]["balance"] == OPENING_CASH / 100 - 1520.00
+    assert bs["balanced"] and ledger.trial_balance(c)["balanced"]
+
+
+def test_payroll_sync_is_idempotent(payroll_conn):
+    c, run_id = payroll_conn
+    sync.sync_payroll_accrual(c, run_id)
+    sync.sync_payroll_paid(c, run_id)
+    before = ledger.balance_sheet(c)["assets"]["1010"]["balance"]
+    for _ in range(3):
+        sync.sync_payroll_accrual(c, run_id)
+        sync.sync_payroll_paid(c, run_id)
+    assert ledger.balance_sheet(c)["assets"]["1010"]["balance"] == before
+
+
+def test_accrual_reads_hours_not_a_column_that_does_not_exist(payroll_conn):
+    """payroll_lines has `hours`. It does not have `regular_hours` -- that
+    mistake would raise and queue on every single run."""
+    c, run_id = payroll_conn
+    assert sync._payroll_accrual_lines(c, {"id": run_id}, "construction")
+    assert sync._payroll_accrual_lines(c, {"id": run_id}, "construction")[0]["hours"] == 40
+
+
+@pytest.fixture()
+def deposit_conn(conn):
+    with conn.cursor() as cur:
+        cur.execute("CREATE TABLE IF NOT EXISTS leads (id SERIAL PRIMARY KEY, name TEXT, email TEXT, company TEXT)")
+        cur.execute("""CREATE TABLE IF NOT EXISTS payments (id SERIAL PRIMARY KEY, lead_id INT,
+                        stripe_session_id TEXT, stripe_payment_intent_id TEXT, amount_cents INTEGER,
+                        currency TEXT DEFAULT 'usd', company TEXT DEFAULT 'construction')""")
+        cur.execute("INSERT INTO leads (id,name,email,company) VALUES (1,'Bob','b@x.com','construction')")
+        cur.execute("""INSERT INTO payments (lead_id,stripe_session_id,amount_cents,currency,company)
+                       VALUES (1,'cs_1',50000,'usd','construction') RETURNING id""")
+        pid = cur.fetchone()["id"]
+    conn.commit()
+    ledger.open_books(conn, OPENING_CASH, when="2026-10-01")
+    sync.ensure_schema(conn)
+    return conn, pid
+
+
+def test_a_deposit_is_cash_but_not_yet_revenue(deposit_conn):
+    """Booking a deposit as income on the day it arrives says the job was
+    earned before it was done. It is held until the work is billed."""
+    c, pid = deposit_conn
+    assert sync.sync_deposit(c, pid).posted
+    bs = ledger.balance_sheet(c)
+    assert bs["assets"]["1010"]["balance"] == OPENING_CASH / 100 + 500.00
+    assert bs["liabilities"]["2100"]["balance"] == 500.00
+    assert abs(ledger.income_statement(c)["total_revenue"]) < 0.01, "deposit is not revenue"
+    assert bs["balanced"]
+
+
+def test_deposit_webhook_retry_does_not_double_count(deposit_conn):
+    """Stripe retries webhooks. That must not mint money."""
+    c, pid = deposit_conn
+    sync.sync_deposit(c, pid)
+    before = ledger.balance_sheet(c)["assets"]["1010"]["balance"]
+    sync.sync_deposit(c, pid)
+    assert ledger.balance_sheet(c)["assets"]["1010"]["balance"] == before
+
+
+def test_books_status_reports_dirty_books_as_dirty(conn):
+    ledger.open_books(conn, OPENING_CASH)
+    sync.ensure_schema(conn)
+    st = sync.books_status(conn)
+    assert st["trial_balance"]["balanced"] and st["balance_sheet"]["balanced"]
+    assert st["clean"] is True

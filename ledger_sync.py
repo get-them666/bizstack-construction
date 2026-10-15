@@ -83,6 +83,33 @@ def _queue(conn, kind: str, ref_id, detail: str, error: str) -> None:
     conn.commit()
 
 
+def sync_deposit(conn, payment_id: int, company: str = "construction") -> Sync:
+    """A customer deposit is cash in, held against work not yet started.
+
+    Goes to Customer Deposits Held (2100), not revenue. Booking it as income
+    on the day it arrives says the job was earned before it was done. It
+    clears to revenue when an invoice is raised.
+    """
+    s = Sync()
+    with conn.cursor() as cur:
+        cur.execute("SELECT p.*, l.name AS lead_name FROM payments p "
+                    "LEFT JOIN leads l ON l.id = p.lead_id "
+                    "WHERE p.id = %s AND p.company = %s", (payment_id, company))
+        pay = cur.fetchone()
+    if not pay:
+        s.skipped += 1
+        return s
+    amount = int(pay.get("amount_cents") or 0)
+    if amount <= 0:
+        s.skipped += 1
+        return s
+    _guard(conn, "deposit", payment_id, f"deposit {pay.get('lead_name') or pay.get('lead_id')}",
+           lambda: bridge.post_deposit(conn, {"id": pay.get("lead_id"),
+                                              "name": pay.get("lead_name")},
+                                      amount / 100.0, company), s)
+    return s
+
+
 def pending(conn, company: str = "construction") -> list[dict]:
     with conn.cursor() as cur:
         cur.execute("SELECT * FROM ledger_pending WHERE company = %s AND resolved_at IS NULL "
@@ -243,7 +270,7 @@ def _payroll_accrual_lines(conn, run: dict, company: str) -> list[dict]:
     with conn.cursor() as cur:
         cur.execute("""
             SELECT pl.crew_id, c.name, c.pay_rate,
-                   COALESCE(SUM(pl.regular_hours), 0) + COALESCE(SUM(pl.overtime_hours), 0) AS hours
+                   COALESCE(SUM(pl.hours), 0) + COALESCE(SUM(pl.overtime_hours), 0) AS hours
             FROM payroll_lines pl JOIN crew c ON c.id = pl.crew_id
             WHERE pl.run_id = %s GROUP BY pl.crew_id, c.name, c.pay_rate
         """, (run.get("id"),))

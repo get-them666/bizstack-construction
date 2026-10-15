@@ -1423,6 +1423,15 @@ f"The mail transport did not accept the message. This usually means the "
         with db.cursor() as cur:
             cur.execute("UPDATE payroll_runs SET status = 'closed' WHERE id = %s;", (run_id,))
             db.commit()
+        # Only the crew who actually received money are relieved. A skipped
+        # transfer leaves the wage owed, which is correct -- the liability was
+        # accrued when the run was created and only goes away when cash moves.
+        if paid:
+            try:
+                ledger_sync.ensure_schema(db)
+                ledger_sync.sync_payroll_paid(db, run_id, company=_BID_COMPANY)
+            except Exception as e:
+                logger.warning("ledger not updated for payroll run %s: %s", run_id, e)
         return {
             "ok": True, "run_id": run_id,
             "paid": paid,
@@ -4563,10 +4572,20 @@ async def payments_webhook(request: Request, db=Depends(get_db)):
                 )
                 cur.execute(
                     "INSERT INTO payments (lead_id, stripe_session_id, stripe_payment_intent_id, amount_cents, currency, company) "
-                    "VALUES (%s, %s, %s, %s, %s, 'construction');",
+                    "VALUES (%s, %s, %s, %s, %s, 'construction') RETURNING id;",
                     (int(lead_id), session.get("id"), payment_intent, amount_total, currency),
                 )
+                payment_id = cur.fetchone()["id"]
                 db.commit()
+            # A deposit is cash in, but it is not revenue yet -- it is money
+            # held against work not started, so it lands in deposits held and
+            # clears to revenue when the job is billed. Booking it as income on
+            # the day it arrives overstates what was earned.
+            try:
+                ledger_sync.ensure_schema(db)
+                ledger_sync.sync_deposit(db, payment_id, company=_BID_COMPANY)
+            except Exception as e:
+                logger.warning("ledger not updated for deposit payment %s: %s", payment_id, e)
 
     return Response(content='{"received": true}', media_type="application/json")
 
@@ -8714,16 +8733,36 @@ async def payroll_run_create(request: Request, period_start: str = Form(...), pe
                         "AND status IN ('submitted','approved');", (crew["crew_id"], ps, pe))
             jobs_done += 1
         db.commit()
+    # Accrue the wages at run creation, not at payout. From this moment the
+    # crew are owed the money whether or not it has been sent, and a job's
+    # margin is wrong for the whole period if it waits until the money moves.
+    try:
+        ledger_sync.ensure_schema(db)
+        ledger_sync.sync_payroll_accrual(db, run_id, company=_BID_COMPANY)
+    except Exception as e:
+        logger.warning("ledger not updated for payroll run %s: %s", run_id, e)
     return RedirectResponse(url=f"/payroll?period_start={ps}&period_end={pe}&ok=run+created+{jobs_done}",
                             status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.post("/api/payroll/run/{run_id}/finalize")
 async def payroll_run_finalize(run_id: int, request: Request, db=Depends(get_db)):
+    """Close a run without paying it.
+
+    Deliberately does NOT relieve the payroll liability. Closing a run only
+    stops further hours being added; if the money has not moved the crew are
+    still owed it and the books should still say so. Paying settles it, and
+    that path posts its own entry.
+    """
     require_admin(request)
     with db.cursor() as cur:
         cur.execute("UPDATE payroll_runs SET status = 'closed' WHERE id = %s;", (run_id,))
         db.commit()
+    try:
+        ledger_sync.ensure_schema(db)
+        ledger_sync.sync_payroll_accrual(db, run_id, company=_BID_COMPANY)
+    except Exception as e:
+        logger.warning("ledger not updated for payroll run %s: %s", run_id, e)
     return RedirectResponse(url=request.headers.get("referer") or "/payroll", status_code=status.HTTP_303_SEE_OTHER)
 
 
