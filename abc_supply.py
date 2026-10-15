@@ -1,37 +1,40 @@
-"""ABC Supply product + pricing client.
+"""ABC Supply pricing adapter.
 
-Why this exists
----------------
-An itemized quote is only as honest as the prices behind it. `materials_catalog`
-held 17 hand-seeded rows, so any quote generated from it was a guess with a
-decimal point. ABC Supply is the one supplier of the four in play (ABC Supply /
-Lansing, Lowe's, Richards) that exposes a real, documented API for contract
-pricing, so it is the one that can make the numbers true.
+Built against the published Individual Business track
+(https://apidocs.abcsupply.com). Client Credentials, no user login, no
+redirect URI -- the right shape for a single contractor pricing its own
+material.
 
-Getting access is a business step, not a code step: the ABC API is restricted to
-customers with an existing credit account, and enrollment is reviewed by their
-team. See :func:`setup_checklist`. Until those credentials exist this module is
-inert -- every call returns ``None``/``[]`` rather than raising, so nothing that
-imports it breaks.
+What it does: given item numbers and quantities, returns the price ABC
+Supply would actually charge *this account* at *that branch*. That is the
+number worth putting on a takeoff, and it is not the same as a website
+shelf price: branches set their own pricing per account and per branch.
 
-Transport notes, from https://apidocs.abcsupply.com/authorization-methods:
+WHAT THIS DELIBERATELY DOES NOT DO
+----------------------------------
+ABC Supply's API Terms of Use prohibit, verbatim:
 
-  - OAuth 2.0 client credentials (Individuals & Businesses track), HTTP Basic.
-    Client Credentials is the right grant here: Shaun is the account holder, not
-    a platform reselling to third parties. The Aggregator track explicitly
-    *cannot* read pricing, which is precisely what we need.
-  - Access tokens live 30 minutes and client-credentials has no refresh token,
-    so :func:`_token` caches and re-mints proactively rather than discovering
-    expiry via a 401.
-  - Sandbox and production are different Okta tenants with different auth URLs;
-    both are configurable so the integration can be proven without touching
-    live pricing.
+  - "Direct price comparison tools across competitors or markets"
+  - "Packaging or selling of product or pricing data for market analysis
+     or intelligence"
 
-Scope requested is deliberately read-only-minimal plus pricing: we quote, we do
-not order. ``order.write`` is *not* requested -- a quoting tool has no business
-being able to spend the company's money.
+So this module prices for the owner's own estimating and never compares
+against another supplier. `price_items` takes an item list and returns
+prices; there is no competitor field and nothing to compare to. If a
+cross-supplier comparison is wanted later it has to come from a source
+whose terms allow it.
+
+THE $0.00 TRAP
+--------------
+Price Items returns HTTP 200 even when a line fails, and a line priced at
+0.00 is a SUCCESS meaning "this branch has not entered a price for this
+item yet". Treating that as free would understate a takeoff by whatever the
+material actually costs. `_read_price` therefore returns a None unit price
+and a reason, and callers are expected to show that rather than a zero.
+
+Credentials are read from the environment and never logged. Access tokens
+live 30 minutes, so they are cached with a margin.
 """
-
 from __future__ import annotations
 
 import base64
@@ -42,368 +45,244 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-AUTH_PROD = "https://auth.partners.abcsupply.com/oauth2/ausvvp0xuwGKLenYy357/v1/token"
-AUTH_SANDBOX = "https://sandbox.auth.partners.abcsupply.com/oauth2/aus1vp07knpuqf6Xz0h8/v1/token"
+SANDBOX = {
+    "token": "https://sandbox.auth.partners.abcsupply.com/oauth2/aus1vp07knpuqf6Xz0h8/v1/token",
+    "api": "https://partners-sb.abcsupply.com/api",
+}
+PRODUCTION = {
+    "token": "https://auth.partners.abcsupply.com/oauth2/ausvvp0xuwGKLenYy357/v1/token",
+    "api": "https://partners.abcsupply.com/api",
+}
 
-# Read-only scopes: catalog + contract pricing + account/location context.
-# No order.write -- see module docstring.
-SCOPES_READONLY = [
-    "location.read",
-    "product.read",
-    "account.read",
-    "pricing.read",
-]
+# Individual Business scopes. pricing.read is the one that matters; the rest
+# are here so a later order/invoice feature does not need a new consent.
+SCOPES = ("location.read product.read account.read pricing.read "
+          "allOrder.read order.write notification.read notification.write "
+          "invoice.read invoice.history.read")
 
-DEFAULT_BASE_PROD = "https://apis.abcsupply.com"
-DEFAULT_BASE_SANDBOX = "https://sandbox.apis.abcsupply.com"
+# Price Items accepts at most 50 lines per call.
+MAX_LINES = 50
+TOKEN_TTL = 25 * 60          # tokens live 30 min; refresh early
+UA = "Buildstack-Materials/1.0"
 
-# Tokens are 30 min. Re-mint at 25 so a long-running quote build cannot be
-# killed by a token expiring mid-loop.
-_TOKEN_TTL = 25 * 60
+_token_cache: dict = {"token": None, "expires": 0.0}
 
-_timeout = float(os.getenv("ABC_API_TIMEOUT", "20") or 20)
-_cache: dict = {"token": None, "expires_at": 0.0, "base": None}
+
+class ABCError(RuntimeError):
+    """Anything that stops us getting a price. Shown to the owner, never hidden."""
+
+
+def config() -> dict:
+    """Everything needed, and what is missing. Never returns secret values."""
+    env = "ABC_SANDBOX" if os.getenv("ABC_SANDBOX", "").lower() in ("1", "true", "yes") else "ABC_PROD"
+    return {
+        "client_id": bool(os.getenv("ABC_CLIENT_ID")),
+        "client_secret": bool(os.getenv("ABC_CLIENT_SECRET")),
+        "ship_to": os.getenv("ABC_SHIP_TO", ""),
+        "branch": os.getenv("ABC_BRANCH", ""),
+        "environment": env,
+        "host": SANDBOX if env == "ABC_SANDBOX" else PRODUCTION,
+    }
 
 
 def configured() -> bool:
-    """True when credentials are present. Checked before any network call."""
-    return bool(os.getenv("ABC_CLIENT_ID") and os.getenv("ABC_CLIENT_SECRET"))
+    """True when a price request can actually be attempted."""
+    c = config()
+    return bool(c["client_id"] and c["client_secret"] and c["ship_to"] and c["branch"])
 
 
-def _auth_url() -> str:
-    if (os.getenv("ABC_SANDBOX", "") or "").lower() in ("1", "true", "yes", "on"):
-        return os.getenv("ABC_AUTH_URL", AUTH_SANDBOX)
-    return os.getenv("ABC_AUTH_URL", AUTH_PROD)
+def missing() -> list[str]:
+    out = []
+    if not os.getenv("ABC_CLIENT_ID"):
+        out.append("ABC_CLIENT_ID")
+    if not os.getenv("ABC_CLIENT_SECRET"):
+        out.append("ABC_CLIENT_SECRET")
+    if not os.getenv("ABC_SHIP_TO"):
+        out.append("ABC_SHIP_TO (your ABC ship-to account number)")
+    if not os.getenv("ABC_BRANCH"):
+        out.append("ABC_BRANCH (the branch number you buy from)")
+    return out
 
 
-def base_url() -> str:
-    if (os.getenv("ABC_SANDBOX", "") or "").lower() in ("1", "true", "yes", "on"):
-        return os.getenv("ABC_BASE_URL", DEFAULT_BASE_SANDBOX)
-    return os.getenv("ABC_BASE_URL", DEFAULT_BASE_PROD)
-
-
-def setup_checklist() -> list[str]:
-    """What the owner still has to do before this module does anything.
-
-    Surfaced as text rather than hidden in docs so it can be rendered in the
-    app and checked off, since it is a multi-week business process.
-    """
-    return [
-        "Open a credit account with ABC Supply Customer Financial Services "
-        "(credit application; contractors only -- they do not sell to homeowners).",
-        "Create a myABCSupply account for the company.",
-        "Complete the ABC API Enrollment Form at apidocs.abcsupply.com and accept "
-        "the Terms and Conditions; their API team reviews and approves.",
-        "On approval, set ABC_CLIENT_ID / ABC_CLIENT_SECRET, and ABC_BILL_TO to the "
-        "Bill-To account number used for pricing.",
-        "Set ABC_SANDBOX=1 first to validate against the sandbox tenant before "
-        "pointing at live contract pricing.",
-    ]
-
-
-# --------------------------------------------------------------------------
-# transport
-# --------------------------------------------------------------------------
-
-def _token(force: bool = False) -> str:
-    """Client-credentials token, cached with a safety margin."""
-    if not configured():
-        return ""
-    base = base_url()
-    # A sandbox/production switch invalidates the cached token: they are
-    # different tenants, so the cached one will not authenticate on the other.
-    if not force and _cache["token"] and _cache["base"] == base and time.time() < _cache["expires_at"]:
-        return _cache["token"]
-
-    cid = os.getenv("ABC_CLIENT_ID", "")
-    secret = os.getenv("ABC_CLIENT_SECRET", "")
-    raw = base64.b64encode(f"{cid}:{secret}".encode()).decode()
-    body = urllib.parse.urlencode({
-        "grant_type": "client_credentials",
-        "scope": " ".join(SCOPES_READONLY),
-    }).encode()
-    req = urllib.request.Request(
-        _auth_url(),
-        data=body,
-        headers={
-            "Authorization": f"Basic {raw}",
-            "Content-Type": "application/x-www-form-urlencoded",
-            "Accept": "application/json",
-        },
-    )
-    with urllib.request.urlopen(req, timeout=_timeout) as resp:
-        payload = json.loads(resp.read().decode() or "{}")
-    token = payload.get("access_token") or ""
-    _cache["token"] = token
-    _cache["base"] = base
-    _cache["expires_at"] = time.time() + _TOKEN_TTL
-    return token
-
-
-def _request(method: str, path: str, body=None, params=None, retry_auth: bool = True):
-    """One API call. Returns parsed JSON, or ``None`` on any failure.
-
-    Fails soft by design: a pricing lookup that raises would turn a vendor
-    outage into a 500 on a customer-facing quote page. Callers treat ``None`` as
-    "price unknown" and fall back to the curated catalog.
-    """
-    token = _token()
-    if not token:
-        return None
-    url = f"{base_url()}{path}"
-    if params:
-        url = f"{url}?{urllib.parse.urlencode({k: v for k, v in params.items() if v not in (None, '')})}"
-    data = json.dumps(body).encode() if body is not None else None
-    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
-    if data:
-        headers["Content-Type"] = "application/json"
-    req = urllib.request.Request(url, data=data, headers=headers, method=method)
+def _post(url: str, payload: dict, headers: dict, timeout: int = 30) -> dict:
+    body = json.dumps(payload).encode() if not isinstance(payload, str) else payload.encode()
+    req = urllib.request.Request(url, data=body, headers={"User-Agent": UA, **headers})
     try:
-        with urllib.request.urlopen(req, timeout=_timeout) as resp:
-            raw = resp.read().decode()
-        return json.loads(raw) if raw else {}
-    except urllib.error.HTTPError as exc:
-        if exc.code == 401 and retry_auth:
-            # Token minted early but rejected; force one re-mint and retry once.
-            _token(force=True)
-            return _request(method, path, body=body, params=params, retry_auth=False)
-        print(f"[abc] {method} {path} -> HTTP {exc.code}", flush=True)
-        return None
-    except Exception as exc:
-        print(f"[abc] {method} {path} failed: {exc}", flush=True)
-        return None
-
-
-# --------------------------------------------------------------------------
-# product + pricing
-# --------------------------------------------------------------------------
-
-def search_items(query: str = "", *, category: str = "", page_size: int = 50,
-                 skip: int = 0):
-    """POST /search/items -- catalog search by attribute/keyword."""
-    if not configured():
-        return []
-    body = {
-        "searchText": query,
-        "pageSize": int(page_size),
-        "startIndex": int(skip),
-    }
-    if category:
-        body["productCategory"] = category
-    out = _request("POST", "/search/items", body=body) or {}
-    items = out.get("items") or out.get("Items") or []
-    return items if isinstance(items, list) else []
-
-
-def get_item(item_number: str):
-    """GET /item/{itemNumber}"""
-    if not configured() or not item_number:
-        return None
-    return _request("GET", f"/item/{urllib.parse.quote(str(item_number))}")
-
-
-def price_items(item_numbers, *, bill_to: str = ""):
-    """POST /prices -- real-time *customer-specific* pricing.
-
-    This is the whole point of the integration. Bill-To is not optional in
-    practice: ABC returns list/contract pricing keyed to the account, and
-    without it the numbers are not ours.
-    """
-    if not configured():
-        return []
-    bill_to = bill_to or os.getenv("ABC_BILL_TO", "")
-    nums = [str(n) for n in (item_numbers or []) if str(n).strip()]
-    if not nums:
-        return []
-    out = _request("POST", "/prices", body={
-        "billToNumber": bill_to,
-        "itemNumbers": nums,
-    }) or {}
-    prices = out.get("prices") or out.get("Prices") or out.get("items") or []
-    return prices if isinstance(prices, list) else []
-
-
-def _bill_scoped(kind: str):
-    """recent / frequent / favorite items for the Bill-To account.
-
-    ``frequent`` is the highest-value endpoint in the catalogue for quoting: it
-    is what this company actually buys, ranked by purchase frequency, which
-    makes a repeat job's price sheet almost free.
-    """
-    if not configured():
-        return []
-    bill_to = os.getenv("ABC_BILL_TO", "")
-    if not bill_to:
-        return []
-    out = _request("GET", f"/api/product/v1/items/{urllib.parse.quote(bill_to)}/{kind}") or {}
-    items = out.get("items") or out.get("Items") or []
-    return items if isinstance(items, list) else []
-
-
-def frequent_items():
-    return _bill_scoped("frequents")
-
-
-def recent_items():
-    return _bill_scoped("recents")
-
-
-def favorite_items():
-    return _bill_scoped("favorites")
-
-
-def availability(item_number: str, *, branch: str = "", zipcode: str = ""):
-    """Where we can actually collect it. A price you cannot source is not a quote."""
-    if not configured() or not item_number:
-        return []
-    out = _request("GET",
-                   f"/availability/items/{urllib.parse.quote(str(item_number))}/branches",
-                   params={"branchNumber": branch, "zipCode": zipcode}) or {}
-    rows = out.get("branches") or out.get("Branches") or []
-    return rows if isinstance(rows, list) else []
-
-
-def hierarchy():
-    """GET /hierarchy -- product tree, for the vendor/brand gallery."""
-    if not configured():
-        return []
-    out = _request("GET", "/hierarchy") or {}
-    rows = out.get("hierarchy") or out.get("items") or out.get("categories") or []
-    return rows if isinstance(rows, list) else ([out] if isinstance(out, dict) and out else [])
-
-
-# --------------------------------------------------------------------------
-# mapping into materials_catalog
-# --------------------------------------------------------------------------
-
-def price_to_cents(entry) -> int | None:
-    """Normalise a /prices row to integer cents.
-
-    ABC returns decimal strings like "142.99". Returning ``None`` rather than 0
-    matters: a zero price would silently become a $0 line on a customer quote,
-    and 0 is a real (and wrong) number in a way that "unknown" is not.
-    """
-    if entry is None:
-        return None
-    if isinstance(entry, (int, float)):
-        return int(round(float(entry) * 100))
-    if not isinstance(entry, dict):
-        return None
-    raw = None
-    for key in ("price", "Price", "unitPrice", "netPrice", "amount"):
-        if entry.get(key) not in (None, ""):
-            raw = entry[key]
-            break
-    if raw in (None, ""):
-        return None
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read()
+    except urllib.error.HTTPError as e:
+        detail = e.read()[:400].decode("utf-8", "replace")
+        # Okta returns the reason in a JSON body; surface it rather than a bare code.
+        try:
+            detail = json.loads(detail).get("error_description") or detail
+        except (json.JSONDecodeError, AttributeError):
+            pass
+        raise ABCError(f"HTTP {e.code}: {detail}") from e
+    except urllib.error.URLError as e:
+        raise ABCError(f"could not reach ABC Supply: {e.reason}") from e
     try:
-        return int(round(float(str(raw).replace("$", "").replace(",", "")) * 100))
+        return json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise ABCError(f"ABC Supply returned non-JSON: {e}") from e
+
+
+def _get(url: str, headers: dict, timeout: int = 30) -> dict:
+    req = urllib.request.Request(url, headers={"User-Agent": UA, **headers})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        detail = e.read()[:400].decode("utf-8", "replace")
+        try:
+            detail = json.loads(detail).get("error_description") or detail
+        except (json.JSONDecodeError, AttributeError):
+            pass
+        raise ABCError(f"HTTP {e.code}: {detail}") from e
+    except urllib.error.URLError as e:
+        raise ABCError(f"could not reach ABC Supply: {e.reason}") from e
+
+
+def access_token(force: bool = False) -> str:
+    """Client-credentials token, cached past its 30-minute life with a margin."""
+    now = time.time()
+    if not force and _token_cache["token"] and _token_cache["expires"] > now:
+        return _token_cache["token"]
+
+    cid, sec = os.getenv("ABC_CLIENT_ID"), os.getenv("ABC_CLIENT_SECRET")
+    if not cid or not sec:
+        raise ABCError("ABC_CLIENT_ID and ABC_CLIENT_SECRET are not set. Apply at "
+                       "partners-developer.abcsupply.com/signup first.")
+    basic = base64.b64encode(f"{cid}:{sec}".encode()).decode()
+    body = urllib.parse.urlencode({"grant_type": "client_credentials",
+                                   "scope": SCOPES})
+    data = _post(config()["host"]["token"], body,
+                 {"Authorization": f"Basic {basic}",
+                  "Content-Type": "application/x-www-form-urlencoded"})
+    tok = data.get("access_token")
+    if not tok:
+        raise ABCError(f"no access token in response: {str(data)[:200]}")
+    _token_cache["token"] = tok
+    _token_cache["expires"] = now + TOKEN_TTL
+    return tok
+
+
+def _read_price(line: dict) -> tuple[float | None, str | None]:
+    """Unit price, or None plus a reason.
+
+    $0.00 is a successful response meaning the branch has not priced the
+    item. It is not free, and it is not zero.
+    """
+    st = (line.get("status") or {}).get("code")
+    msg = (line.get("status") or {}).get("message")
+    if st not in (None, "", "OK", "200", 200):
+        return None, msg or f"status {st}"
+    price = line.get("unitPrice")
+    if price in (None, ""):
+        return None, msg or "no price returned"
+    try:
+        val = float(price)
     except (TypeError, ValueError):
-        return None
+        return None, f"unreadable price {price!r}"
+    if val == 0:
+        return None, "branch has not priced this item yet"
+    return val, None
 
 
-def item_to_catalog_row(item: dict, price_cents: int | None = None) -> dict:
-    """ABC item -> a `materials_catalog`-shaped row.
+def price_items(items: list[dict], purpose: str = "estimating",
+                timeout: int = 30) -> list[dict]:
+    """Price a list of {itemNumber, quantity, uom, length} against the account.
 
-    Writes straight into the existing table's vocabulary: `store` carries the
-    supplier, `brand` feeds the gallery, `sku` carries the ABC item number so a
-    later refresh can re-price by key instead of fuzzy-matching on name.
+    Batches at the documented 50-line ceiling. Every line is returned, with
+    unit_price None and reason set where ABC could not price it, so a caller
+    can never mistake an unpriced item for a free one.
     """
-    item = item or {}
-    brand = item.get("brandName") or item.get("brand") or ""
-    desc = item.get("description") or item.get("itemDescription") or ""
-    sku = item.get("itemNumber") or item.get("itemNbr") or ""
-    unit = item.get("unitOfMeasure") or item.get("uom") or "each"
-    category = item.get("categoryDescription") or item.get("productCategory") or ""
-    return {
-        "store": "ABC Supply",
-        "brand": brand,
-        "category": str(category)[:80],
-        "name": str(desc)[:400],
-        "model": item.get("manufacturerModel") or item.get("modelNumber") or "",
-        "sku": str(sku),
-        "style": item.get("style") or item.get("colorName") or "",
-        "color": item.get("colorName") or item.get("color") or "",
-        "unit": str(unit)[:40],
-        "price_cents": int(price_cents) if price_cents is not None else 0,
-        "notes": "",
-    }
-
-
-def refresh_catalog(db, *, limit: int = 500) -> dict:
-    """Pull frequent + search results into `materials_catalog`.
-
-    Upserts by SKU so re-running refreshes prices instead of duplicating rows.
-    Returns a summary rather than raising: a supplier outage must not look like
-    a broken app.
-    """
-    summary = {"items": 0, "priced": 0, "skipped": 0, "error": ""}
     if not configured():
-        summary["error"] = "ABC_SUPPLY_NOT_CONFIGURED"
-        return summary
+        raise ABCError("ABC Supply is not configured; missing " + ", ".join(missing()))
+    if purpose not in ("estimating", "quoting", "ordering"):
+        purpose = "estimating"
 
-    items = frequent_items()
+    items = [i for i in items if str(i.get("itemNumber", "")).strip()]
     if not items:
-        items = search_items(page_size=limit)
-    items = items[:int(limit)]
-    if not items:
-        summary["error"] = "no items returned"
-        return summary
+        return []
 
-    skus = [i.get("itemNumber") or i.get("itemNbr") for i in items if isinstance(i, dict)]
-    skus = [str(s) for s in skus if s]
-    price_by_sku = {}
-    for row in price_items(skus):
-        if isinstance(row, dict):
-            key = str(row.get("itemNumber") or row.get("itemNbr") or "")
-            cents = price_to_cents(row)
-            if key and cents is not None:
-                price_by_sku[key] = cents
+    c = config()
+    out: list[dict] = []
+    for start in range(0, len(items), MAX_LINES):
+        chunk = items[start:start + MAX_LINES]
+        lines = []
+        for n, it in enumerate(chunk, start=1):
+            line = {"id": str(n), "itemNumber": str(it["itemNumber"]).strip(),
+                    "quantity": it.get("quantity", 1)}
+            if it.get("uom"):
+                line["uom"] = it["uom"]
+            # length is required only for dimensional items (lumber, pipe,
+            # trim). Sending it on a non-dimensional item is rejected.
+            if it.get("length") and it.get("length", {}).get("value") is not None:
+                line["length"] = {"value": it["length"]["value"],
+                                  "uom": it["length"].get("uom", "in")}
+            lines.append(line)
 
-    try:
-        with db.cursor() as cur:
-            for item in items:
-                row = item_to_catalog_row(item, price_by_sku.get(row_sku(item)))
-                if not row["sku"] or not row["name"]:
-                    summary["skipped"] += 1
-                    continue
-                # Explicit upsert rather than ON CONFLICT (sku): materials_catalog
-                # has no unique index on sku (only (category, brand, enabled)), and
-                # adding one to a table holding live pricing risks failing on
-                # pre-existing duplicate or blank SKUs -- turning a catalog refresh
-                # into a schema migration.
-                cur.execute(
-                    "SELECT id FROM materials_catalog WHERE sku = %s LIMIT 1;",
-                    (row["sku"],),
-                )
-                existing = cur.fetchone()
-                if existing:
-                    cur.execute(
-                        "UPDATE materials_catalog SET price_cents = %s, brand = %s, "
-                        "name = %s, store = %s, updated_at = NOW() WHERE id = %s;",
-                        (row["price_cents"], row["brand"], row["name"], row["store"],
-                         existing["id"]),
-                    )
-                else:
-                    cur.execute(
-                        "INSERT INTO materials_catalog "
-                        "(store, brand, category, name, model, sku, style, color, unit, "
-                        " price_cents, price_high_cents, notes, enabled) "
-                        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NULL,'',TRUE);",
-                        (row["store"], row["brand"], row["category"], row["name"],
-                         row["model"], row["sku"], row["style"], row["color"],
-                         row["unit"], row["price_cents"]),
-                    )
-                summary["items"] += 1
-                if row["price_cents"]:
-                    summary["priced"] += 1
-        db.commit()
-    except Exception as exc:
-        db.rollback()
-        summary["error"] = str(exc)
-    return summary
+        payload = {"requestId": f"Buildstack-{int(time.time())}-{start}",
+                   "shipToNumber": c["ship_to"],
+                   "branchNumber": c["branch"],
+                   "purpose": purpose,
+                   "lines": lines}
+        data = _post(f"{c['host']['api']}/pricing/v2/prices", payload,
+                     {"Authorization": f"Bearer {access_token()}",
+                      "Content-Type": "application/json"}, timeout)
+        by_id = {str(l.get("id")): l for l in (data.get("lines") or [])}
+        for idx, it in enumerate(chunk, start=1):
+            line = by_id.get(str(idx), {})
+            unit, reason = _read_price(line)
+            qty = float(it.get("quantity") or 0)
+            out.append({
+                "itemNumber": str(it["itemNumber"]).strip(),
+                "description": line.get("description") or it.get("description") or "",
+                "quantity": qty,
+                "uom": line.get("uom") or it.get("uom") or "",
+                "unit_price": unit,
+                "extended": round(unit * qty, 2) if unit is not None and qty else None,
+                "reason": reason,
+            })
+    return out
 
 
-def row_sku(item: dict) -> str:
-    item = item or {}
-    return str(item.get("itemNumber") or item.get("itemNbr") or "")
+def search_items(term: str, limit: int = 25, branch: str = "") -> list[dict]:
+    """Find item numbers by description. This is how a takeoff gets built."""
+    if not term.strip():
+        return []
+    c = config()
+    payload = {"searchText": term.strip()[:120], "pageSize": min(int(limit), 50)}
+    if branch:
+        payload["branchNumbers"] = [branch]
+    data = _post(f"{c['host']['api']}/product/v1/items/search", payload,
+                 {"Authorization": f"Bearer {access_token()}",
+                  "Content-Type": "application/json"})
+    rows = data.get("items") or data.get("results") or []
+    out = []
+    for it in rows[:limit]:
+        out.append({
+            "itemNumber": it.get("itemNumber") or it.get("itemNumberFull") or "",
+            "description": it.get("description") or it.get("itemDescription") or "",
+            "uom": it.get("uom") or it.get("unitOfMeasure") or "",
+            "branch_price": it.get("branchPrice") or it.get("price"),
+        })
+    return out
+
+
+def frequent_items(limit: int = 100) -> list[dict]:
+    """What this account actually orders, most frequent first.
+
+    The best possible starting point for a takeoff: real item numbers from
+    the account's own history, rather than searching for lumber one sheet at
+    a time.
+    """
+    c = config()
+    data = _get(f"{c['host']['api']}/product/v1/items/frequent?pageSize={min(int(limit), 200)}",
+                {"Authorization": f"Bearer {access_token()}"})
+    rows = data.get("items") or data.get("results") or []
+    return [{"itemNumber": i.get("itemNumber", ""),
+             "description": i.get("description", ""),
+             "uom": i.get("uom", ""),
+             "order_count": i.get("orderCount") or i.get("frequency")}
+            for i in rows[:limit]]

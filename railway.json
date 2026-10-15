@@ -14,7 +14,9 @@
       "construction_knowledge.md",
       "templates/construction/*.html",
       "static/**",
-      "bid_costing.py"
+      "bid_costing.py",
+      "abc_supply.py",
+      "supplier_prices.py"
     ],
     "buildEnvironment": "V3"
   },
