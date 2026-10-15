@@ -19,7 +19,8 @@
       "supplier_prices.py",
       "ledger.py",
       "ledger_bridge.py",
-      "ledger_sync.py"
+      "ledger_sync.py",
+      "auth0_service.py"
     ],
     "buildEnvironment": "V3"
   },

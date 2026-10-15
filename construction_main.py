@@ -55,6 +55,7 @@ import permit_enricher
 import permit_stats
 import email_fetcher
 import bid_costing
+import auth0_service
 import material_picker
 import takeoff
 import supplier_prices
@@ -890,6 +891,83 @@ def require_auth(request: Request):
 def require_admin(request: Request) -> None:
     if not require_auth(request)[0]:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Admin login required")
+
+
+# --- Auth0 login bridge ------------------------------------------------------
+# Auth0 proves who someone is; it does not know who your crew are. This
+# answers that on every login so an Action can either attach a role claim or
+# deny the login outright.
+
+@app.post("/api/auth/login")
+async def auth_login_check(request: Request, db=Depends(get_db)):
+    """Called by an Auth0 Action during login. Answers: allowed, and what role.
+
+    Returns 200 with {"allowed": false} for someone who is not on the list --
+    not an error status. A 403 here would make the Action's job ambiguous:
+    a rejected login and a broken endpoint look identical.
+    """
+    # A missing secret means an unconfigured deploy, and it must fail closed.
+    if not auth0_service.authorized(request.headers.get(auth0_service.HEADER)):
+        raise HTTPException(status_code=401, detail="Bad or missing credentials")
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    try:
+        auth0_service.ensure_schema(db)
+        verdict = auth0_service.decide(
+            db,
+            email=str(payload.get("email") or ""),
+            name=str(payload.get("name") or "")[:255],
+            auth0_sub=str(payload.get("sub") or "")[:120],
+            user_agent=request.headers.get("user-agent", ""),
+            ip=(request.client.host if request.client else "") or "",
+        )
+    except Exception as e:
+        # Fail closed, and say why. Never let a database hiccup decide who
+        # is allowed into the books.
+        logger.warning("auth login check failed: %s", e)
+        return JSONResponse({"allowed": False, "role": None, "reason": "lookup failed"})
+    return JSONResponse(verdict)
+
+
+@app.get("/api/auth/status")
+async def auth_status(request: Request, db=Depends(get_db)):
+    """Recent sign-ins. Admin only -- the log shows who has been in."""
+    require_admin(request)
+    try:
+        auth0_service.ensure_schema(db)
+        return JSONResponse({
+            "ok": True,
+            "configured": auth0_service.configured(),
+            "owner_emails": len(auth0_service.allowlist()["owners"]),
+            "recent": auth0_service.recent(db, 40),
+            "denied": auth0_service.denied_recent(db, 20),
+        })
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)})
+
+
+def require_role(request: Request, *roles: str) -> str:
+    """Gate a page on an Auth0 role claim.
+
+    Separate from require_admin on purpose: require_admin governs the
+    existing PIN/email login and its behaviour must not change. This reads
+    auth0_role off the SAME session token, so it works with whichever login
+    produced it, and is inert -- denying everything -- until Auth0 is wired.
+
+    Uses auth_service.SESSION_COOKIE rather than a cookie name invented
+    here: the admin session is set under that key at login, so anything else
+    reads a cookie that is never written and denies everyone.
+    """
+    actor = current_actor(request)
+    got = ((actor or {}).get("auth0_role") or "").strip().lower()
+    if not got or got not in [r.lower() for r in roles]:
+        raise HTTPException(status_code=403,
+                            detail="Your account does not have access here.")
+    return got
 
 
 # --- Worker (crew) auth -----------------------------------------------------
