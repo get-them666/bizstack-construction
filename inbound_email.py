@@ -140,6 +140,8 @@ def _ensure_schema(cur):
 def _ingest(db, company_key, msgs, mailbox_from):
     """Insert inbound email comms rows. Returns match/insert/dedup counts."""
     matched = inserted = deduped = skipped = unmatched = 0
+    bid_count = bids_created = 0
+    bid_errors: list = []
     with db.cursor() as cur:
         _ensure_schema(cur)
         for m in msgs:
@@ -147,6 +149,17 @@ def _ingest(db, company_key, msgs, mailbox_from):
             if not sender:
                 skipped += 1
                 continue
+            # Bid solicitation? Parsed onto the bid board, never onto leads.
+            # Wrapped because a parse failure must not stop the message being
+            # recorded as comms -- losing the email itself is the worse outcome.
+            try:
+                if looks_like_bid_email(sender, m.get("subject") or "", m.get("to") or ""):
+                    bid_count += 1
+                    bid_result = ingest_bid_email(db, sender, m.get("subject") or "",
+                                                  m.get("text") or "", company_key)
+                    bids_created += bid_result.get("created", 0)
+            except Exception as _be:
+                bid_errors.append(str(_be)[:200])
             cur.execute(
                 "SELECT id, email, name, notes, status FROM leads "
                 "WHERE LOWER(email) = %s AND company = %s;",
@@ -212,7 +225,9 @@ def _ingest(db, company_key, msgs, mailbox_from):
                 print(f"[email-inbound] auto-reply failed for lead {lead_id}: {exc}", flush=True)
         db.commit()
     return {"matched": matched, "inserted": inserted, "deduped": deduped,
-            "skipped": skipped, "unmatched": unmatched}
+            "skipped": skipped, "unmatched": unmatched,
+            "bids_seen": bid_count, "bids_created": bids_created,
+            "bid_errors": bid_errors}
 
 
 def _make_content_id(sender, subject, date):
@@ -374,3 +389,81 @@ if __name__ == "__main__":
     with psycopg.connect(os.getenv("DATABASE_URL", ""), row_factory=dict_row) as _db:
         _db.autocommit = False
         print(json.dumps(poll_gmail_inbox(_db, _company, _company, _mailbox)), flush=True)
+
+# --- Bids by email -----------------------------------------------------------
+# A general contractor emailing an addendum, an RFI response, or a new
+# solicitation should land on the bid board, not in the lead pipeline. A GC is
+# not a customer, so nothing here may create a leads row -- that is what fires
+# the auto-reply and the outbound voice agent.
+#
+# Reuses the same parse the paste box uses (bid_sources.parse_pasted) so an
+# email and a pasted CSV produce identical rows.
+
+# Markers that an inbound email is about a solicitation rather than a customer.
+_BID_SUBJECT_HINTS = (
+    "bid", "rfp", "rfq", "solicitation", "addendum", "addenda", "rfi",
+    "invitation to bid", "invitation to bid?", "scope", "takeoff",
+    "proposal due", "due date", "draw", "submittal", "prequalification",
+)
+
+# Only senders that look like a trade partner get auto-parsed. Without this
+# any customer email mentioning "scope" would spawn a phantom bid.
+_BID_SENDER_HINTS = (
+    "estimating", "estimator", "bids", "procurement", "purchasing", "contracts",
+    "gmail.com",  # placeholder replaced by real list below
+)
+# Deliberately NOT a generic domain match: a GC's own email domain is
+# unknown, so this is configured, not guessed.
+BIDS_INBOX_ENABLED = os.getenv("BIDS_INBOX_ENABLED", "").strip().lower() in ("1", "true", "yes")
+BIDS_INBOX_SENDERS = tuple(
+    s.strip().lower() for s in os.getenv("BIDS_INBOX_SENDERS", "").split(",") if s.strip()
+)
+
+
+def looks_like_bid_email(sender: str, subject: str, to: str = "") -> bool:
+    """True when this inbound email should be parsed onto the bid board.
+
+    Two ways in, either sufficient:
+      - the subject says it is a solicitation, AND
+      - the sender is on the configured partner list.
+
+    Requiring both is deliberate. Subject keywords alone would turn every
+    customer email containing the word "scope" into a bid; a sender allowlist
+    alone would miss a GC who mails from an unfamiliar domain. Together they
+    are conservative, and a missed bid is recoverable while a phantom one
+    pollutes the pipeline.
+    """
+    if not BIDS_INBOX_ENABLED:
+        return False
+    s = (subject or "").lower()
+    if not any(h in s for h in _BID_SUBJECT_HINTS):
+        return False
+    if not BIDS_INBOX_SENDERS:
+        return False
+    sender_l = (sender or "").lower()
+    return any(d in sender_l for d in BIDS_INBOX_SENDERS)
+
+
+def ingest_bid_email(conn, sender: str, subject: str, text: str,
+                     company_key: str = "construction") -> dict:
+    """Parse a solicitation email into bid rows. Never touches leads."""
+    import bid_opportunities
+    import bid_sources
+
+    body = f"{subject}\n\n{text or ''}".strip()
+    rows, note = bid_sources.parse_pasted(body)
+    if not rows:
+        # Nothing structured to extract. Do not invent a bid: a row with a
+        # guessed name is worse than nothing, and the full email is already
+        # preserved verbatim in comms_logs by _ingest.
+        return {"created": 0, "updated": 0, "note": note or "nothing structured"}
+    res = bid_opportunities.upsert_pulled(conn, rows, company_key)
+    with conn.cursor() as cur:
+        cur.execute("UPDATE bid_opportunities SET notes = COALESCE(notes,'') || %s "
+                    "WHERE company = %s AND source = 'pull' "
+                    "AND id IN (SELECT id FROM bid_opportunities WHERE company = %s "
+                    "ORDER BY id DESC LIMIT %s)",
+                    (f"\n\n--- from email {sender}: {subject[:200]} ---",
+                     company_key, company_key, max(1, res["created"])))
+    conn.commit()
+    return {**res, "note": note}

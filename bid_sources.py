@@ -257,10 +257,102 @@ _CSV_HINTS = {"name", "title", "project", "project_name", "project_title",
               "amount", "bid_amount", "price", "value", "due", "due_date",
               "gc", "owner", "contractor", "location", "address", "status"}
 
-_LABEL = re.compile(
-    r"^\s*(job|project|trade|scope|due|due date|deadline|amount|bid|price|"
-    r"reference|ref|solicitation|rfp|gc|owner|contractor|location|address|"
-    r"status)\s*[:\-]\s*(.+)$", re.I)
+# Field labels as they turn up in real solicitation email. The separator is
+# optional on purpose: "Due date 11/12/2026" and "Amount $152,000" are how
+# people actually write, and a regex that demanded a colon matched almost
+# nothing. Multi-word labels come first so "Bid Due:" is not read as
+# "bid" with the value "Due: ...".
+_LABELS = (r"due\s+date|bid\s+due|bid\s+amount|unit\s+price|contract\s+number|"
+           r"rfp\s+number|job\s+name|project\s+name|deadline|amount|price|"
+           r"reference|solicitation|project|contractor|location|address|"
+           r"trade|scope|status|owner|job|due|bid|rfp|gc|ref")
+
+_LABEL = re.compile(rf"^\s*({_LABELS})\s*[:\-]?\s*(.+)$", re.I)
+
+# A value runs until the next label or end of line, so
+# "Due date 11/12/2026. Amount $152,000." yields a due date AND an amount
+# rather than one value swallowing the other.
+_VALUE_END = re.compile(rf"(?=\s+(?:{_LABELS})\s*[:\-]?\s|$)", re.I)
+
+_LABEL_TO_KEY = {
+    "due date": "due_date", "due": "due_date", "bid due": "due_date",
+    "deadline": "due_date",
+    "amount": "amount", "bid amount": "amount", "price": "amount",
+    "unit price": "amount",
+    "reference": "reference", "ref": "reference", "contract number": "reference",
+    "solicitation": "reference", "rfp": "reference", "rfp number": "reference",
+    "job": "name", "job name": "name", "project": "name", "project name": "name",
+    "trade": "trade", "scope": "trade",
+    "location": "location", "address": "location",
+    "contractor": "owner", "owner": "owner", "gc": "owner",
+    "status": "status", "price_": "amount",
+}
+
+
+# Labels whose value is expected to start with a digit or a currency symbol.
+# Used to tell a field from a title: "Due date 11/12/2026" is a field, but
+# "Bid Documents Attached" is a subject line and must stay a title.
+_STRONG = {"due date", "due", "bid due", "deadline", "amount", "bid amount",
+           "price", "unit price", "reference", "ref", "contract number",
+           "solicitation", "rfp number", "job name", "project name"}
+
+_HAS_VALUE = re.compile(r"^\s*[\d$€£]")          # starts with a digit or currency
+
+
+def _label_value(line: str, with_offset: bool = False):
+    """Return (key, value) for a "Label: value" line, else (None, None).
+
+    with_offset adds the index just past the value, which is what lets
+    _label_fields walk several labels on one line. The regex group spans the
+    whole remainder of the line, so slicing by the group end would skip
+    everything after the first field.
+
+    Two guards keep subject lines from being mistaken for fields. A title
+    like "RFP addendum - cove base" starts with a keyword, so requiring a
+    colon or dash is not enough on its own; but "Due date 11/12/2026" has no
+    punctuation at all. So: an explicit separator always means a field, and
+    without one only a strong field label whose value actually looks like a
+    value counts.
+    """
+    m = _LABEL.match(line)
+    if not m:
+        return (None, None, 0) if with_offset else (None, None)
+    raw = re.sub(r"\s+", " ", m.group(1).strip().lower())
+    key = _LABEL_TO_KEY.get(raw)
+    if not key:
+        return (None, None, 0) if with_offset else (None, None)
+    rest = m.group(2).strip()
+    has_sep = re.match(r"^\s*[:\-]\s*", m.group(0)[m.start(2) - m.start(0):] or "") \
+        or bool(re.search(rf"^\s*{re.escape(raw)}\s*[:\-]", line, re.I))
+    if not has_sep and not (raw in _STRONG and _HAS_VALUE.match(rest)):
+        return (None, None, 0) if with_offset else (None, None)
+    raw = _VALUE_END.split(rest, maxsplit=1)[0]
+    val = raw.strip(" .,-")
+    if not val:
+        return (None, None, 0) if with_offset else (None, None)
+    if with_offset:
+        return key, val, m.start(2) + len(raw)
+    return key, val
+
+
+def _label_fields(line: str) -> dict:
+    """Every label on a line, not just the first.
+
+    Real email puts several fields on one line -- "Due date 11/12/2026.
+    Amount $152,000. Trade: Drywall." -- and a regex that matched once threw
+    the other two away.
+    """
+    out: dict = {}
+    rest = line
+    for _ in range(12):
+        key, val, end = _label_value(rest, with_offset=True)
+        if not key or not end:
+            break
+        out.setdefault(key, val)
+        rest = rest[end:].lstrip(" .,-;")
+        if not rest:
+            break
+    return out
 
 
 def _sniff_delim(line: str) -> str:
@@ -336,55 +428,60 @@ def parse_pasted(text: str, date_format: str = "") -> tuple[list[dict], str]:
         return _finalize(rows, f"{len(rows)} row(s) read as "
                                 f"{'tab' if delim == chr(9) else delim}-separated.")
 
-    # Free-text path: records separated by blank lines, labelled fields inside.
-    blocks, cur = [], []
-    for l in [x for x in lines if x.strip()] if False else _with_blanks(text):
-        if not l.strip():
-            if cur:
-                blocks.append(cur)
-                cur = []
-        else:
-            cur.append(l)
-    if cur:
-        blocks.append(cur)
+    # Free-text path. Line-driven rather than blank-line-blocked, because an
+    # email is a title followed by fields, not a set of blank-line-delimited
+    # blocks. A non-label line opens a record; label lines fill it; a blank
+    # line closes it.
+    records: list[dict] = []
+    cur: dict = {}
+
+    def flush():
+        nonlocal cur
+        if cur and str(cur.get("name", "")).strip():
+            records.append(cur)
+        cur = {}
+
+    for line in lines:
+        if not line.strip():
+            flush()
+            continue
+        fields = _label_fields(line)
+        if fields:
+            for k, v in fields.items():
+                cur.setdefault(k, v)
+            continue
+        if cur.get("name"):
+            # Second unlabelled line in the same record: usually extra prose.
+            cur["_extra"] = (cur.get("_extra", "") + " " + line.strip()).strip()
+            continue
+        flush()
+        cur["name"] = line.strip()
+    flush()
 
     rows = []
-    for blk in blocks:
-        fields: dict[str, str] = {}
-        for line in blk:
-            m = _LABEL.match(line)
-            if m:
-                key = m.group(1).lower().replace(" ", "_")
-                fields[key] = m.group(2).strip()
-        # A title is the first line that is not a "Label: value" pair. Done
-        # before the unlabelled fallback so a block with *some* labels still
-        # gets a name -- otherwise "Trade: Painting\nAmount: $54,000" parsed
-        # perfectly and was then thrown away for having no name.
-        if not fields.get("name"):
-            for line in blk:
-                if not _LABEL.match(line):
-                    fields["name"] = line.strip()
-                    break
-        if not fields:
-            fields["name"] = blk[0].strip()
-        if "name" not in fields or not fields["name"]:
-            fields["name"] = blk[0].strip()
-        if not fields.get("_had_labels") and fields.get("name"):
-            rest = " ".join(l for l in blk[1:])
-            labels = [l for l in blk if _LABEL.match(l)]
-            extra = " ".join(l for l in blk[1:] if l not in labels)
-            amt = re.search(r"\$\s?([\d,]+(?:\.\d{2})?)", extra)
-            if amt and "amount" not in fields:
-                fields["amount"] = amt.group(1)
-            dm = re.search(r"\b(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|"
-                           r"\d{4}-\d{2}-\d{2}|[A-Za-z]{3,9}\.?\s+\d{1,2},?\s+\d{4})\b", extra)
-            if dm and not any(k in fields for k in ("due_date", "due")):
-                fields["due_date"] = dm.group(1)
-            rm = re.search(r"\b([A-Z]{0,4}[-\w]*\d[-\w]*)\b", extra)
-            if rm and len(rm.group(1)) > 4 and "reference" not in fields:
-                fields["reference"] = rm.group(1)
-        rows.append(_norm(fields))
-    return _finalize(rows, f"{len(rows)} block(s) read as text.")
+    for rec in records:
+        extra = rec.pop("_extra", "")
+        row = _norm(rec)
+        # Scrape anything the labels did not capture from the prose.
+        if extra:
+            if not row.get("bid_amount"):
+                m = re.search(r"\$\s?([\d,]+(?:\.\d{2})?)", extra)
+                if m:
+                    row["bid_amount"] = _num(m.group(1))
+            if not row.get("due_date"):
+                m = re.search(r"\b(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|"
+                              r"\d{4}-\d{2}-\d{2}|[A-Za-z]{3,9}\.?\s+\d{1,2},?\s+\d{4})\b",
+                              extra)
+                if m:
+                    row["due_date"] = _date(m.group(1), _sniff_date_format([[line] for line in lines]))
+            if not row.get("reference"):
+                m = re.search(r"\b([A-Z]{2,}[-\w]*\d[-\w]*)\b", extra)
+                if m:
+                    row["reference"] = m.group(1)
+        if extra and row.get("notes") is not None:
+            row["notes"] = ((row.get("notes") or "") + "\n" + extra)[:4000]
+        rows.append(row)
+    return _finalize(rows, f"{len(records)} record(s) read as text.")
 
 
 def _finalize(rows: list[dict], note: str) -> tuple[list[dict], str]:

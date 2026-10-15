@@ -54,6 +54,9 @@ from stripe_service import StripeService, default_deposit_cents
 import permit_enricher
 import permit_stats
 import email_fetcher
+import material_picker
+import takeoff
+import supplier_prices
 import bid_opportunities
 import bid_sources
 import enrichment
@@ -677,6 +680,13 @@ async def lifecycle(app: FastAPI):
     try:
         with psycopg.connect(db_url, row_factory=dict_row) as conn:
             bid_opportunities.ensure_schema(conn)
+            # Order matters and is not arbitrary: costing extends
+            # bid_opportunities with outcome columns and a projects FK, so it
+            # runs after. takeoff and supplier_prices are independent of each
+            # other and guard their own FKs.
+            bid_costing.ensure_accounting_schema(conn)
+            takeoff.ensure_schema(conn)
+            supplier_prices.ensure_schema(conn)
         print("🎯 bid_opportunities ready.")
     except Exception as e:
         print(f"⚠️ bid_opportunities init skipped: {e}")
@@ -2686,6 +2696,152 @@ async def inventory_page(request: Request, company: str = "construction", db=Dep
 # agreement, and Richards/Kempsville/Builders FirstSource have no feed at all.
 # This page is how the price book gets real numbers before any of that lands.
 # Prices are typed in dollars because that is what is printed on the receipt.
+
+
+# --- Takeoffs: itemized material cost, owner's view only ---------------------
+# Priced from every supplier including account-specific ones, which is the
+# whole point. Everything here sits behind require_admin; the customer-facing
+# half is material_picker and reads only public_ok suppliers.
+
+@app.get("/api/takeoffs")
+async def takeoffs_list(request: Request, bid_id: int = 0, db=Depends(get_db)):
+    require_admin(request)
+    takeoff.ensure_schema(conn=db)
+    return JSONResponse(content={"sheets": takeoff.list_sheets(db, bid_id or None, _BID_COMPANY)})
+
+
+@app.post("/api/takeoffs")
+async def takeoff_create(request: Request, name: str = Form(...), bid_id: int = Form(0),
+                         markup_pct: float = Form(0.0), notes: str = Form(""), db=Depends(get_db)):
+    require_admin(request)
+    takeoff.ensure_schema(conn=db)
+    if not name.strip():
+        raise HTTPException(status_code=400, detail="name is required")
+    sid = takeoff.create_sheet(db, name, bid_id or None, markup_pct, notes, _BID_COMPANY)
+    return JSONResponse(content={"id": sid})
+
+
+@app.get("/api/takeoffs/{sheet_id}")
+async def takeoff_get(sheet_id: int, request: Request, db=Depends(get_db)):
+    require_admin(request)
+    takeoff.ensure_schema(conn=db)
+    sheet = takeoff.get_sheet(db, sheet_id, _BID_COMPANY)
+    if not sheet:
+        raise HTTPException(status_code=404, detail="sheet not found")
+    return JSONResponse(content={"sheet": {k: str(v) if hasattr(v, "isoformat") else v
+                                           for k, v in sheet.items() if k != "lines"},
+                                 "lines": [{k: str(v) if hasattr(v, "isoformat") else v
+                                            for k, v in l.items()} for l in sheet["lines"]],
+                                 "totals": takeoff.totals(sheet)})
+
+
+@app.post("/api/takeoffs/{sheet_id}/lines")
+async def takeoff_add_line(sheet_id: int, request: Request, description: str = Form(...),
+                           qty: float = Form(1.0), item_number: str = Form(""),
+                           uom: str = Form("each"), supplier: str = Form(""),
+                           group_name: str = Form("other"), note: str = Form(""),
+                           lookup: str = Form("0"), db=Depends(get_db)):
+    """Add a line. lookup=1 fills the unit cost from the private price book."""
+    require_admin(request)
+    takeoff.ensure_schema(conn=db)
+    if not takeoff.get_sheet(db, sheet_id, _BID_COMPANY):
+        raise HTTPException(status_code=404, detail="sheet not found")
+    cents, sup = 0, supplier
+    if lookup.lower() in ("1", "true", "yes") and item_number.strip():
+        hit = takeoff.cost_lookup(db, [item_number.strip()], _BID_COMPANY).get(item_number.strip())
+        if hit:
+            cents, sup = hit["unit_cost_cents"], hit["supplier"]
+    lid = takeoff.add_line(db, sheet_id, description, qty, item_number, uom,
+                           cents, sup, "book" if cents else "unknown", group_name, note)
+    return JSONResponse(content={"id": lid, "unit_cost_cents": cents, "supplier": sup})
+
+
+@app.delete("/api/takeoffs/{sheet_id}/lines/{line_id}")
+async def takeoff_delete_line(sheet_id: int, line_id: int, request: Request, db=Depends(get_db)):
+    require_admin(request)
+    takeoff.ensure_schema(conn=db)
+    return JSONResponse(content={"ok": takeoff.delete_line(db, line_id, sheet_id)})
+
+
+@app.get("/api/takeoffs/{sheet_id}/export.csv")
+async def takeoff_export(sheet_id: int, request: Request, db=Depends(get_db)):
+    require_admin(request)
+    takeoff.ensure_schema(conn=db)
+    sheet = takeoff.get_sheet(db, sheet_id, _BID_COMPANY)
+    if not sheet:
+        raise HTTPException(status_code=404, detail="sheet not found")
+    csv_text = takeoff.accounting_csv(sheet)
+    return Response(content=csv_text, media_type="text/csv", headers={
+        "Content-Disposition": f'attachment; filename="takeoff-{sheet_id}.csv"'})
+
+
+@app.get("/materials-picker", response_class=HTMLResponse)
+async def materials_picker_page(request: Request, search: str = "", category: str = ""):
+    """Public material sandbox. No login.
+
+    Reads only suppliers flagged public_ok, so an account price cannot reach
+    this page. There is no parameter that changes that.
+    """
+    items = material_picker.browse(search=search, category=category)
+    return templates.TemplateResponse(
+        request=request, name="materials_picker.html",
+        context={"items": items, "categories": material_picker.categories(),
+                 "sel_cat": category or "all", "q": search,
+                 "empty": not items})
+
+
+@app.post("/api/materials-picker/price")
+async def materials_picker_price(request: Request, items: str = Form("[]")):
+    """Price a chosen list. Public, no login, no lead created."""
+    try:
+        chosen = json.loads(items) if items else []
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="items must be a JSON array")
+    if not isinstance(chosen, list) or len(chosen) > 300:
+        raise HTTPException(status_code=400, detail="send a list of at most 300 items")
+    clean = []
+    for it in chosen[:300]:
+        if not isinstance(it, dict):
+            continue
+        clean.append({"item_number": str(it.get("item_number", ""))[:80],
+                      "description": str(it.get("description", ""))[:300],
+                      "uom": str(it.get("uom", "each"))[:40],
+                      "qty": it.get("qty", 1)})
+    return JSONResponse(content=material_picker.price_list(clean))
+
+
+@app.post("/api/materials-picker/submit")
+async def materials_picker_submit(request: Request, name: str = Form(""),
+                                  email: str = Form(""), phone: str = Form(""),
+                                  notes: str = Form(""), items: str = Form("[]"),
+                                  db=Depends(get_db)):
+    """Hand the chosen list over. Creates a lead only if enabled.
+
+    Contact details are validated and rate-limited like any other intake.
+    Nothing is emailed or dialled here: the lead row is the handoff, and the
+    existing outbound guardrails decide what happens next.
+    """
+    priced = material_picker.price_list(json.loads(items) if items else [])
+    if not priced["lines"]:
+        raise HTTPException(status_code=400, detail="Pick at least one material.")
+    if not (name.strip() or email.strip() or phone.strip()):
+        raise HTTPException(status_code=400, detail="Leave a name, email or phone number.")
+    if email.strip() and not re.fullmatch(r"[^@\s]+@[^@\s]+\.[A-Za-z]{2,}", email.strip()):
+        raise HTTPException(status_code=400, detail="That email does not look right.")
+    made_lead = False
+    if material_picker.submission_creates_lead() and email.strip():
+        try:
+            bid = bid_opportunities.create_bid(
+                db, "construction", name=f"Material list — {name.strip() or email.strip()}",
+                trade="materials", reference="sandbox", role="prime",
+                bid_amount=priced["subtotal"], notes=notes.strip()[:2000])
+            made_lead = True
+        except Exception:
+            # A failed write must not lose their selection.
+            made_lead = False
+    return JSONResponse(content={"ok": True, "count": priced["count"],
+                                 "subtotal": priced["subtotal"],
+                                 "lead": made_lead})
 
 
 @app.get("/materials", response_class=HTMLResponse)
