@@ -1,0 +1,271 @@
+{% extends "base.html" %}
+{% block title %}Books{% endblock %}
+
+{% block content %}
+<section class="bg-slate-50 min-h-screen py-8">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+
+        <div class="flex flex-wrap items-end justify-between gap-4 mb-6">
+            <div>
+                <p class="text-sm font-bold text-indigo-600 uppercase tracking-widest">Accounting</p>
+                <h1 class="text-3xl font-black tracking-tight text-slate-900">Books</h1>
+                <p class="text-sm text-slate-500 mt-1">
+                    Every figure below is a balanced journal entry. Nothing here is a typed-in total.
+                </p>
+            </div>
+            <a href="/bids" class="px-4 py-2.5 text-sm font-semibold text-slate-700 bg-white border border-slate-200 rounded-xl">← Bids</a>
+        </div>
+
+        {# ── Honesty banner. A trial balance that does not sum to zero, or a
+             balance sheet that does not balance, means the books are wrong and
+             every other number here is suspect. Say so at the top. ─────────── #}
+        {% if tb.balanced and bs.balanced and not pending %}
+        <div class="mb-6 px-4 py-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm font-semibold">
+            Books balance. Debits equal credits, assets equal liabilities plus equity.
+        </div>
+        {% else %}
+        <div class="mb-6 px-4 py-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-sm font-semibold">
+            {% if not tb.balanced %}Trial balance is out by ${{ "{:,.2f}".format(tb.difference|abs) }}.
+            {% endif %}
+            {% if not bs.balanced %}Balance sheet is out by ${{ "{:,.2f}".format(bs.difference|abs) }}.
+            {% endif %}
+            {% if pending %}{{ pending|length }} posting{{ 's' if pending|length != 1 else '' }} could not reach the books.{% endif %}
+            Fix these before trusting any figure on this page.
+        </div>
+        {% endif %}
+
+        {# ── Queue ─────────────────────────────────────────────────────────── #}
+        {% if pending %}
+        <div class="bg-white rounded-2xl border border-rose-200 p-5 mb-6">
+            <div class="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                    <p class="text-sm font-bold text-rose-800">{{ pending|length }} posting{{ 's' if pending|length != 1 else '' }} not on the books</p>
+                    <p class="text-xs text-slate-500 mt-1">
+                        The job or invoice itself saved fine. Only the accounting entry failed,
+                        so nothing is lost — it is queued here. Re-running is safe; it never double counts.
+                    </p>
+                </div>
+                <form method="post" action="/books/retry">
+                    <button class="px-4 py-2 text-sm font-bold text-white bg-rose-600 hover:bg-rose-700 rounded-lg">
+                        Try again
+                    </button>
+                </form>
+            </div>
+            <div class="mt-3 space-y-1.5">
+                {% for p in pending %}
+                <div class="text-xs bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
+                    <span class="font-mono font-bold text-slate-700">{{ p.kind }} #{{ p.ref_id }}</span>
+                    <span class="text-slate-500"> — {{ (p.last_error or '')[:140] }}</span>
+                    <span class="text-slate-400">({{ p.attempts }} attempt{{ 's' if p.attempts != 1 else '' }})</span>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+
+        {# ── Opening balances ──────────────────────────────────────────────── #}
+        {% if not tb.rows %}
+        <div class="bg-white rounded-2xl border border-slate-200 p-5 mb-6">
+            <p class="text-sm font-bold text-slate-900">Open the books</p>
+            <p class="text-xs text-slate-500 mt-1 mb-3">
+                Enter what is actually in the PNC business checking account today. Without this,
+                the first balance sheet only reflects money that moves through the app.
+            </p>
+            <form method="post" action="/books/open" class="flex flex-wrap gap-2 items-end">
+                <div>
+                    <label class="block text-xs font-semibold text-slate-600 mb-1">Opening cash</label>
+                    <input name="cash" placeholder="$0.00" required
+                           class="text-sm border border-slate-200 rounded-lg px-3 py-2 w-36">
+                </div>
+                <div>
+                    <label class="block text-xs font-semibold text-slate-600 mb-1">As of</label>
+                    <input name="when" type="date" value="{{ today.isoformat() }}"
+                           class="text-sm border border-slate-200 rounded-lg px-3 py-2">
+                </div>
+                <button class="px-4 py-2 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg">
+                    Post opening balance
+                </button>
+            </form>
+        </div>
+        {% endif %}
+
+        {# ── Headline ──────────────────────────────────────────────────────── #}
+        <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+            <div class="bg-white rounded-2xl border border-slate-200 p-5">
+                <p class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Revenue</p>
+                <p class="text-2xl font-black text-slate-900 mt-1">${{ "{:,.2f}".format(is.total_revenue) }}</p>
+            </div>
+            <div class="bg-white rounded-2xl border border-slate-200 p-5">
+                <p class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Direct cost</p>
+                <p class="text-2xl font-black text-slate-900 mt-1">${{ "{:,.2f}".format(is.direct_cost) }}</p>
+            </div>
+            <div class="bg-white rounded-2xl border border-slate-200 p-5">
+                <p class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Overhead</p>
+                <p class="text-2xl font-black text-slate-900 mt-1">${{ "{:,.2f}".format(is.overhead) }}</p>
+            </div>
+            <div class="bg-white rounded-2xl border border-slate-200 p-5">
+                <p class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Net income</p>
+                <p class="text-2xl font-black {% if is.net_income < 0 %}text-rose-700{% else %}text-emerald-700{% endif %} mt-1">
+                    ${{ "{:,.2f}".format(is.net_income) }}
+                </p>
+            </div>
+        </div>
+
+        <div class="grid gap-6 lg:grid-cols-2">
+
+            {# ── Trial balance ─────────────────────────────────────────────── #}
+            <div class="bg-white rounded-2xl border border-slate-200 p-5">
+                <div class="flex items-center justify-between mb-3">
+                    <p class="text-sm font-bold text-slate-900">Trial balance</p>
+                    <span class="text-xs font-bold {% if tb.balanced %}text-emerald-700{% else %}text-rose-700{% endif %}">
+                        {% if tb.balanced %}balanced{% else %}out by ${{ "{:,.2f}".format(tb.difference|abs) }}{% endif %}
+                    </span>
+                </div>
+                {% if tb.rows %}
+                <div class="overflow-x-auto">
+                    <table class="w-full text-xs">
+                        <thead><tr class="text-left text-slate-400 uppercase tracking-wide">
+                            <th class="py-1 pr-2 font-semibold">Account</th>
+                            <th class="py-1 pr-2 text-right font-semibold">Debit</th>
+                            <th class="py-1 text-right font-semibold">Credit</th>
+                        </tr></thead>
+                        <tbody>
+                        {% for r in tb.rows %}
+                        <tr class="border-t border-slate-100">
+                            <td class="py-1.5 pr-2">
+                                <span class="font-mono text-slate-400">{{ r.code }}</span>
+                                <span class="text-slate-700">{{ r.name }}</span>
+                            </td>
+                            <td class="py-1.5 pr-2 text-right font-mono text-slate-600">
+                                {{ "{:,.2f}".format(r.debit) if r.debit else "" }}
+                            </td>
+                            <td class="py-1.5 text-right font-mono text-slate-600">
+                                {{ "{:,.2f}".format(r.credit) if r.credit else "" }}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                        </tbody>
+                        <tfoot><tr class="border-t-2 border-slate-200 font-bold">
+                            <td class="py-2 pr-2">Totals</td>
+                            <td class="py-2 pr-2 text-right font-mono">${{ "{:,.2f}".format(tb.total_debits) }}</td>
+                            <td class="py-2 text-right font-mono">${{ "{:,.2f}".format(tb.total_credits) }}</td>
+                        </tr></tfoot>
+                    </table>
+                </div>
+                {% else %}
+                <p class="text-sm text-slate-400 py-4">Nothing posted yet.</p>
+                {% endif %}
+            </div>
+
+            {# ── Balance sheet ─────────────────────────────────────────────── #}
+            <div class="bg-white rounded-2xl border border-slate-200 p-5">
+                <div class="flex items-center justify-between mb-3">
+                    <p class="text-sm font-bold text-slate-900">Balance sheet</p>
+                    <span class="text-xs font-bold {% if bs.balanced %}text-emerald-700{% else %}text-rose-700{% endif %}">
+                        {% if bs.balanced %}balances{% else %}out by ${{ "{:,.2f}".format(bs.difference|abs) }}{% endif %}
+                    </span>
+                </div>
+                {% macro side(title, rows) %}
+                <p class="text-xs font-bold text-slate-500 uppercase tracking-wide mt-3 mb-1">{{ title }}</p>
+                {% for code, v in rows.items() if v.balance %}
+                <div class="flex justify-between text-xs py-0.5">
+                    <span class="text-slate-600"><span class="font-mono text-slate-400">{{ code }}</span> {{ v.name }}</span>
+                    <span class="font-mono text-slate-800">${{ "{:,.2f}".format(v.balance) }}</span>
+                </div>
+                {% endfor %}
+                {% endmacro %}
+                {{ side("Assets", bs.assets) }}
+                <div class="flex justify-between text-xs py-1 border-t border-slate-200 font-bold">
+                    <span>Total assets</span><span class="font-mono">${{ "{:,.2f}".format(bs.total_assets) }}</span>
+                </div>
+                {{ side("Liabilities", bs.liabilities) }}
+                {{ side("Equity", bs.equity) }}
+                {% if bs.current_earnings %}
+                <div class="flex justify-between text-xs py-0.5">
+                    <span class="text-slate-600">Earnings not yet closed</span>
+                    <span class="font-mono text-slate-800">${{ "{:,.2f}".format(bs.current_earnings) }}</span>
+                </div>
+                {% endif %}
+                <div class="flex justify-between text-xs py-1 border-t-2 border-slate-200 font-bold mt-1">
+                    <span>Liabilities + equity</span>
+                    <span class="font-mono">${{ "{:,.2f}".format(bs.total_liabilities + bs.total_equity) }}</span>
+                </div>
+            </div>
+        </div>
+
+        {# ── Per job ───────────────────────────────────────────────────────── #}
+        {% if jobs %}
+        <div class="bg-white rounded-2xl border border-slate-200 p-5 mt-6">
+            <p class="text-sm font-bold text-slate-900 mb-3">By job</p>
+            <div class="overflow-x-auto">
+                <table class="w-full text-xs">
+                    <thead><tr class="text-left text-slate-400 uppercase tracking-wide">
+                        <th class="py-1 pr-3 font-semibold">Job</th>
+                        <th class="py-1 pr-3 text-right font-semibold">Revenue</th>
+                        <th class="py-1 pr-3 text-right font-semibold">Direct cost</th>
+                        <th class="py-1 pr-3 text-right font-semibold">Margin</th>
+                        <th class="py-1 pr-3 text-right font-semibold">%</th>
+                        <th class="py-1 text-right font-semibold">Repair</th>
+                    </tr></thead>
+                    <tbody>
+                    {% for j in jobs %}
+                    <tr class="border-t border-slate-100">
+                        <td class="py-2 pr-3">
+                            <span class="font-mono text-slate-400">#{{ j.bid_id }}</span>
+                            <span class="text-slate-700">{{ j.name or 'job ' ~ j.bid_id }}</span>
+                        </td>
+                        <td class="py-2 pr-3 text-right font-mono">${{ "{:,.2f}".format(j.revenue) }}</td>
+                        <td class="py-2 pr-3 text-right font-mono">${{ "{:,.2f}".format(j.direct_cost) }}</td>
+                        <td class="py-2 pr-3 text-right font-mono font-bold text-slate-900">${{ "{:,.2f}".format(j.gross_margin) }}</td>
+                        <td class="py-2 pr-3 text-right font-mono {% if j.gross_margin_pct and j.gross_margin_pct < 20 %}text-rose-700{% else %}text-emerald-700{% endif %}">
+                            {{ j.gross_margin_pct }}%
+                        </td>
+                        <td class="py-2 text-right">
+                            <form method="post" action="/api/bids/{{ j.bid_id }}/books/repair">
+                                <button class="text-xs font-semibold text-indigo-600 hover:text-indigo-800">Re-post</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% endif %}
+
+        {# ── Recent entries ───────────────────────────────────────────────── #}
+        {% if entries %}
+        <div class="bg-white rounded-2xl border border-slate-200 p-5 mt-6">
+            <p class="text-sm font-bold text-slate-900 mb-3">Recent entries</p>
+            <div class="overflow-x-auto">
+                <table class="w-full text-xs">
+                    <thead><tr class="text-left text-slate-400 uppercase tracking-wide">
+                        <th class="py-1 pr-3 font-semibold">Entry</th>
+                        <th class="py-1 pr-3 font-semibold">Date</th>
+                        <th class="py-1 pr-3 font-semibold">Source</th>
+                        <th class="py-1 pr-3 font-semibold">Memo</th>
+                        <th class="py-1 text-right font-semibold">Amount</th>
+                    </tr></thead>
+                    <tbody>
+                    {% for e in entries %}
+                    <tr class="border-t border-slate-100">
+                        <td class="py-1.5 pr-3 font-mono text-slate-600">{{ e.entry_no }}</td>
+                        <td class="py-1.5 pr-3 text-slate-600">{{ e.entry_date }}</td>
+                        <td class="py-1.5 pr-3 font-mono text-slate-500">{{ e.source_type or '—' }}</td>
+                        <td class="py-1.5 pr-3 text-slate-600">{{ (e.memo or '')[:70] }}</td>
+                        <td class="py-1.5 text-right font-mono text-slate-800">${{ "{:,.2f}".format(e.amount) }}</td>
+                    </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            <p class="text-xs text-slate-400 mt-3">
+                Entries are never edited. A correction is a reversal, which is what an auditor expects
+                to see and what makes a mistake traceable later.
+            </p>
+        </div>
+        {% endif %}
+
+    </div>
+</section>
+{% endblock %}

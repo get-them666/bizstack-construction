@@ -18,7 +18,8 @@
       "abc_supply.py",
       "supplier_prices.py",
       "ledger.py",
-      "ledger_bridge.py"
+      "ledger_bridge.py",
+      "ledger_sync.py"
     ],
     "buildEnvironment": "V3"
   },

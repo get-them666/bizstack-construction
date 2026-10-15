@@ -321,6 +321,13 @@ def post(conn, lines: list[dict], entry_date=None, memo: str = "",
             f"(difference {(debits - credits)/100:,.2f})")
 
     # Every account referenced must exist, before any write.
+    # Seed on demand: the chart is per-company, so a company that has never
+    # posted before would otherwise fail with "account 1100 is not in the
+    # chart" -- which reads as a broken module rather than a new book.
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) AS n FROM ledger_accounts WHERE company = %s", (company,))
+        if not cur.fetchone()["n"]:
+            seed_chart(conn, company)
     for code in {x["account"] for x in prepared}:
         account_id(conn, code, company)
 

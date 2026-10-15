@@ -59,6 +59,7 @@ import material_picker
 import takeoff
 import supplier_prices
 import ledger
+import ledger_sync
 import bid_opportunities
 import bid_sources
 import enrichment
@@ -2779,6 +2780,122 @@ async def takeoff_export(sheet_id: int, request: Request, db=Depends(get_db)):
     csv_text = takeoff.accounting_csv(sheet)
     return Response(content=csv_text, media_type="text/csv", headers={
         "Content-Disposition": f'attachment; filename="takeoff-{sheet_id}.csv"'})
+
+
+# --- Books: double-entry reporting and the queue that keeps it honest -------
+# Everything here is read-only except the repair actions. The numbers come
+# from ledger.py, which enforces that debits equal credits.
+
+@app.get("/books", response_class=HTMLResponse)
+async def books_page(request: Request, as_of: str = "", db=Depends(get_db)):
+    """Trial balance, balance sheet, income statement and per-job P&L."""
+    require_admin(request)
+    ledger_sync.ensure_schema(db)
+    tb = ledger.trial_balance(db, as_of=as_of or None, company=_BID_COMPANY)
+    bs = ledger.balance_sheet(db, as_of=as_of or None, company=_BID_COMPANY)
+    ist = ledger.income_statement(db, company=_BID_COMPANY)
+    return templates.TemplateResponse(
+        request=request, name="books.html",
+        context={"tb": tb, "bs": bs, "is": ist,
+                 "jobs": ledger.job_pnl(db, company=_BID_COMPANY),
+                 "entries": ledger.entries(db, 25, company=_BID_COMPANY),
+                 "pending": ledger_sync.pending(db, company=_BID_COMPANY),
+                 "as_of": as_of, "today": date.today()})
+
+
+@app.post("/books/retry")
+async def books_retry(request: Request, db=Depends(get_db)):
+    """Re-attempt every queued posting. Idempotent, so safe to press twice."""
+    require_admin(request)
+    ledger_sync.ensure_schema(db)
+    result = ledger_sync.retry_all(db, company=_BID_COMPANY)
+    back = request.headers.get("referer") or "/books"
+    return RedirectResponse(url=back, code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/books/open")
+async def books_open(request: Request, cash: str = Form(...), when: str = Form(""),
+                     db=Depends(get_db)):
+    """Post opening balances so the books start from a known position."""
+    require_admin(request)
+    ledger_sync.ensure_schema(db)
+    try:
+        ledger.open_books(db, float(cash.replace("$", "").replace(",", "")),
+                          when=when or None, company=_BID_COMPANY)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Enter the opening cash amount.")
+    except ledger.LedgerError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return RedirectResponse(url="/books", code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/api/bids/{bid_id}/books/repair")
+async def books_repair_bid(bid_id: int, request: Request, db=Depends(get_db)):
+    """Re-post everything on one job. For when a posting failed and was queued."""
+    require_admin(request)
+    ledger_sync.ensure_schema(db)
+    result = ledger_sync.sync_all_for_bid(db, bid_id, company=_BID_COMPANY)
+    if request.headers.get("accept", "").startswith("application/json"):
+        return JSONResponse(content=result.as_dict())
+    return RedirectResponse(url="/books", code=status.HTTP_303_SEE_OTHER)
+
+
+@app.get("/api/bids/{bid_id}/invoices")
+async def bid_invoices(bid_id: int, request: Request, db=Depends(get_db)):
+    require_admin(request)
+    return JSONResponse(content={"invoices": bid_costing.list_invoices(db, bid_id, _BID_COMPANY),
+                                 "summary": bid_costing.invoice_summary(db, bid_id, _BID_COMPANY)})
+
+
+@app.post("/api/bids/{bid_id}/invoices")
+async def bid_invoice_create(bid_id: int, request: Request, amount: str = Form(...),
+                             description: str = Form(""), due_date: str = Form(""),
+                             issue: bool = Form(0), db=Depends(get_db)):
+    """Raise an invoice. Posting to the ledger happens after the write and is
+    queued rather than allowed to block the owner from billing a job."""
+    require_admin(request)
+    try:
+        inv = bid_costing.create_invoice(db, bid_id, amount, _BID_COMPANY, description,
+                                         due_date=due_date)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    ledger_sync.ensure_schema(db)
+    sync = ledger_sync.Sync()
+    if issue:
+        bid_costing.set_invoice_status(db, inv["id"], "sent", _BID_COMPANY)
+        sync = ledger_sync.sync_invoice(db, inv["id"], _BID_COMPANY)
+    return RedirectResponse(url=f"/bids?invoiced={inv['id']}", code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/api/bids/{bid_id}/invoices/{invoice_id}/status")
+async def bid_invoice_status(bid_id: int, invoice_id: int, request: Request,
+                             status: str = Form(...), collected: str = Form(""),
+                             db=Depends(get_db)):
+    require_admin(request)
+    if not bid_costing.set_invoice_status(db, invoice_id, status, _BID_COMPANY,
+                                          collected or None):
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    ledger_sync.ensure_schema(db)
+    ledger_sync.sync_invoice_status(db, invoice_id, _BID_COMPANY)
+    return RedirectResponse(url="/books", code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/api/bids/{bid_id}/costs")
+async def bid_cost_create(bid_id: int, request: Request, description: str = Form(...),
+                          category: str = Form("material"), vendor: str = Form(""),
+                          estimated: str = Form(""), actual: str = Form(""),
+                          db=Depends(get_db)):
+    require_admin(request)
+    try:
+        lid = bid_costing.add_cost_line(db, bid_id, category, description, vendor,
+                                        estimated=estimated or None, actual=actual or None,
+                                        company=_BID_COMPANY)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    ledger_sync.ensure_schema(db)
+    if actual:
+        ledger_sync.sync_cost_line(db, lid, _BID_COMPANY)
+    return RedirectResponse(url="/books", code=status.HTTP_303_SEE_OTHER)
 
 
 @app.get("/materials-picker", response_class=HTMLResponse)
@@ -6970,6 +7087,14 @@ async def bid_set_status(bid_id: int, request: Request, status: str = Form(...),
             raise HTTPException(status_code=404, detail="Bid not found")
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    # Won/lost is an accounting event, so the outcome columns are written
+    # here rather than in set_status. No revenue is recognised on a win --
+    # it is recognised when the job is billed, per ledger_sync.sync_bid_outcome.
+    if status in ("won", "lost", "withdrawn"):
+        try:
+            bid_costing.set_outcome(db, bid_id, status, _BID_COMPANY)
+        except Exception as e:
+            logger.warning("outcome columns not written for bid %s: %s", bid_id, e)
     back = request.headers.get("referer") or "/bids"
     return RedirectResponse(url=back, code=status.HTTP_303_SEE_OTHER)
 
