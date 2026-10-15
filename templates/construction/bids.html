@@ -34,8 +34,36 @@
                         class="px-5 py-2.5 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition-colors">
                     Pull latest bids
                 </button>
+                {% else %}
+                <button id="pasteBtn"
+                        class="px-5 py-2.5 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition-colors">
+                    Add bids from my bid system
+                </button>
                 {% endif %}
             </div>
+
+            {# Nothing configured yet, so the button pastes instead. Keeps the
+               control present and useful on day one rather than hidden behind
+               an env var the owner has not been given a value for. #}
+            {% if not usable %}
+            <div id="pastePanel" class="hidden mt-4">
+                <label for="pasteBox" class="block text-xs font-semibold text-slate-600 mb-1.5">
+                    Paste a CSV export, or the text of a bid email. Blank line between records.
+                </label>
+                <textarea id="pasteBox" rows="7" spellcheck="false"
+                          placeholder="Job Name, Trade, Reference, GC, Due Date, Amount&#10;Hilton Drywall, Drywall, VVH026TB100001, Premier Architecture, 11/06/2026, &quot;$150,000&quot;"
+                          class="w-full text-sm font-mono border border-slate-200 rounded-lg px-3 py-2"></textarea>
+                <div class="mt-2 flex items-center gap-3">
+                    <button onclick="pasteBids(this)"
+                            class="px-4 py-2 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg">
+                        Add them
+                    </button>
+                    <p class="text-xs text-slate-500">
+                        Nothing is emailed or called. Bids you already have are updated, never duplicated.
+                    </p>
+                </div>
+            </div>
+            {% endif %}
 
             <div id="pullOut" class="hidden mt-4 px-4 py-3 rounded-xl text-sm font-semibold"></div>
 
@@ -285,5 +313,57 @@ function pullBids(source, btn) {
             btn.classList.remove('opacity-60', 'pointer-events-none');
         });
 }
+</script>
+
+function pasteBids(btn) {
+    var out = document.getElementById('pullOut');
+    var box = document.getElementById('pasteBox');
+    var text = box ? box.value : '';
+    if (!text.trim()) { out.className = 'mt-4 px-4 py-3 rounded-xl text-sm font-semibold bg-amber-50 text-amber-800 border border-amber-200'; out.textContent = 'Paste something first.'; return; }
+    if (btn.dataset.busy) return;
+    btn.dataset.busy = '1';
+    var label = btn.textContent;
+    btn.textContent = 'Adding…';
+    btn.classList.add('opacity-60', 'pointer-events-none');
+    out.className = 'mt-4 px-4 py-3 rounded-xl text-sm font-semibold bg-slate-100 text-slate-700';
+    out.textContent = 'Reading…';
+    out.classList.remove('hidden');
+
+    fetch('/api/bids/ingest', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ text: text })
+    })
+        .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+        .then(function (res) {
+            var j = res.j;
+            if (!res.ok) {
+                out.className = 'mt-4 px-4 py-3 rounded-xl text-sm font-semibold bg-rose-50 text-rose-800 border border-rose-200';
+                out.textContent = 'Could not read that — ' + (j.detail || 'unknown error');
+                return;
+            }
+            var e = (j.errors || []).length;
+            out.className = 'mt-4 px-4 py-3 rounded-xl text-sm font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200';
+            out.textContent = j.note + ' ' + j.created + ' new, ' + j.updated + ' updated' +
+                              (e ? ', ' + e + ' rejected.' : '.');
+            setTimeout(function () { location.reload(); }, 1600);
+        })
+        .catch(function () {
+            out.className = 'mt-4 px-4 py-3 rounded-xl text-sm font-semibold bg-rose-50 text-rose-800 border border-rose-200';
+            out.textContent = 'Could not reach the server.';
+        })
+        .then(function () {
+            delete btn.dataset.busy;
+            btn.textContent = label;
+            btn.classList.remove('opacity-60', 'pointer-events-none');
+        });
+}
+
+(function () {
+    var b = document.getElementById('pasteBtn');
+    var panel = document.getElementById('pastePanel');
+    if (!b || !panel) return;
+    b.addEventListener('click', function () { panel.classList.toggle('hidden'); });
+})();
 </script>
 {% endblock %}

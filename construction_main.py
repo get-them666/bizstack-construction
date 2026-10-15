@@ -6886,6 +6886,39 @@ async def bid_pull(request: Request, source: str = Form("json_feed"), db=Depends
     return JSONResponse(content={"ok": True, "source": source, **result})
 
 
+@app.post("/api/bids/ingest")
+async def bid_ingest(request: Request, text: str = Form(""), db=Depends(get_db)):
+    """Turn pasted text into board rows. Admin only.
+
+    The zero-configuration path, so the button does something without any
+    external API wired up. Accepts a CSV/TSV export from a bid system, or the
+    text of a solicitation email. Blank lines separate records.
+
+    Writes through upsert_pulled, so it cannot overwrite a bid's status and
+    cannot duplicate one it already holds.
+    """
+    require_admin(request)
+    if not text or not text.strip():
+        return JSONResponse(content={"ok": False, "detail": "Nothing pasted."}, status_code=400)
+    if len(text) > 400_000:
+        return JSONResponse(content={"ok": False, "detail": "That is too large to paste."},
+                            status_code=400)
+    try:
+        rows, note = bid_sources.parse_pasted(text)
+    except Exception as e:
+        return JSONResponse(content={"ok": False, "detail": f"Could not read that: {e}"},
+                            status_code=400)
+    if not rows:
+        return JSONResponse(content={"ok": False, "detail": note or "Nothing readable in that."},
+                            status_code=400)
+    run_id = bid_opportunities.start_pull(db, "paste", _BID_COMPANY)
+    result = bid_opportunities.upsert_pulled(db, rows, _BID_COMPANY)
+    detail = None if not result["errors"] else f"{len(result['errors'])} rejected."
+    bid_opportunities.finish_pull(db, run_id, fetched=len(rows), created=result["created"],
+                                  updated=result["updated"], ok=True, error=detail)
+    return JSONResponse(content={"ok": True, "note": note, **result})
+
+
 @app.get("/bids", response_class=HTMLResponse)
 async def bids_page(request: Request, status: str = "", db=Depends(get_db)):
     require_admin(request)

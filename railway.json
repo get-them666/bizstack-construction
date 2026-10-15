@@ -13,7 +13,8 @@
       "bot_knowledge.md",
       "construction_knowledge.md",
       "templates/construction/*.html",
-      "static/**"
+      "static/**",
+      "bid_costing.py"
     ],
     "buildEnvironment": "V3"
   },
