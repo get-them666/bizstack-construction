@@ -39,6 +39,7 @@ Usage
 
 import argparse
 import email
+import json
 import email.policy
 import os
 import re
@@ -65,6 +66,38 @@ LEAD_SUBJECT = re.compile(
 ZIP = re.compile(r"\b([A-Z][A-Za-z .'-]+,\s*[A-Z]{2}\s*\d{5})\b")
 BID = re.compile(r"thumbtack\.com/bid/(\d+)")
 SUBJ_SERVICE = re.compile(r"needs (.+?) in [A-Z]", re.I)
+
+
+def append_detail(path, enrich):
+    """Re-print the request-page detail onto a regenerated lead file."""
+    detail = enrich.get("detail") or {}
+    ids = enrich.get("ids") or {}
+    lines = ["", PAGE_SECTION, ""]
+    if ids:
+        lines.append("- Thumbtack request id: %s"
+                     % ", ".join("%s=%s" % kv for kv in ids.items()))
+    for key, label in (
+        ("bedrooms", "Number of bedrooms"), ("bathrooms", "Number of bathrooms"),
+        ("cleaning_type", "Cleaning type"), ("extras", "Extra services"),
+        ("stains", "Stains to clean"), ("pets", "Pets"), ("frequency", "Frequency"),
+        ("zip", "Zip code"), ("scheduling", "Scheduling preferences"),
+        ("expires", "Job expires"),
+    ):
+        if detail.get(key):
+            lines.append("- %s: %s" % (label, str(detail[key])[:140]))
+    q = enrich_quote(enrich)
+    if q:
+        lines.append("")
+        lines.append("### Requoted from the page detail")
+        lines.append("")
+        lines.append("- **$%d - $%d** (%s)" % (q["low"], q["high"], q["basis"]))
+        for note in (enrich.get("quote") or {}).get("notes", []):
+            lines.append("  - %s" % note)
+        if q.get("recurring"):
+            lines.append("  - recurring: %s" % q["recurring"])
+    lines.append("")
+    with open(path, "a") as fh:
+        fh.write("\n".join(lines))
 
 
 def slug(value, limit=48):
@@ -298,7 +331,7 @@ def quote_for(lead):
     return {"low": low, "high": high, "basis": basis, "known": known, "notes": notes}
 
 
-def render_quote(quote):
+def render_quote(quote, page_derived=False):
     if not quote["low"]:
         return ""
     lines = ["Ballpark: $%d - $%d (%s)." % (
@@ -307,14 +340,71 @@ def render_quote(quote):
         lines.append("Based on what you described: %s." % ", ".join(quote["known"]))
     if quote["notes"]:
         lines.append("Adjustments: %s." % ", ".join(quote["notes"]))
-    lines.append("That's an estimate from the job description alone. A couple of photos")
-    lines.append("pins it down.")
+    if page_derived:
+        lines.append("That is worked out from the details already on your job, so photos will")
+        lines.append("confirm it rather than change it.")
+    else:
+        lines.append("That's an estimate from the job description alone. A couple of photos")
+        lines.append("pins it down.")
     return "\n".join(lines)
 
 
-def build_draft(lead):
+ENRICH_DIR = os.path.expanduser("~/Thumbtack Jobs/enriched")
+PAGE_SECTION = "## From the request page"
+
+
+def sidecar_path(initials):
+    if not initials or len(initials) < 2:
+        return None
+    return os.path.join(ENRICH_DIR, "%s%s.json" % (initials[0].lower(), initials[1].lower()))
+
+
+def load_enrichment(name):
+    """Page-derived detail for this lead, from the sidecar.
+
+    This used to read a section appended inside the lead file, which does not
+    work: this script regenerates every lead file on each run, so the section
+    was destroyed by whatever ran next and each quote silently reverted to the
+    generic rate. The sidecar is keyed on the customer's initials and survives
+    regeneration, so the order the two scripts run in stops mattering.
+    """
+    initials = re.findall(r"\b([A-Z])\.", name or "")
+    if len(initials) < 2:
+        return None
+    path = sidecar_path(initials)
+    if not path or not os.path.exists(path):
+        return None
+    try:
+        with open(path) as fh:
+            return json.load(fh)
+    except (ValueError, OSError):
+        return None
+
+
+def enrich_quote(enrich):
+    """The page-derived price, if a request page has been parsed."""
+    if not enrich:
+        return None
+    q = enrich.get("quote") or {}
+    if not q.get("low"):
+        return None
+    # Same shape as quote_for() so render() and build_draft() can consume
+    # either quote without caring which produced it.
+    return {
+        "low": float(q["low"]),
+        "high": float(q["high"]),
+        "basis": q.get("basis", ""),
+        "known": q.get("known", []),
+        "notes": q.get("notes", []),
+        "recurring": q.get("recurring", ""),
+    }
+
+
+def build_draft(lead, enrich=None):
     who = lead["name"].split()[0] if lead["name"] else "there"
-    quote = quote_for(lead)
+    page_quote = enrich_quote(enrich)
+    quote = page_quote or quote_for(lead)
+    page_derived = page_quote is not None
     lines = []
     lines.append("Hi %s," % who)
     lines.append("")
@@ -330,10 +420,15 @@ def build_draft(lead):
             lines.append("")
             lines.append("Yes, that is exactly the kind of job we take on.")
     lines.append("")
-    block = render_quote(quote)
+    block = render_quote(quote, page_derived)
     if block:
         lines.append(block)
         lines.append("")
+        if page_derived:
+            lines.append("That range is already worked out from the details on your job, so it")
+            lines.append("is closer than a typical first estimate. It holds once we have seen the")
+            lines.append("area, and I will confirm before I start anything.")
+            lines.append("")
     lines.append("Send a few photos of the area and I will firm up an exact price, usually")
     lines.append("the same day. Fastest way is the instant quote form:")
     lines.append("%s/instant-quote" % BUSINESS["site"])
@@ -352,7 +447,7 @@ def build_draft(lead):
     return "\n".join(lines)
 
 
-def render(lead, drafts=True):
+def render(lead, drafts=True, enrich=None):
     stamp = lead["when"].strftime("%Y-%m-%d %H:%M") if lead["when"] else "unknown date"
     out = ["# %s - %s" % (lead["name"], lead["service"]), ""]
     out.append("- Received: %s" % stamp)
@@ -383,7 +478,7 @@ def render(lead, drafts=True):
     out.append("")
     out.append(lead["message"].strip() or "(the notification carried no message text)")
     if drafts:
-        quote = quote_for(lead)
+        quote = enrich_quote(enrich) or quote_for(lead)
         out.append("")
         out.append("## Quote")
         out.append("")
@@ -395,6 +490,8 @@ def render(lead, drafts=True):
                 out.append("- From what they described: %s" % ", ".join(quote["known"]))
             if quote["notes"]:
                 out.append("- Adjustments: %s" % ", ".join(quote["notes"]))
+            if enrich_quote(enrich):
+                out.append("- From the request page detail, not the generic rate")
             out.append("- Estimate only. Real rates are env-tunable via TT_QUOTE_*")
         else:
             out.append("No rate on file for this service; scope it before quoting.")
@@ -405,7 +502,7 @@ def render(lead, drafts=True):
         out.append("email: every notification comes from do-not-reply@pro.thumbtack.com.")
         out.append("")
         out.append("```")
-        out.append(build_draft(lead))
+        out.append(build_draft(lead, enrich))
         out.append("```")
     return "\n".join(out) + "\n"
 
@@ -457,8 +554,11 @@ def main():
         stamp = lead["when"].strftime("%Y-%m-%d") if lead["when"] else "undated"
         fname = "%s--%s--%s.md" % (stamp, slug(lead["name"]), slug(lead["service"]))
         full = os.path.join(leads_dir, fname)
+        enrich = load_enrichment(lead["name"])
         with open(full, "w") as fh:
-            fh.write(render(lead, drafts=not args.no_drafts))
+            fh.write(render(lead, drafts=not args.no_drafts, enrich=enrich))
+        if enrich:
+            append_detail(full, enrich)
         written.append((full, lead))
 
     index = ["# Thumbtack jobs", "",

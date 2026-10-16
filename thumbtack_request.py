@@ -31,9 +31,11 @@ Usage
 
 import argparse
 import html
+import json
 import os
 import re
 import sys
+from datetime import datetime
 
 FIELDS = {
     "bedrooms": "Number of bedrooms",
@@ -296,9 +298,9 @@ def match_lead(detail, ids, lead_dir):
 
     if initials:
         want = initials.lower()
-        target = "%s-%s--" % (want[0], want[1])
+        pat = re.compile(r"(^|-)%s-%s--" % (want[0], want[1]))
         hits = [os.path.join(lead_dir, fn) for fn in sorted(os.listdir(lead_dir))
-                if fn.endswith(".md") and fn.lower().startswith(target)]
+                if fn.endswith(".md") and pat.search(fn.lower())]
         if len(hits) == 1:
             return hits[0], []
         if len(hits) > 1:
@@ -375,8 +377,49 @@ def create_lead(lead_dir, detail, ids, q):
     return path
 
 
+ENRICH_DIR = os.path.expanduser("~/Thumbtack Jobs/enriched")
+
+
+def sidecar_path(initials):
+    """Page detail lives beside the lead files, not inside them.
+
+    thumbtack_jobs.py regenerates every lead file on each run, so detail
+    appended into the markdown was destroyed by whatever ran next and the
+    quote silently fell back to the generic rate. A sidecar keyed on the
+    customer initials survives regeneration, and both scripts read the same
+    file, so the order they run in stops mattering.
+    """
+    if not initials:
+        return None
+    os.makedirs(ENRICH_DIR, exist_ok=True)
+    return os.path.join(ENRICH_DIR, "%s.json" % initials.lower())
+
+
+def write_sidecar(detail, ids, q):
+    path = sidecar_path(ids.get("initials", ""))
+    if not path:
+        return None
+    payload = {"ids": ids, "detail": detail, "quote": q,
+               "saved": datetime.now().isoformat(timespec="seconds")}
+    with open(path, "w") as fh:
+        json.dump(payload, fh, indent=2, default=str)
+    return path
+
+
+def read_sidecar(initials):
+    path = sidecar_path(initials)
+    if not path or not os.path.exists(path):
+        return None
+    try:
+        with open(path) as fh:
+            return json.load(fh)
+    except (ValueError, OSError):
+        return None
+
+
 def apply_to_lead(path, detail, ids, q):
     body = open(path).read()
+    write_sidecar(detail, ids, q)
     if "## From the request page" in body:
         return "already applied"
     lines = ["", "## From the request page", ""]
@@ -406,9 +449,12 @@ def initials_path(lead_dir, initials):
     if not initials or not os.path.isdir(lead_dir):
         return None
     want = initials.lower()
-    prefix = "%s-%s--" % (want[0], want[1])
+    # Anywhere in the name, not just the start: email-derived lead files are
+    # date-prefixed ("2026-10-16--a-d--carpet-cleaning.md"), so a startswith
+    # check silently missed every one of them and created a duplicate instead.
+    pat = re.compile(r"(^|-)%s-%s--" % (want[0], want[1]))
     for fn in sorted(os.listdir(lead_dir)):
-        if fn.endswith(".md") and fn.lower().startswith(prefix):
+        if fn.endswith(".md") and pat.search(fn.lower()):
             return os.path.join(lead_dir, fn)
     return None
 
