@@ -5589,7 +5589,22 @@ async def vapi_llm(request: Request, db=Depends(get_db)):
         payload = {}
 
     from openai import OpenAI
-    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    # Same treatment as the hosts app: voice gets its own base URL rather than
+    # sharing OPENAI_BASE_URL, because repointing that would drag web_search
+    # and every other OpenAI caller with it -- and search uses the Responses
+    # API, which is not Zen-compatible.
+    _base = (os.getenv("VOICE_BASE_URL") or "").strip()
+    _key = os.getenv("OPENAI_API_KEY") or ""
+    if _base:
+        # Zen's free models need no credential. The SDK refuses to construct
+        # with an empty api_key, so pass a placeholder and blank the header;
+        # a non-empty Authorization gets an instant 401.
+        _noauth = os.getenv("VOICE_NO_AUTH", "").lower() in ("1", "true", "yes")
+        client = OpenAI(api_key=_key or "zen",
+                        base_url=_base.rstrip("/"),
+                        default_headers={"Authorization": ""} if _noauth else None)
+    else:
+        client = OpenAI(api_key=_key)
     model = os.getenv("OPENAI_VOICE_MODEL", "gpt-4o-mini")
     messages = _vapi_messages_to_openai(payload)
     tools = _voice_openai_tools() or None
