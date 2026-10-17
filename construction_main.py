@@ -56,6 +56,7 @@ import permit_stats
 import email_fetcher
 import bid_costing
 import auth0_service
+import auth0_login
 import material_picker
 import takeoff
 import supplier_prices
@@ -969,6 +970,92 @@ def require_role(request: Request, *roles: str) -> str:
         raise HTTPException(status_code=403,
                             detail="Your account does not have access here.")
     return got
+
+
+# --- Auth0 sign-in -----------------------------------------------------------
+# Auth0 proves identity; this mints the SAME session cookie the PIN/email
+# login issues, so require_admin and every gated page behave identically.
+# Nothing downstream knows Auth0 exists.
+
+@app.get("/api/auth/login/start")
+async def auth0_login_start(request: Request):
+    """Begin Auth0 sign-in. Sets PKCE + state + nonce cookies, redirects out."""
+    if not auth0_login.configured():
+        return RedirectResponse(
+            url="/login?error=" + urllib.parse.quote(
+                "Auth0 is not configured: " + ", ".join(auth0_login.missing())),
+            code=status.HTTP_303_SEE_OTHER)
+    base = str(request.base_url).rstrip("/")
+    redirect_uri = os.getenv("AUTH0_CALLBACK_URL") or f"{base}/api/auth/callback"
+    verifier = auth0_login.new_verifier()
+    nonce = auth0_login.new_nonce()
+    state = auth0_login.new_verifier()
+    try:
+        url = auth0_login.authorize_url(verifier, nonce, state, redirect_uri)
+    except auth0_login.Auth0Error as e:
+        return RedirectResponse(url="/login?error=" + urllib.parse.quote(str(e)[:180]),
+                                code=status.HTTP_303_SEE_OTHER)
+    resp = RedirectResponse(url=url, code=status.HTTP_303_SEE_OTHER)
+    for name, value in ((auth0_login.STATE_COOKIE, state),
+                        (auth0_login.VERIFIER_COOKIE, verifier),
+                        (auth0_login.NONCE_COOKIE, nonce)):
+        resp.set_cookie(name, value, max_age=auth0_login.COOKIE_TTL,
+                        httponly=True, samesite="lax", secure=True, path="/")
+    return resp
+
+
+@app.get("/api/auth/callback")
+async def auth0_callback(request: Request, code: str = "", state: str = "",
+                         error: str = "", error_description: str = "",
+                         db=Depends(get_db)):
+    """Receive Auth0's reply, verify it, and sign the person in.
+
+    No admin gate: this is the far side of a redirect, and a login wall here
+    would break the flow. Every failure mode is a redirect with a readable
+    reason instead of a stack trace.
+    """
+    got_state = request.cookies.get(auth0_login.STATE_COOKIE, "")
+    verifier = request.cookies.get(auth0_login.VERIFIER_COOKIE, "")
+    nonce = request.cookies.get(auth0_login.NONCE_COOKIE, "")
+
+    def bail(msg: str):
+        r = RedirectResponse(url="/login?error=" + urllib.parse.quote(msg[:180]),
+                             code=status.HTTP_303_SEE_OTHER)
+        auth0_login.clear_cookies(r)
+        return r
+
+    if error:
+        return bail(error_description or f"Auth0 refused: {error}")
+    if not code:
+        return bail("No authorization code came back from Auth0.")
+    # State is the CSRF check for the redirect. Constant-time, and a missing
+    # value on either side is a refusal rather than a pass.
+    import hmac as _hmac
+    if not got_state or not state or not _hmac.compare_digest(got_state, state):
+        return bail("That sign-in did not start here, so it was discarded.")
+    if not verifier or not nonce:
+        return bail("The sign-in session expired. Try again.")
+
+    base = str(request.base_url).rstrip("/")
+    redirect_uri = os.getenv("AUTH0_CALLBACK_URL") or f"{base}/api/auth/callback"
+    try:
+        auth0_service.ensure_schema(db)
+        actor = auth0_login.complete_login(code, verifier, nonce, redirect_uri, db)
+    except auth0_login.Auth0Error as e:
+        logger.info("auth0 login refused: %s", e)
+        return bail(str(e))
+    except Exception as e:
+        # Fail closed. A stack trace on a login page is both ugly and a leak.
+        logger.warning("auth0 login failed: %s", e)
+        return bail("Sign-in could not be completed.")
+
+    if actor.get("claim_mismatch"):
+        # Not fatal -- the allowlist already decided -- but worth a trail.
+        logger.warning("auth0: role claim %s disagreed with the allowlist for %s",
+                       actor.get("claim_roles"), actor.get("email"))
+    resp = _finish_login(actor, request)
+    auth0_login.clear_cookies(resp)
+    return resp
 
 
 # --- Worker (crew) auth -----------------------------------------------------
