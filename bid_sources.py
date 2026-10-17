@@ -153,27 +153,38 @@ def fetch_rss(timeout: int = DEFAULT_TIMEOUT) -> list[dict]:
 
 # --- autodesk: Autodesk Construction Cloud via APS ----------------------------
 # Configure with APS_CLIENT_ID, APS_CLIENT_SECRET, APS_PROJECT_ID.
-def fetch_autodesk(timeout: int = DEFAULT_TIMEOUT) -> list[dict]:
-    cid, sec, pid = (os.getenv("APS_CLIENT_ID"), os.getenv("APS_CLIENT_SECRET"),
-                     os.getenv("APS_PROJECT_ID"))
-    if not (cid and sec and pid):
-        raise SourceError("APS_CLIENT_ID, APS_CLIENT_SECRET and APS_PROJECT_ID are all required")
-    body = urllib.parse.urlencode(
-        {"grant_type": "client_credentials", "client_id": cid, "client_secret": sec}
-    ).encode()
-    req = urllib.request.Request("https://developer.api.autodesk.com/authentication/v2/token",
-                                 data=body, headers={"Content-Type": "application/x-www-form-urlencoded"})
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            tok = json.load(resp).get("access_token", "")
-    except urllib.error.HTTPError as e:
-        raise SourceError(f"APS auth failed: HTTP {e.code}") from e
-    if not tok:
-        raise SourceError("APS auth returned no access token")
-    base = f"https://developer.api.autodesk.com/construction/v1/projects/{pid}/submittals"
-    data = json.loads(_get(base, {"Authorization": f"Bearer {tok}"}, timeout))
-    rows = _first(data, "results", "items") or []
-    return [_norm(r) for r in rows if isinstance(r, dict)]
+def fetch_autodesk(timeout: int = DEFAULT_TIMEOUT, user_email: str = "") -> list[dict]:
+    """ACC submittals for APS_PROJECT_ID, via the owner's three-legged token.
+
+    Was client_credentials against /construction/v1/projects/{id}/submittals,
+    which could not have worked twice over: that path 404s (the resource name
+    belongs after /construction/, not before the version), and ACC refuses a
+    two-legged token because it names the app rather than a project member.
+
+    So the token comes from autodesk_oauth, which the owner signs into, and the
+    x-construction-project-id header goes on because ACC requires it. Needs
+    APS_CLIENT_ID/APS_CLIENT_SECRET/APS_REDIRECT_URI set and a completed
+    sign-in; APS_PROJECT_ID too, and autodesk_oauth.list_projects is how you
+    find its value.
+    """
+    import autodesk_oauth as ao
+
+    if not ao.configured():
+        raise SourceError(
+            "Autodesk is not configured; missing "
+            + ", ".join(ao.missing())
+            + " (see /oauth/autodesk/start)")
+    if not ao.config()["project_id"]:
+        raise SourceError("APS_PROJECT_ID is not set. /oauth/autodesk/status lists "
+                          "your ACC projects and their IDs.")
+    if not user_email:
+        raise SourceError("No Autodesk owner email; the pull needs a signed-in account.")
+
+    data = ao.api_get(
+        f"/construction/submittals/v1/projects/{ao.config()['project_id']}/submittals",
+        user_email, timeout)
+    rows = data.get("results") if isinstance(data, dict) else data
+    return [_norm(r) for r in (rows or []) if isinstance(r, dict)]
 
 
 def _norm(r: dict, date_format: str = "") -> dict:
@@ -202,13 +213,110 @@ def _norm(r: dict, date_format: str = "") -> dict:
     }
 
 
+# --- permits -----------------------------------------------------------------
+# The one source with no external API, no credentials and no contract: our own
+# permit importer already writes job_leads, so the board can be fed from a table
+# we own instead of a vendor's invite list.
+#
+# Reads the database rather than the network, which is why it ignores `timeout`
+# -- the signature is fixed by pull(), not by this adapter's needs.
+
+PERMIT_MAX_ROWS = 400
+PERMIT_DAYS = 90
+PERMIT_USE_CLASSES = ("commercial",)
+
+
+def fetch_permits(timeout: int = DEFAULT_TIMEOUT) -> list[dict]:
+    """Turn recent commercial permits into board rows.
+
+    Not a solicitation feed, and the board should not pretend otherwise: a
+    permit says a job is happening and what it is worth, not that anyone has
+    invited us to price it. So owner/amount/location are real and
+    reference is the permit number, but due_date is left empty rather than
+    invented. A fabricated deadline is worse than a blank one -- it sorts to
+    the top of the board and implies a bid is due.
+
+    Commercial only. job_leads carries residential permits too, and those name
+    homeowners, not GCs with a bid board. Filtering to commercial keeps the
+    board aimed at the work it can actually bid on and keeps private individuals
+    off it, which is the same boundary the lead pipeline enforces.
+
+    permit_number is required because it is half the dedupe key
+    (company, reference, trade). Rows without one would all collapse onto the
+    same conflict target.
+    """
+    import psycopg
+    from psycopg.rows import dict_row
+
+    dsn = os.getenv("DATABASE_URL", "")
+    if not dsn:
+        raise SourceError("DATABASE_URL is not set; permits are read from our own database.")
+
+    placeholders = ",".join("%s" for _ in PERMIT_USE_CLASSES)
+    sql = f"""
+        SELECT permit_number, address, city, state, postal_code, work_type,
+               job_description, scope_summary, contractor_name, estimated_value
+        FROM job_leads
+        WHERE NOT is_demo
+          AND COALESCE(address, '') <> ''
+          AND COALESCE(permit_number, '') <> ''
+          AND COALESCE(use_class, 'unknown') IN ({placeholders})
+          AND status NOT IN ('won','lost','closed')
+          AND found_at >= NOW() - make_interval(days => %s)
+        ORDER BY found_at DESC
+        LIMIT %s
+    """
+    params = list(PERMIT_USE_CLASSES) + [PERMIT_DAYS, PERMIT_MAX_ROWS]
+
+    try:
+        # dict_row on the connection, not the cursor: psycopg3 returns tuples by
+        # default and dict(tuple) raises. Matches enrichment.py.
+        with psycopg.connect(dsn, connect_timeout=15, row_factory=dict_row) as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, params)
+                src = cur.fetchall()
+    except psycopg.Error as e:
+        raise SourceError(f"could not read permits: {e}") from e
+
+    rows = []
+    for r in src:
+        r = dict(r)
+        where = ", ".join(
+            p for p in (r.get("address"), r.get("city"),
+                        " ".join(p for p in ((r.get("state") or "").strip(),
+                                             (r.get("postal_code") or "").strip()) if p).strip())
+            if p
+        )
+        desc = (r.get("job_description") or "").strip()
+        # A permit often has no description; the address is a better title than
+        # an empty card, and _upsert drops a row whose name is blank.
+        name = desc[:120] if desc else where
+        if not name:
+            continue
+        rows.append({
+            "name": name,
+            "owner": (r.get("contractor_name") or "").strip(),
+            "reference": (r.get("permit_number") or "").strip(),
+            "trade": (r.get("work_type") or "").strip(),
+            "location": where,
+            "due_date": "",
+            "bid_amount": r.get("estimated_value"),
+            "notes": (r.get("scope_summary") or "").strip() or desc,
+            "role": "sub",
+        })
+    return rows
+
+
 SOURCES = {
     "json_feed": {"label": "JSON feed", "fn": fetch_json_feed,
                   "needs": ["BIDS_FEED_URL"]},
+    "permits": {"label": "Permits (commercial)", "fn": fetch_permits,
+                "needs": ["DATABASE_URL"]},
     "rss": {"label": "RSS feed", "fn": fetch_rss,
             "needs": ["BIDS_RSS_URL"]},
     "autodesk": {"label": "Autodesk Construction Cloud", "fn": fetch_autodesk,
-                 "needs": ["APS_CLIENT_ID", "APS_CLIENT_SECRET", "APS_PROJECT_ID"]},
+                 "needs": ["APS_CLIENT_ID", "APS_CLIENT_SECRET", "APS_REDIRECT_URI",
+                           "APS_PROJECT_ID"]},
     "buildingconnected": {"label": "BuildingConnected", "fn": None,
                           "needs": [], "unavailable": (
                               "No public API. Access is by contract through the "
@@ -231,7 +339,8 @@ def source_status() -> list[dict]:
     return out
 
 
-def pull(source: str, timeout: int = DEFAULT_TIMEOUT) -> list[dict]:
+def pull(source: str, timeout: int = DEFAULT_TIMEOUT,
+         user_email: str = "") -> list[dict]:
     s = SOURCES.get(source)
     if not s:
         raise SourceError(f"unknown source '{source}'; try one of {sorted(SOURCES)}")
@@ -240,6 +349,12 @@ def pull(source: str, timeout: int = DEFAULT_TIMEOUT) -> list[dict]:
     missing = [v for v in s["needs"] if not os.getenv(v)]
     if missing:
         raise SourceError(f"{source} is not configured; missing {', '.join(missing)}")
+    # Only autodesk needs the signed-in owner's identity -- ACC will not accept
+    # a token that is not attached to a project member. Adapters that do not
+    # declare user_email are called exactly as before.
+    import inspect
+    if "user_email" in inspect.signature(s["fn"]).parameters:
+        return s["fn"](timeout, user_email=user_email)
     return s["fn"](timeout)
 
 # --- paste / CSV ingest ------------------------------------------------------

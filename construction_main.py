@@ -79,6 +79,7 @@ import lead_sources
 import scrap_io
 import inbound_email
 import google_oauth
+import autodesk_oauth
 import skiptrace_service
 import skip_sherpa_service
 import pdl_contact_service
@@ -1061,6 +1062,17 @@ templates.env.globals["site_theme_state"] = lambda: site_theme.state()
 templates.env.globals["company"] = company
 templates.env.globals["map_embed"] = _map_embed
 templates.env.globals["map_directions"] = _map_directions
+
+
+def _owner_email() -> str:
+    """The APS token is stored per signed-in owner.
+
+    Single-owner app today, so this resolves to the admin account rather than
+    threading an actor through every APS call. When a second admin connects
+    their own Autodesk, this becomes current_actor(request)["email"] and the
+    token table's UNIQUE(user_email) already carries it.
+    """
+    return os.getenv("ADMIN_EMAIL", "hello@bizstackperks.com")
 
 
 def _secure_cookies() -> bool:
@@ -2420,6 +2432,111 @@ async def api_logout():
 
 
 # --- GOOGLE OAUTH ---
+
+@app.get("/oauth/autodesk/start")
+async def autodesk_oauth_start(request: Request):
+    """Send the owner to Autodesk to sign in.
+
+    Admin only. A two-legged token cannot read ACC project data, so the owner
+    has to grant access as themselves -- there is no way to wire this without
+    one human clicking through it once.
+
+    State and the PKCE verifier both go in httponly cookies rather than the
+    query string. The verifier is a secret: anything that leaks it can redeem
+    the authorization code, and the code arrives on a URL that ends up in
+    browser history and server logs.
+    """
+    require_admin(request)
+    if not autodesk_oauth.configured():
+        return RedirectResponse(
+            url="/bids?error=Autodesk+is+not+configured%3A+"
+                + "+".join(autodesk_oauth.missing()),
+            status_code=status.HTTP_303_SEE_OTHER)
+    state, verifier, challenge = autodesk_oauth.new_state()
+    resp = RedirectResponse(url=autodesk_oauth.build_auth_url(state, challenge),
+                            status_code=status.HTTP_303_SEE_OTHER)
+    for name, val in ((autodesk_oauth.STATE_COOKIE, state),
+                      ("aps_pkce_verifier", verifier)):
+        resp.set_cookie(name, val, httponly=True, samesite="lax",
+                        secure=_secure_cookies(), max_age=autodesk_oauth.STATE_TTL)
+    return resp
+
+
+@app.get("/oauth/autodesk/callback")
+async def autodesk_oauth_callback(request: Request, code: str = None, error: str = None):
+    """Take the code back, store the token, land on /bids.
+
+    Deliberately unauthenticated on the request itself: APS redirects here from
+    the browser, and the session cookie is what proves the callback belongs to
+    the sign-in we started. State is compared with compare_digest and a missing
+    cookie fails rather than defaults -- an absent state is a failure, not an
+    empty string to be matched against.
+    """
+    import hmac
+
+    state = request.cookies.get(autodesk_oauth.STATE_COOKIE)
+    verifier = request.cookies.get("aps_pkce_verifier")
+    got_state = request.query_params.get("state")
+    if not state or not got_state or not hmac.compare_digest(state, got_state):
+        return RedirectResponse(url="/bids?error=Autodesk+state+mismatch%3A+"
+                                       "start+the+connection+again",
+                                status_code=status.HTTP_303_SEE_OTHER)
+    if error:
+        return RedirectResponse(url=f"/bids?error=Autodesk+cancelled%3A+{error}",
+                                status_code=status.HTTP_303_SEE_OTHER)
+    if not code:
+        return RedirectResponse(url="/bids?error=No+authorization+code+from+Autodesk",
+                                status_code=status.HTTP_303_SEE_OTHER)
+    if not verifier:
+        return RedirectResponse(url="/bids?error=Missing+PKCE+verifier%3A+"
+                                       "cookies+may+be+blocked+on+this+callback",
+                                status_code=status.HTTP_303_SEE_OTHER)
+    try:
+        tok = autodesk_oauth.exchange_code(code, verifier)
+        autodesk_oauth.save_tokens(
+            user_email=_owner_email(),
+            access_token=tok["access_token"],
+            refresh_token=tok.get("refresh_token"),
+            expires_in=tok.get("expires_in", 3600),
+            scope=tok.get("scope", autodesk_oauth.SCOPE_STRING),
+        )
+    except autodesk_oauth.AutodeskError as e:
+        return RedirectResponse(url=f"/bids?error=Autodesk+exchange+failed%3A+{e}",
+                                status_code=status.HTTP_303_SEE_OTHER)
+    resp = RedirectResponse(url="/bids?aps=connected", status_code=status.HTTP_303_SEE_OTHER)
+    for name in (autodesk_oauth.STATE_COOKIE, "aps_pkce_verifier"):
+        resp.delete_cookie(name)
+    return resp
+
+
+@app.get("/api/autodesk/status")
+async def autodesk_status(request: Request):
+    """Is Autodesk wired, is it connected, and which projects can it see.
+
+    The project list is here on purpose: APS_PROJECT_ID is otherwise something
+    you go hunting for in the ACC UI, and this returns it with the name beside
+    it. Admin only -- it reads a live token.
+    """
+    require_admin(request)
+    out = {
+        "configured": autodesk_oauth.configured(),
+        "missing": autodesk_oauth.missing(),
+        "connected": bool(autodesk_oauth.get_tokens(_owner_email())),
+        "project_id": autodesk_oauth.config()["project_id"],
+        "projects": [],
+        "error": None,
+    }
+    if out["connected"] and not out["project_id"]:
+        try:
+            out["projects"] = [
+                {"id": p.get("id"), "name": p.get("name"),
+                 "status": p.get("status"), "accountId": p.get("accountId")}
+                for p in autodesk_oauth.list_projects(_owner_email())
+            ]
+        except autodesk_oauth.AutodeskError as e:
+            out["error"] = str(e)
+    return JSONResponse(content=out)
+
 
 @app.get("/auth/google")
 async def google_oauth_start(request: Request, service: str = "construction"):
@@ -7360,7 +7477,7 @@ async def bid_pull(request: Request, source: str = Form("json_feed"), db=Depends
     require_admin(request)
     run_id = bid_opportunities.start_pull(db, source, _BID_COMPANY)
     try:
-        rows = bid_sources.pull(source)
+        rows = bid_sources.pull(source, user_email=_owner_email())
     except Exception as e:
         bid_opportunities.finish_pull(db, run_id, ok=False, error=str(e))
         return JSONResponse(content={"ok": False, "source": source,
