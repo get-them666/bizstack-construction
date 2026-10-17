@@ -1,27 +1,27 @@
-fastapi>=0.115.12
-uvicorn>=0.34.0
+fastapi>=0.143.3
+uvicorn>=0.54.0
 jinja2==3.1.6
 python-multipart==0.0.32
-signalwire-sdk>=3.4.1
-psycopg[binary]>=3.1.18
+signalwire-sdk>=3.7.2
+psycopg[binary]>=3.3.6
 # Connection pooling. The app serves every request through get_db() and ~45
 # module-level helpers open their own connection; without a pool each of those
 # pays a full TCP + TLS + auth handshake. psycopg_pool ships with psycopg 3.
-psycopg_pool>=3.2.0
-openai>=3.0.0
+psycopg_pool>=3.3.3
+openai>=3.35.0
 aiosmtplib==5.1.3
-stripe>=8.0.0
-fpdf2==2.8.8
+stripe>=16.0.0
+fpdf2==2.8.9
 python-docx==1.2.0
 python-pptx==1.0.2
-apify-client>=1.7.0
-boto3>=1.34.0
-certifi>=2024.2.2
+apify-client>=3.3.0
+boto3>=1.43.114
+certifi>=2026.7.22
 # Server-side RudderStack ingestion. Analytics must never be able to break a
 # page, so every call in analytics_service.py is wrapped and fails soft.
 rudder-sdk-python>=2.1.9
 # enrichment.py: reverse-address a permit lead to owner email/phone.
-peopledatalabs>=6.0.0
+peopledatalabs>=6.4.13
 # The lead pipeline (lifecycle, intake, work queue, outreach) is vendored in
 # this repo at bizstack_leads/ and imported as `from bizstack_leads import ...`.
 # It is deliberately NOT a pip dependency: this app is its own company, so its
@@ -35,3 +35,15 @@ peopledatalabs>=6.0.0
 # every build -- build time and image size for a package nothing imports, and
 # from a file whose own comment says it must never reach the container. Install
 # it locally when you need the tool: pip install selenium
+
+# Auth0 ID-token verification (auth0_login.py). PyJWT is the RS256 verifier and
+# it needs `cryptography` for the RSA maths -- PyJWT does not pull that in on
+# its own, so both are named explicitly.
+#
+# Careful: do NOT add a package literally called `jwt`. PyJWT installs into a
+# `jwt/` directory, and the unrelated `jwt` package on PyPI installs to the same
+# path and shadows it. The result is an import of `jwt.algorithms` that fails
+# with `cannot import name 'InvalidKeyError' from 'jwt.exceptions'`, which looks
+# like a broken Auth0 module rather than a namespace collision.
+PyJWT>=2.15.1
+cryptography>=50.0.2
