@@ -205,7 +205,33 @@ def fetch_autodesk(timeout: int = DEFAULT_TIMEOUT, user_email: str = "") -> list
         f"/construction/submittals/v1/projects/{ao.config()['project_id']}/submittals",
         user_email, timeout)
     rows = data.get("results") if isinstance(data, dict) else data
-    return [_norm(r) for r in (rows or []) if isinstance(r, dict)]
+    out = []
+    for r in (rows or []):
+        if not isinstance(r, dict):
+            continue
+        row = _norm(r)
+        if not row.get("external_url"):
+            row["external_url"] = buildingconnected_link(r)
+        out.append(row)
+    return out
+
+
+# BuildingConnected opens an opportunity by its id, with no API call needed:
+#   https://app.buildingconnected.com/opportunities/{opportunityId}/info
+# That is what makes a board card clickable straight into the real bid, so it is
+# worth building from whatever id the row carries rather than leaving the card
+# dead. Falls back through the id fields ACC actually uses.
+_OPPORTUNITY_ID_KEYS = ("opportunityId", "opportunity_id", "bidPackageId",
+                        "bid_package_id", "inviteId", "invite_id", "id")
+
+
+def buildingconnected_link(row: dict) -> str:
+    """Deep link into Bid Board for one opportunity, or "" if we have no id."""
+    oid = _first(row, *_OPPORTUNITY_ID_KEYS)
+    oid = str(oid or "").strip()
+    if not oid or not re.fullmatch(r"[A-Za-z0-9_-]{8,64}", oid):
+        return ""
+    return f"https://app.buildingconnected.com/opportunities/{oid}/info"
 
 
 def _norm(r: dict, date_format: str = "") -> dict:
@@ -231,6 +257,12 @@ def _norm(r: dict, date_format: str = "") -> dict:
         "bid_amount": _num(_first(r, "bid_amount", "bidAmount", "amount", "value", "price")),
         "notes": str(_first(r, "notes", "description", "summary", "scopeOfWork") or "").strip(),
         "role": "sub",
+        # Where the bid lives upstream. BuildingConnected exposes
+        #   https://app.buildingconnected.com/opportunities/{id}/info
+        # with {id} being the `id` from GET opportunities, so an opportunity id
+        # is enough to make the board's cards openable.
+        "external_url": str(_first(r, "external_url", "externalUrl", "url",
+                                   "link", "permalink", "webUrl") or "").strip(),
     }
 
 

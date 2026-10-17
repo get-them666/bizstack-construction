@@ -43,7 +43,7 @@ ROLE_NOTES = {
 _WEBHOOK_FIELDS = {
     "name", "owner", "contact_name", "contact_email", "contact_phone",
     "reference", "role", "trade", "location", "due_date", "bid_amount",
-    "status", "notes",
+    "status", "notes", "external_url",
 }
 
 
@@ -202,7 +202,8 @@ def _upsert(conn, rows: list[dict], company: str = "construction",
                 "  contact_phone = EXCLUDED.contact_phone, role = EXCLUDED.role, "
                 "  due_date = EXCLUDED.due_date, bid_amount = EXCLUDED.bid_amount, "
                 "  status = EXCLUDED.status, location = EXCLUDED.location, "
-                "  notes = EXCLUDED.notes, updated_at = now()"
+                "  notes = EXCLUDED.notes, updated_at = now(), "
+            "  external_url = COALESCE(NULLIF(EXCLUDED.external_url,''), bid_opportunities.external_url)"
             )
 
         # Build the column list as a dict so it cannot contain duplicates.
@@ -346,7 +347,8 @@ def upsert_from_webhook(conn, payload: dict, company: str = "construction") -> d
         f"  contact_name = EXCLUDED.contact_name, contact_email = EXCLUDED.contact_email, "
         f"  contact_phone = EXCLUDED.contact_phone, due_date = EXCLUDED.due_date, "
         f"  bid_amount = EXCLUDED.bid_amount, location = EXCLUDED.location, "
-        f"  notes = EXCLUDED.notes, updated_at = now() "
+        f"  notes = EXCLUDED.notes, updated_at = now(), "
+        f"  external_url = COALESCE(NULLIF(EXCLUDED.external_url,''), bid_opportunities.external_url) "
         f"RETURNING id, (xmax = 0) AS inserted"
     )
     params = [vals[c] for c in vals] + [due, amount, status, company]
@@ -420,6 +422,13 @@ def ensure_schema(conn) -> None:
         cur.execute("ALTER TABLE bid_opportunities ADD COLUMN IF NOT EXISTS notes TEXT;")
         cur.execute("ALTER TABLE bid_opportunities ADD COLUMN IF NOT EXISTS source VARCHAR(40) DEFAULT 'manual';")
         cur.execute("ALTER TABLE bid_opportunities ADD COLUMN IF NOT EXISTS company VARCHAR(40) DEFAULT 'construction';")
+        # Where the bid actually lives, so the board can deep-link out to it.
+        # BuildingConnected accepts
+        #   https://app.buildingconnected.com/opportunities/{id}/info
+        # with {id} being the `id` from GET opportunities. Without a column for
+        # it there was nowhere to put that URL, so every bid on the board was a
+        # dead card -- you could read it but not open it anywhere.
+        cur.execute("ALTER TABLE bid_opportunities ADD COLUMN IF NOT EXISTS external_url TEXT;")
         # first_seen_at never moves; last_seen_at moves on every pull. Comparing
         # them is how the board knows a solicitation is one it has never seen
         # before, which is the whole point of pulling on a button rather than
