@@ -352,9 +352,41 @@ def build_calendar_tools(db):
 
         return google_calendar
 
+    def _identity():
+        """Resolve the (service, user_email) pair the OAuth token is stored under.
+
+        These three tools used to hardcode service='google', user_email='owner'.
+        That matches no row in google_tokens: this app stores service
+        'construction' under the owner's GMAIL_OWNER address, so every call
+        raised 'No valid access token for owner'. The tool reported "Calendar
+        unavailable", the model retried the same dead tool, and the request died
+        on the tool budget -- which is what looked like the prompt freezing.
+        """
+        services = (os.getenv("GMAIL_SEND_SERVICES", "construction") or "construction")
+        service = next((s.strip() for s in services.split(",") if s.strip()), "construction")
+        owner = (os.getenv("GMAIL_OWNER") or os.getenv("SMTP_FROM") or "").strip()
+        return service, owner
+
+    def _guard():
+        """(service, owner) or an error dict explaining the missing grant."""
+        service, owner = _identity()
+        if not owner:
+            return None, {"ok": False, "error": (
+                "Calendar is not connected: no GMAIL_OWNER or SMTP_FROM is set, "
+                "so there is no Google account to read a calendar from.")}
+        import google_oauth
+        if not google_oauth.get_google_tokens(service, owner):
+            return None, {"ok": False, "error": (
+                f"Calendar is not connected: no Google grant for {owner}. "
+                "Sign in with Google and grant calendar access first.")}
+        return (service, owner), None
+
     def list_calendar_events(start: str = "", end: str = "", days: int = 7) -> dict:
         """Read the owner's Google Calendar for the next `days` (default 7)."""
         gc = _impl()
+        ident, err = _guard()
+        if err:
+            return err
         try:
             now = datetime.now(timezone.utc)
             window_start = _parse_dt(start, None) or now
@@ -364,7 +396,7 @@ def build_calendar_tools(db):
             # list_events takes ISO 8601 strings, matching google_calendar.py's
             # own sync path which passes .isoformat().
             events = gc.list_events(
-                "google", "owner", DEFAULT_CALENDAR,
+                ident[0], ident[1], DEFAULT_CALENDAR,
                 time_min=window_start.isoformat(),
                 time_max=window_end.isoformat(),
             )
@@ -404,7 +436,7 @@ def build_calendar_tools(db):
             ]
 
         try:
-            created = gc.create_event("google", "owner", DEFAULT_CALENDAR, event)
+            created = gc.create_event(ident[0], ident[1], DEFAULT_CALENDAR, event)
         except Exception as e:
             return {"ok": False, "error": f"Could not create the event: {e}"}
         return {
@@ -419,10 +451,13 @@ def build_calendar_tools(db):
     def cancel_event(event_id: str = "") -> dict:
         """Delete a calendar event by id."""
         gc = _impl()
+        ident, err = _guard()
+        if err:
+            return err
         if not event_id.strip():
             return {"ok": False, "error": "Need the event id."}
         try:
-            gc.delete_event("google", "owner", DEFAULT_CALENDAR, event_id.strip())
+            gc.delete_event(ident[0], ident[1], DEFAULT_CALENDAR, event_id.strip())
         except Exception as e:
             return {"ok": False, "error": f"Could not delete that event: {e}"}
         return {"ok": True, "message": f"Removed event {event_id.strip()}."}

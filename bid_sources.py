@@ -97,10 +97,26 @@ def _ymd(y: int, mo: int, d: int):
         return None
 
 
+def _normkey(k) -> str:
+    """Collapse a field name to a comparable form.
+
+    Feeds spell the same field every way imaginable -- jobName, job_name,
+    JobName, "Job Name" -- and exact-key matching silently missed all of them.
+    A missed name is not a cosmetic problem: _upsert drops rows with a blank
+    name, so the bid vanished from the board with no error anywhere. That is
+    what made the JSON feed look empty while it was actually being served
+    perfectly good data.
+    """
+    return re.sub(r"[^a-z0-9]", "", str(k).lower())
+
+
 def _first(d: dict, *keys):
-    for k in keys:
-        if d.get(k) not in (None, ""):
-            return d[k]
+    if not d:
+        return ""
+    wanted = {_normkey(k) for k in keys}
+    for k, v in d.items():
+        if _normkey(k) in wanted and v not in (None, ""):
+            return v
     return ""
 
 
@@ -145,8 +161,13 @@ def fetch_rss(timeout: int = DEFAULT_TIMEOUT) -> list[dict]:
         out.append(_norm({
             "name": title,
             "notes": re.sub(r"<[^>]+>", " ", body)[:4000],
-            "reference": text.get("guid") or text.get("id") or "",
+            "reference": (text.get("guid") or text.get("id") or text.get("link") or ""),
             "due_date": text.get("pubDate") or text.get("published") or text.get("updated"),
+            # Feeds put the trade in <category> ("Roofing", "Plumbing") far more
+            # often than anywhere else. Dropping it left every RSS bid with an
+            # empty trade, so nothing on the board could be filtered by scope.
+            "trade": text.get("category") or text.get("subject") or "",
+            "location": text.get("location") or "",
         }))
     return out
 
