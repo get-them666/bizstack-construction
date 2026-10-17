@@ -1,0 +1,192 @@
+{% extends "base.html" %}
+{% set co = company() %}
+{% block title %}{{ b.name }} | {{ co.name }}{% endblock %}
+{% block meta %}<meta name="robots" content="noindex, nofollow">{% endblock %}
+
+{% block content %}
+<div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
+
+  <a href="/bids" class="text-sm font-semibold text-indigo-600 hover:text-indigo-700">&larr; All bids</a>
+
+  <div class="flex flex-wrap items-start justify-between gap-4 mt-4 mb-8">
+    <div class="min-w-0">
+      {% if b.external_url %}
+      <h1 class="text-3xl font-black text-slate-900">
+        <a href="{{ b.external_url }}" target="_blank" rel="noopener noreferrer"
+           class="hover:text-indigo-700 hover:underline">{{ b.name }}</a>
+      </h1>
+      {% else %}
+      <h1 class="text-3xl font-black text-slate-900">{{ b.name }}</h1>
+      {% endif %}
+      <div class="flex flex-wrap items-center gap-2 mt-3">
+        {% if b.trade %}<span class="px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide bg-indigo-50 text-indigo-700 rounded">{{ b.trade }}</span>{% endif %}
+        <span class="px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide bg-slate-100 text-slate-600 rounded">{{ b.role or 'sub' }}</span>
+        <span class="px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide bg-slate-800 text-white rounded">{{ b.status }}</span>
+        {% if b.reference %}<span class="text-xs font-mono text-slate-400">{{ b.reference }}</span>{% endif %}
+        {% if b.source %}<span class="text-xs text-slate-400">via {{ b.source }}</span>{% endif %}
+      </div>
+    </div>
+    <a href="/bids" class="px-4 py-2.5 text-sm font-semibold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 rounded-xl transition-colors">&larr; Board</a>
+  </div>
+
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+
+    {# ── Left: the bid ─────────────────────────────────── #}
+    <div class="lg:col-span-2 space-y-6">
+
+      <section class="bg-white rounded-2xl border border-slate-200 p-5">
+        <h2 class="text-sm font-bold uppercase tracking-wide text-slate-500 mb-3">Details</h2>
+        <dl class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3 text-sm">
+          <div><dt class="text-slate-500">GC / owner</dt><dd class="font-semibold text-slate-800">{{ b.owner or '—' }}</dd></div>
+          <div><dt class="text-slate-500">Location</dt><dd class="font-semibold text-slate-800">{{ b.location or '—' }}</dd></div>
+          <div><dt class="text-slate-500">Bid due</dt><dd class="font-semibold text-slate-800">{{ b.due_date or '—' }}</dd></div>
+          <div><dt class="text-slate-500">Bid amount</dt><dd class="font-semibold text-slate-800">{{ "${:,.0f}".format(b.bid_amount) if b.bid_amount else "—" }}</dd></div>
+          {% if b.contract_value %}
+          <div><dt class="text-slate-500">Contract value</dt><dd class="font-semibold text-emerald-700">{{ "${:,.0f}".format(b.contract_value) }}</dd></div>
+          {% endif %}
+          <div><dt class="text-slate-500">First seen</dt><dd class="font-semibold text-slate-800">{{ b.first_seen_at.strftime('%b %d, %Y') if b.first_seen_at else '—' }}</dd></div>
+        </dl>
+      </section>
+
+      <section class="bg-white rounded-2xl border border-slate-200 p-5">
+        <h2 class="text-sm font-bold uppercase tracking-wide text-slate-500 mb-3">Contact</h2>
+        {% if b.contact_name or b.contact_email or b.contact_phone %}
+        <dl class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3 text-sm">
+          <div><dt class="text-slate-500">Name</dt><dd class="font-semibold text-slate-800">{{ b.contact_name or '—' }}</dd></div>
+          <div><dt class="text-slate-500">Phone</dt><dd class="font-semibold text-slate-800">{{ b.contact_phone or '—' }}</dd></div>
+          <div class="sm:col-span-2">
+            <dt class="text-slate-500">Email</dt>
+            <dd class="font-semibold">
+              {% if b.contact_email %}<a href="mailto:{{ b.contact_email }}" class="text-indigo-600 hover:text-indigo-700">{{ b.contact_email }}</a>{% else %}—{% endif %}
+            </dd>
+          </div>
+        </dl>
+        {% else %}
+        <p class="text-sm text-slate-500">No contact on this bid. Bids that arrive through the
+          <span class="font-semibold">webhook</span> carry one; pulled feeds do not.</p>
+        {% endif %}
+      </section>
+
+      {% if b.notes %}
+      <section class="bg-white rounded-2xl border border-slate-200 p-5">
+        <h2 class="text-sm font-bold uppercase tracking-wide text-slate-500 mb-3">Notes</h2>
+        <p class="text-sm text-slate-700 whitespace-pre-wrap">{{ b.notes }}</p>
+      </section>
+      {% endif %}
+
+      {# ── Cost lines ──────────────────────────────────── #}
+      <section class="bg-white rounded-2xl border border-slate-200 p-5">
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="text-sm font-bold uppercase tracking-wide text-slate-500">Cost lines</h2>
+          {% if cost_summary and not cost_summary.get('complete', True) %}
+          <span class="text-[11px] font-bold uppercase tracking-wide bg-amber-100 text-amber-800 rounded px-2 py-0.5">Incomplete</span>
+          {% endif %}
+        </div>
+
+        {% if costs %}
+        <table class="w-full text-sm">
+          <thead><tr class="text-left text-xs uppercase tracking-wide text-slate-400 border-b border-slate-100">
+            <th class="pb-2">Category</th><th class="pb-2">Description</th>
+            <th class="pb-2 text-right">Estimated</th><th class="pb-2 text-right">Actual</th>
+            <th></th></tr></thead>
+          <tbody>
+            {% for c in costs %}
+            <tr class="border-b border-slate-50">
+              <td class="py-2 font-semibold text-slate-700">{{ c.category }}</td>
+              <td class="py-2 text-slate-600">{{ c.description or '—' }}{% if c.vendor %} <span class="text-slate-400">· {{ c.vendor }}</span>{% endif %}</td>
+              <td class="py-2 text-right">{{ "${:,.0f}".format(c.estimated or 0) }}</td>
+              <td class="py-2 text-right">{{ "${:,.0f}".format(c.actual or 0) }}</td>
+              <td class="py-2 text-right">
+                <form method="post" action="/api/bids/{{ b.id }}/costs/{{ c.id }}/delete">
+                  <input type="hidden" name="back" value="/bids/{{ b.id }}">
+                  <button class="text-xs font-semibold text-red-600 hover:text-red-700">Remove</button>
+                </form>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+          <tfoot><tr class="font-bold">
+            <td colspan="2" class="pt-3">Total</td>
+            <td class="pt-3 text-right">{{ "${:,.0f}".format(cost_summary.get('estimated', 0)) }}</td>
+            <td class="pt-3 text-right">{{ "${:,.0f}".format(cost_summary.get('actual', 0)) }}</td>
+            <td></td>
+          </tr></tfoot>
+        </table>
+        {% else %}
+        <p class="text-sm text-slate-500">No cost lines yet.</p>
+        {% endif %}
+
+        <form method="post" action="/api/bids/{{ b.id }}/costs" class="mt-4 pt-4 border-t border-slate-100 grid grid-cols-1 sm:grid-cols-5 gap-2">
+          <select name="category" class="text-sm border border-slate-200 rounded-lg px-2 py-2 bg-white">
+            {% for c in cost_categories %}<option value="{{ c }}">{{ c }}</option>{% endfor %}
+          </select>
+          <input name="description" placeholder="what it's for" class="text-sm border border-slate-200 rounded-lg px-3 py-2 sm:col-span-2">
+          <input name="estimated" placeholder="estimated" inputmode="decimal" class="text-sm border border-slate-200 rounded-lg px-3 py-2">
+          <input name="actual" placeholder="actual" inputmode="decimal" class="text-sm border border-slate-200 rounded-lg px-3 py-2">
+          <input type="hidden" name="back" value="/bids/{{ b.id }}">
+          <button class="text-sm font-semibold px-4 py-2 bg-slate-900 text-white rounded-lg hover:bg-slate-700">Add</button>
+        </form>
+      </section>
+    </div>
+
+    {# ── Right: paperwork + pipeline ──────────────────── #}
+    <div class="space-y-6">
+
+      <section class="bg-white rounded-2xl border border-slate-200 p-5">
+        <h2 class="text-sm font-bold uppercase tracking-wide text-slate-500 mb-3">Pipeline</h2>
+        <form method="post" action="/api/bids/{{ b.id }}/status" class="flex items-center gap-2">
+          <select name="status" class="text-sm border border-slate-200 rounded-lg px-2 py-2 bg-white flex-1">
+            {% for s in statuses %}<option value="{{ s }}" {% if s == b.status %}selected{% endif %}>{{ s }}</option>{% endfor %}
+          </select>
+          <button class="text-sm font-semibold px-4 py-2 bg-slate-900 text-white rounded-lg hover:bg-slate-700">Set</button>
+        </form>
+
+        <form method="post" action="/api/bids/{{ b.id }}/amount" class="flex items-center gap-2 mt-3">
+          <input name="amount" value="{{ b.bid_amount or '' }}" placeholder="amount" inputmode="decimal"
+                 class="text-sm border border-slate-200 rounded-lg px-3 py-2 flex-1">
+          <button class="text-sm font-semibold px-4 py-2 bg-white border border-slate-200 rounded-lg hover:border-indigo-300">Update</button>
+        </form>
+
+        <form method="post" action="/api/bids/{{ b.id }}/delete" class="mt-4 pt-4 border-t border-slate-100"
+              onsubmit="return confirm('Delete this bid?')">
+          <button class="text-sm font-semibold px-4 py-2 text-red-600 border border-red-200 rounded-lg hover:bg-red-50 w-full">Delete bid</button>
+        </form>
+      </section>
+
+      <section class="bg-white rounded-2xl border border-slate-200 p-5">
+        <h2 class="text-sm font-bold uppercase tracking-wide text-slate-500 mb-3">Invoices</h2>
+        {% if inv_summary %}
+        <div class="grid grid-cols-2 gap-3 mb-4 text-sm">
+          <div><div class="text-slate-500">Billed</div><div class="font-bold text-slate-800">{{ "${:,.0f}".format(inv_summary.get('billed', 0)) }}</div></div>
+          <div><div class="text-slate-500">Collected</div><div class="font-bold text-emerald-700">{{ "${:,.0f}".format(inv_summary.get('collected', 0)) }}</div></div>
+        </div>
+        {% endif %}
+
+        {% if invoices %}
+        <ul class="space-y-2 text-sm mb-4">
+          {% for inv in invoices %}
+          <li class="flex items-center justify-between gap-2 py-1.5 border-b border-slate-50">
+            <div class="min-w-0">
+              <div class="font-semibold text-slate-800 truncate">{{ inv.description or inv.invoice_number or 'Invoice' }}</div>
+              <div class="text-xs text-slate-400">{{ inv.status }}{% if inv.due_date %} · due {{ inv.due_date }}{% endif %}</div>
+            </div>
+            <div class="font-bold text-slate-800 shrink-0">{{ "${:,.0f}".format(inv.amount or 0) }}</div>
+          </li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <p class="text-sm text-slate-500 mb-4">Nothing billed yet.</p>
+        {% endif %}
+
+        <form method="post" action="/api/bids/{{ b.id }}/invoices" class="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-4 border-t border-slate-100">
+          <input name="amount" placeholder="amount" inputmode="decimal" class="text-sm border border-slate-200 rounded-lg px-3 py-2">
+          <input name="due_date" placeholder="due YYYY-MM-DD" class="text-sm border border-slate-200 rounded-lg px-3 py-2">
+          <input name="description" placeholder="what it covers" class="text-sm border border-slate-200 rounded-lg px-3 py-2 sm:col-span-2">
+          <input type="hidden" name="back" value="/bids/{{ b.id }}">
+          <button class="text-sm font-semibold px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 sm:col-span-2">Raise invoice</button>
+        </form>
+      </section>
+    </div>
+  </div>
+</div>
+{% endblock %}

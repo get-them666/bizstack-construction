@@ -3141,7 +3141,8 @@ async def bid_invoices(bid_id: int, request: Request, db=Depends(get_db)):
 @app.post("/api/bids/{bid_id}/invoices")
 async def bid_invoice_create(bid_id: int, request: Request, amount: str = Form(...),
                              description: str = Form(""), due_date: str = Form(""),
-                             issue: bool = Form(0), db=Depends(get_db)):
+                             issue: int = Form(0), back: str = Form(""),
+                             db=Depends(get_db)):
     """Raise an invoice. Posting to the ledger happens after the write and is
     queued rather than allowed to block the owner from billing a job."""
     require_admin(request)
@@ -3155,6 +3156,8 @@ async def bid_invoice_create(bid_id: int, request: Request, amount: str = Form(.
     if issue:
         bid_costing.set_invoice_status(db, inv["id"], "sent", _BID_COMPANY)
         sync = ledger_sync.sync_invoice(db, inv["id"], _BID_COMPANY)
+    if back.startswith("/bids/"):
+        return RedirectResponse(url=back, code=status.HTTP_303_SEE_OTHER)
     return RedirectResponse(url=f"/bids?invoiced={inv['id']}", code=status.HTTP_303_SEE_OTHER)
 
 
@@ -3175,6 +3178,7 @@ async def bid_invoice_status(bid_id: int, invoice_id: int, request: Request,
 async def bid_cost_create(bid_id: int, request: Request, description: str = Form(...),
                           category: str = Form("material"), vendor: str = Form(""),
                           estimated: str = Form(""), actual: str = Form(""),
+                          back: str = Form(""),
                           db=Depends(get_db)):
     require_admin(request)
     try:
@@ -3186,6 +3190,23 @@ async def bid_cost_create(bid_id: int, request: Request, description: str = Form
     ledger_sync.ensure_schema(db)
     if actual:
         ledger_sync.sync_cost_line(db, lid, _BID_COMPANY)
+    # A cost entered from the bid page belongs to that bid, so put the owner
+    # back where they were. Only ever follow a same-site path.
+    if back.startswith("/bids/"):
+        return RedirectResponse(url=back, code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(url="/books", code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/api/bids/{bid_id}/costs/{line_id}/delete")
+async def bid_cost_delete(bid_id: int, line_id: int, request: Request,
+                          back: str = Form(""), db=Depends(get_db)):
+    """Remove one cost line. Used to be unreachable -- the accessor existed but
+    no route called it, so a wrong line could only be corrected in the database."""
+    require_admin(request)
+    if not bid_costing.delete_cost_line(db, line_id, bid_id, _BID_COMPANY):
+        raise HTTPException(status_code=404, detail="Cost line not found")
+    if back.startswith("/bids/"):
+        return RedirectResponse(url=back, code=status.HTTP_303_SEE_OTHER)
     return RedirectResponse(url="/books", code=status.HTTP_303_SEE_OTHER)
 
 
@@ -7432,6 +7453,45 @@ async def job_lead_delete(job_id: int, request: Request, db=Depends(get_db)):
 # auto_reply.auto_reply_to_lead and the outbound voice agent, and a general
 # contractor is not a customer. Nothing below sends email or dials.
 _BID_COMPANY = "construction"
+
+
+@app.get("/bids/{bid_id}")
+async def bid_detail_page(bid_id: int, request: Request, db=Depends(get_db)):
+    """One bid, with the paperwork that belongs to it.
+
+    The board used to be the end of the road: every row was a div with no href,
+    so there was nowhere to click into and invoices and cost lines -- which have
+    had working endpoints all along -- could not be reached from a bid at all.
+    This is that page.
+    """
+    require_admin(request)
+    bid = bid_opportunities.get_bid(db, bid_id, _BID_COMPANY)
+    if not bid:
+        return RedirectResponse(url="/bids?missing=1", status_code=status.HTTP_303_SEE_OTHER)
+
+    costs = []
+    summary = {}
+    invoices: list = []
+    inv_summary: dict = {}
+    try:
+        bid_costing.ensure_accounting_schema(db)
+        costs = bid_costing.cost_lines(db, bid_id, _BID_COMPANY)
+        summary = bid_costing.cost_summary(db, bid_id, _BID_COMPANY)
+        invoices = bid_costing.list_invoices(db, bid_id, _BID_COMPANY)
+        inv_summary = bid_costing.invoice_summary(db, bid_id, _BID_COMPANY)
+    except Exception as exc:
+        # A missing accounting table must not cost the owner the whole page.
+        print(f"[bids] accounting unavailable for bid {bid_id}: {exc}", flush=True)
+
+    return templates.TemplateResponse(
+        request=request, name="bid_detail.html",
+        context={
+            "b": bid, "costs": costs, "cost_summary": summary,
+            "invoices": invoices, "inv_summary": inv_summary,
+            "statuses": ["new", "drafting", "sent", "shortlist",
+                         "won", "lost", "withdrawn"],
+            "cost_categories": ["material", "labor", "sub", "equipment", "other"],
+        })
 
 
 @app.get("/api/bids")
