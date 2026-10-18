@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import csv
 import datetime
+import re
 import io
 import json
 import os
@@ -309,6 +310,49 @@ def _fetch(url: str, auth_header: str = "", token: str = "") -> str:
         raise SupplierError(f"could not reach the feed: {e.reason}") from e
 
 
+def tracked_skus(conn, supplier_name: str, company: str = "construction",
+                 limit: int = 200) -> list[dict]:
+    """The store SKUs already recorded in `materials_catalog` for a supplier.
+
+    A partner retail API prices an item the caller names; it does not hand over
+    a catalogue. So the sync prices the SKUs we already track for that store,
+    which is where the real Home Depot/Lowe's item numbers live.
+
+    Matching walks from the most specific name to the least, because a supplier
+    row is often named more precisely than the `store` column it prices. An
+    earlier version stripped stop words to derive a brand, which deleted
+    "Home Depot" entirely -- both words are stop words -- and silently widened
+    the query to every tracked SKU.
+    """
+    raw = " ".join(str(supplier_name or "").split())
+    if not raw:
+        return []
+
+    base = """SELECT sku, name, unit FROM materials_catalog
+              WHERE sku <> '' AND enabled"""
+    candidates = [raw]
+    trimmed = re.split(r"\s+[-–—:]\s+|\s+\|\s+", raw)
+    candidates += [t for t in trimmed if t and t != raw]
+    words = [w for w in re.split(r"[\s_\-]+", raw.lower()) if w]
+    if len(words) > 1:
+        candidates.append(" ".join(words[:-1]))
+
+    seen: set = set()
+    for pattern in candidates:
+        pattern = pattern.strip()
+        if not pattern or pattern.lower() in seen:
+            continue
+        seen.add(pattern.lower())
+        with conn.cursor() as cur:
+            cur.execute(f"{base} AND LOWER(store) LIKE %s ORDER BY id LIMIT %s",
+                        (f"%{pattern.lower()}%", max(1, min(int(limit), 1000))))
+            rows = cur.fetchall()
+        if rows:
+            return [{"sku": r["sku"], "description": r["name"], "uom": r["unit"]}
+                    for r in rows]
+    return []
+
+
 def sync_supplier(conn, supplier_id: int, company: str = "construction",
                   sheet_text: str = "") -> dict:
     """Refresh one supplier's prices.
@@ -335,7 +379,63 @@ def sync_supplier(conn, supplier_id: int, company: str = "construction",
                                         "prices are priced per order, not per catalogue")
                 return {"supplier": sup["name"], "rows": len(rows), "priced": 0,
                         "note": "items listed; run a quote to get real prices"}
-            raise SupplierError(f"no API adapter for '{sup['name']}'")
+            # Other retailers dispatch to supplier_adapters. This has to sit
+            # above the fallback, or every retail supplier dies on
+            # "no API adapter" and the adapter module never runs.
+            try:
+                import supplier_adapters
+                adapter = supplier_adapters.adapter_for(sup["name"])
+            except Exception as e:
+                _mark(conn, supplier_id, f"failed: {e}", ok=False)
+                raise SupplierError(f"supplier adapter unavailable: {e}") from e
+            if adapter is None:
+                raise SupplierError(f"no API adapter for '{sup['name']}'")
+        else:
+            adapter = None
+
+        if adapter is not None:
+            try:
+                if not adapter.configured():
+                    raise SupplierError(
+                        f"{adapter.name} is not configured; missing "
+                        + ", ".join(adapter.missing()))
+                # Neither retailer exposes a bulk catalogue on a partner API, so
+                # price the SKUs already tracked in materials_catalog rather
+                # than inventing an enumeration endpoint.
+                candidates = tracked_skus(conn, sup["name"], company=company)
+                if not candidates:
+                    _mark(conn, supplier_id,
+                          f"{adapter.name} configured but no tracked SKUs to price",
+                          ok=False)
+                    raise SupplierError(
+                        f"{sup['name']}: no SKUs in materials_catalog for this store. "
+                        f"Add the items first, then sync.")
+                # Adapters read `itemNumber` (abc_supply's field name), while
+                # tracked_skus returns `sku`. Map explicitly: leaving this to a
+                # name coincidence wrote every row at 0 and reported "0/3
+                # priced" as if the supplier had no prices at all.
+                priced = adapter.price_items(
+                    [{"itemNumber": row["sku"], "description": row["description"],
+                      "uom": row["uom"]} for row in candidates],
+                    purpose="catalogue")
+                merged = []
+                for row, p in zip(candidates, priced):
+                    merged.append({
+                        "item_number": row["sku"],
+                        "description": p.get("description") or row["description"],
+                        "uom": p.get("uom") or row.get("uom") or "each",
+                        "price_cents": int(p.get("unit_price") or 0),
+                    })
+                n = save_prices(conn, supplier_id, merged, company)
+                unpriced = sum(1 for m in merged if not m["price_cents"])
+                _mark(conn, supplier_id, f"{n - unpriced}/{n} priced via {adapter.name}")
+                return {"supplier": sup["name"], "rows": n,
+                        "priced": n - unpriced, "unpriced": unpriced}
+            except SupplierError:
+                raise
+            except Exception as e:
+                _mark(conn, supplier_id, f"failed: {e}", ok=False)
+                raise SupplierError(f"{sup['name']} sync failed: {e}") from e
 
         text = sheet_text or _fetch(sup["feed_url"], sup["feed_auth_header"] or "",
                                     sup["feed_token"] or "")
