@@ -36,11 +36,21 @@ def test_home_depot_needs_both_values(monkeypatch):
     assert sa.HomeDepot.configured() is True
 
 
-def test_lowes_needs_both_values(monkeypatch):
-    monkeypatch.setenv("LOWES_API_KEY", "k")
-    assert sa.Lowes.configured() is False
-    monkeypatch.setenv("LOWES_CONSUMER_KEY", "c")
-    assert sa.Lowes.configured() is True
+def test_lowes_delegates_its_own_credential_check(monkeypatch):
+    """lowes_api is the real client; this module must not second-guess it with a
+    different set of env var names."""
+    import lowes_api
+    monkeypatch.delenv("LOWES_PARTNER_ID", raising=False)
+    assert sa.Lowes.configured() == lowes_api.configured()
+    monkeypatch.setenv("LOWES_PARTNER_ID", "p-1")
+    assert sa.Lowes.configured() == lowes_api.configured() is True
+
+
+def test_lowes_never_prices_a_quote(monkeypatch):
+    """Standing decision in lowes_api.py: a quote total must never be derived
+    from a Lowe's number, because that is the customer reference price."""
+    with pytest.raises(sa.SupplierAPIError, match="never be derived"):
+        sa.Lowes.price_items([{"itemNumber": "1"}])
 
 
 def test_unconfigured_adapter_raises_instead_of_returning_nothing(monkeypatch):
@@ -52,13 +62,6 @@ def test_unconfigured_call_makes_no_network_request(monkeypatch):
     monkeypatch.setattr(sa, "_get", lambda *a, **k: pytest.fail("must not call out"))
     with pytest.raises(sa.SupplierAPIError):
         sa.HomeDepot.product("305842616")
-
-
-def test_lowes_price_items_says_use_the_sheet_path(monkeypatch):
-    monkeypatch.setenv("LOWES_API_KEY", "k")
-    monkeypatch.setenv("LOWES_CONSUMER_KEY", "c")
-    with pytest.raises(sa.SupplierAPIError, match="price-sheet"):
-        sa.Lowes.price_items([{"itemNumber": "1"}])
 
 
 def test_home_depot_has_no_bulk_catalog():
@@ -75,7 +78,7 @@ def test_adapter_lookup_matches_by_name():
 
 def test_sheet_suppliers_have_no_api_adapter():
     """These go through the price sheet, so they must not claim an API client."""
-    for name in ("Builders FirstSource", "Kempsville", "Richards", "ABC Supply"):
+    for name in ("Builders FirstSource", "Kempsville", "Richards", "ABC Supply", "HD Supply"):
         assert sa.adapter_for(name) is None
 
 

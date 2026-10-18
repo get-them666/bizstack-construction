@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="wrap">
+  <h1>Material suppliers</h1>
+  <p class="muted">
+    Where every material price comes from. Only <em>public</em> suppliers reach
+    customer-facing pages, and those go through a markup so a cost is never
+    published. Private contract pricing stays here.
+  </p>
+
+  {% if notice %}<div class="flash ok">{{ notice }}</div>{% endif %}
+  {% if error %}<div class="flash bad">{{ error }}</div>{% endif %}
+
+  {% if estimates.escalated %}
+  <div class="flash ok">
+    Estimate layer escalated by BLS {{ estimates.bls_series }} from
+    {{ estimates.base_period }} to {{ estimates.bls_period }}
+    (factor {{ '%.4f'|format(estimates.factor) }}). An index supplies a ratio,
+    not a level, so this makes the numbers current and cannot make them real.
+  </div>
+  {% else %}
+  <div class="flash warn">
+    BLS not reachable ({{ estimates.reason }}), so the estimate layer is
+    <strong>not escalated</strong> and is dated from {{ estimates.base_period }}.
+    Treat it as rough and confirm against a receipt.
+  </div>
+  {% endif %}
+
+  <section class="card">
+    <h2>Registered suppliers</h2>
+    {% if suppliers %}
+    <table>
+      <tr><th>Name</th><th>Kind</th><th>Public</th><th>Items</th><th>Last sync</th><th></th></tr>
+      {% for s in suppliers %}
+      <tr>
+        <td><strong>{{ s.name }}</strong>{% if s.category %}<br><small class="muted">{{ s.category }}</small>{% endif %}</td>
+        <td>{{ s.kind }}</td>
+        <td>{% if s.public_ok %}yes{% else %}no{% endif %}</td>
+        <td>{{ s.items }}</td>
+        <td><small>
+          {{ s.last_synced_at.strftime('%Y-%m-%d %H:%M') if s.last_synced_at else 'never' }}
+          {% if s.last_sync_note %}<br>{{ s.last_sync_note }}{% endif %}
+        </small></td>
+        <td>
+          <form method="post" action="/materials/suppliers/sync">
+            <input type="hidden" name="supplier_id" value="{{ s.id }}">
+            <button>Sync</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% else %}
+    <p class="muted">No suppliers registered yet. Import a price sheet on
+      <a href="/materials">the price book</a>, or connect an API below.</p>
+    {% endif %}
+  </section>
+
+  <section class="card">
+    <h2>API availability</h2>
+    {% for a in adapters %}
+    <p>
+      <strong>{{ a.name }}</strong>
+      {% if a.configured %}
+        <span class="muted">configured</span>
+      {% else %}
+        <span class="muted">waiting on access</span>
+      {% endif %}
+      {% if a.missing %}
+      <ul>
+        {% for m in a.missing %}<li class="muted">{{ m }}</li>{% endfor %}
+      </ul>
+      {% endif %}
+    </p>
+    {% endfor %}
+    <p class="muted">
+      Builders FirstSource, Kempsville and Richards have no API. For those,
+      export a price sheet from the yard portal and paste it on
+      <a href="/materials">the price book</a> &mdash; that path already works and
+      needs no credentials.
+    </p>
+  </section>
+
+  <p><a href="/materials">&larr; back to the price book</a></p>
+</div>
+{% endblock %}

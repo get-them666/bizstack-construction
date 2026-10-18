@@ -437,6 +437,18 @@ def sync_supplier(conn, supplier_id: int, company: str = "construction",
                 _mark(conn, supplier_id, f"failed: {e}", ok=False)
                 raise SupplierError(f"{sup['name']} sync failed: {e}") from e
 
+        if not sheet_text and not str(sup.get("feed_url") or "").strip():
+            # A manual supplier is fed by handing the sheet in. Syncing one
+            # without it used to fall through to _fetch("") and fail with
+            # "feed URL must be http or https", which is true and useless --
+            # it made the sync button look broken for exactly the yards that
+            # have no API.
+            raise SupplierError(
+                f"{sup['name']} is a manual supplier: it has no feed URL. Sync it "
+                f"by handing in a price sheet (sync_supplier(sheet_text=...)), "
+                f"or paste one on /materials."
+            )
+
         text = sheet_text or _fetch(sup["feed_url"], sup["feed_auth_header"] or "",
                                     sup["feed_token"] or "")
         rows = parse_price_sheet(text, sup["default_uom"] or "each")

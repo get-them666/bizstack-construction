@@ -75,6 +75,7 @@ import site_theme
 import auth_service
 import construction_radar
 import materials_service
+import supplier_adapters
 import training_service
 import lead_sources
 import scrap_io
@@ -3421,6 +3422,54 @@ async def materials_page(request: Request, search: str = "", store: str = "",
         "abc_configured": abc_supply.configured(),
         "lowes_configured": lowes_api.configured(),
     })
+
+
+@app.get("/materials/suppliers", response_class=HTMLResponse)
+async def materials_suppliers(request: Request, db=Depends(get_db)):
+    """What can be pulled right now, and what is waiting on credentials.
+
+    Exists because every supplier client in this tree is correct but has no
+    trigger: without a reachable entry point a working adapter is just code
+    that looks wired.
+    """
+    require_admin(request)
+    supplier_prices.ensure_schema(db)
+    with db.cursor() as cur:
+        cur.execute("""
+            SELECT s.id, s.name, s.kind, s.public_ok, s.category, s.last_synced_at,
+                   s.last_sync_note,
+                   (SELECT COUNT(*) FROM material_supplier_prices p
+                     WHERE p.supplier_id = s.id) AS items
+              FROM material_suppliers s
+             WHERE s.company = 'construction'
+          ORDER BY s.name;
+        """)
+        rows = [dict(r) for r in cur.fetchall()]
+    return templates.TemplateResponse(request=request, name="material_suppliers.html", context={
+        "suppliers": rows,
+        "adapters": supplier_adapters.status(),
+        "estimates": materials_service.bls_escalation(),
+    })
+
+
+@app.post("/materials/suppliers/sync")
+async def materials_supplier_sync(request: Request, supplier_id: int = Form(0),
+                                  db=Depends(get_db)):
+    """Run one supplier's sync. The trigger supplier_prices.sync_supplier needed."""
+    require_admin(request)
+    if not supplier_id:
+        return RedirectResponse(url="/materials/suppliers?error=no supplier selected",
+                                status_code=status.HTTP_303_SEE_OTHER)
+    try:
+        res = supplier_prices.sync_supplier(db, supplier_id)
+        notice = f"{res['supplier']}: {res.get('priced', res.get('rows', 0))} priced"
+        if res.get("unpriced"):
+            notice += f", {res['unpriced']} could not be priced"
+        return RedirectResponse(url=f"/materials/suppliers?notice={notice}",
+                                status_code=status.HTTP_303_SEE_OTHER)
+    except Exception as e:
+        return RedirectResponse(url=f"/materials/suppliers?error={str(e)[:200]}",
+                                status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.post("/materials/save")

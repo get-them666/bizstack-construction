@@ -22,8 +22,9 @@ Home Depot
     ``HOMEDEPOT_BASE_URL`` because the retailer has moved its host before.
 
 Lowe's
-    Partner/enterprise gated, not self-serve. ``HOMEDEPOT``-shaped env vars
-    only, and it reports itself unconfigured until then.
+    Partner-gated, and ``lowes_api`` is the real client -- this module only
+    delegates so ``sync_supplier`` can dispatch by name. Their mature path is
+    a daily CSV over SFTP, and a local price needs a storeId.
 
 Builders FirstSource / Kempsville
     No public API. They use the price-sheet path in ``supplier_prices``, which
@@ -40,6 +41,8 @@ import json
 import os
 import urllib.error
 import urllib.request
+
+import lowes_api
 
 USER_AGENT = "Buildstack-Materials/1.0"
 DEFAULT_TIMEOUT = int(os.getenv("SUPPLIER_API_TIMEOUT", "30"))
@@ -161,28 +164,51 @@ class HomeDepot:
 # ---------------------------------------------------------------------------
 
 class Lowes:
+    """Delegates to ``lowes_api``, which already exists and is the real client.
+
+    Not reimplemented here on purpose. ``lowes_api`` documents the two things
+    that matter and that a stub would have got wrong: their mature delivery
+    path is a daily CSV over SFTP rather than REST, and a local price requires
+    a ``storeId`` -- a national price with no store context is the wrong number
+    for a Hampton Roads customer.
+
+    It also records the standing decision that Lowe's is the *customer
+    reference* price and never a quote input, so ``price_items`` below refuses
+    rather than quietly feeding a quote.
+    """
+
     name = "Lowe's"
-    base_url = os.getenv("LOWES_BASE_URL", "https://apis.lowes.com").rstrip("/")
 
     @staticmethod
     def configured() -> bool:
-        return bool(os.getenv("LOWES_API_KEY")) and bool(os.getenv("LOWES_CONSUMER_KEY"))
+        return lowes_api.configured()
 
     @staticmethod
     def missing() -> list[str]:
-        out = []
-        if not os.getenv("LOWES_API_KEY"):
-            out.append("LOWES_API_KEY (partner access; not self-serve)")
-        if not os.getenv("LOWES_CONSUMER_KEY"):
-            out.append("LOWES_CONSUMER_KEY")
-        return out
+        return lowes_api.setup_checklist()
+
+    @staticmethod
+    def base_url() -> str:
+        return lowes_api.base_url()
+
+    @classmethod
+    def product(cls, product_id: str, store_id: str = "", zipcode: str = ""):
+        return lowes_api.get_product(product_id, store_id=store_id, zipcode=zipcode)
 
     @classmethod
     def price_items(cls, items: list[dict], purpose: str = "estimating",
                     timeout: int = DEFAULT_TIMEOUT) -> list[dict]:
         raise SupplierAPIError(
-            f"{cls.name} does not publish a self-serve product/pricing API. "
-            f"Use the price-sheet path: sync_supplier(sheet_text=...)")
+            "Lowe's is the customer reference price, not our cost. A quote total "
+            "must never be derived from a Lowe's number -- see the role note at "
+            "the top of lowes_api.py. Use ABC Supply contract pricing for a "
+            "quote, or the price-sheet path for owner-supplied materials.")
+
+    @classmethod
+    def catalog_items(cls, limit: int = 100, timeout: int = DEFAULT_TIMEOUT) -> list[dict]:
+        raise SupplierAPIError(
+            "Lowe's has no self-serve catalog. Their mature path is a daily CSV "
+            "over SFTP; see lowes_api.py for the role and credential notes.")
 
 
 ADAPTERS: dict = {
