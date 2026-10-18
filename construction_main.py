@@ -3345,6 +3345,14 @@ async def materials_picker_submit(request: Request, name: str = Form(""),
     Contact details are validated and rate-limited like any other intake.
     Nothing is emailed or dialled here: the lead row is the handoff, and the
     existing outbound guardrails decide what happens next.
+
+    This used to call bid_opportunities.create_bid and set a variable named
+    `made_lead`, while returning a key called "lead" -- so every sandbox
+    enquiry landed on the bid board instead of the lead pipeline. Nothing
+    reached /leads, nothing triggered an auto-reply, and the bid board gained
+    rows that were never bids. source="sandbox" keeps the provenance visible
+    and hidden_lead_sources() never hides it, so it shows up in the normal
+    owner-facing lists.
     """
     priced = material_picker.price_list(json.loads(items) if items else [])
     if not priced["lines"]:
@@ -3354,19 +3362,48 @@ async def materials_picker_submit(request: Request, name: str = Form(""),
     if email.strip() and not re.fullmatch(r"[^@\s]+@[^@\s]+\.[A-Za-z]{2,}", email.strip()):
         raise HTTPException(status_code=400, detail="That email does not look right.")
     made_lead = False
+    lead_id = None
     if material_picker.submission_creates_lead() and email.strip():
+        lines = priced["lines"]
+        summary = "; ".join(
+            f"{(ln.get('description') or ln.get('item_number') or '?')}"
+            f" x{ln.get('qty', 1)}"
+            for ln in lines[:8]
+        )
+        if len(lines) > 8:
+            summary += f"; +{len(lines) - 8} more"
         try:
-            bid = bid_opportunities.create_bid(
-                db, "construction", name=f"Material list — {name.strip() or email.strip()}",
-                trade="materials", reference="sandbox", role="prime",
-                bid_amount=priced["subtotal"], notes=notes.strip()[:2000])
-            made_lead = True
-        except Exception:
+            subtotal_cents = int(round(priced["subtotal"] * 100))
+            res = lead_intake.intake_lead(
+                db, company="construction", source="sandbox",
+                name=name.strip(), phone=phone.strip(), email=email.strip(),
+                description=f"Material list ({priced['count']} items): {summary}",
+                project_type="materials",
+                # Reuses existing columns rather than adding new ones.
+                # store.insert_lead silently DROPS any field that is not already
+                # a leads column, so a new key here would vanish with no error
+                # and the selection would be lost. intake_lead has no `notes`
+                # parameter -- it is a column, so it rides in `extra`.
+                extra={
+                    "notes": notes.strip()[:2000],
+                    "estimate_low_cents": subtotal_cents,
+                    "estimate_high_cents": subtotal_cents,
+                    "estimate_json": json.dumps({
+                        "kind": "sandbox_materials",
+                        "count": priced["count"],
+                        "subtotal_cents": subtotal_cents,
+                        "lines": lines,
+                    })[:8000],
+                },
+            )
+            lead_id, made_lead = res["lead_id"], res["created"]
+        except Exception as e:
             # A failed write must not lose their selection.
+            print(f"⚠️ materials sandbox lead save failed: {e}", flush=True)
             made_lead = False
     return JSONResponse(content={"ok": True, "count": priced["count"],
                                  "subtotal": priced["subtotal"],
-                                 "lead": made_lead})
+                                 "lead": made_lead, "lead_id": lead_id})
 
 
 @app.get("/materials", response_class=HTMLResponse)

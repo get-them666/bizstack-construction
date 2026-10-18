@@ -1,21 +1,30 @@
 """Materials pricing for Buildstack Construction Co.
 
-Two layers:
+Three layers, in order of how much they can be trusted:
 
-1. A **seeded price book** (``PRICE_BOOK``) with 2026-era prices for the commodities we
-   actually order — lumber/framing, structural steel, copper wire, shingles/roofing,
-   drywall, concrete, tile, fasteners, paint, PEX/plumbing … Prices are stored in
-   **cents** and are conservative ballparks ("we pay about X today"), not bids.
+1. **A real supplier feed** (``supplier_prices``) -- actual prices from a
+   supplier, written by ``sync_into_catalogue`` or typed in by the owner. This
+   is the only layer that is a real price, and the only one a quote may use.
 
-2. A **live-API seam** (``MATERIALS_API_URL`` + ``MATERIALS_API_KEY``) so the owner can
-   point this at a real market-data provider (RSMeans-adjacent estimate APIs, Billd,
-   Buildertrend's ProEst, or a regional lumberyard feed). When configured, prices are
-   pulled live and cached for ``MATERIALS_CACHE_MINUTES``; otherwise the price book is
-   used and the assistant says so honestly.
+2. **EstimationPro regional costs** (``estimation_pro``) -- a public, keyless
+   benchmark that resolves a ZIP to a region and returns dated, itemised costs.
+   Real data, but a benchmark rather than something we were invoiced.
 
-The copilot tool ``estimate_materials(project_type, sqft, include=[], live=...)`` returns
-a line-item materials estimate. Never quote a final materials price from memory — always
-pull from this service ('price-book' or 'live-api' source is included in the reply).
+3. **This module's estimate layer** (``PRICE_BOOK`` plus the inline line
+   ranges). Internal allowances. They are escalated by the official BLS
+   construction-materials PPI from ``PRICE_BOOK_BASE_PERIOD`` so they track the
+   industry, and every surface that shows them says "estimate". An index
+   supplies a ratio, not a level: escalation makes these numbers current, it
+   cannot make them real. See ``cost_indices``.
+
+No fabricated price is presented as a price. The seeded brand catalogue
+(``BRAND_CATALOG``) carries real brands, styles and store SKUs but no prices at
+all -- a 0 means "not currently priced" and nothing quotes it.
+
+The copilot tool ``estimate_materials(project_type, sqft, include=[], live=...)``
+returns a line-item materials estimate with its ``source`` and the BLS period
+behind it. Never quote a final materials price from memory -- always pull from
+this service, and prefer a supplier price over an estimate.
 """
 
 import json
@@ -28,7 +37,10 @@ from urllib.parse import urlencode
 __all__ = ["BusinessMaterialsService", "PRICE_BOOK", "DEFAULT_ESTIMATE_UNITS", "BRAND_CATALOG"]
 
 # ---------------------------------------------------------------------------
-# Price book (cents). 2026-era ballparks seeded from recent supplier invoices.
+# Estimate book (cents). Internal allowances struck around 2026-01; NOT supplier
+# prices and NOT quotable. Every read goes through _escalated_cents(), which
+# moves it forward by the official BLS construction-materials PPI, and every
+# surface that shows it labels it an estimate. See bls_escalation below.
 # ---------------------------------------------------------------------------
 PRICE_BOOK: dict = {
     # --- Lumber / framing (MBF = thousand board feet) -------------------------
@@ -132,106 +144,113 @@ DEFAULT_ESTIMATE_UNITS: dict = {
 
 
 # ---------------------------------------------------------------------------
-# Brand catalog (2026 retail ballparks). Real brands + styles + store item/SKU
-# numbers so the assistant can name specific products when it quotes. Prices are
-# conservative retail ballparks pulled from store listings and marked as such;
-# the owner can fine-tune / add rows in the `materials_catalog` table, and a
-# live-API seam (above) can override by sku when configured.
+# Brand catalog. Real brands, styles and store item/SKU numbers so the
+# assistant can name a specific product when it quotes.
 #
-# Fields: store, brand, category, name, model, sku, style, color, unit,
-#         price_cents (optional price_high_cents for ranges).
+# NO PRICE IS SEEDED HERE. These rows used to carry hand-typed figures whose own
+# notes read "2026 retail ballpark" and "2026 typical retail range" -- invented
+# numbers indistinguishable, on screen, from a price anyone had actually paid.
+# They are gone. price_cents stays 0, which `price_list` and the public
+# catalogue already treat as "not currently priced"; nothing quotes a 0.
+#
+# A price only gets written to this table from a real source: a supplier feed
+# (see supplier_prices.py) or an explicit owner entry. BLS PPI can escalate such
+# a price once it exists -- see cost_indices.py -- but an index cannot invent
+# the level, which is exactly why the levels were removed rather than adjusted.
+#
+# Fields: store, brand, category, name, model, sku, style, color, unit.
 # ---------------------------------------------------------------------------
 BRAND_CATALOG: list = [
     # --- Kitchen / bath cabinets (Home Depot, Hampton Bay) ------------------
     {"store": "Home Depot", "brand": "Hampton Bay", "category": "cabinets",
      "name": "Designer Series Elgin 36x24x34.5 Assembled Corner Base Cabinet",
      "model": "BEZ36-ELWH", "sku": "305842616", "style": "Raised Panel",
-     "color": "White", "unit": "each", "price_cents": 34800,
-     "notes": "2026 retail ballpark; in-stock/assembled."},
+     "color": "White", "unit": "each",
+     "notes": "No price: awaiting a real supplier feed."},
     {"store": "Home Depot", "brand": "Hampton Bay", "category": "cabinets",
      "name": "Shaker 36x24x34.5 Ready-to-Assemble Corner Sink Base Cabinet",
      "model": "KCSB36-SSW", "sku": "", "style": "Shaker", "color": "Satin White",
-     "unit": "each", "price_cents": 18900,
-     "notes": "2026 retail ballpark; RTA."},
+     "unit": "each",
+     "notes": "No price: awaiting a real supplier feed."},
     {"store": "Home Depot", "brand": "Hampton Bay", "category": "cabinets",
      "name": "Shaker 36x24x34.5 Ready-to-Assemble Corner Sink Base Cabinet",
      "model": "KCSB36-SDV", "sku": "", "style": "Shaker", "color": "Dove Gray",
-     "unit": "each", "price_cents": 19900,
-     "notes": "2026 retail ballpark; RTA."},
+     "unit": "each",
+     "notes": "No price: awaiting a real supplier feed."},
     # --- Roofing (GAF, Home Depot + Lowe's) ---------------------------------
     {"store": "Home Depot", "brand": "GAF", "category": "roofing",
      "name": "Royal Sovereign 3-Tab Roofing Shingles (33.33 sq ft/bundle)",
      "model": "0201180", "sku": "", "style": "3-Tab", "color": "Charcoal",
-     "unit": "bundle", "price_cents": 3597,
-     "notes": "2026 retail ballpark; 3 bundles per square."},
+     "unit": "bundle",
+     "notes": "No price: awaiting a real supplier feed."},
     {"store": "Home Depot", "brand": "GAF", "category": "roofing",
      "name": "Royal Sovereign 3-Tab Roofing Shingles (33.33 sq ft/bundle)",
      "model": "0202880", "sku": "", "style": "3-Tab", "color": "Weathered Gray",
-     "unit": "bundle", "price_cents": 3597,
-     "notes": "2026 retail ballpark."},
+     "unit": "bundle",
+     "notes": "No price: awaiting a real supplier feed."},
     {"store": "Home Depot", "brand": "GAF", "category": "roofing",
      "name": "Timberline HDZ Architectural Laminated Shingles (33.33 sq ft/bundle)",
      "model": "0489180", "sku": "", "style": "Architectural", "color": "Charcoal",
-     "unit": "bundle", "price_cents": 4697,
-     "notes": "2026 retail ballpark; America's #1 architectural shingle."},
+     "unit": "bundle",
+     "notes": "No price: awaiting a real supplier feed."},
     {"store": "Home Depot", "brand": "GAF", "category": "roofing",
      "name": "Timberline HDZ Architectural Laminated Shingles (33.33 sq ft/bundle)",
      "model": "0489258", "sku": "", "style": "Architectural", "color": "Driftwood",
-     "unit": "bundle", "price_cents": 4437,
-     "notes": "2026 retail ballpark."},
+     "unit": "bundle",
+     "notes": "No price: awaiting a real supplier feed."},
     {"store": "Home Depot", "brand": "GAF", "category": "roofing",
      "name": "Timberline UHDZ Ultra-Manatee Laminated Shingles (pro, special order)",
      "model": "0582900", "sku": "1015001911", "style": "Architectural",
-     "color": "Weathered Wood", "unit": "bundle", "price_cents": 6788,
-     "notes": "2026 retail ballpark; UL Class-4 impact."},
+     "color": "Weathered Wood", "unit": "bundle",
+     "notes": "No price: awaiting a real supplier feed."},
     {"store": "Lowe's", "brand": "GAF", "category": "roofing",
      "name": "Timberline HDZ Architectural Roof Shingles (33.33 sq ft/bundle)",
      "model": "0489180", "sku": "1439810", "style": "Architectural",
-     "color": "Charcoal", "unit": "bundle", "price_cents": 4948,
-     "notes": "2026 retail ballpark."},
+     "color": "Charcoal", "unit": "bundle",
+     "notes": "No price: awaiting a real supplier feed."},
     # --- Flooring (LVP, Home Depot) ------------------------------------------
     {"store": "Home Depot", "brand": "TrafficMaster", "category": "flooring",
      "name": "Bighorn Trail Oak Rigid-Lock Waterproof LVP (7.2x48 in)",
      "model": "TM2151", "sku": "", "style": "LVP", "color": "Trail Oak",
-     "unit": "sqft", "price_cents": 239,
-     "notes": "2026 retail ballpark; ~28.84 sqft/case."},
+     "unit": "sqft",
+     "notes": "No price: awaiting a real supplier feed."},
     {"store": "Home Depot", "brand": "A&A Surfaces", "category": "flooring",
      "name": "Acorn Hill Luxury Vinyl Plank Flooring",
      "model": "HD-LVR6550-0012", "sku": "", "style": "LVP", "color": "Acorn Hill",
-     "unit": "sqft", "price_cents": 199,
-     "notes": "2026 retail ballpark."},
+     "unit": "sqft",
+     "notes": "No price: awaiting a real supplier feed."},
     {"store": "Home Depot", "brand": "Shaw", "category": "flooring",
      "name": "Camden Mindful Luxury Vinyl Plank Flooring",
      "model": "HD94500295", "sku": "", "style": "LVP", "color": "Camden Mindful",
-     "unit": "sqft", "price_cents": 299,
-     "notes": "2026 retail ballpark."},
+     "unit": "sqft",
+     "notes": "No price: awaiting a real supplier feed."},
     # --- Fixtures (Home Depot) ------------------------------------------------
     {"store": "Home Depot", "brand": "MOEN", "category": "fixtures",
      "name": "Genta 4in Centerset Double-Handle Bathroom Faucet w/ Drain",
      "model": "84764BL", "sku": "1012308602", "style": "Centerset",
-     "color": "Matte Black", "unit": "each", "price_cents": 12900,
-     "notes": "2026 retail ballpark; WaterSense."},
+     "color": "Matte Black", "unit": "each",
+     "notes": "No price: awaiting a real supplier feed."},
     {"store": "Home Depot", "brand": "MOEN", "category": "fixtures",
      "name": "Chateau Single-Handle Fixed Kitchen Faucet w/ Side Sprayer",
      "model": "7430", "sku": "", "style": "Single-Handle", "color": "Chrome",
-     "unit": "each", "price_cents": 11132,
-     "notes": "2026 retail ballpark."},
+     "unit": "each",
+     "notes": "No price: awaiting a real supplier feed."},
     {"store": "Home Depot", "brand": "Delta", "category": "fixtures",
      "name": "Foundations Single-Handle 1-Spray Tub & Shower Faucet (valve incl.)",
      "model": "B114900C", "sku": "", "style": "Tub/Shower", "color": "Chrome",
-     "unit": "each", "price_cents": 8900,
-     "notes": "2026 retail ballpark."},
+     "unit": "each",
+     "notes": "No price: awaiting a real supplier feed."},
     # --- Countertops (typical retail range; verified on-site) -----------------
     {"store": "Home Depot / Lowe's", "brand": "Engineered Quartz", "category": "countertops",
      "name": "Engineered quartz countertop (slab, standard grade)",
      "model": "", "sku": "", "style": "Quartz", "color": "any",
-     "unit": "sqft", "price_cents": 4000, "price_high_cents": 7500,
-     "notes": "2026 typical retail range by grade; final slab price verified on-site."},
+     "unit": "sqft",
+     "notes": "No price: awaiting a real supplier feed."},
     {"store": "Home Depot / Lowe's", "brand": "Granite", "category": "countertops",
      "name": "Granite countertop (slab, standard grade)",
      "model": "", "sku": "", "style": "Granite", "color": "any",
-     "unit": "sqft", "price_cents": 4100, "price_high_cents": 6000,
-     "notes": "2026 typical retail range by slab; verified on-site."},
+     "unit": "sqft",
+     "notes": "No price: awaiting a real supplier feed."},
 ]
 
 
@@ -252,6 +271,66 @@ def include_bool(include: list, key: str) -> bool:
     return any(str(k).strip().lower() == key for k in (include or []))
 
 
+# ---------------------------------------------------------------------------
+# Official escalation for the internal estimate layer
+# ---------------------------------------------------------------------------
+# The levels in PRICE_BOOK and in the inline line ranges below were struck as
+# "2026-era ballparks". They are internal judgement, not quotes, and they are
+# labelled as estimates wherever they surface. What BLS can honestly fix is the
+# one thing that is knowable without a supplier: how far those levels have
+# drifted since they were set. So the whole estimate layer is multiplied by the
+# official construction-materials PPI between PRICE_BOOK_BASE_PERIOD and the
+# latest published month.
+#
+# This makes the numbers current. It does not make them real: an index supplies
+# a ratio, never a level. See cost_indices.verify_anchor, which returns
+# "not_checkable_by_an_index" for exactly that reason.
+PRICE_BOOK_BASE_PERIOD = os.getenv("PRICE_BOOK_BASE_PERIOD", "2026-01")
+
+_escalation_cache: dict = {"at": 0.0, "payload": None}
+_ESCALATION_TTL = 6 * 3600
+
+
+def bls_escalation() -> dict:
+    """Current/then multiplier for construction materials, cached.
+
+    Degrades to 1.0 when BLS cannot be reached, and says so via ``escalated``
+    so callers can label the estimate instead of quietly presenting stale
+    numbers as current.
+    """
+    now = time.time()
+    if _escalation_cache["payload"] and now - _escalation_cache["at"] < _ESCALATION_TTL:
+        return _escalation_cache["payload"]
+    try:
+        import cost_indices as ci
+        result = ci.escalate(100, ci.DEFAULT_MATERIALS, PRICE_BOOK_BASE_PERIOD)
+        payload = {
+            "factor": float(result.get("factor") or 1.0) if result.get("escalated") else 1.0,
+            "escalated": bool(result.get("escalated")),
+            "reason": result.get("reason"),
+            "bls_series": result.get("bls_series"),
+            "bls_period": result.get("bls_period"),
+            "bls_index": result.get("bls_index"),
+            "base_period": PRICE_BOOK_BASE_PERIOD,
+        }
+    except Exception as e:
+        payload = {"factor": 1.0, "escalated": False, "reason": str(e)[:200],
+                   "bls_series": None, "bls_period": None, "bls_index": None,
+                   "base_period": PRICE_BOOK_BASE_PERIOD}
+    _escalation_cache["at"] = now
+    _escalation_cache["payload"] = payload
+    return payload
+
+
+def _escalated_cents(cents) -> int:
+    """Move one estimate value forward with the official index."""
+    value = _cents(cents)
+    if not value:
+        return value
+    factor = bls_escalation().get("factor") or 1.0
+    return int(round(value * factor)) if factor != 1.0 else value
+
+
 # --- Brand catalog: DB persistence + search --------------------------------
 def _cat_dollar(row: dict) -> float:
     return round(_cents(row.get("price_cents")) / 100, 2)
@@ -260,6 +339,48 @@ def _cat_dollar(row: dict) -> float:
 def catalog() -> list:
     """Active catalog: owner rows from DB when loaded, else the seeded book."""
     return _catalog_rows if _catalog_rows else BRAND_CATALOG
+
+
+NO_PRICE_NOTE = "No price: awaiting a real supplier feed."
+
+# The exact phrases the hand-typed seed rows carried. Matching on these rather
+# than on "price_cents > 0" is deliberate: it clears the invented numbers and
+# leaves every row the owner entered by hand alone.
+_FABRICATED_MARKERS = (
+    "%retail ballpark%",
+    "%typical retail range%",
+    "%2026 retail%",
+    "%2026 typical retail%",
+    "%2026-era ballpark%",
+)
+
+
+def retire_fabricated_prices(conn) -> int:
+    """Zero out seeded prices that were never a real quote.
+
+    ``seed_materials_catalog`` only seeds an empty table, so removing the prices
+    from ``BRAND_CATALOG`` does not touch the rows a live database already
+    holds. Without this those 17 invented prices keep rendering exactly as
+    before, which would make the removal cosmetic.
+
+    Idempotent: a second run matches nothing, because the notes it writes do not
+    contain any of the markers.
+    """
+    if conn is None:
+        return 0
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""UPDATE materials_catalog
+                SET price_cents = 0, price_high_cents = NULL,
+                    notes = %s, updated_at = NOW()
+                WHERE price_cents <> 0
+                  AND ({" OR ".join(["notes ILIKE %s"] * len(_FABRICATED_MARKERS))})""",
+            (NO_PRICE_NOTE, *_FABRICATED_MARKERS))
+        cleared = cur.rowcount or 0
+    if cleared:
+        conn.commit()
+        print(f"🧹 materials: cleared {cleared} fabricated seeded price(s)", flush=True)
+    return cleared
 
 
 def seed_materials_catalog(conn) -> int:
@@ -287,6 +408,7 @@ def seed_materials_catalog(conn) -> int:
         );
         """)
         cur.execute("CREATE INDEX IF NOT EXISTS idx_materials_catalog_cat ON materials_catalog (category, brand, enabled);")
+        retire_fabricated_prices(conn)
         cur.execute("SELECT COUNT(*) AS c FROM materials_catalog;")
         row = cur.fetchone()
         count = row["c"] if isinstance(row, dict) else (row[0] if row else 0)
@@ -418,14 +540,19 @@ class BusinessMaterialsService:
             return 43200
 
     def get_price(self, sku: str) -> Optional[int]:
-        """Live price (cents) for a sku when API configured + cached, else book."""
+        """Live price (cents) for a sku when API configured + cached, else book.
+
+        A book value is an internal allowance, so it is escalated by the official
+        PPI before it is used. See ``bls_escalation``.
+        """
         if self.api_configured():
             now = time.time()
             if now > (self._cache_until or 0):
                 self._refresh_cache()
             if sku in self._cache:
                 return self._cache[sku]
-        return PRICE_BOOK.get(sku)
+        book = PRICE_BOOK.get(sku)
+        return _escalated_cents(book) if book is not None else None
 
     def _refresh_cache(self) -> None:
         """Pull live prices from the configured materials API and cache them."""
@@ -474,8 +601,11 @@ class BusinessMaterialsService:
         def add(name, sku, qty, low_cents, high_cents, unit):
             nonlocal cents_total_low, cents_total_high
             qty = max(float(qty or 0), 0)
-            low_c = _cents(low_cents) * qty
-            high_c = _cents(high_cents) * qty
+            # Every line's range is an internal ballpark, escalated together by
+            # the official PPI. Applied here because this is the only place a
+            # line is priced, so nothing can bypass it.
+            low_c = _escalated_cents(low_cents) * qty
+            high_c = _escalated_cents(high_cents) * qty
             cents_total_low += low_c
             cents_total_high += high_c
             sku_unit = unit or DEFAULT_ESTIMATE_UNITS.get(sku, "unit")
@@ -538,25 +668,50 @@ class BusinessMaterialsService:
         for sku in include:
             sku = str(sku).strip()
             if sku in PRICE_BOOK and sku not in [ln["sku"] for ln in lines]:
-                cents = self.get_price(sku) or PRICE_BOOK[sku]
+                cents = _escalated_cents(self.get_price(sku) or PRICE_BOOK[sku])
                 add(sku.replace("_", " "), sku, 1, int(cents * 0.95), int(cents * 1.15),
                     DEFAULT_ESTIMATE_UNITS.get(sku, "unit"))
 
         dollars = lambda c: round(c / 100, 2)  # noqa: E731
+        esc = bls_escalation()
+        if live_ok:
+            source = "live-api"
+            note = ("Live material prices via API — final price still confirmed "
+                    "on-site.")
+        elif esc["escalated"]:
+            source = f"estimate+{esc['bls_series']}@{esc['bls_period']}"
+            note = (
+                f"Estimate. Our internal allowance from {esc['base_period']}, "
+                f"escalated to {esc['bls_period']} by the official BLS "
+                f"{esc['bls_series']} construction-materials index. "
+                f"Levels are judgement, not a supplier quote — every price is "
+                f"confirmed against a real receipt before it goes on a quote."
+            )
+        else:
+            source = "estimate-stale"
+            note = (
+                f"Estimate, and NOT index-escalated: {esc.get('reason') or 'no BLS data'}. "
+                f"Allowances are dated from {esc['base_period']} and materials "
+                f"prices have moved since. Treat as a rough range and confirm "
+                f"against a real receipt."
+            )
         return {
             "ok": True,
             "project_type": t,
             "sqft": sqft,
-            "source": "live-api" if live_ok else "price-book",
+            "source": source,
             "lines": lines,
             "total_low_dollars": dollars(cents_total_low),
             "total_high_dollars": dollars(cents_total_high),
-            "note": (
-                "Live material prices via API — final price still confirmed on-site."
-                if live_ok
-                else "Materials estimate from our price book — final price comes from "
-                     "the free on-site walkthrough."
-            ),
+            "pricing": {
+                "escalated": esc["escalated"],
+                "bls_series": esc["bls_series"],
+                "bls_period": esc["bls_period"],
+                "bls_index": esc["bls_index"],
+                "base_period": esc["base_period"],
+                "absolute_source": "not a supplier price; an internal allowance",
+            },
+            "note": note,
         }
 
 
