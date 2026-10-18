@@ -984,7 +984,7 @@ async def auth0_login_start(request: Request):
         return RedirectResponse(
             url="/login?error=" + urllib.parse.quote(
                 "Auth0 is not configured: " + ", ".join(auth0_login.missing())),
-            code=status.HTTP_303_SEE_OTHER)
+            status_code=status.HTTP_303_SEE_OTHER)
     base = str(request.base_url).rstrip("/")
     redirect_uri = os.getenv("AUTH0_CALLBACK_URL") or f"{base}/api/auth/callback"
     verifier = auth0_login.new_verifier()
@@ -994,8 +994,8 @@ async def auth0_login_start(request: Request):
         url = auth0_login.authorize_url(verifier, nonce, state, redirect_uri)
     except auth0_login.Auth0Error as e:
         return RedirectResponse(url="/login?error=" + urllib.parse.quote(str(e)[:180]),
-                                code=status.HTTP_303_SEE_OTHER)
-    resp = RedirectResponse(url=url, code=status.HTTP_303_SEE_OTHER)
+                                status_code=status.HTTP_303_SEE_OTHER)
+    resp = RedirectResponse(url=url, status_code=status.HTTP_303_SEE_OTHER)
     for name, value in ((auth0_login.STATE_COOKIE, state),
                         (auth0_login.VERIFIER_COOKIE, verifier),
                         (auth0_login.NONCE_COOKIE, nonce)):
@@ -1020,7 +1020,7 @@ async def auth0_callback(request: Request, code: str = "", state: str = "",
 
     def bail(msg: str):
         r = RedirectResponse(url="/login?error=" + urllib.parse.quote(msg[:180]),
-                             code=status.HTTP_303_SEE_OTHER)
+                             status_code=status.HTTP_303_SEE_OTHER)
         auth0_login.clear_cookies(r)
         return r
 
@@ -3101,7 +3101,7 @@ async def books_retry(request: Request, db=Depends(get_db)):
     ledger_sync.ensure_schema(db)
     result = ledger_sync.retry_all(db, company=_BID_COMPANY)
     back = request.headers.get("referer") or "/books"
-    return RedirectResponse(url=back, code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(url=back, status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.post("/books/open")
@@ -3117,7 +3117,7 @@ async def books_open(request: Request, cash: str = Form(...), when: str = Form("
         raise HTTPException(status_code=400, detail="Enter the opening cash amount.")
     except ledger.LedgerError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    return RedirectResponse(url="/books", code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(url="/books", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.post("/api/bids/{bid_id}/books/repair")
@@ -3128,7 +3128,7 @@ async def books_repair_bid(bid_id: int, request: Request, db=Depends(get_db)):
     result = ledger_sync.sync_all_for_bid(db, bid_id, company=_BID_COMPANY)
     if request.headers.get("accept", "").startswith("application/json"):
         return JSONResponse(content=result.as_dict())
-    return RedirectResponse(url="/books", code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(url="/books", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.get("/api/bids/{bid_id}/invoices")
@@ -3157,8 +3157,8 @@ async def bid_invoice_create(bid_id: int, request: Request, amount: str = Form(.
         bid_costing.set_invoice_status(db, inv["id"], "sent", _BID_COMPANY)
         sync = ledger_sync.sync_invoice(db, inv["id"], _BID_COMPANY)
     if back.startswith("/bids/"):
-        return RedirectResponse(url=back, code=status.HTTP_303_SEE_OTHER)
-    return RedirectResponse(url=f"/bids?invoiced={inv['id']}", code=status.HTTP_303_SEE_OTHER)
+        return RedirectResponse(url=back, status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(url=f"/bids?invoiced={inv['id']}", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.post("/api/bids/{bid_id}/invoices/{invoice_id}/status")
@@ -3171,7 +3171,7 @@ async def bid_invoice_status(bid_id: int, invoice_id: int, request: Request,
         raise HTTPException(status_code=404, detail="Invoice not found")
     ledger_sync.ensure_schema(db)
     ledger_sync.sync_invoice_status(db, invoice_id, _BID_COMPANY)
-    return RedirectResponse(url="/books", code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(url="/books", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.post("/api/bids/{bid_id}/costs")
@@ -3193,8 +3193,8 @@ async def bid_cost_create(bid_id: int, request: Request, description: str = Form
     # A cost entered from the bid page belongs to that bid, so put the owner
     # back where they were. Only ever follow a same-site path.
     if back.startswith("/bids/"):
-        return RedirectResponse(url=back, code=status.HTTP_303_SEE_OTHER)
-    return RedirectResponse(url="/books", code=status.HTTP_303_SEE_OTHER)
+        return RedirectResponse(url=back, status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(url="/books", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.post("/api/bids/{bid_id}/costs/{line_id}/delete")
@@ -3206,8 +3206,8 @@ async def bid_cost_delete(bid_id: int, line_id: int, request: Request,
     if not bid_costing.delete_cost_line(db, line_id, bid_id, _BID_COMPANY):
         raise HTTPException(status_code=404, detail="Cost line not found")
     if back.startswith("/bids/"):
-        return RedirectResponse(url=back, code=status.HTTP_303_SEE_OTHER)
-    return RedirectResponse(url="/books", code=status.HTTP_303_SEE_OTHER)
+        return RedirectResponse(url=back, status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(url="/books", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.get("/api/materials-picker/quote")
@@ -7562,7 +7562,7 @@ async def bid_set_status(bid_id: int, request: Request, status: str = Form(...),
         except Exception as e:
             logger.warning("outcome columns not written for bid %s: %s", bid_id, e)
     back = request.headers.get("referer") or "/bids"
-    return RedirectResponse(url=back, code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(url=back, status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.post("/api/bids/{bid_id}/amount")
@@ -7576,7 +7576,7 @@ async def bid_set_amount(bid_id: int, request: Request, amount: str = Form(...),
     if not bid_opportunities.set_bid_amount(db, bid_id, val, _BID_COMPANY):
         raise HTTPException(status_code=404, detail="Bid not found")
     back = request.headers.get("referer") or "/bids"
-    return RedirectResponse(url=back, code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(url=back, status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.post("/api/bids/{bid_id}/note")
@@ -7588,7 +7588,7 @@ async def bid_add_note(bid_id: int, request: Request, note: str = Form(...),
     if not bid_opportunities.add_note(db, bid_id, note.strip(), _BID_COMPANY):
         raise HTTPException(status_code=404, detail="Bid not found")
     back = request.headers.get("referer") or "/bids"
-    return RedirectResponse(url=back, code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(url=back, status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.post("/api/bids/{bid_id}/delete")
@@ -7596,7 +7596,7 @@ async def bid_delete(bid_id: int, request: Request, db=Depends(get_db)):
     require_admin(request)
     if not bid_opportunities.delete_bid(db, bid_id, _BID_COMPANY):
         raise HTTPException(status_code=404, detail="Bid not found")
-    return RedirectResponse(url="/bids?deleted=1", code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(url="/bids?deleted=1", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.get("/api/bids/sources")
