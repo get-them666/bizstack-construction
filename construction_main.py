@@ -1164,6 +1164,38 @@ def _owner_email() -> str:
     return os.getenv("ADMIN_EMAIL", "hello@bizstackperks.com")
 
 
+def admin_email() -> str:
+    """The primary owner address. For membership, use ``admin_emails()``."""
+    return os.getenv("ADMIN_EMAIL", "hello@bizstackperks.com")
+
+
+def admin_emails() -> set:
+    """Every address that should land on the admin side of a sign-in.
+
+    ADMIN_EMAIL holds one address, and an owner signs in with more than one
+    over time: a personal Gmail and a Workspace mailbox on the same domain.
+    With a single-address check the second one is silently downgraded to an
+    ordinary user, which is how an owner gets locked out of their own
+    dashboard with no error anywhere.
+
+    Reads ADMIN_EMAIL plus the comma-separated ADMIN_EMAILS, so existing
+    single-address deployments are unchanged. Mirrors
+    auth0_service.allowlist()["owners"].
+    """
+    out = set()
+    for chunk in (os.getenv("ADMIN_EMAILS", "") or "").split(","):
+        if chunk.strip():
+            out.add(chunk.strip().lower())
+    primary = (os.getenv("ADMIN_EMAIL", "") or "").strip()
+    if primary:
+        out.add(primary.lower())
+    return out
+
+
+def is_admin_email(email: str) -> bool:
+    return bool(email) and email.strip().lower() in admin_emails()
+
+
 def _secure_cookies() -> bool:
     return os.getenv("COOKIE_SECURE", "false").lower() == "true"
 
@@ -1221,7 +1253,7 @@ def _resolve_credentials(db, identifier: str, secret: str):
     secret = (secret or "").strip()
     admin_email = os.getenv("ADMIN_EMAIL", "hello@bizstackperks.com")
     admin_password = os.getenv("ADMIN_PASSWORD", "password123")
-    if ident.lower() == admin_email.lower() and secret == admin_password:
+    if is_admin_email(ident) and secret == admin_password:
         return {
             "role": "admin", "id": 0,
             "email": (os.getenv("ADMIN_OTP_EMAIL") or admin_email),
@@ -2658,15 +2690,13 @@ async def google_oauth_callback(request: Request, code: str = None, error: str =
             cur.execute("SELECT * FROM users WHERE email ILIKE %s;", (user_email,))
             actor = cur.fetchone()
         if not actor:
-            admin_email = os.getenv("ADMIN_EMAIL", "").lower()
             # Least privilege. This used to be `else "worker"`, which meant any
             # Google account that completed a sign-in was granted the crew app:
             # time sheets, payroll, internal jobs. A customer clicking "sign in
             # with Google" on the sandbox would have landed inside the business.
             # An unrecognised account is now a customer, and crew have to be
             # invited by an admin.
-            role = ("admin" if user_email == admin_email
-                    else "customer")
+            role = "admin" if is_admin_email(user_email) else "customer"
             with db.cursor() as cur:
                 cur.execute("""
                     INSERT INTO users (email, name, role, created_at)

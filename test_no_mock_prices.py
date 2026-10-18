@@ -198,3 +198,42 @@ def test_login_redirects_a_customer_to_their_account():
     import construction_main as m
     assert m._login_redirect("admin") == "/dashboard"
     assert m._login_redirect("customer") == "/account"
+
+
+# --- who is an owner ---------------------------------------------------------
+
+def test_admin_email_matches_any_listed_address(monkeypatch):
+    """An owner signs in with more than one account over time. With a single
+    ADMIN_EMAIL the second one was silently downgraded to an ordinary user and
+    locked out of their own dashboard."""
+    import construction_main as m
+    monkeypatch.setenv("ADMIN_EMAIL", "soleary0006@gmail.com")
+    monkeypatch.setenv("ADMIN_EMAILS", "hello@bizstackperks.com, ops@bizstackperks.com")
+    assert m.is_admin_email("soleary0006@gmail.com")
+    assert m.is_admin_email("hello@bizstackperks.com")
+    assert m.is_admin_email("OPS@BizStackPerks.com")
+    assert not m.is_admin_email("stranger@example.com")
+
+
+def test_single_admin_env_still_works(monkeypatch):
+    import construction_main as m
+    monkeypatch.setenv("ADMIN_EMAIL", "soleary0006@gmail.com")
+    monkeypatch.delenv("ADMIN_EMAILS", raising=False)
+    assert m.is_admin_email("soleary0006@gmail.com")
+    assert not m.is_admin_email("hello@bizstackperks.com")
+
+
+def test_admin_match_ignores_whitespace_and_case(monkeypatch):
+    import construction_main as m
+    monkeypatch.setenv("ADMIN_EMAIL", "a@b.com")
+    monkeypatch.setenv("ADMIN_EMAILS", "  c@d.com , e@f.com  ")
+    assert m.is_admin_email(" C@D.com ")
+    assert m.is_admin_email("e@f.com")
+    assert not m.is_admin_email("")
+
+
+def test_blank_entries_are_ignored(monkeypatch):
+    import construction_main as m
+    monkeypatch.setenv("ADMIN_EMAIL", "a@b.com")
+    monkeypatch.setenv("ADMIN_EMAILS", ",,  ,")
+    assert m.admin_emails() == {"a@b.com"}
