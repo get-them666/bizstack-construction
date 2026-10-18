@@ -97,6 +97,28 @@
                        class="w-full text-sm border border-slate-300 rounded-lg px-3 py-2">
                 <input name="phone" placeholder="Phone" type="tel"
                        class="w-full text-sm border border-slate-300 rounded-lg px-3 py-2">
+                <input name="project_type" placeholder="Project type (roofing, kitchen, bath, deck)"
+                       class="w-full text-sm border border-slate-300 rounded-lg px-3 py-2">
+                <div class="grid grid-cols-3 gap-2">
+                    <input name="width_ft" placeholder="Width ft" inputmode="decimal"
+                           class="w-full text-sm border border-slate-300 rounded-lg px-3 py-2">
+                    <input name="length_ft" placeholder="Length ft" inputmode="decimal"
+                           class="w-full text-sm border border-slate-300 rounded-lg px-3 py-2">
+                    <input name="sqft" placeholder="or total sq ft" inputmode="numeric"
+                           class="w-full text-sm border border-slate-300 rounded-lg px-3 py-2">
+                </div>
+                <p class="text-xs text-slate-500 -mt-1">
+                    Area is worked out from width &times; length if you give both.
+                </p>
+                <input type="hidden" name="photo" id="photoPath">
+                <div class="flex items-center gap-3">
+                    <label class="cursor-pointer text-xs font-semibold text-indigo-600 hover:text-indigo-700">
+                        Add a photo
+                        <input type="file" id="photoFile" accept="image/*" class="hidden">
+                    </label>
+                    <img id="photoPreview" alt="" class="hidden w-12 h-12 object-cover rounded-lg border">
+                    <span id="photoStatus" class="text-xs text-slate-500"></span>
+                </div>
                 <textarea name="notes" rows="2" placeholder="What is this for? Timings, access, anything we should know."
                           class="w-full text-sm border border-slate-300 rounded-lg px-3 py-2"></textarea>
                 <button class="w-full px-4 py-3 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl">
@@ -174,6 +196,51 @@
     document.getElementById('viewBtn').addEventListener('click', function () { render(); panel.classList.remove('hidden'); });
     document.getElementById('closeBtn').addEventListener('click', function () { panel.classList.add('hidden'); });
 
+    // --- width x length -> area -------------------------------------------
+    function applyDims() {
+        var w = parseFloat((document.querySelector('[name=width_ft]').value || '').replace(',', '.'));
+        var l = parseFloat((document.querySelector('[name=length_ft]').value || '').replace(',', '.'));
+        var sq = document.querySelector('[name=sqft]');
+        if (w > 0 && l > 0) {
+            sq.value = Math.round(w * l);
+            sq.setAttribute('readonly', 'readonly');
+        } else {
+            sq.removeAttribute('readonly');
+        }
+    }
+    ['width_ft', 'length_ft'].forEach(function (n) {
+        document.querySelector('[name=' + n + ']')
+            .addEventListener('blur', applyDims);
+    });
+
+    // --- photo -> the existing public vision endpoint ---------------------
+    document.getElementById('photoFile').addEventListener('change', function (e) {
+        var file = e.target.files && e.target.files[0];
+        if (!file) { return; }
+        var status = document.getElementById('photoStatus');
+        var prev = document.getElementById('photoPreview');
+        prev.src = URL.createObjectURL(file);
+        prev.classList.remove('hidden');
+        status.textContent = 'Looking at your photo…';
+        var fd = new FormData();
+        fd.append('photo', file);
+        var sq = parseFloat(document.querySelector('[name=sqft]').value || '');
+        if (sq > 0) { fd.append('sqft', sq); }
+        fetch('/api/vision/quote', { method: 'POST', body: fd })
+            .then(function (r) { return r.json(); })
+            .then(function (j) {
+                if (j && j.estimate && j.estimate.sqft && !(sq > 0)) {
+                    document.querySelector('[name=sqft]').value = j.estimate.sqft;
+                    status.textContent = 'Read the area from your photo.';
+                } else if (j && j.scope) {
+                    status.textContent = 'Photo read — ' + String(j.scope).slice(0, 48);
+                } else {
+                    status.textContent = 'Photo attached.';
+                }
+            })
+            .catch(function () { status.textContent = 'Photo attached.'; });
+    });
+
     document.getElementById('sendForm').addEventListener('submit', function (e) {
         e.preventDefault();
         var out = document.getElementById('sendOut');
@@ -187,9 +254,18 @@
             .then(function (res) {
                 if (!res.ok) { out.className = 'text-sm font-semibold text-center text-rose-700'; out.textContent = res.j.detail || 'Could not send that.'; return; }
                 out.className = 'text-sm font-semibold text-center text-emerald-700';
-                out.textContent = 'Got it — we\'ll be in touch about your ' + res.j.count + ' item(s).';
+                var msg = 'Got it — we\'ll be in touch about your ' + res.j.count + ' item(s).';
+                if (res.j.quote_no) {
+                    msg += ' Your estimate is ' + res.j.quote_no +
+                           ' — save it from your account page.';
+                } else if (res.j.quote_error) {
+                    msg += ' ' + res.j.quote_error;
+                }
+                out.textContent = msg;
                 list = []; save();
                 f.reset();
+                document.getElementById('photoPreview').classList.add('hidden');
+                document.getElementById('photoPath').value = '';
             })
             .catch(function () {
                 out.className = 'text-sm font-semibold text-center text-rose-700';

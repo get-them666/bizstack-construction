@@ -25,7 +25,13 @@ OTP_TTL_SECONDS = 10 * 60
 SESSION_TTL_SECONDS = 72 * 60 * 60
 MAX_OTP_ATTEMPTS = 6
 
-ROLES = ("admin", "worker")
+# `customer` is a customer of the business, not crew. It exists so that signing
+# in from the public sandbox can identify somebody without handing them the
+# crew app. It has no crew feature in CREW_FEATURES and must never be treated
+# as equivalent to `worker`.
+ROLES = ("admin", "worker", "customer")
+
+CREW_ROLES = ("admin", "worker")
 
 # Construction crew feature catalogue: key -> human label on the Access page.
 # Namespaced under `perms_crew` in app_settings so it never collides with other

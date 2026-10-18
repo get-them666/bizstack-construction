@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="wrap">
+  <h1>Your account</h1>
+  <p class="muted">Quotes and documents for <strong>{{ email }}</strong>.</p>
+
+  {% if notice %}<div class="flash ok">{{ notice }}</div>{% endif %}
+
+  {% if quotes %}
+  <section class="card">
+    <h2>Quotes</h2>
+    <table>
+      <tr><th>Reference</th><th>Scope</th><th>Area</th><th>Total</th>
+          <th>Basis</th><th>Status</th><th>Documents</th></tr>
+      {% for q in quotes %}
+      <tr>
+        <td><strong>{{ q.quote_no }}</strong><br><small class="muted">{{ q.created_at.strftime('%Y-%m-%d') }}</small></td>
+        <td>{{ q.trade }}</td>
+        <td>{% if q.sqft %}{{ '{:,}'.format(q.sqft|float|int) }} sq ft{% else %}&mdash;{% endif %}
+            {% if q.width_ft and q.length_ft %}<br><small class="muted">{{ q.width_ft }}&times;{{ q.length_ft }} ft</small>{% endif %}</td>
+        <td>${{ '{:,.2f}'.format(q.job_price_cents|int / 100) }}</td>
+        <td><small>
+          {{ price_basis.get(q.price_source, price_basis['estimate']).split('.')[0] }}
+          {% if q.bls_series %}<br><span class="muted">{{ q.bls_series }} @ {{ q.bls_period }}</span>{% endif %}
+        </small></td>
+        <td>{{ q.status }}</td>
+        <td>
+          {% for d in documents if d.quote_id == q.id %}
+          <a href="{{ d.url }}">{{ d.label }}</a>{% if not loop.last %}, {% endif %}
+          {% endfor %}
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+  </section>
+
+  <section class="card">
+    <h2>What these numbers are</h2>
+    <p class="muted">Every quote says which of these it used:</p>
+    <ul class="muted">
+      {% for key, text in price_basis.items() %}
+      <li><strong>{{ key }}</strong> &mdash; {{ text }}</li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% else %}
+  <div class="card">
+    <p>No quotes yet. Build one from the <a href="/materials-picker">materials sandbox</a>
+       or <a href="/instant-quote">instant quote</a> and it will appear here.</p>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

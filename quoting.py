@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, timezone
+import time
 
 import estimating_service
 
@@ -199,12 +200,70 @@ CREATE TABLE IF NOT EXISTS quote_lines (
 CREATE INDEX IF NOT EXISTS quote_lines_quote_idx ON quote_lines (quote_id, sort_order);
 """
 
+# Provenance columns, added to the tables above so every number on a quote can
+# say where it came from. A quote is a promise; being able to reproduce it a
+# year later is the difference between a quote and a guess.
+#
+# price_source is the important one. 'supplier' means a real price someone paid,
+# 'estimationpro' is a public regional benchmark, and 'estimate' is our own
+# allowance escalated by BLS. They are not interchangeable and a document must
+# not present one as another.
+_MIGRATIONS = """
+ALTER TABLE quotes ADD COLUMN IF NOT EXISTS quote_no        VARCHAR(40) NOT NULL DEFAULT '';
+ALTER TABLE quotes ADD COLUMN IF NOT EXISTS customer_email  VARCHAR(255) NOT NULL DEFAULT '';
+ALTER TABLE quotes ADD COLUMN IF NOT EXISTS customer_name   VARCHAR(160) NOT NULL DEFAULT '';
+ALTER TABLE quotes ADD COLUMN IF NOT EXISTS width_ft        NUMERIC(10,2);
+ALTER TABLE quotes ADD COLUMN IF NOT EXISTS length_ft       NUMERIC(10,2);
+ALTER TABLE quotes ADD COLUMN IF NOT EXISTS photo_path      TEXT NOT NULL DEFAULT '';
+ALTER TABLE quotes ADD COLUMN IF NOT EXISTS address         TEXT NOT NULL DEFAULT '';
+ALTER TABLE quotes ADD COLUMN IF NOT EXISTS price_source    VARCHAR(40) NOT NULL DEFAULT '';
+ALTER TABLE quotes ADD COLUMN IF NOT EXISTS bls_series      VARCHAR(24) NOT NULL DEFAULT '';
+ALTER TABLE quotes ADD COLUMN IF NOT EXISTS bls_period      VARCHAR(12) NOT NULL DEFAULT '';
+ALTER TABLE quotes ADD COLUMN IF NOT EXISTS escalated       BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE quotes ADD COLUMN IF NOT EXISTS expires_at      TIMESTAMPTZ;
+ALTER TABLE quote_lines ADD COLUMN IF NOT EXISTS price_source   VARCHAR(40) NOT NULL DEFAULT '';
+ALTER TABLE quote_lines ADD COLUMN IF NOT EXISTS observed_at    TIMESTAMPTZ;
+ALTER TABLE quote_lines ADD COLUMN IF NOT EXISTS bls_series     VARCHAR(24) NOT NULL DEFAULT '';
+ALTER TABLE quote_lines ADD COLUMN IF NOT EXISTS bls_period     VARCHAR(12) NOT NULL DEFAULT '';
+ALTER TABLE quote_lines ADD COLUMN IF NOT EXISTS price_verified BOOLEAN NOT NULL DEFAULT FALSE;
+CREATE INDEX IF NOT EXISTS quotes_customer_idx ON quotes (customer_email, created_at DESC);
+"""
+
 
 def ensure_schema(db) -> None:
+    """Create the quote tables.
+
+    ``quotes.lead_id`` references ``leads(id)``, and Postgres will not create a
+    foreign key against a table that does not exist yet. So ``leads`` is
+    created first when it is missing, which makes this safe to call from a
+    route or a script without the caller having to know the ordering. The app's
+    startup block creates ``leads`` long before this runs, but the quote tables
+    were previously only ever created by a caller that had already done so.
+    """
     with db.cursor() as cur:
+        cur.execute("SELECT to_regclass('public.leads') AS t;")
+        row = cur.fetchone()
+        have_leads = (row["t"] if isinstance(row, dict) else (row[0] if row else None))
+        if not have_leads:
+            try:
+                from bizstack_leads import schema as leads_schema
+                leads_schema.create_schema(db)
+                cur.execute("SELECT 1;")
+            except Exception as e:
+                db.rollback()
+                raise RuntimeError(
+                    f"quotes need the leads table, which is missing: {e}") from e
         for stmt in _DDL.strip().split(";"):
             if stmt.strip():
                 cur.execute(stmt)
+        # Columns only, never a CREATE: a migration failing on an existing
+        # table must not roll back the creates above.
+        for stmt in _MIGRATIONS.strip().split(";"):
+            if stmt.strip():
+                try:
+                    cur.execute(stmt)
+                except Exception:
+                    pass
     db.commit()
 
 
@@ -502,3 +561,137 @@ def reprice_from_catalog(db, quote_id: int) -> dict:
     except Exception as exc:
         db.rollback()
         return {"ok": False, "error": str(exc)}
+
+# --------------------------------------------------------------------------
+# Persisting a quote built from a customer's material picks
+# --------------------------------------------------------------------------
+
+PRICE_SOURCE_SUPPLIER = "supplier"        # a real price, from a feed or a receipt
+PRICE_SOURCE_ESTIMATIONPRO = "estimationpro"  # public regional benchmark
+PRICE_SOURCE_ESTIMATE = "estimate"        # our allowance, BLS-escalated
+
+VALID_PRICE_SOURCES = (PRICE_SOURCE_SUPPLIER, PRICE_SOURCE_ESTIMATIONPRO, PRICE_SOURCE_ESTIMATE)
+
+
+def _next_quote_no(db) -> str:
+    """Human-quotable reference. Not a sequence, so it survives restores."""
+    year = time.strftime("%Y")
+    with db.cursor() as cur:
+        cur.execute("SELECT COUNT(*) AS c FROM quotes WHERE created_at >= %s;",
+                    (f"{year}-01-01",))
+        row = cur.fetchone()
+        n = int((row["c"] if isinstance(row, dict) else row[0]) or 0) if row else 0
+    return f"Q{year}-{n + 1:04d}"
+
+
+def price_provenance(conn=None) -> dict:
+    """The index state a quote is being priced against, for the record."""
+    try:
+        import materials_service
+        esc = materials_service.bls_escalation()
+    except Exception as exc:
+        return {"price_source": PRICE_SOURCE_ESTIMATE, "escalated": False,
+                "bls_series": "", "bls_period": "", "reason": str(exc)[:120]}
+    return {"price_source": PRICE_SOURCE_ESTIMATE, "escalated": esc["escalated"],
+            "bls_series": esc.get("bls_series") or "",
+            "bls_period": esc.get("bls_period") or ""}
+
+
+def save_quote(db, lead_id: int, quote: dict, lines: list[dict] | None = None,
+               *, customer_email: str = "", customer_name: str = "",
+               width_ft: float | None = None, length_ft: float | None = None,
+               photo_path: str = "", address: str = "",
+               price_source: str = "", bls_series: str = "", bls_period: str = "",
+               escalated: bool = False, status: str = STATUS_DRAFT) -> dict:
+    """Write a quote and its lines.
+
+    ``price_source`` is recorded on the quote and copied onto every line, and
+    ``price_verified`` is only true for a supplier price. That is what stops a
+    later document from presenting an escalated allowance as something a
+    customer was actually charged by a yard.
+    """
+    ensure_schema(db)
+    if price_source and price_source not in VALID_PRICE_SOURCES:
+        raise ValueError(f"price_source must be one of {VALID_PRICE_SOURCES}")
+    if not price_source:
+        price_source = PRICE_SOURCE_ESTIMATE
+
+    sqft = quote.get("sqft")
+    if sqft is None and width_ft and length_ft:
+        try:
+            sqft = round(float(width_ft) * float(length_ft), 2)
+        except (TypeError, ValueError):
+            sqft = None
+
+    quote_no = _next_quote_no(db)
+    with db.cursor() as cur:
+        cur.execute(
+            """INSERT INTO quotes
+                 (lead_id, trade, scope_text, sqft, band, materials_tier,
+                  job_price_cents, deposit_cents, status, notes, quote_no,
+                  customer_email, customer_name, width_ft, length_ft, photo_path,
+                  address, price_source, bls_series, bls_period, escalated,
+                  expires_at)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
+                       NOW() + INTERVAL '30 days')
+               RETURNING id;""",
+            (int(lead_id), quote.get("trade") or "", quote.get("scope_text") or "",
+             sqft, quote.get("band") or BAND_MID, quote.get("materials_tier") or "",
+             int(quote.get("job_price_cents") or 0),
+             int(quote.get("deposit_cents") or deposit_for(quote.get("job_price_cents") or 0)),
+             status, quote.get("notes") or "", quote_no,
+             (customer_email or "").strip().lower(), (customer_name or "").strip(),
+             width_ft, length_ft, photo_path or "", address or "",
+             price_source, bls_series or "", bls_period or "", bool(escalated)))
+        quote_id = cur.fetchone()["id"]
+
+        rows = lines if lines is not None else quote.get("lines") or []
+        verified = price_source == PRICE_SOURCE_SUPPLIER
+        for i, ln in enumerate(rows):
+            if not isinstance(ln, dict):
+                continue
+            total = int(ln.get("total_cents")
+                        or ln.get("extended") or 0)
+            cur.execute(
+                """INSERT INTO quote_lines
+                     (quote_id, line_no, description, category, qty, unit,
+                      unit_price_cents, total_cents, sku, vendor, sort_order,
+                      price_source, bls_series, bls_period, price_verified, observed_at)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW());""",
+                (quote_id, i + 1, ln.get("description") or ln.get("name") or "",
+                 ln.get("category") or "material",
+                 ln.get("qty") or 1, ln.get("unit") or ln.get("uom") or "each",
+                 int(ln.get("unit_price_cents") or ln.get("unit_price") or 0),
+                 total, ln.get("item_number") or ln.get("sku") or "",
+                 ln.get("supplier") or ln.get("vendor") or "",
+                 i, price_source, bls_series or "", bls_period or "", verified))
+    db.commit()
+    return {"ok": True, "quote_id": quote_id, "quote_no": quote_no, "sqft": sqft,
+            "price_source": price_source, "bls_series": bls_series,
+            "bls_period": bls_period}
+
+
+def quotes_for_customer(db, email: str, limit: int = 50) -> list[dict]:
+    if not (email or "").strip():
+        return []
+    with db.cursor() as cur:
+        cur.execute(
+            """SELECT q.*, (SELECT COALESCE(SUM(total_cents),0) FROM quote_lines l
+                             WHERE l.quote_id = q.id) AS lines_total
+                 FROM quotes q WHERE q.customer_email = %s
+             ORDER BY q.created_at DESC LIMIT %s;""",
+            (email.strip().lower(), max(1, min(int(limit), 200))))
+        return [dict(r) for r in cur.fetchall()]
+
+
+def quote_with_lines(db, quote_id: int) -> dict | None:
+    with db.cursor() as cur:
+        cur.execute("SELECT * FROM quotes WHERE id = %s;", (int(quote_id),))
+        quote = cur.fetchone()
+        if not quote:
+            return None
+        cur.execute("""SELECT * FROM quote_lines WHERE quote_id = %s
+                       ORDER BY sort_order, line_no;""", (int(quote_id),))
+        quote = dict(quote)
+        quote["lines"] = [dict(r) for r in cur.fetchall()]
+    return quote

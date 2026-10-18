@@ -98,6 +98,7 @@ import abc_supply
 import lowes_api
 import materials_service
 import quoting
+import quote_documents
 import suppression
 logger = logging.getLogger("construction")
 
@@ -1168,7 +1169,7 @@ def _secure_cookies() -> bool:
 
 
 def _login_redirect(role: str) -> str:
-    return {"admin": "/dashboard"}.get(role or "", "/")
+    return {"admin": "/dashboard", "customer": "/account"}.get(role or "", "/")
 
 
 def _site_base(request: Request) -> str:
@@ -2658,7 +2659,14 @@ async def google_oauth_callback(request: Request, code: str = None, error: str =
             actor = cur.fetchone()
         if not actor:
             admin_email = os.getenv("ADMIN_EMAIL", "").lower()
-            role = "admin" if user_email == admin_email else "worker"
+            # Least privilege. This used to be `else "worker"`, which meant any
+            # Google account that completed a sign-in was granted the crew app:
+            # time sheets, payroll, internal jobs. A customer clicking "sign in
+            # with Google" on the sandbox would have landed inside the business.
+            # An unrecognised account is now a customer, and crew have to be
+            # invited by an admin.
+            role = ("admin" if user_email == admin_email
+                    else "customer")
             with db.cursor() as cur:
                 cur.execute("""
                     INSERT INTO users (email, name, role, created_at)
@@ -3336,24 +3344,39 @@ async def materials_picker_price(request: Request, items: str = Form("[]")):
     return JSONResponse(content=material_picker.price_list(clean))
 
 
+def _estimate_source(lines: list[dict]) -> str:
+    """Classify what priced a list, from the suppliers that actually priced it.
+
+    EstimationPro rows are published under a supplier row named for it, and
+    those are a public benchmark, not a price anyone paid. Anything else came
+    from a real supplier feed. Mixed lists are treated as the weaker of the
+    two, because a document must not call a benchmark a real price.
+    """
+    names = [str(ln.get("supplier") or "").lower() for ln in lines if ln.get("extended")]
+    if not names:
+        return quoting.PRICE_SOURCE_ESTIMATE
+    if all("estimationpro" in n for n in names):
+        return quoting.PRICE_SOURCE_ESTIMATIONPRO
+    if all("estimationpro" not in n for n in names):
+        return quoting.PRICE_SOURCE_SUPPLIER
+    return quoting.PRICE_SOURCE_ESTIMATIONPRO
+
+
 @app.post("/api/materials-picker/submit")
 async def materials_picker_submit(request: Request, name: str = Form(""),
                                   email: str = Form(""), phone: str = Form(""),
                                   notes: str = Form(""), items: str = Form("[]"),
+                                  project_type: str = Form(""),
+                                  width_ft: str = Form(""), length_ft: str = Form(""),
+                                  sqft: str = Form(""),
+                                  photo: str = Form(""),
                                   db=Depends(get_db)):
-    """Hand the chosen list over. Creates a lead only if enabled.
+    """Hand the chosen list over. Creates a lead, and a quote when it can.
 
-    Contact details are validated and rate-limited like any other intake.
-    Nothing is emailed or dialled here: the lead row is the handoff, and the
-    existing outbound guardrails decide what happens next.
-
-    This used to call bid_opportunities.create_bid and set a variable named
-    `made_lead`, while returning a key called "lead" -- so every sandbox
-    enquiry landed on the bid board instead of the lead pipeline. Nothing
-    reached /leads, nothing triggered an auto-reply, and the bid board gained
-    rows that were never bids. source="sandbox" keeps the provenance visible
-    and hidden_lead_sources() never hides it, so it shows up in the normal
-    owner-facing lists.
+    The chosen list is also saved as a real quote with its pricing provenance
+    recorded, so the customer's account has something to open and the number
+    can be reproduced later. A quote that cannot be priced is not created and
+    the reason is returned -- an unpriced quote is worse than none.
     """
     priced = material_picker.price_list(json.loads(items) if items else [])
     if not priced["lines"]:
@@ -3402,9 +3425,80 @@ async def materials_picker_submit(request: Request, name: str = Form(""),
             # A failed write must not lose their selection.
             print(f"⚠️ materials sandbox lead save failed: {e}", flush=True)
             made_lead = False
+
+    # A quote needs an email to be findable later, and needs a price to be a
+    # quote at all. Lines that could not be priced are carried through as None
+    # rather than zero, so the total is never quietly short.
+    quote_id = quote_no = None
+    quote_error = None
+    priced_cents = sum(int(ln["extended"] or 0) for ln in priced["lines"])
+    unpriced = sum(1 for ln in priced["lines"] if not ln.get("extended"))
+
+    def _num(v):
+        try:
+            f = float(str(v or "").replace(",", "").strip())
+            return f if f > 0 else None
+        except (TypeError, ValueError):
+            return None
+
+    w, l = _num(width_ft), _num(length_ft)
+    # Width x length is the more specific claim, so it is not overridden by a
+    # typed square footage. Implausible dimensions are refused rather than
+    # written into a quote: a 900x900 ft property is a typo, not a job.
+    bad_dims = bool(w and l and (w > 500 or l > 500))
+    area = round(w * l, 2) if (w and l) else _num(sqft)
+
+    if lead_id and priced_cents > 0 and bad_dims:
+        quote_error = ("Those dimensions are over 500 ft, so no estimate was "
+                       "created. Check the width and length and send again.")
+    elif lead_id and priced_cents > 0:
+        try:
+            prov = quoting.price_provenance()
+            body = quoting.build_quote(
+                quoting.normalize_trade(project_type) or "materials",
+                area, scope_text=notes.strip()[:2000],
+                materials_tier="sandbox picks")
+            # The customer's chosen list is the quote, not the band model, so
+            # the model total is replaced by what they actually picked.
+            body["job_price_cents"] = priced_cents
+            body["deposit_cents"] = quoting.deposit_for(priced_cents)
+            lines = []
+            for ln in priced["lines"]:
+                if not ln.get("extended"):
+                    continue
+                lines.append({"item_number": ln.get("item_number", ""),
+                              "description": ln.get("description", ""),
+                              "category": "material", "qty": ln.get("qty", 1),
+                              "unit": ln.get("uom", "each"),
+                              "unit_price_cents": int(ln.get("unit_price") or 0),
+                              "total_cents": int(ln["extended"]),
+                              "supplier": ln.get("supplier") or ""})
+            saved = quoting.save_quote(
+                db, lead_id, body, lines,
+                customer_email=email.strip(), customer_name=name.strip(),
+                width_ft=w, length_ft=l, photo_path=photo.strip()[:500],
+                # Read the source off the lines rather than guessing from a
+                # global flag: the line already knows which supplier priced it,
+                # and that alone settles whether this is a real price or a
+                # benchmark.
+                price_source=_estimate_source(priced["lines"]),
+                bls_series=prov.get("bls_series", ""),
+                bls_period=prov.get("bls_period", ""),
+                escalated=bool(prov.get("escalated")))
+            quote_id, quote_no = saved["quote_id"], saved["quote_no"]
+        except Exception as e:
+            quote_error = str(e)[:200]
+            print(f"⚠️ materials sandbox quote save failed: {e}", flush=True)
+    elif lead_id and unpriced:
+        quote_error = "None of the chosen items could be priced, so no quote was created."
+    elif not priced_cents and priced["lines"]:
+        quote_error = "The chosen items are not priced yet, so no quote was created."
+
     return JSONResponse(content={"ok": True, "count": priced["count"],
                                  "subtotal": priced["subtotal"],
-                                 "lead": made_lead, "lead_id": lead_id})
+                                 "lead": made_lead, "lead_id": lead_id,
+                                 "quote_id": quote_id, "quote_no": quote_no,
+                                 "quote_error": quote_error})
 
 
 @app.get("/materials", response_class=HTMLResponse)
@@ -3422,6 +3516,88 @@ async def materials_page(request: Request, search: str = "", store: str = "",
         "abc_configured": abc_supply.configured(),
         "lowes_configured": lowes_api.configured(),
     })
+
+
+@app.get("/account", response_class=HTMLResponse)
+async def account_page(request: Request, notice: str = "", db=Depends(get_db)):
+    """A customer's own quotes and documents.
+
+    Scoped by the signed-in email. Admins see the same page for a customer by
+    passing ?email=, which is how the owner looks up what someone was sent
+    without opening their inbox.
+    """
+    actor = current_actor(request)
+    email = (actor or {}).get("email") or ""
+    is_admin = bool(actor and actor.get("role") == "admin")
+    if is_admin and request.query_params.get("email"):
+        email = request.query_params.get("email", "").strip().lower()
+    if not email:
+        return RedirectResponse(url="/login?next=/account",
+                                status_code=status.HTTP_303_SEE_OTHER)
+
+    try:
+        quoting.ensure_schema(db)
+        quotes = quoting.quotes_for_customer(db, email, limit=50)
+    except Exception as e:
+        print(f"⚠️ account page quotes failed: {e}", flush=True)
+        quotes = []
+
+    docs = []
+    for q in quotes:
+        for kind, label in (("estimate", "Estimate"),
+                            ("bill_of_sale", "Bill of sale"),
+                            ("receipt", "Receipt")):
+            docs.append({"quote_id": q["id"], "quote_no": q["quote_no"],
+                         "kind": kind, "label": label,
+                         "url": f"/account/quotes/{q['id']}/{kind}"})
+
+    return templates.TemplateResponse(request=request, name="account.html", context={
+        "email": email,
+        "quotes": quotes,
+        "documents": docs,
+        "notice": notice,
+        "price_basis": quote_documents.PRICE_BASIS,
+    })
+
+
+@app.get("/account/quotes/{quote_id}/{kind}")
+async def account_quote_document(request: Request, quote_id: int, kind: str,
+                                  fmt: str = "pdf", db=Depends(get_db)):
+    """Download one document for a quote the caller is entitled to."""
+    actor = current_actor(request)
+    is_admin = bool(actor and actor.get("role") == "admin")
+    email = (actor or {}).get("email") or ""
+    if not is_admin and not email:
+        return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
+
+    quoting.ensure_schema(db)
+    quote = quoting.quote_with_lines(db, quote_id)
+    if not quote:
+        raise HTTPException(status_code=404, detail="No such quote")
+    if not is_admin and (quote.get("customer_email") or "").lower() != email.lower():
+        raise HTTPException(status_code=403, detail="That quote is not yours")
+
+    values = (quote_documents.values_from_payment({"id": quote_id,
+                                                    "amount_cents": quote.get("deposit_cents") or 0,
+                                                    "customer_name": quote.get("customer_name"),
+                                                    "customer_email": quote.get("customer_email"),
+                                                    "reference": quote.get("quote_no")},
+                                                   quote)
+              if kind == "receipt" else quote_documents.values_from_quote(quote))
+    try:
+        data = quote_documents.render(kind, values, fmt if fmt in ("pdf", "docx") else "pdf")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    label = {"estimate": "Estimate", "bill_of_sale": "Bill-of-sale",
+             "receipt": "Receipt"}.get(kind, kind)
+    ext = "docx" if fmt == "docx" else "pdf"
+    return Response(
+        content=data,
+        media_type=("application/vnd.openxmlformats-officedocument."
+                    "wordprocessingml.document" if ext == "docx" else "application/pdf"),
+        headers={"Content-Disposition":
+                 f'attachment; filename="{quote.get("quote_no") or quote_id}-{kind}.{ext}"'})
 
 
 @app.get("/materials/suppliers", response_class=HTMLResponse)

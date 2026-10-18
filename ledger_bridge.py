@@ -220,3 +220,43 @@ def record_operating_expense(conn, code, amount, description="", when=None,
     ], entry_date=when, memo=f"{acct} — {description}"[:200],
         source_type="opex", source_id=f"{acct}:{when or date.today().isoformat()}:{(description or '')[:40]}",
         company=company)
+
+# --------------------------------------------------------------------------
+# Quotes
+# --------------------------------------------------------------------------
+
+def post_quote_accepted(conn, quote, company: str = "construction") -> dict:
+    """Record a customer accepting a quote.
+
+    Deliberately not revenue. A quote is an offer; nothing has been earned and
+    nothing is owed until an invoice goes out, so posting the full amount here
+    would inflate the P&L on every job still sitting in "accepted". This
+    carries the value without touching income: the deposit moves to a held
+    liability and the balance to a job-in-progress account, both of which are
+    cleared by post_invoice() when the work is actually invoiced.
+    """
+    amt = _d(quote.get("job_price_cents"), "quote job price")
+    if amt <= 0:
+        return {"posted": False, "reason": "quote has no price"}
+    deposit = _d(quote.get("deposit_cents"), "quote deposit")
+    if deposit < 0 or deposit > amt:
+        deposit = 0
+    balance = amt - deposit
+
+    lines = []
+    if deposit > 0:
+        lines += [
+            {"account": "1010", "debit": deposit, "description": "Deposit due on acceptance"},
+            {"account": "2100", "credit": deposit, "description": "Customer deposit held"},
+        ]
+    if balance > 0:
+        lines += [
+            {"account": "1250", "debit": balance,
+             "description": f"Work committed — quote {quote.get('quote_no') or quote.get('id')}"},
+            {"account": "2100", "credit": balance,
+             "description": "Customer contract balance"},
+        ]
+    ref = quote.get("quote_no") or quote.get("id")
+    return ledger.post(conn, lines,
+        memo=f"Quote accepted — {ref}",
+        source_type="quote_accepted", source_id=str(quote.get("id")), company=company)

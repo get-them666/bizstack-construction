@@ -43,19 +43,33 @@ def _words_under_1000(n):
     return " ".join(out)
 
 
+def _words(n):
+    """Cents-free integer to words, any magnitude.
+
+    ``_words_under_1000`` only covers three digits, and it was being handed
+    the whole dollar figure. A $2,550 invoice indexed ONES[255] and raised
+    IndexError, so every amount of $1,000 or more crashed -- which includes
+    any check worth writing and every estimate this app produces.
+    """
+    n = int(n or 0)
+    if n == 0:
+        return ""
+    out = []
+    for value, name in ((1_000_000_000, "Billion"), (1_000_000, "Million"),
+                        (1_000, "Thousand")):
+        if n >= value:
+            out.append(f"{_words_under_1000(n // value)} {name}")
+            n %= value
+    if n:
+        out.append(_words_under_1000(n))
+    return " ".join(p for p in out if p)
+
+
 def amount_to_words(cents: int) -> str:
     """Convert an amount in cents to the words used on the check amount line."""
-    dollars, remainder = divmod(int(cents or 0), 100)
-    if dollars == 0:
-        parts = "Zero"
-    elif dollars < 1_000_000:
-        parts = _words_under_1000(dollars)
-    else:
-        millions, rest = divmod(dollars, 1_000_000)
-        parts = _words_under_1000(millions) + " Million"
-        if rest:
-            parts += " " + _words_under_1000(rest)
-    return f"{parts.title()} and {remainder:02d}/100 Dollars"
+    sign = "-" if int(cents or 0) < 0 else ""
+    dollars, remainder = divmod(abs(int(cents or 0)), 100)
+    return f"{sign}{(_words(dollars).title() or 'Zero')} and {remainder:02d}/100 Dollars"
 
 
 def _money(cents: int) -> str:

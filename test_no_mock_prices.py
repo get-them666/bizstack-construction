@@ -175,3 +175,26 @@ def test_retire_handles_no_connection():
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
+
+# --- privilege: a sign-in must not grant the crew app -------------------------
+
+def test_unknown_google_sign_in_is_not_given_worker():
+    """Regression: the OAuth callback defaulted every unrecognised account to
+    `worker`, so any customer clicking "sign in with Google" on the public
+    sandbox was handed time sheets, payroll and internal jobs."""
+    from auth_service import ROLES, CREW_ROLES
+
+    assert "customer" in ROLES
+    assert "customer" not in CREW_ROLES
+    assert "worker" in CREW_ROLES, "crew must still be a role"
+
+
+def test_customer_role_has_no_crew_features():
+    import auth_service
+    assert "customer" not in getattr(auth_service, "CREW_FEATURES", {})
+
+
+def test_login_redirects_a_customer_to_their_account():
+    import construction_main as m
+    assert m._login_redirect("admin") == "/dashboard"
+    assert m._login_redirect("customer") == "/account"
