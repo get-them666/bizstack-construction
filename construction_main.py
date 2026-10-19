@@ -7837,20 +7837,26 @@ async def bid_create(
 
 
 @app.post("/api/bids/{bid_id}/status")
-async def bid_set_status(bid_id: int, request: Request, status: str = Form(...),
+async def bid_set_status(bid_id: int, request: Request,
+                         new_status: str = Form(..., alias="status"),
                          db=Depends(get_db)):
+    # The parameter is aliased rather than renamed: the form field the bid cards
+    # post is still "status", but a parameter literally named `status` shadowed
+    # the fastapi module, so `status.HTTP_303_SEE_OTHER` raised
+    # AttributeError and the redirect 500'd after the status had already been
+    # written.
     require_admin(request)
     try:
-        if not bid_opportunities.set_status(db, bid_id, status, _BID_COMPANY):
+        if not bid_opportunities.set_status(db, bid_id, new_status, _BID_COMPANY):
             raise HTTPException(status_code=404, detail="Bid not found")
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     # Won/lost is an accounting event, so the outcome columns are written
     # here rather than in set_status. No revenue is recognised on a win --
     # it is recognised when the job is billed, per ledger_sync.sync_bid_outcome.
-    if status in ("won", "lost", "withdrawn"):
+    if new_status in ("won", "lost", "withdrawn"):
         try:
-            bid_costing.set_outcome(db, bid_id, status, _BID_COMPANY)
+            bid_costing.set_outcome(db, bid_id, new_status, _BID_COMPANY)
         except Exception as e:
             logger.warning("outcome columns not written for bid %s: %s", bid_id, e)
     back = request.headers.get("referer") or "/bids"

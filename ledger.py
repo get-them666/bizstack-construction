@@ -215,6 +215,17 @@ def ensure_schema(conn) -> None:
         ):
             cur.execute(f"ALTER TABLE ledger_entries ADD COLUMN IF NOT EXISTS {_col} {_decl};")
 
+        # tx_type is asserted and defaulted, not just declared. A live database
+        # predating the double-entry rewrite still carries it as NOT NULL with
+        # no default, and CREATE TABLE IF NOT EXISTS will not remove it, so
+        # every write to the ledger failed there -- opening the books was just
+        # the first caller to notice. The default keeps any other writer alive;
+        # post() derives a better value from the entry's own accounts.
+        cur.execute("ALTER TABLE ledger_entries ADD COLUMN IF NOT EXISTS tx_type VARCHAR(20);")
+        cur.execute("ALTER TABLE ledger_entries ALTER COLUMN tx_type SET DEFAULT 'journal';")
+        cur.execute("UPDATE ledger_entries SET tx_type = 'journal' WHERE tx_type IS NULL;")
+        cur.execute("ALTER TABLE ledger_entries ALTER COLUMN tx_type SET NOT NULL;")
+
         # Idempotency. A repost of the same source record is a no-op rather
         # than a duplicate, which is what makes it safe to call on every save.
         cur.execute("""
@@ -364,10 +375,11 @@ def post(conn, lines: list[dict], entry_date=None, memo: str = "",
                         "debits": debits, "reason": "already posted"}
         entry_no = _next_entry_no(conn, company)
         cur.execute(
-            "INSERT INTO ledger_entries (entry_no, entry_date, memo, source_type, source_id, company) "
-            "VALUES (%s,%s,%s,%s,%s,%s) RETURNING id",
+            "INSERT INTO ledger_entries (entry_no, entry_date, memo, source_type, source_id, "
+            "company, tx_type) VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING id",
             (entry_no, when, (memo or "")[:1000] or None,
-             source_type or None, str(source_id) if source_id else None, company))
+             source_type or None, str(source_id) if source_id else None, company,
+             _tx_type(prepared)))
         eid = cur.fetchone()["id"]
         for x in prepared:
             cur.execute(
@@ -376,6 +388,37 @@ def post(conn, lines: list[dict], entry_date=None, memo: str = "",
                 (eid, x["account"], x["debit"], x["credit"], x["description"], x["bid_id"]))
     conn.commit()
     return {"posted": True, "entry_id": eid, "entry_no": entry_no, "debits": debits}
+
+
+def _tx_type(prepared: list) -> str:
+    """Derive the entry's coarse type from the accounts it touches.
+
+    ``ledger_entries.tx_type`` is a leftover from the pre-double-entry model.
+    The column survives in live databases -- ``CREATE TABLE IF NOT EXISTS``
+    never drops one -- and it is NOT NULL with no default, so a database that
+    still has it rejected every write to the ledger. Opening the books was the
+    first thing to trip it, and it was not the only thing.
+
+    It is derived rather than asked for, so an entry cannot be labelled by a
+    caller and disagree with its own lines. ``pitch_numbers`` reads this column
+    with ``tx_type IN ('income','revenue')`` and ``tx_type = 'expense'``, so
+    those are the values used: the entry is an expense when it charges an
+    expense account, income when it credits a revenue account, and a plain
+    journal otherwise (a transfer, an opening balance, a deposit held).
+    """
+    expense_accounts, revenue_accounts = set(), set()
+    for code, _name, kind in CHART:
+        if kind == EXPENSE:
+            expense_accounts.add(code)
+        elif kind == REVENUE:
+            revenue_accounts.add(code)
+    debits = {x["account"] for x in prepared if x.get("debit")}
+    credits = {x["account"] for x in prepared if x.get("credit")}
+    if debits & expense_accounts:
+        return "expense"
+    if credits & revenue_accounts:
+        return "income"
+    return "journal"
 
 
 def post_balanced(conn, debits: dict, credits: dict, **kw) -> dict:
