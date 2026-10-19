@@ -82,6 +82,7 @@ import scrap_io
 import inbound_email
 import google_oauth
 import google_maps
+import photo_store
 import autodesk_oauth
 import skiptrace_service
 import skip_sherpa_service
@@ -682,6 +683,12 @@ async def lifecycle(app: FastAPI):
     except Exception as e:
         print(f"⚠️ materials_catalog refresh skipped: {e}")
 
+    # Said at boot, not discovered after a deploy wiped the crew's photos.
+    try:
+        photo_store.startup_check()
+    except Exception as e:
+        print(f"⚠️ photo storage check failed: {e}", flush=True)
+
     # Bid board is its own module with its own idempotent DDL, so it is not in
     # the startup block above -- that block is one transaction and an ordering
     # slip there rolls back 52 tables. Rows are entered through /bids, never
@@ -789,6 +796,31 @@ os.makedirs("static", exist_ok=True)
 os.makedirs("uploads", exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+# Files already on local disk stay reachable at /uploads/. New uploads go
+# through /media/ and survive a redeploy.
+
+
+@app.get("/media/{key:path}")
+async def media_fetch(key: str):
+    """Serve an uploaded photo from whichever backend holds it.
+
+    Keys rather than URLs are what records store, so this stays valid across a
+    backend change and across the deploys that used to delete local files.
+    """
+    try:
+        body, content_type = photo_store.read(key)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Not found")
+    return Response(content=body, media_type=content_type,
+                    headers={"Cache-Control": "public, max-age=31536000, immutable"})
+
+
+@app.get("/api/storage/status")
+async def storage_status(request: Request):
+    """Whether photos survive a deploy, and what is missing if they do not."""
+    require_admin(request)
+    return JSONResponse(content=photo_store.status())
+
 
 WORKER_COOKIE = "worker_session"
 
@@ -8668,12 +8700,14 @@ async def crew_photo_upload(request: Request, project_id: int = Form(0), caption
         return RedirectResponse(url=request.headers.get("referer") or "/crew", status_code=status.HTTP_303_SEE_OTHER)
     ext = os.path.splitext(photo.filename or "")[1][:10] or ".jpg"
     fname = f"{uuid.uuid4().hex[:12]}{ext.lower()}"
-    with open(os.path.join("uploads", fname), "wb") as fh:
-        fh.write(raw)
+    try:
+        stored = photo_store.save(raw, fname)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     with db.cursor() as cur:
         cur.execute(
             "INSERT INTO job_photos (project_id, crew_id, filename, caption, is_punchlist) VALUES (%s,%s,%s,%s,%s);",
-            (project_id or None, worker.get("id"), fname, caption, punchlist.lower() in ("on", "true", "1")),
+            (project_id or None, worker.get("id"), stored["key"], caption, punchlist.lower() in ("on", "true", "1")),
         )
         db.commit()
     return RedirectResponse(url=request.headers.get("referer") or "/crew/dashboard", status_code=status.HTTP_303_SEE_OTHER)
@@ -9013,7 +9047,7 @@ async def worker_app_photos(request: Request, project_id: int = 0, db=Depends(ge
                 "id": r["id"], "project_id": r["project_id"], "project_name": r["project_name"],
                 "crew_id": r["crew_id"], "crew_name": r["crew_name"], "caption": r["caption"],
                 "is_punchlist": bool(r["is_punchlist"]),
-                "url": f"/uploads/{r['filename']}",
+                "url": photo_store.url_for(r["filename"]),
                 "created_at": r["created_at"].isoformat(),
             })
     return JSONResponse(content={"photos": photos})
@@ -9033,15 +9067,19 @@ async def worker_app_photos_upload(request: Request, project_id: int = Form(0), 
         raise HTTPException(status_code=400, detail="Empty file")
     ext = os.path.splitext(photo.filename or "")[1][:10] or ".jpg"
     fname = f"{uuid.uuid4().hex[:12]}{ext.lower()}"
-    with open(os.path.join("uploads", fname), "wb") as fh:
-        fh.write(raw)
+    try:
+        stored = photo_store.save(raw, fname)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     with db.cursor() as cur:
         cur.execute(
             "INSERT INTO job_photos (project_id, crew_id, filename, caption, is_punchlist) VALUES (%s,%s,%s,%s,%s);",
-            (project_id or None, worker.get("id"), fname, caption, punchlist.lower() in ("on", "true", "1")),
+            (project_id or None, worker.get("id"), stored["key"], caption, punchlist.lower() in ("on", "true", "1")),
         )
         db.commit()
-    return JSONResponse(content={"status": "ok", "url": f"/uploads/{fname}"})
+    return JSONResponse(content={"status": "ok", "url": stored["url"],
+                                 "key": stored["key"], "backend": stored["backend"],
+                                 "persistent": stored["backend"] == "r2"})
 
 
 # --- Crew app: Messages with the office ---------------------------------------
