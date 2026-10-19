@@ -62,6 +62,8 @@ import takeoff
 import supplier_prices
 import ledger
 import ledger_sync
+import ledger_bridge
+import funding_referrals
 import bid_opportunities
 import bid_sources
 import enrichment
@@ -707,6 +709,10 @@ async def lifecycle(app: FastAPI):
             # seeds the chart, so a new account added to ledger.CHART appears
             # on the next boot without a migration.
             ledger.ensure_schema(conn)
+            # Business/SBA referral records behind /finance. Independent of the
+            # ledger tables; the commission only reaches the books later, when
+            # the owner marks a referral paid.
+            funding_referrals.ensure_schema(conn)
         print("🎯 bid_opportunities ready.")
     except Exception as e:
         print(f"⚠️ bid_opportunities init skipped: {e}")
@@ -2399,6 +2405,7 @@ async def finance_submit(
     email: str = Form(""),
     address: str = Form(""),
     amount_needed: str = Form(""),
+    loan_purpose: str = Form("home"),
     when_start: str = Form(""),
     message: str = Form(""),
     db=Depends(get_db),
@@ -2448,6 +2455,25 @@ async def finance_submit(
                                 status_code=status.HTTP_303_SEE_OTHER)
 
     lead_id = res["lead_id"]
+
+    # Business/investment financing is the one purpose we may be paid a
+    # referral fee on. Record the referral so it has a lifecycle the owner
+    # can advance from the admin page; a purely residential application stays
+    # a lead only. funding_referrals normalizes the purpose and refuses to
+    # default toward the paid one, so an ambiguous answer lands on 'home'.
+    # Isolated: a failure here must not cost us the lead we just captured.
+    try:
+        purpose = funding_referrals.normalize_purpose(loan_purpose)
+        if purpose == funding_referrals.BUSINESS:
+            funding_referrals.create(
+                db, lead_id=lead_id, purpose=purpose,
+                amount_cents=amount_cents, consent_at=datetime.now(timezone.utc),
+                consent_note="finance form — business/investment self-identified",
+                note=(message or project_type or "")[:500],
+            )
+    except Exception as e:
+        print(f"[finance] referral record failed: {e}", flush=True)
+
     if res.get("created"):
         # Same side effects as /submit-lead. Each is isolated: a failed
         # notification must not cost us the lead we just captured.
@@ -2488,6 +2514,73 @@ async def finance_submit(
             print(f"[finance] repeat notify failed: {e}", flush=True)
 
     return RedirectResponse(url="/finance?sent=1", status_code=status.HTTP_303_SEE_OTHER)
+
+
+# --- Funding referrals: the revenue side of /finance ------------------------
+# Business/SBA loan referrals and the commission a lender pays us when one
+# funds. Owner-only. The lifecycle and the business-purpose guard live in
+# funding_referrals.py; these routes only drive it and read it back.
+
+@app.get("/finance/referrals", response_class=HTMLResponse)
+async def funding_referrals_page(request: Request, db=Depends(get_db)):
+    require_admin(request)
+    funding_referrals.ensure_schema(db)
+    rows = funding_referrals.list_referrals(db)
+    totals = {
+        "open": sum(1 for r in rows if r["status"] in (funding_referrals.NEW, funding_referrals.SUBMITTED)),
+        "funded": sum(1 for r in rows if r["status"] in (funding_referrals.FUNDED, funding_referrals.COMMISSION_PAID)),
+        "commission_cents": sum(int(r.get("commission_cents") or 0) for r in rows),
+    }
+    return templates.TemplateResponse(
+        request=request, name="funding_referrals.html",
+        context={"rows": rows, "totals": totals,
+                 "statuses": funding_referrals.STATUSES,
+                 "purpose_business": funding_referrals.BUSINESS,
+                 "today": date.today()})
+
+
+@app.post("/finance/referrals/{referral_id}/status")
+async def funding_referral_status(referral_id: int, request: Request,
+                                  status_: str = Form("", alias="status"),
+                                  partner: str = Form(""),
+                                  commission_pct: str = Form(""),
+                                  note: str = Form(""),
+                                  db=Depends(get_db)):
+    """Advance one referral. On `commission_paid`, book the fee to the ledger.
+
+    The guard is in funding_referrals.set_status -- a home-purpose referral
+    cannot reach a business-only status, so this route cannot be used to book
+    an unlicensed referral fee even by mistake. The ledger post is idempotent
+    on the referral id, so pressing the button twice does not double-count.
+    """
+    require_admin(request)
+    funding_referrals.ensure_schema(db)
+    try:
+        row = funding_referrals.get(db, referral_id)
+        if partner.strip() and row:
+            with db.cursor() as cur:
+                cur.execute("UPDATE funding_referrals SET partner = %s, updated_at = NOW() WHERE id = %s",
+                            (partner.strip()[:120], referral_id))
+            db.commit()
+        pct = None
+        if commission_pct.strip():
+            try:
+                pct = float(commission_pct.strip().replace("%", "").replace(",", ""))
+            except ValueError:
+                pct = None
+        updated = funding_referrals.set_status(
+            db, referral_id, status_, note=note, commission_pct=pct)
+        if updated["status"] == funding_referrals.COMMISSION_PAID:
+            try:
+                ledger_bridge.post_referral_commission(db, updated)
+            except ledger.LedgerError as e:
+                print(f"[funding-ref] commission not booked: {e}", flush=True)
+    except funding_referrals.ReferralGuardError as e:
+        back = request.headers.get("referer") or "/finance/referrals"
+        sep = "&" if "?" in back else "?"
+        return RedirectResponse(url=f"{back}{sep}error={str(e)[:200]}",
+                                status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(url="/finance/referrals", status_code=status.HTTP_303_SEE_OTHER)
 
 
 # --- Auth -------------------------------------------------------------------

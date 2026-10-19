@@ -83,6 +83,7 @@ CHART: list[tuple] = [
 
     ("4010", "Contract Revenue", REVENUE),
     ("4020", "Change Order Revenue", REVENUE),
+    ("4030", "Referral Commission Revenue", REVENUE),
     ("4090", "Deposit Revenue", REVENUE),
 
     ("5010", "Materials — Direct", EXPENSE),

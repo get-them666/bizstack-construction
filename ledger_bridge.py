@@ -205,6 +205,35 @@ def apply_deposit_to_invoice(conn, lead, amount, invoice_id, company: str = "con
         company=company)
 
 
+def post_referral_commission(conn, referral, when=None, company: str = "construction") -> dict:
+    """A lender paid us a referral fee on a funded business loan.
+
+    Credit 4030 Referral Commission Revenue, debit cash. Idempotent on
+    ``(funding_referral, id)`` via :func:`ledger.post`, so re-marking a referral
+    as commissioned cannot double-count.
+
+    Refuses a non-business referral outright rather than trusting the caller:
+    residential mortgage referral fees are the licensed/RESPA zone and must
+    never reach the books. The same guard lives in ``funding_referrals``, and
+    keeping it here too means the ledger cannot be used as a bypass.
+    """
+    purpose = str(referral.get("purpose") or "").lower()
+    if purpose != "business":
+        raise ledger.LedgerError(
+            f"refusing to book a referral commission for purpose {purpose!r}: "
+            f"only business-purpose loans may be commissioned")
+    amt = _d(referral.get("commission_cents"), "referral commission")
+    if amt <= 0:
+        return {"posted": False, "reason": "no commission recorded"}
+    partner = str(referral.get("partner") or "lender")[:120]
+    return ledger.post(conn, [
+        {"account": "1010", "debit": amt, "description": f"Referral fee — {partner}"},
+        {"account": "4030", "credit": amt, "description": f"Revenue — {partner}"},
+    ], entry_date=when, memo=f"Referral commission — {partner}"[:200],
+        source_type="funding_referral", source_id=str(referral.get("id")),
+        company=company)
+
+
 def record_operating_expense(conn, code, amount, description="", when=None,
                              company: str = "construction") -> dict:
     """Overhead — insurance, fuel, rent, the things that are not a job."""

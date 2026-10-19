@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{% block title %}Funding Referrals{% endblock %}
+
+{% block content %}
+<section class="bg-slate-50 min-h-screen py-8">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+
+        <div class="flex flex-wrap items-end justify-between gap-4 mb-6">
+            <div>
+                <p class="text-sm font-bold text-indigo-600 uppercase tracking-widest">Finance</p>
+                <h1 class="text-3xl font-black tracking-tight text-slate-900">Funding Referrals</h1>
+                <p class="text-sm text-slate-500 mt-1">
+                    Business/SBA loan referrals from <a href="/finance" class="text-indigo-600 hover:underline">/finance</a>
+                    and the commission a lender pays when one funds. Only business-purpose loans can be
+                    submitted or commissioned — residential mortgage referrals are the licensed zone and are blocked.
+                </p>
+            </div>
+            <a href="/books" class="px-4 py-2.5 text-sm font-semibold text-slate-700 bg-white border border-slate-200 rounded-xl">Books →</a>
+        </div>
+
+        {% if request.query_params.get("error") %}
+        <div class="mb-6 px-4 py-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-sm font-semibold">
+            {{ request.query_params.get("error") }}
+        </div>
+        {% endif %}
+
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+            <div class="bg-white rounded-2xl border border-slate-200 p-5">
+                <p class="text-xs font-bold text-slate-500 uppercase tracking-wider">Open</p>
+                <p class="text-2xl font-black text-slate-900 mt-1">{{ totals.open }}</p>
+            </div>
+            <div class="bg-white rounded-2xl border border-slate-200 p-5">
+                <p class="text-xs font-bold text-slate-500 uppercase tracking-wider">Funded</p>
+                <p class="text-2xl font-black text-slate-900 mt-1">{{ totals.funded }}</p>
+            </div>
+            <div class="bg-white rounded-2xl border border-slate-200 p-5">
+                <p class="text-xs font-bold text-slate-500 uppercase tracking-wider">Commission booked</p>
+                <p class="text-2xl font-black text-emerald-700 mt-1">${{ "{:,.2f}".format(totals.commission_cents / 100.0) }}</p>
+            </div>
+        </div>
+
+        {% if not rows %}
+        <div class="bg-white rounded-2xl border border-slate-200 p-8 text-center text-slate-500">
+            No referrals yet. A business/investment application on
+            <a href="/finance" class="text-indigo-600 hover:underline">/finance</a> creates one.
+        </div>
+        {% else %}
+        <div class="space-y-3">
+            {% for r in rows %}
+            <div class="bg-white rounded-2xl border border-slate-200 p-5">
+                <div class="flex flex-wrap items-start justify-between gap-4">
+                    <div>
+                        <div class="flex items-center gap-2">
+                            <span class="px-2 py-0.5 rounded-full text-xs font-bold
+                                {% if r.purpose == purpose_business %}bg-indigo-50 text-indigo-700{% else %}bg-slate-100 text-slate-600{% endif %}">
+                                {{ r.purpose }}
+                            </span>
+                            <span class="px-2 py-0.5 rounded-full text-xs font-bold
+                                {% if r.status == 'commission_paid' %}bg-emerald-50 text-emerald-700
+                                {% elif r.status == 'funded' %}bg-blue-50 text-blue-700
+                                {% elif r.status == 'declined' %}bg-rose-50 text-rose-700
+                                {% else %}bg-amber-50 text-amber-700{% endif %}">
+                                {{ r.status }}
+                            </span>
+                            <span class="text-xs text-slate-400">#{{ r.id }} · lead {{ r.lead_id }}</span>
+                        </div>
+                        <p class="mt-2 text-sm text-slate-700">
+                            <span class="font-semibold">{{ r.partner or 'no partner set' }}</span>
+                            {% if r.amount_cents %}<span class="text-slate-500"> · ${{ "{:,.2f}".format(r.amount_cents / 100.0) }} requested</span>{% endif %}
+                            {% if r.commission_cents %}<span class="text-emerald-700 font-semibold"> · commission ${{ "{:,.2f}".format(r.commission_cents / 100.0) }}</span>{% endif %}
+                        </p>
+                        {% if r.note %}<p class="mt-1 text-xs text-slate-500">{{ r.note[:300] }}</p>{% endif %}
+                    </div>
+
+                    <form method="post" action="/finance/referrals/{{ r.id }}/status"
+                          class="flex flex-wrap items-end gap-2">
+                        <div>
+                            <label class="block text-[10px] font-bold text-slate-500 uppercase">Partner</label>
+                            <input name="partner" value="{{ r.partner or '' }}" placeholder="lender"
+                                   class="w-36 px-2 py-1.5 rounded-lg bg-slate-50 border border-slate-200 text-xs">
+                        </div>
+                        <div>
+                            <label class="block text-[10px] font-bold text-slate-500 uppercase">Commission %</label>
+                            <input name="commission_pct" value="{{ r.commission_pct if r.commission_pct is not none else '' }}" placeholder="1.0"
+                                   class="w-20 px-2 py-1.5 rounded-lg bg-slate-50 border border-slate-200 text-xs">
+                        </div>
+                        <div>
+                            <label class="block text-[10px] font-bold text-slate-500 uppercase">Status</label>
+                            <select name="status" class="px-2 py-1.5 rounded-lg bg-slate-50 border border-slate-200 text-xs">
+                                {% for s in statuses %}
+                                <option value="{{ s }}" {% if s == r.status %}selected{% endif %}>{{ s }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <input type="hidden" name="note" value="">
+                        <button class="px-3 py-1.5 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg">Save</button>
+                    </form>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        <p class="mt-6 text-xs text-slate-400">
+            Marking a referral <span class="font-semibold">commission_paid</span> posts the fee to
+            <span class="font-mono">4030 Referral Commission Revenue</span> on the books. Posting is idempotent —
+            pressing Save twice never double-counts.
+        </p>
+    </div>
+</section>
+{% endblock %}
