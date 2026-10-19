@@ -394,3 +394,50 @@ def maps_embed_url(lat: float, lng: float, zoom: int = 16) -> str:
 def maps_directions_url(origin_lat: float, origin_lng: float, dest_lat: float, dest_lng: float) -> str:
     """Generate Google Maps directions URL."""
     return f"https://www.google.com/maps/dir/?api=1&origin={origin_lat},{origin_lng}&destination={dest_lat},{dest_lng}&travelmode=driving"
+
+def live_probe(address: str = "4600 Monticello Ave, Norfolk, VA") -> dict:
+    """Actually call Google once and report what came back.
+
+    ``maps_status()`` is deliberately network-free, which makes it free to call
+    on every page but means it cannot tell you *why* a call is failing right
+    now. Billing being switched off is not visible from a key that is present
+    and correct -- every request returns REQUEST_DENIED and the status above
+    only reports that something failed earlier, if at all.
+
+    One call, so this is for a health page and a curl, not a hot path.
+    """
+    key = (os.getenv("GOOGLE_MAPS_SERVER_KEY") or os.getenv("GOOGLE_MAPS_API_KEY") or "").strip()
+    if not key:
+        return {"ok": False, "stage": "config", "status": "NO_KEY",
+                "hint": "set GOOGLE_MAPS_SERVER_KEY to a separate server-side key"}
+    which = "server" if os.getenv("GOOGLE_MAPS_SERVER_KEY", "").strip() else "browser"
+    try:
+        result = geocode_address(address)
+    except Exception as e:
+        msg = str(e)
+        billing = "enable Billing" in msg or "illing" in msg and "REQUEST_DENIED" in msg
+        return {"ok": False, "stage": "call",
+                "status": "REQUEST_DENIED" if "REQUEST_DENIED" in msg else "EXCEPTION",
+                "message": msg[:240], "key_in_use": which,
+                "billing_enabled": billing,
+                "hint": ("Google Cloud billing is off for this project. Enable it at "
+                         "https://console.cloud.google.com/project/_/billing/enable -- "
+                         "the key and the APIs are fine, Maps will not serve without it."
+                         if billing else "")}
+    status = str(_LAST_ERROR.get("status") or "")
+    if result:
+        return {"ok": True, "stage": "geocode", "status": "OK",
+                "key_in_use": which, "address": address,
+                "resolved": (result.get("formatted_address") or "")[:120]}
+    return {
+        "ok": False, "stage": "geocode", "status": status or "EMPTY",
+        "message": str(_LAST_ERROR.get("message") or "")[:240],
+        "key_in_use": which, "address": address,
+        "billing_enabled": status == "REQUEST_DENIED" and "illing" in str(
+            _LAST_ERROR.get("message") or ""),
+        "hint": ("Google Cloud billing is off for this project. Enable it at "
+                 "https://console.cloud.google.com/project/_/billing/enable -- "
+                 "the key and the APIs are fine, Maps will not serve without it."
+                 if status == "REQUEST_DENIED" else
+                 "check that the key is not referer-restricted to a browser origin"),
+    }

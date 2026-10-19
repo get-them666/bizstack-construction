@@ -81,6 +81,7 @@ import lead_sources
 import scrap_io
 import inbound_email
 import google_oauth
+import google_maps
 import autodesk_oauth
 import skiptrace_service
 import skip_sherpa_service
@@ -2241,8 +2242,21 @@ async def vision_quote_endpoint(
 
 
 @app.get("/health")
-async def health_check():
+async def health():
     return {"status": "ok"}
+
+
+@app.get("/maps/health", response_class=JSONResponse)
+async def maps_health(request: Request):
+    """Live check on Google Maps, for when the site looks fine but addresses
+    will not resolve. Admin only: it makes a billable call and reports on the
+    project's billing state."""
+    require_admin(request)
+    return JSONResponse(content={
+        "config": google_maps.maps_status(),
+        "tools_advertised": google_maps.maps_tools_available(),
+        "probe": google_maps.live_probe(),
+    })
 
 
 @app.get("/robots.txt", response_class=Response)
