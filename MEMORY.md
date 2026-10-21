@@ -94,7 +94,21 @@ request drafted in `docs/records-request.md`, which is still unsigned.
 - **SignalWire** — the account is space `bizstack-perks.signalwire.com` (project
   `3c6eb174-…`) and holds only the assistant line `+17578469275`.
   `SIGNALWIRE_API_TOKEN` was set 2026-10-20 (`swapi_…`, owner-created in the
-  portal) and verified against the phone-numbers API — outbound SMS is back.
+  portal) and verified against the phone-numbers API. **The Campaign Registry
+  is fully REST-API accessible** with this token (`/api/relay/rest/registry/beta/…`,
+  Basic auth `ProjectID:APIToken`) — the old "portal-only" belief was wrong URL
+  paths. 10DLC registration submitted 2026-10-21 after the owner topped up the
+  SignalWire balance and added a card (TCR registration requires Auto Top-Up
+  active, which is why a bare account gets `insufficient_balance`): brand
+  `460486de-2b8d-4462-827d-1afcf25089ff` (Buildstack Construction Co., EIN
+  20-1755044, PRIVATE_PROFIT, CONSTRUCTION), campaign `a76073da-4b44-48c3-97ee-2f765f18704d`
+  ("BuildStack Construction Lead Outreach", MARKETING, lead_generation, samples
+  embed (757) 908-7121), number order `0932cce2-a69d-49e6-a615-034d8818ddef`
+  (+17578469275). All three were `pending` at submission; carrier review ~1–3
+  days. Poll: GET brand / campaigns/{cid} / orders/{oid} (note: campaign and
+  order retrieve under `/registry/beta/{campaigns,orders}/{id}`, not nested).
+  The site number (757) 908-7121 stays on Vapi forever; SMS is plumbing-only
+  on 846-9275.
 - **Google** — GCP project `prismatic-will-507203-k8` (Maps key + Vision + the
   `CON_GOOGLE_*` OAuth login client + Gmail send). The Maps key answers
   `REQUEST_DENIED`: **billing is not enabled** on the project, so every Maps API
@@ -259,7 +273,9 @@ draft staged into `leads.draft_reply` when the lead gained a real email.
 **Nothing here sends.** The owner reviews and fires drafts from the leads page
 (`auto_reply.fire_lead_draft` re-checks caps and contact policy at send time).
 A phone-only gain does not stage a draft — email is the channel that sends
-today, and SignalWire SMS is still blocked on A2P campaign registration.
+today; SignalWire SMS is submitted and pending 10DLC carrier review (brand
+`460486de-…`, campaign `a76073da-…`, number order `0932cce2-…`, all `pending`
+as of 2026-10-21 — see the Account map).
 `DISABLE_LEAD_ENRICH` kills it (explicit parsing — Railway's string "false" is
 not ON). First live run: 10 examined, 7 contacts, 7 drafts, 10 Skip Sherpa
 lookups.
