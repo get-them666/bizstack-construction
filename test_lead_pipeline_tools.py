@@ -29,8 +29,10 @@ import pytest
 from con_ai_agent import BusinessAIAgent
 import copilot_ops
 
-# The pipeline, in the order the Copilot is told to run it.
-PIPELINE = ["lookup_zip", "skip_trace_owner", "contact_lookup", "save_contact", "draft_lead_email"]
+# The pipeline, in the order the Copilot is told to run it. enrich_leads is
+# the batch form of steps 1-5 and is held to the same contract.
+PIPELINE = ["lookup_zip", "skip_trace_owner", "contact_lookup", "save_contact",
+            "draft_lead_email", "enrich_leads"]
 
 
 class _FakeDb:
@@ -93,6 +95,33 @@ def test_schema_params_match_handler_signature(handlers, agent):
         sig = set(inspect.signature(handlers[name]).parameters)
         props = set(schemas[name]["function"]["parameters"]["properties"])
         assert sig == props, f"{name}: handler{sorted(sig)} != schema{sorted(props)}"
+
+
+def test_create_deposit_links_batch_is_copilot_only_and_wired():
+    """The batch deposit-link tool must be visible to the Copilot and handled.
+
+    It also creates real Stripe sessions, so it must never reach the public
+    widget. The generic dispatch test below would catch a missing handler, but
+    not a leak to the widget or a silently dropped schema.
+    """
+    import construction_main
+
+    class _NoDb:
+        def cursor(self):
+            raise AssertionError("building the schema map must not touch the database")
+
+        def commit(self):
+            pass
+
+        def rollback(self):
+            pass
+
+    handlers = construction_main.build_copilot_handlers(_NoDb(), "owner@example.com")
+    copilot = {t["function"]["name"] for t in BusinessAIAgent(subset="copilot")._tools()}
+    public = {t["function"]["name"] for t in BusinessAIAgent(subset="widget")._tools()}
+    assert "create_deposit_links" in copilot
+    assert "create_deposit_links" in handlers
+    assert "create_deposit_links" not in public
 
 
 def test_every_advertised_tool_is_dispatchable():

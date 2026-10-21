@@ -352,8 +352,11 @@ records.
 
 ## 15. Available owner tools (copilot)
 
-- **Leads:** `register_lead`, `lookup_leads`, `list_leads`, `update_lead_status`
+- **Leads:** `register_lead`, `lookup_leads`, `list_leads`, `update_lead_status`,
+  `skip_trace_owner`, `lookup_zip`, `contact_lookup`, `save_contact`, `draft_lead_email`,
+  `enrich_leads` (batch: runs the whole pipeline on several leads at once)
 - **Money:** `get_business_summary`, `get_accounting_summary`, `create_deposit_link`,
+  `create_deposit_links` (batch: checkout links for every waiting lead at once),
 - **Materials:** `estimate_materials`, `get_material_price`, `search_materials`
 - **Crew:** `list_crew`, `run_payroll`, `get_payroll_summary`, `lookup_crew_timesheets`,
   `training_status`, `grade_training_quiz`, `remind_crew_training`,
@@ -399,6 +402,10 @@ These five steps work as one flow. Each is only useful once the one before it ha
    `dnc`/`usable` flags per number — record them, never dial them.
 4. `save_contact(lead_id, ...)` — writes the result back onto the lead.
 5. `draft_lead_email(lead_id)` — drafts the outreach. It drafts; it does not send.
+
+`enrich_leads(limit)` runs steps 1–5 as a batch on the newest eligible leads (default 10,
+max 25) in one call — prefer it over walking leads one at a time. It spends Skip Sherpa
+credits and stages drafts; it never sends.
 
 These are for **business** contacts, and every use is logged to the audit trail. Do not
 use them to build a list of homeowners. A phone or email recorded here is for the record

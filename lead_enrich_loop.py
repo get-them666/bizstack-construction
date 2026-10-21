@@ -127,14 +127,29 @@ def _mark_ran(db) -> None:
     db.commit()
 
 
-def run_once(db=None) -> dict:
-    """One capped pass. Never raises; returns a summary dict."""
+def run_once(db=None, force: bool = False, limit=None) -> dict:
+    """One capped pass. Never raises; returns a summary dict.
+
+    force=True skips the once-per-day marker -- the owner asked for this run
+    by name (the Copilot's enrich_leads tool), so today's nightly pass having
+    already happened must not refuse it. The marker is still written, and the
+    cap still applies: force buys timing, not extra credits.
+
+    limit overrides LEAD_ENRICH_MAX for this run only, clamped to 1..25 so a
+    model-supplied 1000 cannot become a 1000-credit bill.
+    """
     summary = {"examined": 0, "enriched": 0, "name_only": 0, "unchanged": 0,
                "drafts": 0, "sherpa_lookups": 0, "skipped": "", "steps": []}
     if _env_flag("DISABLE_LEAD_ENRICH"):
         summary["skipped"] = "DISABLE_LEAD_ENRICH is set"
         return summary
-    cap = _daily_max()
+    if limit is None:
+        cap = _daily_max()
+    else:
+        try:
+            cap = max(1, min(int(limit), 25))
+        except (TypeError, ValueError):
+            cap = _daily_max()
     if cap == 0:
         summary["skipped"] = "LEAD_ENRICH_MAX is 0"
         return summary
@@ -148,7 +163,7 @@ def run_once(db=None) -> dict:
         db = psycopg.connect(db_url, row_factory=dict_row)
 
     try:
-        if _already_ran_today(db):
+        if not force and _already_ran_today(db):
             summary["skipped"] = "already ran today"
             return summary
         # Marked BEFORE spending, not after: a crash mid-run must not let the

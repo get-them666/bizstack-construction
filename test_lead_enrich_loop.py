@@ -114,6 +114,34 @@ def test_already_ran_today_short_circuits_before_any_lookup():
     assert "FROM leads" not in statements
 
 
+def test_force_bypasses_the_daily_marker(monkeypatch):
+    """The owner asking by name (the Copilot's enrich_leads tool) must not be
+    refused because the nightly pass already ran. force buys timing, not
+    credits: the batch is still capped."""
+    monkeypatch.delenv("DISABLE_LEAD_ENRICH", raising=False)
+    today = loop.date.today().isoformat()
+    db = _Db(cursor=_Cur(one={"value": today}, rows=[]))
+    result = loop.run_once(db=db, force=True)
+    assert result["skipped"] == ""
+    statements = " ".join(sql for sql, _ in db._cur.executed)
+    assert "FROM leads" in statements
+
+
+def test_limit_overrides_the_daily_cap_and_clamps(monkeypatch):
+    """A model-supplied 1000 must not become a 1000-credit bill; 0 must not
+    mean 'skip the batch cursor entirely' either."""
+    monkeypatch.delenv("DISABLE_LEAD_ENRICH", raising=False)
+    db = _Db(cursor=_Cur(rows=[]))
+    loop.run_once(db=db, force=True, limit=1000)
+    selects = [p for sql, p in db._cur.executed if "FROM leads" in sql]
+    assert selects and selects[0][-1] == 25
+
+    db = _Db(cursor=_Cur(rows=[]))
+    loop.run_once(db=db, force=True, limit=0)
+    selects = [p for sql, p in db._cur.executed if "FROM leads" in sql]
+    assert selects and selects[0][-1] == 1
+
+
 def test_select_batch_never_queries_at_zero(monkeypatch):
     class _BoomDb(_Db):
         def cursor(self):

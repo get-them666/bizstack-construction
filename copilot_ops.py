@@ -830,6 +830,28 @@ def build_contact_tools(db, owner_email: str):
                 "subject": subject,
                 "note": "Nothing was sent. The owner reviews and sends from the leads page."}
 
+    def enrich_leads(limit: int = 10) -> dict:
+        """Batch enrichment: the whole five-step pipeline over many leads at once.
+
+        Runs the nightly loop on demand (force past the daily marker -- the
+        owner asked for this run): free parcel owner, Skip Sherpa contact
+        (at most ONE credit per lead), conservative write-back, and a staged
+        first-touch draft for every lead that gained a real email. The summary
+        reports credits spent and drafts staged. Nothing is sent.
+
+        Prefer this over looping contact_lookup yourself: one call, one bill,
+        and the per-request tool budget cannot cut the batch in half.
+        """
+        import lead_enrich_loop
+        try:
+            n = int(limit)
+        except (TypeError, ValueError):
+            n = 10
+        result = lead_enrich_loop.run_once(db=db, force=True, limit=n)
+        skipped = str(result.get("skipped") or "")
+        result["ok"] = not skipped.startswith(("run failed", "DATABASE_URL", "DISABLE"))
+        return result
+
     return {"skip_trace_owner": skip_trace_owner, "save_contact": save_contact,
             "lookup_zip": lookup_zip, "contact_lookup": contact_lookup,
-            "draft_lead_email": draft_lead_email}
+            "draft_lead_email": draft_lead_email, "enrich_leads": enrich_leads}

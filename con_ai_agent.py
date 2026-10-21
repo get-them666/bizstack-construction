@@ -605,6 +605,27 @@ OPERATING MANUAL:
             {
                 "type": "function",
                 "function": {
+                    "name": "create_deposit_links",
+                    "description": (
+                        "Batch: create Stripe deposit checkout links for up to `limit` "
+                        "QUOTED leads that do not have one yet, in one call instead of "
+                        "looping create_deposit_link. Marks each lead 'pending' (so "
+                        "re-running creates no duplicates) and returns every URL. "
+                        "CREATES ONLY -- nothing is emailed to a customer; the owner "
+                        "delivers each link. Amount is the lead's deposit_cents, or the "
+                        "default deposit when unset."
+                    ),
+                    "parameters": self._props(
+                        {"limit": "integer"},
+                        ["limit"],
+                        "How many links to create: 1-25. Counts only quoted leads still "
+                        "waiting on a deposit.",
+                    ),
+                },
+            },
+            {
+                "type": "function",
+                "function": {
                     "name": "list_crew",
                     "description": "List crew members (name, role, pay type/rate, active status, direct-deposit / bank status).",
                     "parameters": self._props({}, [], ""),
@@ -829,6 +850,29 @@ OPERATING MANUAL:
                         ["lead_id"],
                         "lead_id from lookup_leads or list_leads. Blank subject and body use the "
                         "standard note built from the lead's owner name and property address.",
+                    ),
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "enrich_leads",
+                    "description": (
+                        "Batch: run the whole lead pipeline (parcel owner, Skip Sherpa "
+                        "email/phone, write-back, staged first-touch draft) over the "
+                        "newest address-only leads that have no contact yet. One call "
+                        "does all of it -- use this INSTEAD of looping "
+                        "skip_trace_owner/contact_lookup/save_contact/draft_lead_email "
+                        "yourself, which the per-request tool budget will cut in half. "
+                        "Costs up to ONE Skip Sherpa credit per lead examined (hits and "
+                        "misses alike); the summary reports credits spent and drafts "
+                        "staged. Nothing is sent -- drafts wait on the leads page."
+                    ),
+                    "parameters": self._props(
+                        {"limit": "integer"},
+                        ["limit"],
+                        "How many leads to process this call: 1-25. Each lead can cost one "
+                        "Skip Sherpa credit, so state the number.",
                     ),
                 },
             },
@@ -1125,8 +1169,9 @@ OPERATING MANUAL:
                         exhausted = exhausted or name
                         content = json.dumps({
                             "ok": False,
-                            "error": f"{name} already ran {budget} time(s) in this request "
-                                     f"without succeeding. Not retrying it again.",
+                            "error": f"{name} hit the per-tool call budget "
+                                     f"({budget} calls) for this request. "
+                                     f"Continue in a new message if you still need it.",
                         })
                     else:
                         content = self._execute_tool(name, tc.function.arguments)
@@ -1136,9 +1181,11 @@ OPERATING MANUAL:
 
                 if exhausted:
                     raise ToolBudgetExhausted(
-                        f"{exhausted} failed {budget} time(s) in a row, so the request was "
-                        f"stopped instead of retrying further. Check that tool's provider "
-                        f"credentials or quota -- see the server log for the exact error."
+                        f"{exhausted} hit the per-tool call budget of {budget} for this "
+                        f"request, so it was stopped instead of looping further. The "
+                        f"budget counts every call to a tool, not just failures. Ask "
+                        f"again in a new message to continue, or raise "
+                        f"COPILOT_TOOL_ATTEMPTS."
                     )
             return fallback
         except ToolBudgetExhausted:

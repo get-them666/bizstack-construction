@@ -1539,6 +1539,69 @@ f"The mail transport did not accept the message. This usually means the "
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
+    def create_deposit_links(limit: int = 10):
+        """Batch: Stripe deposit checkout links for quoted leads awaiting one.
+
+        One call replaces a create_deposit_link-per-lead loop (which the
+        per-request tool budget would cut in half). Creates checkout sessions
+        and marks them 'pending' -- the same order the UI route uses: session
+        FIRST, then the UPDATE, because persisting 'pending' before Stripe
+        answered once left 24 rows that could never complete. A failure leaves
+        the lead untouched.
+
+        It does NOT send anything to customers; the owner delivers each URL
+        from the leads page. Leads already pending or paid are skipped, so
+        re-running creates no duplicates.
+        """
+        try:
+            n = max(1, min(int(limit), 25))
+        except (TypeError, ValueError):
+            n = 10
+        with db.cursor() as cur:
+            cur.execute(
+                "SELECT id, name, email, project_type, deposit_cents FROM leads "
+                "WHERE LOWER(COALESCE(status, '')) = 'quoted' "
+                "  AND COALESCE(deposit_status, 'none') = 'none' "
+                "ORDER BY created_at DESC LIMIT %s;",
+                (n,),
+            )
+            rows = cur.fetchall()
+        if not rows:
+            return {"ok": True, "created": [], "count": 0,
+                    "note": "No quoted leads are waiting on a deposit link."}
+        created, failed = [], []
+        for lead in rows:
+            amount_cents = int(lead.get("deposit_cents") or default_deposit_cents())
+            try:
+                checkout = stripe_svc.create_deposit_checkout(
+                    lead_id=lead["id"],
+                    customer_name=lead["name"],
+                    customer_email=lead.get("email") or "",
+                    project_type=lead.get("project_type") or "",
+                    amount_cents=amount_cents,
+                    base_url=f"https://{company()['domain']}",
+                )
+                with db.cursor() as cur:
+                    cur.execute(
+                        "UPDATE leads SET deposit_status = 'pending', deposit_cents = %s, "
+                        "stripe_session_id = %s WHERE id = %s;",
+                        (amount_cents, checkout["session_id"], lead["id"]),
+                    )
+                db.commit()
+                created.append({"lead_id": lead["id"], "name": lead["name"],
+                                "url": checkout["url"], "amount_cents": amount_cents})
+            except Exception as e:
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+                failed.append({"lead_id": lead["id"], "name": lead["name"],
+                               "error": str(e)})
+        return {"ok": not failed, "created": created, "failed": failed,
+                "count": len(created),
+                "note": "Links were created, not sent. The owner delivers each URL; "
+                        "nothing was emailed to a customer."}
+
     # --- Extended owner-co-pilot toolkit -----------------------------------
     def lookup_permits(city="", address=""):
         with db.cursor() as cur:
@@ -2104,6 +2167,7 @@ f"The mail transport did not accept the message. This usually means the "
         "send_sms_message": send_sms_message,
         "send_email_message": send_email_message,
         "create_deposit_link": create_deposit_link,
+        "create_deposit_links": create_deposit_links,
         "lookup_permits": lookup_permits,
         "enrich_permit_lead": enrich_permit_lead,
         "list_crew": list_crew,
