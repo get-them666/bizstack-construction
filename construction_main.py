@@ -7979,6 +7979,7 @@ async def bid_detail_page(bid_id: int, request: Request, db=Depends(get_db)):
     summary = {}
     invoices: list = []
     inv_summary: dict = {}
+    docs: list = []
     try:
         bid_costing.ensure_accounting_schema(db)
         costs = bid_costing.cost_lines(db, bid_id, _BID_COMPANY)
@@ -7988,12 +7989,18 @@ async def bid_detail_page(bid_id: int, request: Request, db=Depends(get_db)):
     except Exception as exc:
         # A missing accounting table must not cost the owner the whole page.
         print(f"[bids] accounting unavailable for bid {bid_id}: {exc}", flush=True)
+    try:
+        bid_opportunities.ensure_schema(db)
+        docs = bid_opportunities.list_documents(db, bid_id, _BID_COMPANY)
+    except Exception as exc:
+        print(f"[bids] documents unavailable for bid {bid_id}: {exc}", flush=True)
 
     return templates.TemplateResponse(
         request=request, name="bid_detail.html",
         context={
             "b": bid, "costs": costs, "cost_summary": summary,
             "invoices": invoices, "inv_summary": inv_summary,
+            "docs": docs,
             "statuses": ["new", "drafting", "sent", "shortlist",
                          "won", "lost", "withdrawn"],
             "cost_categories": ["material", "labor", "sub", "equipment", "other"],
@@ -8111,6 +8118,42 @@ async def bid_delete(bid_id: int, request: Request, db=Depends(get_db)):
     return RedirectResponse(url="/bids?deleted=1", status_code=status.HTTP_303_SEE_OTHER)
 
 
+@app.post("/api/bids/{bid_id}/documents")
+async def bid_document_upload(bid_id: int, request: Request, doc: UploadFile = Form(...),
+                              db=Depends(get_db)):
+    require_admin(request)
+    bid_opportunities.ensure_schema(db)
+    bid = bid_opportunities.get_bid(db, bid_id, _BID_COMPANY)
+    if not bid:
+        raise HTTPException(status_code=404, detail="Bid not found")
+    raw = await doc.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="Empty file")
+    ext = os.path.splitext(doc.filename or "")[1][:10] or ".pdf"
+    fname = f"bid-{bid_id}-{uuid.uuid4().hex[:12]}{ext.lower()}"
+    try:
+        stored = photo_store.save(raw, fname, key_prefix=f"bids/{bid_id}")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    bid_opportunities.add_document(db, bid_id, _BID_COMPANY,
+                                   filename=(doc.filename or fname)[:500],
+                                   key=stored["key"], url=stored["url"],
+                                   content_type=doc.content_type,
+                                   bytes_count=len(raw),
+                                   uploaded_by=_owner_email())
+    back = request.headers.get("referer") or f"/bids/{bid_id}"
+    return RedirectResponse(url=back, status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/api/bids/documents/{doc_id}/delete")
+async def bid_document_delete(doc_id: int, request: Request, db=Depends(get_db)):
+    require_admin(request)
+    bid_opportunities.ensure_schema(db)
+    bid_opportunities.delete_document(db, doc_id, _BID_COMPANY)
+    back = request.headers.get("referer") or "/bids"
+    return RedirectResponse(url=back, status_code=status.HTTP_303_SEE_OTHER)
+
+
 @app.get("/api/bids/sources")
 async def bid_sources_api(request: Request, db=Depends(get_db)):
     """Which external bid sources are wired and which env vars each needs.
@@ -8159,7 +8202,7 @@ async def bid_ingest(request: Request, text: str = Form(""), db=Depends(get_db))
     external API wired up. Accepts a CSV/TSV export from a bid system, or the
     text of a solicitation email. Blank lines separate records.
 
-    Writes through upsert_pulled, so it cannot overwrite a bid's status and
+    Writes through upsert_pulled, so it cannot overwrite a status and
     cannot duplicate one it already holds.
     """
     require_admin(request)
@@ -8178,10 +8221,25 @@ async def bid_ingest(request: Request, text: str = Form(""), db=Depends(get_db))
                             status_code=400)
     run_id = bid_opportunities.start_pull(db, "paste", _BID_COMPANY)
     result = bid_opportunities.upsert_pulled(db, rows, _BID_COMPANY)
+    try:
+        bid_opportunities.deduplicate_bids(db, _BID_COMPANY)
+    except Exception as e:
+        print(f"⚠️ bid dedup after ingest failed: {e}", flush=True)
     detail = None if not result["errors"] else f"{len(result['errors'])} rejected."
     bid_opportunities.finish_pull(db, run_id, fetched=len(rows), created=result["created"],
                                   updated=result["updated"], ok=True, error=detail)
     return JSONResponse(content={"ok": True, "note": note, **result})
+
+
+@app.post("/api/bids/deduplicate")
+async def bids_deduplicate(request: Request, db=Depends(get_db)):
+    require_admin(request)
+    try:
+        bid_opportunities.ensure_schema(db)
+        res = bid_opportunities.deduplicate_bids(db, _BID_COMPANY)
+    except Exception as e:
+        return JSONResponse(content={"ok": False, "error": str(e)}, status_code=500)
+    return JSONResponse(content={"ok": True, **res})
 
 
 @app.get("/bids", response_class=HTMLResponse)

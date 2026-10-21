@@ -462,9 +462,27 @@ def ensure_schema(conn) -> None:
         # entered through the board, not seeded at boot, so nothing in this
         # module carries live pipeline into version control.
         cur.execute("""
-            CREATE UNIQUE INDEX IF NOT EXISTS uq_bid_opportunities_ref_trade
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_bid_opportunities_dedupe
                 ON bid_opportunities(company, COALESCE(reference,''), COALESCE(trade,''))
         """)
+        # Documents attached to a bid (plans, specs, addenda, bid forms).
+        # Stored via photo_store (R2) so files survive deploys; key is the
+        # handle to serve via /media/{key}.
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS bid_documents (
+                id SERIAL PRIMARY KEY,
+                bid_id INTEGER NOT NULL REFERENCES bid_opportunities(id) ON DELETE CASCADE,
+                company VARCHAR(40) DEFAULT 'construction',
+                filename VARCHAR(500) NOT NULL,
+                key VARCHAR(500) NOT NULL,
+                url TEXT,
+                content_type VARCHAR(120),
+                bytes INTEGER,
+                uploaded_by VARCHAR(255),
+                uploaded_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_bid_documents_bid ON bid_documents(bid_id);")
     conn.commit()
 
 
@@ -586,3 +604,82 @@ def stats(conn, company: str = "construction") -> dict:
                           if r["status"] not in ("won", "lost", "withdrawn")),
     }
     return out
+
+
+def deduplicate_bids(conn, company: str = "construction") -> dict:
+    """Delete duplicate bid opportunities, keeping the oldest (lowest id).
+
+    Matches on normalized reference, name, and location so pastes/pulls/webhooks
+    don't create multiple cards for the same solicitation.
+    """
+    with conn.cursor() as cur:
+        cur.execute("""
+            WITH ranked AS (
+                SELECT id,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY company,
+                                        LOWER(TRIM(COALESCE(reference,''))),
+                                        LOWER(TRIM(COALESCE(name,''))),
+                                        LOWER(TRIM(COALESCE(location,'')))
+                           ORDER BY id ASC
+                       ) AS rn
+                FROM bid_opportunities
+                WHERE company = %s
+            )
+            DELETE FROM bid_opportunities b
+            USING ranked r
+            WHERE b.id = r.id AND r.rn > 1
+            RETURNING b.id
+        """, (company,))
+        deleted = cur.fetchall()
+    conn.commit()
+    return {"deleted": len(deleted), "ids": [d["id"] for d in deleted]}
+
+
+def add_document(conn, bid_id: int, company: str, filename: str, key: str,
+                  url: str | None = None, content_type: str | None = None,
+                  bytes_count: int | None = None, uploaded_by: str = "") -> int:
+    # Don't duplicate the same file on the same bid
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT id FROM bid_documents
+            WHERE bid_id = %s AND company = %s AND key = %s
+        """, (bid_id, company, key))
+        if cur.fetchone():
+            cur.execute("""
+                SELECT id FROM bid_documents
+                WHERE bid_id = %s AND company = %s AND LOWER(filename)=LOWER(%s)
+                ORDER BY id DESC LIMIT 1
+            """, (bid_id, company, filename))
+            row = cur.fetchone()
+            return row["id"] if row else 0
+        cur.execute("""
+            INSERT INTO bid_documents (bid_id, company, filename, key, url, content_type, bytes, uploaded_by)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+            RETURNING id
+        """, (bid_id, company, filename, key, url, content_type, bytes_count, uploaded_by))
+        row = cur.fetchone()
+    conn.commit()
+    return row["id"]
+
+
+def list_documents(conn, bid_id: int, company: str = "construction") -> list[dict]:
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT id, filename, key, url, content_type, bytes, uploaded_by, uploaded_at
+            FROM bid_documents
+            WHERE bid_id = %s AND company = %s
+            ORDER BY uploaded_at DESC, id DESC
+        """, (bid_id, company))
+        return cur.fetchall()
+
+
+def delete_document(conn, doc_id: int, company: str = "construction") -> bool:
+    with conn.cursor() as cur:
+        cur.execute(
+            "DELETE FROM bid_documents WHERE id = %s AND company = %s RETURNING id",
+            (doc_id, company),
+        )
+        ok = cur.fetchone() is not None
+    conn.commit()
+    return ok
