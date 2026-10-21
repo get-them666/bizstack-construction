@@ -45,7 +45,10 @@ SUBJECT = "Hello from Buildstack Construction"
 
 
 def first_touch_draft(name, address) -> tuple:
-    first = (str(name or "").strip() or "there").split()[0]
+    raw = (str(name or "").strip() or "")
+    first = raw.split()[0] if raw else "there"
+    if first.lower() in ("permit", "project", "job", "application", "unknown", "owner"):
+        first = "there"
     addr = str(address or "").strip()
     body = (
         f"Hi {first},\n\n"
