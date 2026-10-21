@@ -10,9 +10,9 @@ from permit feeds, which give a property address and an applicant name but
 often no way to reach anyone.
 
 The lookups needed to fix it already exist in this repo but were spread across
-skiptrace_service (owner of record), enrichment.py (PDL) and
-skip_sherpa_service (phone and email). This is the one entry point that runs
-them in cost order, caches what it learns, and writes back conservatively.
+skiptrace_service (owner of record) and skip_sherpa_service (phone and email).
+This is the one entry point that runs them in cost order, caches what it
+learns, and writes back conservatively.
 
 COST ORDER, WHICH IS THE WHOLE POINT
 ------------------------------------
@@ -20,13 +20,14 @@ COST ORDER, WHICH IS THE WHOLE POINT
    paid key, and is cache-first in both directions: a cached hit is a table
    read, and so is a cached MISS, so an address already known to be empty is
    never re-spent on. This is the free tier and it supplies the owner name.
-2. enrichment._enrich_address -- People Data Labs, 100 lookups a month on a
-   free key, tried only because the first step yields a name and no contact.
-3. skip_sherpa_service.trace -- costs a credit per address, so it runs last and
-   only when a cheaper step produced no phone or email.
+2. skip_sherpa_service.trace -- costs one credit per address, so it runs last
+   and only when a cheaper step produced no phone or email. It is refused
+   without a full ZIP: Skip Sherpa keys on the complete address, and a
+   city-level guess spends the credit on the wrong door.
 
-SKIPPING SHERPA INCREMENTS LAST is deliberate. Running it first would spend a
-credit on every address to learn what the free parcel lookup gives away.
+PDL used to sit between these two. Its account is not in use (every lookup
+came back a failure), so as of 2026-10-21 the chain is free-then-funded with
+nothing in between.
 
 WHAT IT WILL NOT DO
 -------------------
@@ -69,7 +70,6 @@ if not os.environ.get("SSL_CERT_FILE") and os.path.exists("/etc/ssl/cert.pem"):
 import psycopg
 from psycopg.rows import dict_row
 
-import enrichment
 import skiptrace_service
 import skip_sherpa_service
 
@@ -97,7 +97,6 @@ def classify_reachable(lead) -> bool:
 def providers() -> dict:
     return {
         "skiptrace": True,
-        "pdl": enrichment.pdl_enabled(),
         "skip_sherpa": skip_sherpa_service.configured(),
     }
 
@@ -118,7 +117,11 @@ def lookup_address(db, raw_address: str, cur) -> dict:
     street = parsed.get("street", "")
     city = parsed.get("city", "")
     state = parsed.get("state", "")
-    zipcode = parsed.get("zip", "") or parsed.get("zip_code", "")
+    # parse_address returns "zipcode". This used to read "zip"/"zip_code", so
+    # the ZIP was ALWAYS empty here and Skip Sherpa was called without one --
+    # which either misses outright or, worse, matches a neighbour. Both cost a
+    # credit, so this key alone was a paying bug.
+    zipcode = parsed.get("zipcode", "")
 
     try:
         with db.cursor() as cur:
@@ -135,34 +138,32 @@ def lookup_address(db, raw_address: str, cur) -> dict:
     except Exception as exc:
         out["steps"].append(f"skiptrace: error {str(exc)[:90]}")
 
-    if enrichment.pdl_enabled():
-        try:
-            hit = enrichment._enrich_address(street)
-            if hit:
-                out["email"] = str(hit.get("email") or "")
-                out["phone"] = str(hit.get("phone") or "")
-                out["steps"].append("pdl: hit")
-            else:
-                out["steps"].append("pdl: no match")
-        except Exception as exc:
-            out["steps"].append(f"pdl: error {str(exc)[:90]}")
-
     if (is_placeholder_email(out["email"]) or not out["phone"]) and skip_sherpa_service.configured():
-        try:
-            trace = skip_sherpa_service.trace(street, city, state, zipcode)
-        except Exception as exc:
-            trace = {"ok": False, "found": False, "message": str(exc)[:120]}
-            out["steps"].append("skip_sherpa: error")
-        if trace.get("found"):
-            emails = trace.get("emails") or []
-            preferred = str(trace.get("preferred_phone") or trace.get("raw_phone") or "").strip()
-            if is_placeholder_email(out["email"]) and emails:
-                out["email"] = str(emails[0])
-            if not out["phone"] and preferred:
-                out["phone"] = preferred
-            out["steps"].append("skip_sherpa: hit")
+        if not zipcode:
+            # Free, and it stands between us and a billed wrong-door match.
+            import zip_lookup
+            try:
+                zipcode = str(zip_lookup.lookup_zip(street, city, state).get("zipcode") or "")
+            except Exception:
+                zipcode = ""
+        if not zipcode:
+            out["steps"].append("skip_sherpa: skipped (no ZIP — never bill a guess)")
         else:
-            out["steps"].append(f"skip_sherpa: no owner ({(trace.get('message') or '')[:60]})")
+            try:
+                trace = skip_sherpa_service.trace(street, city, state, zipcode)
+            except Exception as exc:
+                trace = {"ok": False, "found": False, "message": str(exc)[:120]}
+                out["steps"].append("skip_sherpa: error")
+            if trace.get("found"):
+                emails = trace.get("emails") or []
+                preferred = str(trace.get("preferred_phone") or trace.get("raw_phone") or "").strip()
+                if is_placeholder_email(out["email"]) and emails:
+                    out["email"] = str(emails[0])
+                if not out["phone"] and preferred:
+                    out["phone"] = preferred
+                out["steps"].append("skip_sherpa: hit")
+            else:
+                out["steps"].append(f"skip_sherpa: no owner ({(trace.get('message') or '')[:60]})")
 
     return out
 

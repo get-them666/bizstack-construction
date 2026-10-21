@@ -185,6 +185,39 @@ def test_5xx_surfaces_as_provider_error(monkeypatch):
         assert exc.status == 502
 
 
+# --- the shared 50/month budget ---------------------------------------------
+
+def test_budget_exhaustion_refuses_before_http(monkeypatch):
+    """fetch_rentcast shares one monthly budget with the property tool, the
+    AVM and the sold-leads sweep. The nightly enrichment loop walks this
+    fallback on every HRGEO miss, so unbudgeted it would starve the rest of
+    RentCast within days of the month starting."""
+    monkeypatch.setenv("RENTCAST_API_KEY", "test")
+    import property_service as ps
+    monkeypatch.setattr(ps, "budget_allows", lambda cost=1: False)
+
+    def _boom(*a, **k):
+        raise AssertionError("no HTTP once the budget is spent")
+
+    monkeypatch.setattr(svc, "_get", _boom)
+    try:
+        svc.fetch_rentcast("1 Real St")
+        assert False, "a spent budget must not look like a miss"
+    except svc.ProviderError as exc:
+        assert exc.status == 429
+
+
+def test_a_real_request_charges_the_shared_budget(monkeypatch):
+    monkeypatch.setenv("RENTCAST_API_KEY", "test")
+    import property_service as ps
+    charged = []
+    monkeypatch.setattr(ps, "budget_allows", lambda cost=1: True)
+    monkeypatch.setattr(ps, "charge_call", lambda n=1: charged.append(n))
+    monkeypatch.setattr(svc, "_get", lambda *a, **k: (404, None))
+    assert svc.fetch_rentcast("1 Nowhere Rd") is svc.NOT_FOUND
+    assert charged == [1], "even a miss was billed by RentCast"
+
+
 # --- free HRGEO parcel lookup -------------------------------------------------
 
 def _hrgeo_feature(**overrides):

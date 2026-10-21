@@ -225,11 +225,26 @@ def fetch_rentcast(address: str):
     if not key:
         return None  # not configured; caller tries the next layer
 
+    # The free plan is 50 requests/month and is SHARED with the property tool,
+    # the AVM and the sold-leads sweep -- all of which charge the budget in
+    # property_service. The nightly enrichment loop walks this fallback on
+    # every HRGEO miss or ambiguous parcel, so unbudgeted it would starve every
+    # other RentCast feature within days of the month starting.
+    import property_service as ps
+    if not ps.budget_allows(1):
+        raise ProviderError(
+            f"RentCast monthly budget spent ({ps._month_limit()}/month on the free plan); "
+            "new addresses wait for the reset or a higher RENTCAST_MONTHLY_LIMIT",
+            429, spendable=True)
+
     status, body = _get(
         _RENTCAST_URL,
         {"address": address, "limit": 1},
         {"X-Api-Key": key, "Accept": "application/json"},
     )
+
+    # Any HTTP answer was billed -- misses and quota rejections included.
+    ps.charge_call(1)
 
     if status == 401:
         raise ProviderError("RentCast rejected RENTCAST_API_KEY (401)", 502, spendable=False)

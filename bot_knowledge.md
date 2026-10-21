@@ -243,7 +243,7 @@ records.
 
 ---
 
-## 15. Available owner tools (copilholidot)
+## 15. Available owner tools (copilot)
 
 - `register_lead`, `lookup_leads`, `list_leads`, `update_lead_status`,
   `get_business_summary`, `get_accounting_summary`, `send_sms_message`,

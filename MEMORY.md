@@ -55,6 +55,54 @@ greet as "Dear the homeowner," and why an empty `contractor_name` means
 *unpublished*, not *self-applied*. Applicant identity only comes from the VFOIA
 request drafted in `docs/records-request.md`, which is still unsigned.
 
+## Account map — audited 2026-10-20 (supersedes AGENTS.md's Zen section)
+
+- **OpenAI** — funded again. New project key (`sk-proj-x-Dy…`) in Railway; the old
+  key was retired with `credit_balance_exhausted`. Copilot is back on OpenAI
+  (`COPILOT_MODEL=gpt-4o-mini`, `COPILOT_BASE_URL` deleted). Voice and web_search
+  share this key. Verified with a live tool call.
+- **OpenCode Zen** — the free tier now **403s every non-OpenCode client**
+  (`FreeTierError`) regardless of key; the 2026-10-10 "verified live" note in
+  AGENTS.md is stale. Console keys (`key_…` is only a tracking id; the secret is
+  the `sk-…`) authenticate at `opencode.ai/inference/openai/v1`, not `/zen/v1`.
+  `_DEFAULT_FREE_MODELS` in `con_ai_agent.py` was refreshed (space-bunny-free and
+  ling-3.1-flash-free had rotted off the model list).
+- **Skip Sherpa** — FUNDED and verified live 2026-10-20: returns owner name,
+  emails, and phones with DNC flags. The Railway key was rotated (`d431d7e2-…`);
+  the old `7e5446…` got a 401 after the account change. This is now the contact
+  provider of record. `SKIPTRACE_ENRICH_MAX` raised 1 → 25.
+- **PDL** — RETIRED 2026-10-20. The Copilot's `pdl_contact` tool was renamed
+  `contact_lookup` and rebacked by Skip Sherpa; `PDL_API_KEY` was deleted from
+  Railway (backed up in the owner's local `.env`), so the leftover PDL web
+  routes honestly report not-configured. `data_enrichment` no longer imports
+  `enrichment` at all. Do not reintroduce it — the owner's instruction was
+  "not pdl", and Skip Sherpa is the fundable provider.
+- **RentCast** — the pasted key `32201f…` answers (an auth failure now shows as
+  404 "not in my database", not the 403 the retired key gave). It is the
+  **free Developer plan: 50 requests per calendar month** — a courtesy tier,
+  not a paid pipeline. All RentCast callers share ONE budget in
+  `property_service` (`budget_allows`/`charge_call`, `RENTCAST_MONTHLY_LIMIT`,
+  default 50). As of 2026-10-20 `skiptrace_service.fetch_rentcast` charges that
+  budget too — it previously did not, and the nightly enrichment loop walking
+  that fallback would have starved the property tool, the AVM and the
+  sold-leads sweep within days. Over-budget fetches refuse with a
+  spendable 429 `ProviderError` instead of calling.
+- **Accurate Append** — still 401 (no subscription). Skip Sherpa covers the same
+  ground now; leave it or cancel the trial, but do not treat it as the path.
+- **Vapi** — owns the business line `+17579087121` (org `d4232da5-…`, number
+  record `fc973bf0-…`, "bizstack-voice", active). It is NOT on SignalWire.
+- **SignalWire** — the account is space `bizstack-perks.signalwire.com` (project
+  `3c6eb174-…`) and holds only the assistant line `+17578469275`.
+  `SIGNALWIRE_API_TOKEN` was set 2026-10-20 (`swapi_…`, owner-created in the
+  portal) and verified against the phone-numbers API — outbound SMS is back.
+- **Google** — GCP project `prismatic-will-507203-k8` (Maps key + Vision + the
+  `CON_GOOGLE_*` OAuth login client + Gmail send). The Maps key answers
+  `REQUEST_DENIED`: **billing is not enabled** on the project, so every Maps API
+  call fails until billing is attached at console.cloud.google.com.
+- **Railway cleanup** — 17 unused variables deleted (HOSPITABLE_PAT,
+  CHECK_*, EMAIL_BOT_*, X_API_KEY with a literal trailing tab, etc.). Full
+  pre-cleanup dump lives in the owner's local gitignored `.env`.
+
 ## How to verify against the real system
 
 No local `psycopg` or `fpdf`, and the venvs are broken (`myenv/bin/pip` has a
@@ -197,6 +245,24 @@ local tool raised a 502 on any non-200, which aborted the whole waterfall — so
 the addresses that most needed a fallback were exactly the ones that threw.
 That was the reported "works sometimes, otherwise errors". Any new provider
 layer must return `NOT_FOUND` for both.
+
+## Daily lead enrichment autopilot — live since 2026-10-20
+
+`lead_enrich_loop.py` runs a daemon thread started from `lifecycle()`. Once per
+calendar day (marker `lead_enrich_last_run` in `app_settings`, written BEFORE
+spending so a crash cannot re-spend the day) it takes the newest address-only
+unreachable leads, capped at `LEAD_ENRICH_MAX` (default 10), and runs each
+through the existing free pipeline: HRGEO parcels → Skip Sherpa (at most one
+billed credit per lead) → `data_enrichment.merge` write-back → a first-touch
+draft staged into `leads.draft_reply` when the lead gained a real email.
+
+**Nothing here sends.** The owner reviews and fires drafts from the leads page
+(`auto_reply.fire_lead_draft` re-checks caps and contact policy at send time).
+A phone-only gain does not stage a draft — email is the channel that sends
+today, and SignalWire SMS is still blocked on A2P campaign registration.
+`DISABLE_LEAD_ENRICH` kills it (explicit parsing — Railway's string "false" is
+not ON). First live run: 10 examined, 7 contacts, 7 drafts, 10 Skip Sherpa
+lookups.
 
 ## Accurate Append — the contact step, currently blocked on billing
 

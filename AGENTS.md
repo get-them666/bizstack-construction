@@ -206,7 +206,7 @@ the model a send button that could only error.
 the prompt, and `construction_knowledge.md` §15 ("Available owner tools") hand-lists the toolkit
 in prose. Nothing checks it, and **it is currently drifted** as of `3b4fd69`: it advertises
 `send_email`, which no longer exists under any name, and omits the whole permit pipeline
-(`skip_trace_owner`, `lookup_zip`, `pdl_contact`, `save_contact`, `draft_lead_email`) that
+(`skip_trace_owner`, `lookup_zip`, `contact_lookup`, `save_contact`, `draft_lead_email`) that
 `6f5b336` made reachable. So a tool is live only when all three agree: **schema
 (`con_ai_agent.py`) + handler (`construction_main.py`/`copilot_ops.py`) + prompt
 (`construction_knowledge.md` §15).**

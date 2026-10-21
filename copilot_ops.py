@@ -19,6 +19,7 @@ Three problems this solves:
 """
 
 import ast
+import json
 import operator
 import os
 from datetime import datetime, timedelta, timezone
@@ -525,16 +526,43 @@ def build_task_tools(db, owner_email: str):
 # The pipeline the owner actually needs, and every step of it was unreachable:
 #   address -> ZIP          (zip_lookup, free, keyless)
 #   address -> owner NAME   (skiptrace_service, cached)
-#   address -> email/phone  (pdl_contact_service, cached, audited, ZIP-required)
+#   address -> email/phone  (skip_sherpa_service, audited, ZIP-required)
 #   -> PERSIST onto the lead row, which is what never happened
 #   -> stage a DRAFT for the owner to send
 # Contacts used to be reported in chat and evaporate, so there was no lead row,
 # no dedupe and no touch history, and the same research had to be redone every
 # session.
 #
-# Email/phone deliberately comes from PDL rather than the model's own web_search.
+# Email/phone deliberately comes from Skip Sherpa rather than the model's own web_search.
+# PDL used to sit here; its key is present but the account is not in use, so every
+# lookup came back a failure and the tool's retries tripped the tool budget -> 502.
 # That tool is fenced off people-search domains by _BLOCKED_CONTACT_DOMAINS --
 # business contacts only, decided 2026-10-02 -- and these leads are homeowners.
+
+_CONTACT_CACHE_READY = False
+
+
+def _contact_cache_schema(cur) -> None:
+    """Lazy init for contact_lookup_cache -- misses too, since a miss was billed.
+
+    Module-flagged like skiptrace_service.ensure_schema: CREATE IF NOT EXISTS is
+    idempotent but not free, and this runs on every contact tool call.
+    """
+    global _CONTACT_CACHE_READY
+    if _CONTACT_CACHE_READY:
+        return
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS contact_lookup_cache (
+            address_key VARCHAR(255) PRIMARY KEY,
+            found BOOLEAN NOT NULL,
+            payload TEXT NOT NULL,
+            source VARCHAR(40) DEFAULT 'skip_sherpa',
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
+    """)
+    _CONTACT_CACHE_READY = True
+
+
 def build_contact_tools(db, owner_email: str):
     """Owner-scoped. These WRITE to leads but CANNOT send anything.
 
@@ -639,9 +667,9 @@ def build_contact_tools(db, owner_email: str):
         """Resolve the ZIP code for a street address. Free geocoder, no key, no quota.
 
         This is the step the rest of the pipeline stands on. The open permit feeds
-        publish the street address but not always the ZIP, and PDL refuses to match
-        without one -- a city-level match can return a different person's contact
-        details. So the ZIP is resolved first, not as an afterthought.
+        publish the street address but not always the ZIP, and Skip Sherpa refuses
+        to match without one -- a city-level match can return a different person's
+        contact details. So the ZIP is resolved first, not as an afterthought.
         """
         import skiptrace_service as sts
         import zip_lookup
@@ -657,8 +685,8 @@ def build_contact_tools(db, owner_email: str):
         except zip_lookup.ZipLookupError as exc:
             return {"ok": False, "error": f"ZIP lookup failed: {exc}"}
 
-    def pdl_contact(address: str = "", owner_name: str = "") -> dict:
-        """Look up an EMAIL and PHONE for a homeowner address, via People Data Labs.
+    def contact_lookup(address: str = "") -> dict:
+        """Look up an EMAIL and PHONE for a homeowner address, via Skip Sherpa.
 
         This is the contact step, and it is deliberately NOT web_search. That tool
         is fenced off from people-search domains by _BLOCKED_CONTACT_DOMAINS,
@@ -666,19 +694,25 @@ def build_contact_tools(db, owner_email: str):
         a name from the assessor record; no public record in the US carries an
         email or a phone, so a name alone is not a channel.
 
-        Fetches a ZIP itself when the address lacks one. Results are cached per
-        address -- a repeat costs nothing -- and every lookup is written to
-        pdl_contact_audit with the requesting user.
+        Skip Sherpa bills ONE credit per address, misses included. Results are
+        cached per address -- hits AND misses -- so a repeat costs nothing, and
+        every lookup is written to skiptrace_audit with the requesting user.
+        Refuses before spending whenever it can: no key, no ZIP, unparseable.
 
-        The phone is RECORDED, never dialled. These are residential numbers, and a
-        do-not-call check is a legal requirement before calling one.
+        The phones come back with per-number dnc/usable flags and are RECORDED,
+        never dialled. These are residential lines and calling one requires a
+        do-not-call check first.
         """
-        import pdl_contact_service
+        import skip_sherpa_service
         import skiptrace_service as sts
 
         raw = (address or "").strip()
         if not raw:
             return {"ok": False, "error": "Need an address, e.g. '8494 Lynn River Road, Norfolk, VA 23518'."}
+        if not skip_sherpa_service.configured():
+            return {"ok": False,
+                    "error": "Skip Sherpa is not configured (SKIP_SHERPA_API_KEY is not set). "
+                             "No lookup was made and nothing was billed."}
         parsed = sts.parse_address(raw)
         if not parsed["ok"]:
             return {"ok": False, "error": f"Could not read that address: {parsed['why']}."}
@@ -692,25 +726,64 @@ def build_contact_tools(db, owner_email: str):
                 found = zip_lookup.lookup_zip(street, city, state)
             except zip_lookup.ZipLookupError as exc:
                 return {"ok": False,
-                        "error": f"PDL needs a ZIP and the lookup failed: {exc}"}
+                        "error": f"Skip Sherpa needs a ZIP and the lookup failed: {exc}"}
             zipcode = (found.get("zipcode") or "").strip()
             if not zipcode:
                 return {"ok": False,
-                        "error": "PDL needs a ZIP and none resolved for this address. "
+                        "error": "Skip Sherpa needs a ZIP and none resolved for this address. "
                                  "No lookup was made and nothing was billed."}
 
+        key = sts.normalize_address(street, city, state, zipcode)
         try:
+            # Schema first, committed on its own: if a later ProviderError rolls
+            # the transaction back, a CREATE TABLE undone while the module flag
+            # says "ready" would leave this tool permanently broken.
             with db.cursor() as cur:
-                result = pdl_contact_service.lookup(
-                    street, city, state, zipcode,
-                    owner_name=(owner_name or "").strip(),
-                    cur=cur, requested_by=owner_email,
-                )
+                sts.ensure_schema(cur)
+                _contact_cache_schema(cur)
+            db.commit()
+            with db.cursor() as cur:
+                cur.execute("SELECT found, payload FROM contact_lookup_cache WHERE address_key = %s;",
+                            (key,))
+                row = cur.fetchone()
+            if row:
+                found = bool(row["found"]) if isinstance(row, dict) else bool(row[0])
+                payload_raw = row["payload"] if isinstance(row, dict) else row[1]
+                try:
+                    payload = json.loads(payload_raw) if payload_raw else {}
+                except (TypeError, ValueError):
+                    payload = {}
+                payload["found"] = found
+                with db.cursor() as cur:
+                    sts.audit(cur, owner_email, key, payload, cached=True)
                 db.commit()
+                return {"ok": True, "cached": True, **payload}
         except Exception as exc:
             db.rollback()
-            return {"ok": False, "error": f"PDL lookup failed: {type(exc).__name__}: {exc}"}
-        return {"ok": bool(result.get("found")), **result}
+            return {"ok": False, "error": f"Contact cache read failed: {type(exc).__name__}: {exc}"}
+
+        try:
+            result = skip_sherpa_service.trace(street, city, state, zipcode)
+            with db.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO contact_lookup_cache (address_key, found, payload) "
+                    "VALUES (%s, %s, %s) ON CONFLICT (address_key) DO NOTHING;",
+                    (key, bool(result.get("found")), json.dumps(result)),
+                )
+                sts.audit(cur, owner_email, key,
+                          {"found": result.get("found"),
+                           "owner_of_record": result.get("owner") or "",
+                           "property": {"_source": "skip_sherpa"}},
+                          cached=False)
+            db.commit()
+        except skip_sherpa_service.ProviderError as exc:
+            db.rollback()
+            return {"ok": False, "error": exc.message, "status": exc.status,
+                    "credit_spent": exc.spendable}
+        except Exception as exc:
+            db.rollback()
+            return {"ok": False, "error": f"Contact lookup failed: {type(exc).__name__}: {exc}"}
+        return {"ok": bool(result.get("found")), "cached": False, **result}
 
     def draft_lead_email(lead_id: str = "", subject: str = "", body: str = "") -> dict:
         """Write an email DRAFT onto a lead card for the owner to review.
@@ -740,21 +813,14 @@ def build_contact_tools(db, owner_email: str):
                     "error": f"Lead #{lid} has no real email address yet "
                              f"({email or 'none'}). Save a real contact first."}
 
-        subject = (subject or "").strip() or "Hello from Buildstack Construction"
+        subject = (subject or "").strip()
         address = (lead.get("address") or "").strip()
-        if not (body or "").strip():
-            first = ((lead.get("name") or "").strip() or "there").split()[0]
-            body = (
-                f"Hi {first},\n\n"
-                f"I hope this message finds you well! I'm reaching out from Buildstack "
-                f"Construction, as we noticed your property at {address}. "
-                f"If you're considering any renovations or improvements, we'd love to help "
-                f"you with your project.\n\n"
-                f"Feel free to reply to this email or give us a call at "
-                f"+1 (757) 908-7121 to discuss your ideas!\n\n"
-                f"Best regards,\n"
-                f"Buildstack Construction"
-            )
+        if not (body or "").strip() or not subject:
+            from lead_enrich_loop import first_touch_draft
+            default_subject, default_body = first_touch_draft(lead.get("name"), address)
+            subject = subject or default_subject
+            if not (body or "").strip():
+                body = default_body
 
         with db.cursor() as cur:
             cur.execute("UPDATE leads SET draft_reply = %s WHERE id = %s;",
@@ -765,5 +831,5 @@ def build_contact_tools(db, owner_email: str):
                 "note": "Nothing was sent. The owner reviews and sends from the leads page."}
 
     return {"skip_trace_owner": skip_trace_owner, "save_contact": save_contact,
-            "lookup_zip": lookup_zip, "pdl_contact": pdl_contact,
+            "lookup_zip": lookup_zip, "contact_lookup": contact_lookup,
             "draft_lead_email": draft_lead_email}

@@ -748,7 +748,7 @@ OPERATING MANUAL:
                         "'Blow, Vernon K' -- last, first; take the part after the comma for a "
                         "first-name greeting). Also returns `parcel`, `assessed_value`, "
                         "`year_built` and `is_residential`. It does NOT return an email or a "
-                        "phone -- no public record carries those; use pdl_contact for them. "
+                        "phone -- no public record carries those; use contact_lookup for them. "
                         "Cached per address, so a repeat lookup is free."
                     ),
                     "parameters": self._props(
@@ -775,21 +775,23 @@ OPERATING MANUAL:
             {
                 "type": "function",
                 "function": {
-                    "name": "pdl_contact",
+                    "name": "contact_lookup",
                     "description": (
-                        "Look up an EMAIL and PHONE for a homeowner address via People Data "
-                        "Labs. This is the contact step that skip_trace_owner cannot do. Use "
-                        "web_search instead ONLY for businesses -- it is fenced off "
+                        "Look up an EMAIL and PHONE for a homeowner address via Skip "
+                        "Sherpa. This is the contact step that skip_trace_owner cannot do. "
+                        "Use web_search instead ONLY for businesses -- it is fenced off "
                         "people-search sites. Fetches a ZIP itself if the address lacks one. "
-                        "Cached per address and every lookup is audited. The phone is "
-                        "RECORDED, never dialled: these are residential lines and calling one "
-                        "requires a do-not-call check first."
+                        "ONE address costs ONE Skip Sherpa credit, hits and misses alike; "
+                        "results are cached per address and every lookup is audited. The "
+                        "phones come back with do-not-call flags -- RECORDED, never dialled: "
+                        "these are residential lines and calling one requires a DNC check "
+                        "first."
                     ),
                     "parameters": self._props(
-                        {"address": "string", "owner_name": "string"},
+                        {"address": "string"},
                         ["address"],
-                        "Full property address, ZIP preferred. owner_name is the name from "
-                        "skip_trace_owner, if you already have it.",
+                        "Full property address including ZIP if you have it, e.g. "
+                        "'8494 Lynn River Road, Norfolk, VA 23518'.",
                     ),
                 },
             },
@@ -898,10 +900,15 @@ OPERATING MANUAL:
     # unavailable. They are heavily rate limited, and OpenCode documents each as
     # "available on OpenCode for a limited time", so this list is expected to
     # rot: COPILOT_FREE_FALLBACK_MODELS overrides it, comma separated.
+    # Re-checked against https://opencode.ai/zen/v1/models on 2026-10-20.
+    # space-bunny-free and ling-3.1-flash-free had rotted off the list by then;
+    # as of 2026-10-20 the whole free tier also refuses non-OpenCode clients
+    # (FreeTierError 403), so these only engage when COPILOT_BASE_URL points at
+    # Zen AND OpenCode relaxes that restriction again.
     _DEFAULT_FREE_MODELS = (
-        "space-bunny-free",
         "big-pickle",
-        "ling-3.1-flash-free",
+        "glm-5.3-flash-free",
+        "deepseek-v4.1-flash-free",
         "nemotron-3.5-lightning-free",
     )
 

@@ -393,9 +393,10 @@ These five steps work as one flow. Each is only useful once the one before it ha
    A name is *not* a contact: it has no phone and no email. The endpoint is audited and
    flags residential owners.
 2. `lookup_zip(address)` — fills in a missing ZIP. Permits arrive without one often.
-3. `pdl_contact(name, address, zip)` — the actual **contact** step (email/phone).
+3. `contact_lookup(address)` — the actual **contact** step (email/phone), via Skip Sherpa.
    ZIP is required; a city-level match returns a *neighbour*, which is worse than no answer.
-   It reports `dnc_unknown` because no DNC signal is available.
+   One address costs one credit (cached after the first). Phones come back with
+   `dnc`/`usable` flags per number — record them, never dial them.
 4. `save_contact(lead_id, ...)` — writes the result back onto the lead.
 5. `draft_lead_email(lead_id)` — drafts the outreach. It drafts; it does not send.
 

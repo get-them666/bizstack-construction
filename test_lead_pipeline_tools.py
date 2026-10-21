@@ -8,7 +8,7 @@ The Copilot answered "I am unable to access the property information and names
 for the leads." That was not a provider outage. Four of the five steps of the
 pipeline were **unreachable**: skip_trace_owner and save_contact had handlers
 registered in build_copilot_handlers but no schema in the tool list, and
-lookup_zip, pdl_contact and draft_lead_email did not exist at all.
+lookup_zip, contact_lookup and draft_lead_email did not exist at all.
 
 The failure mode is quiet and total. A handler in _tool_handlers is just a dict
 entry; the API only ever offers the model the functions named in the schema list.
@@ -30,7 +30,7 @@ from con_ai_agent import BusinessAIAgent
 import copilot_ops
 
 # The pipeline, in the order the Copilot is told to run it.
-PIPELINE = ["lookup_zip", "skip_trace_owner", "pdl_contact", "save_contact", "draft_lead_email"]
+PIPELINE = ["lookup_zip", "skip_trace_owner", "contact_lookup", "save_contact", "draft_lead_email"]
 
 
 class _FakeDb:
@@ -134,13 +134,14 @@ def test_copilot_cannot_send_email(agent):
     assert "make_outbound_call" not in names
 
 
-def test_pdl_contact_refuses_without_a_zip(monkeypatch, handlers):
-    """No ZIP means a city-level match, which can return a neighbour.
+def test_contact_lookup_refuses_before_spending(monkeypatch, handlers):
+    """No key or no ZIP means nothing may be billed.
 
-    pdl_contact_service refuses before spending anything; this asserts the
-    Copilot-facing wrapper surfaces that refusal rather than calling through.
+    Skip Sherpa charges one credit per address, misses included, and this tool
+    is the Copilot's only way to spend one. So an unconfigured provider or an
+    unresolvable ZIP must return a refusal with the provider never reached.
     """
-    import pdl_contact_service
+    import skip_sherpa_service
 
     called = []
 
@@ -148,11 +149,11 @@ def test_pdl_contact_refuses_without_a_zip(monkeypatch, handlers):
         called.append(a)
         return {"found": True, "email": "x@y.com", "phone": "7575551234"}
 
-    monkeypatch.setattr(pdl_contact_service, "lookup", boom)
-    monkeypatch.setattr(pdl_contact_service, "configured", lambda: False)
-    result = handlers["pdl_contact"](address="8494 Lynn River Road, Norfolk, VA")
+    monkeypatch.setattr(skip_sherpa_service, "trace", boom)
+    monkeypatch.setattr(skip_sherpa_service, "configured", lambda: False)
+    result = handlers["contact_lookup"](address="8494 Lynn River Road, Norfolk, VA")
     assert result["ok"] is False
-    assert not called, "must not reach PDL when unconfigured or ZIP-less"
+    assert not called, "must not reach Skip Sherpa when unconfigured"
 
 
 def test_draft_lead_email_is_staged_not_sent(handlers):

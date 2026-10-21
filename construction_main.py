@@ -767,6 +767,17 @@ async def lifecycle(app: FastAPI):
     except Exception as exc:
         print(f"⚠️ lead pipeline init skipped: {exc}", flush=True)
 
+    # Daily lead-enrichment autopilot: free parcel lookup -> Skip Sherpa (one
+    # capped credit) -> conservative write-back -> staged first-touch draft.
+    # Research and staging only; nothing sends. Started here, after the DDL
+    # block has committed (it needs app_settings), individually guarded like
+    # every other background thread.
+    try:
+        import lead_enrich_loop
+        lead_enrich_loop.start()
+    except Exception as exc:
+        print(f"[lead-enrich] could not start autopilot: {exc}", flush=True)
+
     try:
         yield
     finally:
