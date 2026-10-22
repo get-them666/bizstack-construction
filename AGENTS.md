@@ -351,5 +351,15 @@ looks like clutter, it is probably a source artifact for `docs/CHECKLIST.md`.
   own `ensure_schema()` over growing it.
 - Python 3.10 target in `venv/`, 3.12 in the Dockerfile (`Dockerfile`, `python:3.12-slim`). Keep
   syntax compatible with 3.10.
-- Deploy is Railway, RAILPACK builder, `uvicorn construction_main:app` (`Procfile`).
-  `railway.json` watches only `construction_main.py` for rebuilds.
+- Deploy is Railway, **Dockerfile** builder (`Dockerfile`, `python:3.12-slim`,
+  `uvicorn construction_main:app`), not RAILPACK. `railway.json`'s
+  `build.watchPatterns` decides which commits trigger a rebuild, and Railway
+  **skips** any commit that touches none of them (`SKIPPED — "No changes to
+  watched files"`). That list was a hand-maintained 19 files covering a small
+  slice of the ~60 flat modules, so a commit touching only an unwatched module
+  (e.g. `lead_enrich_loop.py` on 2026-10-21) silently never shipped. It is now
+  broad globs (`**/*.py`, `**/*.md`, `templates/**`, `static/**`, plus
+  `requirements.txt`/`Dockerfile`/`Procfile`/`railway.json`). **Keep it broad** —
+  this is one service; there is nothing to gate. After a push, confirm with
+  `railway deployment list --json` that the newest deployment is `SUCCESS`, not
+  `SKIPPED`.

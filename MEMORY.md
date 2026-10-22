@@ -91,6 +91,23 @@ request drafted in `docs/records-request.md`, which is still unsigned.
   ground now; leave it or cancel the trial, but do not treat it as the path.
 - **Vapi** — owns the business line `+17579087121` (org `d4232da5-…`, number
   record `fc973bf0-…`, "bizstack-voice", active). It is NOT on SignalWire.
+  The assistant is `80156d94-2c6a-40e3-a027-f4b48ea928f9`, voice
+  `11labs/eleven_turbo_v2_5` **voiceId `ryan`**, transcriber deepgram `nova-3`.
+  **Its `model.url` lives in the Vapi dashboard, not in this repo.** It was
+  created 2026-09-21, when both apps shared one host, so it kept
+  `https://bizstackperks.com/vapi/llm` (the *hosts* domain) after the
+  2026-10-11 separation. That URL 500s, and Vapi's behaviour on a failed
+  custom-LLM call is to speak the assistant's `firstMessage` and then **go
+  silent for the rest of the call** — so the phone bot "answers" and then never
+  replies again. Fixed 2026-10-22 by pointing it at
+  `https://construction.bizstackperks.com/vapi/llm`, and
+  `vapi_service._sync_assistant_url()` now repoints it on every boot and
+  before every outbound call, so a future domain move cannot silently kill
+  the voice line. Diagnose this first if the bot goes quiet: `GET
+  /assistant/80156d94-…` and read `model.url`. Outbound calls are safe either
+  way — they override `model.url` per call via `assistantOverrides`.
+  The second assistant in the org, `c96b850f-…` ("Riley"), is an unrelated
+  Wellness Partners scheduling agent, not ours.
 - **SignalWire** — the account is space `bizstack-perks.signalwire.com` (project
   `3c6eb174-…`) and holds only the assistant line `+17578469275`.
   `SIGNALWIRE_API_TOKEN` was set 2026-10-20 (`swapi_…`, owner-created in the

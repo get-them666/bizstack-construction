@@ -736,6 +736,20 @@ async def lifecycle(app: FastAPI):
         except Exception as exc:
             print(f"[lead-source] could not start scheduler: {exc}", flush=True)
 
+    # The Vapi assistant lives in the Vapi dashboard, and its custom-LLM URL is
+    # whatever domain the app had when the assistant was created. If that URL
+    # errors, Vapi still speaks the assistant's firstMessage and then goes
+    # silent for the rest of the call -- the phone bot "answers" and then never
+    # replies again. Repoint it at this app on every boot so a domain move
+    # can't silently kill the voice line.
+    def _sync_vapi_assistant():
+        try:
+            vapi.sync_assistant()
+        except Exception as exc:
+            print(f"[vapi] assistant url sync failed: {exc}", flush=True)
+
+    threading.Thread(target=_sync_vapi_assistant, daemon=True).start()
+
     # Copilot conversation memory + the one-year task list. Self-initializing, so
     # this is safe on every boot and on redeploys against an existing database.
     try:
@@ -5545,10 +5559,14 @@ def _follow_up_new_lead(lead_id: int) -> None:
             if own and digits[-10:] == own[-10:]:
                 return
             try:
-                if not vapi_service.VapiService().is_configured():
+                # Use the module-level client: it defaults to this app's domain
+                # (construction.bizstackperks.com). A bare VapiService() falls
+                # back to the hosts domain, which would point the voice brain
+                # at the wrong app.
+                if not vapi.is_configured():
                     print(f"📞[followup] Vapi not configured, skipping dial for lead {lead_id}", flush=True)
                     return
-                sid = vapi_service.VapiService().create_ai_outbound_call(to, f"AI immediate callback for new lead {lead_id}")
+                sid = vapi.create_ai_outbound_call(to, f"AI immediate callback for new lead {lead_id}")
             except Exception as e:
                 print(f"📞[followup] dial failed for lead {lead_id}: {e}", flush=True)
                 return
@@ -6241,7 +6259,21 @@ def _vapi_assistant_text(client, model, messages, tools, db,
     """
     material_categories = list(material_categories or [])
     material_categories = [c for c in material_categories if c]
+    # A caller on a phone will not wait forever. Each turn is a full model
+    # round-trip against a 40k-character prompt, and a model that keeps asking
+    # for tools can burn the whole budget before saying a word. When the
+    # budget runs out we answer with whatever we have, so the caller hears
+    # something instead of silence.
+    try:
+        deadline_s = float(os.getenv("VOICE_TOOL_DEADLINE_SECONDS", "25") or 25)
+    except (TypeError, ValueError):
+        deadline_s = 25.0
+    started = time.monotonic()
+    last_text = ""
     for turn in range(6):
+        if time.monotonic() - started > deadline_s:
+            print(f"⚠️ VAPI-DEADLINE hit after {time.monotonic() - started:.1f}s", flush=True)
+            break
         call_kwargs = {"model": model, "messages": messages, "tools": tools, "temperature": 0.7}
         if turn == 0 and tool_choice:
             call_kwargs["tool_choice"] = tool_choice
@@ -6250,6 +6282,8 @@ def _vapi_assistant_text(client, model, messages, tools, db,
         tool_calls = getattr(msg, "tool_calls", None)
         if not tool_calls:
             return (msg.content or "").strip() or "One moment — let me check that for you."
+        if (msg.content or "").strip():
+            last_text = msg.content.strip()
         calls = []
         for tc in tool_calls:
             calls.append({"id": tc.id, "type": "function",
@@ -6274,20 +6308,24 @@ def _vapi_assistant_text(client, model, messages, tools, db,
                 print(f"⚠️ VAPI-TOOL {tc.function.name} crash: {e}", flush=True)
                 result = "That hit a snag — the team will follow up by text."
             messages.append({"role": "tool", "tool_call_id": tc.id, "content": str(result)})
-    return "Let me pass this to the team to get you squared away — they'll follow up by text."
+    return last_text or "Let me pass this to the team to get you squared away — they'll follow up by text."
 
 
 def _vapi_sse_response(text: str, model: str, completion_id: str) -> StreamingResponse:
     """Stream assistant text back to Vapi as OpenAI-format SSE chunks."""
     def gen():
         created = int(time.time())
-        for word in (text + " ").split(" "):
+        words = (text + " ").split(" ")
+        for i, word in enumerate(words):
+            # OpenAI opens a stream with a role-only chunk. Vapi tolerates its
+            # absence, but sending it keeps the shape canonical.
+            delta = {"role": "assistant", "content": word + " "} if i == 0 else {"content": word + " "}
             chunk = {
                 "id": completion_id,
                 "object": "chat.completion.chunk",
                 "created": created,
                 "model": model,
-                "choices": [{"index": 0, "delta": {"content": word + " "},
+                "choices": [{"index": 0, "delta": delta,
                              "logprobs": None, "finish_reason": None}],
             }
             yield f"data: {json.dumps(chunk)}\n\n"

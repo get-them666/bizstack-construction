@@ -3,24 +3,14 @@
   "build": {
     "builder": "RAILPACK",
     "watchPatterns": [
-      "construction_main.py",
-      "con_ai_agent.py",
-      "copilot_ops.py",
-      "copilot_memory.py",
-      "copilot_tasks.py",
-      "bid_opportunities.py",
-      "bid_sources.py",
-      "bot_knowledge.md",
-      "construction_knowledge.md",
-      "templates/construction/*.html",
+      "**/*.py",
+      "**/*.md",
+      "templates/**",
       "static/**",
-      "bid_costing.py",
-      "abc_supply.py",
-      "supplier_prices.py",
-      "ledger.py",
-      "ledger_bridge.py",
-      "ledger_sync.py",
-      "auth0_service.py"
+      "requirements.txt",
+      "Dockerfile",
+      "Procfile",
+      "railway.json"
     ],
     "buildEnvironment": "V3"
   },

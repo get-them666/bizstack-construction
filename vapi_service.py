@@ -45,10 +45,57 @@ class VapiService:
     def _app_base(self) -> str:
         return (os.getenv("APP_BASE_URL", "") or self._default_base).rstrip("/")
 
+    def _llm_url(self) -> str:
+        return f"{self._app_base()}/vapi/llm"
+
+    def _sync_assistant_url(self, assistant_id: str) -> None:
+        """Make sure the Vapi assistant points its custom-LLM URL back at this app.
+
+        The assistant lives in the Vapi dashboard, not in this repo, so its
+        model.url keeps pointing at whatever domain the app had when the
+        assistant was created. When that URL errors, Vapi still speaks the
+        assistant's firstMessage and then goes silent for the rest of the call
+        -- the bot "answers" and then never replies again.
+
+        This app's voice brain lives at {app_base}/vapi/llm, so make the
+        assistant agree. One GET, and one PATCH only when it has drifted.
+        """
+        want = self._llm_url()
+        if not self.is_configured():
+            return
+        try:
+            assistant = self._request("GET", f"/assistant/{assistant_id}")
+        except Exception as e:
+            print(f"📞[vapi] could not read assistant {assistant_id}: {e}", flush=True)
+            return
+        current = ((assistant.get("model") or {}).get("url") or "").rstrip("/")
+        if current == want.rstrip("/"):
+            return
+        try:
+            self._request("PATCH", f"/assistant/{assistant_id}", {
+                "model": {
+                    "provider": "custom-llm",
+                    "model": (assistant.get("model") or {}).get("model") or "voice-agent",
+                    "url": want,
+                },
+            })
+            print(f"📞[vapi] assistant {assistant_id} LLM url {current or '(unset)'} -> {want}", flush=True)
+        except Exception as e:
+            print(f"📞[vapi] could not repoint assistant {assistant_id}: {e}", flush=True)
+
+    def sync_assistant(self) -> None:
+        """Public entry point: make sure the configured assistant is usable."""
+        pinned = (os.getenv("VAPI_ASSISTANT_ID", "") or "").strip()
+        if not pinned:
+            return
+        self._sync_assistant_url(pinned)
+
     def _ensure_assistant(self) -> str:
         pinned = os.getenv("VAPI_ASSISTANT_ID", "") or os.getenv("VAPI_ASSISTANT_ID")
         if pinned and pinned.strip():
-            return pinned.strip()
+            pinned = pinned.strip()
+            self._sync_assistant_url(pinned)
+            return pinned
         if self._assistant_id:
             return self._assistant_id
         with self._lock:
@@ -59,12 +106,13 @@ class VapiService:
                 for a in existing:
                     if (a.get("name") or "").startswith("bizstack-voice"):
                         self._assistant_id = a["id"]
+                        self._sync_assistant_url(a["id"])
                         return a["id"]
             created = self._request("POST", "/assistant", {
                 "name": "bizstack-voice",
                 "model": {
                     "provider": "custom-llm",
-                    "url": f"{self._app_base()}/vapi/llm",
+                    "url": self._llm_url(),
                     "model": "voice-agent",
                 },
                 "firstMessage": "Hey, thanks for reaching out — how can I help?",
@@ -128,7 +176,7 @@ class VapiService:
                 "firstMessage": seed,
                 "model": {
                     "provider": "custom-llm",
-                    "url": f"{self._app_base()}/vapi/llm",
+                    "url": self._llm_url(),
                     "model": "voice-agent",
                     "messages": [{"role": "system", "content": seed}],
                 },
