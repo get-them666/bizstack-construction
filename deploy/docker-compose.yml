@@ -1,0 +1,237 @@
+# BuildStack Construction — production stack (Hetzner).
+#
+# One VPS runs all three containers. They talk over the compose network, so
+# nothing needs a published port:
+#
+#   cloudflared  ──tunnel──▶  cloudflare edge  ──▶  construction.bizstackperks.com
+#        │
+#        └──http://app:8000──▶  app  (FastAPI/uvicorn)
+#                                      │
+#                                      └──postgresql://postgres:5432──▶  postgres
+#
+# The origin never gets a public IP in DNS and never opens a port to the
+# internet, so there is nothing to scan. Cloudflare terminates TLS; the
+# tunnel encrypts the hop from Cloudflare to this host.
+#
+# Two ways to run this file, same definition either way:
+#   * Coolify  — set "Build strategy: Compose", "Docker Compose Location:
+#     deploy/docker-compose.yml". ${VAR} entries become editable variables in
+#     Coolify's Environment Variables tab. GitHub webhooks redeploy on push.
+#   * Plain docker — write deploy/.env (chmod 600) next to this file and run
+#     docker compose --env-file deploy/.env -f deploy/docker-compose.yml up -d
+#
+# NEVER commit a filled-in .env. This file itself holds no secrets.
+
+name: bizstack
+
+services:
+  postgres:
+    # pgvector, because the production dump contains CREATE EXTENSION vector.
+    # pg18 matters: 18+ changed the image's data layout, so the volume mounts
+    # at /var/lib/postgresql and PGDATA lives one level deeper. Mounting at
+    # the old /var/lib/postgresql/data path makes the container refuse to
+    # start -- see deploy/README.md.
+    image: pgvector/pgvector:pg18
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-construction}
+      POSTGRES_USER: ${POSTGRES_USER:-construction}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD (URL-safe, no @ or /)}
+      PGDATA: /var/lib/postgresql/18/docker
+    command:
+      - postgres
+      # The app opens a connection per request and keeps a pool of 10 on top.
+      - -c
+      - max_connections=200
+      - -c
+      - shared_buffers=256MB
+      - -c
+      - work_mem=8MB
+      - -c
+      - effective_cache_size=1GB
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-construction} -d ${POSTGRES_DB:-construction}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+
+  app:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: bizstack-construction:latest
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    stop_grace_period: 30s
+    environment:
+      # Derived, not pasted. The password must be URL-safe: Coolify's
+      # SERVICE_PASSWORD_64_POSTGRES generator and `openssl rand -hex` both
+      # produce one.
+      DATABASE_URL: postgresql://${POSTGRES_USER:-construction}:${POSTGRES_PASSWORD:?}@postgres:5432/${POSTGRES_DB:-construction}
+      PORT: "8000"
+      # Kill switches are off by default on this host -- the background jobs
+      # (permit import, lead scan, loan outreach) are the point of the app.
+      # Set these to 1 only to silence them deliberately.
+      DISABLE_PERMIT_IMPORT: ${DISABLE_PERMIT_IMPORT:-0}
+      DISABLE_LEAD_SCAN: ${DISABLE_LEAD_SCAN:-0}
+      DISABLE_LOAN_OUTREACH: ${DISABLE_LOAN_OUTREACH:-0}
+      # Company, admin and routing identity
+      ADMIN_EMAIL: ${ADMIN_EMAIL}
+      ADMIN_EMAILS: ${ADMIN_EMAILS}
+      ADMIN_NAME: ${ADMIN_NAME}
+      ADMIN_OTP_EMAIL: ${ADMIN_OTP_EMAIL}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?}
+      APP_BASE_URL: ${APP_BASE_URL}
+      APP_SECRET: ${APP_SECRET:?}
+      COMPANY_DOMAIN: ${COMPANY_DOMAIN}
+      COMPANY_EMAIL: ${COMPANY_EMAIL}
+      COMPANY_NAME: ${COMPANY_NAME}
+      COMPANY_PHONE: ${COMPANY_PHONE}
+      COOKIE_SECURE: ${COOKIE_SECURE}
+      OTP_ENABLED: ${OTP_ENABLED}
+      SENDER_PHYSICAL_ADDRESS: ${SENDER_PHYSICAL_ADDRESS}
+      SERVICE_AREA: ${SERVICE_AREA}
+      # AI: OpenAI, the Copilot, and the phone bot
+      BOT_AUTO_SEND_EMAIL: ${BOT_AUTO_SEND_EMAIL}
+      COPILOT_MODEL: ${COPILOT_MODEL}
+      COPILOT_TOOL_ATTEMPTS: ${COPILOT_TOOL_ATTEMPTS}
+      COPILOT_TOOL_DEADLINE_SECONDS: ${COPILOT_TOOL_DEADLINE_SECONDS}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?}
+      VAPI_API_KEY: ${VAPI_API_KEY:?}
+      VAPI_ASSISTANT_ID: ${VAPI_ASSISTANT_ID:?}
+      VAPI_PHONE_NUMBER_ID: ${VAPI_PHONE_NUMBER_ID:?}
+      # Outbound email (SMTP / Gmail send) and inbound email
+      EMAIL_DAILY_CAP: ${EMAIL_DAILY_CAP}
+      EMAIL_FALLBACK_SES_ON_QUOTA: ${EMAIL_FALLBACK_SES_ON_QUOTA}
+      EMAIL_FETCH_MAX: ${EMAIL_FETCH_MAX}
+      EMAIL_TRANSPORT: ${EMAIL_TRANSPORT}
+      GMAIL_INBOUND: ${GMAIL_INBOUND}
+      GMAIL_INBOUND_INTERVAL_SECONDS: ${GMAIL_INBOUND_INTERVAL_SECONDS}
+      GMAIL_OWNER: ${GMAIL_OWNER}
+      GMAIL_SEND_SERVICES: ${GMAIL_SEND_SERVICES}
+      IMAP_HOST: ${IMAP_HOST}
+      IMAP_PASSWORD: ${IMAP_PASSWORD:?}
+      IMAP_PORT: ${IMAP_PORT}
+      IMAP_USERNAME: ${IMAP_USERNAME}
+      INBOUND_EMAIL_SECRET: ${INBOUND_EMAIL_SECRET:?}
+      SMTP_FROM: ${SMTP_FROM}
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_NAME: ${SMTP_NAME}
+      SMTP_PASS: ${SMTP_PASS:?}
+      SMTP_PORT: ${SMTP_PORT}
+      SMTP_TLS: ${SMTP_TLS}
+      SMTP_USER: ${SMTP_USER}
+      # Lead pipeline behaviour and per-day caps
+      LEAD_AUTO_SEND: ${LEAD_AUTO_SEND}
+      LEAD_DEBUG_ACTIVE: ${LEAD_DEBUG_ACTIVE}
+      LEAD_EMAIL_DAILY_CAP: ${LEAD_EMAIL_DAILY_CAP}
+      LEAD_ENRICH_MAX: ${LEAD_ENRICH_MAX}
+      LEAD_MAX_TOUCHES: ${LEAD_MAX_TOUCHES}
+      LEAD_MAX_TOUCHES_REPLIED: ${LEAD_MAX_TOUCHES_REPLIED}
+      LEAD_PIPELINE_DIGEST: ${LEAD_PIPELINE_DIGEST}
+      LEAD_RETOUCH_DAYS: ${LEAD_RETOUCH_DAYS}
+      LEAD_SCAN_INTERVAL_HOURS: ${LEAD_SCAN_INTERVAL_HOURS}
+      LEAD_SOURCES_SAM_GOV: ${LEAD_SOURCES_SAM_GOV}
+      LEAD_SOURCE_AUTO_EMAIL: ${LEAD_SOURCE_AUTO_EMAIL}
+      LEAD_SOURCE_OWNER_DIGEST: ${LEAD_SOURCE_OWNER_DIGEST}
+      LEAD_STATES: ${LEAD_STATES}
+      LEAD_SUPPRESSION_DAYS: ${LEAD_SUPPRESSION_DAYS}
+      TEXT_DAILY_CAP: ${TEXT_DAILY_CAP}
+      # Stripe payments
+      STRIPE_CONNECT_WEBHOOK_SECRET: ${STRIPE_CONNECT_WEBHOOK_SECRET:?}
+      STRIPE_DEPOSIT_PRICE: ${STRIPE_DEPOSIT_PRICE}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:?}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:?}
+      # Google Maps, Google OAuth, Auth0, AppSheet
+      APS_CLIENT_ID: ${APS_CLIENT_ID}
+      APS_CLIENT_SECRET: ${APS_CLIENT_SECRET:?}
+      APS_PROJECT_ID: ${APS_PROJECT_ID}
+      APS_REDIRECT_URI: ${APS_REDIRECT_URI}
+      AUTH0_ADMIN_EMAILS: ${AUTH0_ADMIN_EMAILS}
+      AUTH0_API_SECRET: ${AUTH0_API_SECRET:?}
+      CON_GOOGLE_CLIENT_ID: ${CON_GOOGLE_CLIENT_ID}
+      CON_GOOGLE_CLIENT_SECRET: ${CON_GOOGLE_CLIENT_SECRET:?}
+      CON_GOOGLE_REDIRECT_URI: ${CON_GOOGLE_REDIRECT_URI}
+      GCP_PROJECT_ID: ${GCP_PROJECT_ID}
+      GOOGLE_MAPS_API_KEY: ${GOOGLE_MAPS_API_KEY:?}
+      # Permit import
+      PERMIT_BACKFILL_DAYS: ${PERMIT_BACKFILL_DAYS}
+      PERMIT_GEO_IDS: ${PERMIT_GEO_IDS}
+      PERMIT_INCREMENTAL_DAYS: ${PERMIT_INCREMENTAL_DAYS}
+      PERMIT_MAX_PER_GEO: ${PERMIT_MAX_PER_GEO}
+      PERMIT_SCAN_HOURS: ${PERMIT_SCAN_HOURS}
+      # Cost estimator bands and materials pricing
+      EST_BATH_HIGH: ${EST_BATH_HIGH}
+      EST_BATH_LOW: ${EST_BATH_LOW}
+      EST_DRYWALL_HIGH: ${EST_DRYWALL_HIGH}
+      EST_DRYWALL_LOW: ${EST_DRYWALL_LOW}
+      EST_FENCE_HIGH: ${EST_FENCE_HIGH}
+      EST_KITCHEN_HIGH: ${EST_KITCHEN_HIGH}
+      EST_KITCHEN_LOW: ${EST_KITCHEN_LOW}
+      EST_REFRESH_LOW: ${EST_REFRESH_LOW}
+      EST_ROOF_HIGH: ${EST_ROOF_HIGH}
+      EST_ROOF_LOW: ${EST_ROOF_LOW}
+      EST_WHOLE_HOME_HIGH: ${EST_WHOLE_HOME_HIGH}
+      EST_WHOLE_HOME_LOW: ${EST_WHOLE_HOME_LOW}
+      MATERIALS_CACHE_MINUTES: ${MATERIALS_CACHE_MINUTES}
+      # Third-party data providers
+      ACCURATE_APPEND_API_KEY: ${ACCURATE_APPEND_API_KEY:?}
+      APIFY_TOKEN: ${APIFY_TOKEN:?}
+      RENTCAST_API_KEY: ${RENTCAST_API_KEY:?}
+      RUDDERSTACK_DATA_PLANE_URL: ${RUDDERSTACK_DATA_PLANE_URL}
+      RUDDERSTACK_WRITE_KEY: ${RUDDERSTACK_WRITE_KEY:?}
+      SHOVELS_API_KEY: ${SHOVELS_API_KEY:?}
+      SKIP_SHERPA_API_KEY: ${SKIP_SHERPA_API_KEY:?}
+      # Bid inbox and misc
+      BIDS_INBOX_ENABLED: ${BIDS_INBOX_ENABLED}
+      BIDS_INBOX_SENDERS: ${BIDS_INBOX_SENDERS}
+      BIDS_WEBHOOK_SECRET: ${BIDS_WEBHOOK_SECRET:?}
+      BuildingConnected_API: ${BuildingConnected_API}
+      NOTIFY_EMAIL: ${NOTIFY_EMAIL}
+      SECRET_KEY: ${SECRET_KEY:?}
+      SIGNALWIRE_API_TOKEN: ${SIGNALWIRE_API_TOKEN}
+      SIGNALWIRE_PHONE: ${SIGNALWIRE_PHONE}
+      SIGNALWIRE_PHONE_NUMBER: ${SIGNALWIRE_PHONE_NUMBER}
+      SIGNALWIRE_PROJECT_ID: ${SIGNALWIRE_PROJECT_ID}
+      SIGNALWIRE_SPACE_URL: ${SIGNALWIRE_SPACE_URL}
+      SKIPTRACE_ENRICH_MAX: ${SKIPTRACE_ENRICH_MAX}
+    volumes:
+      # Uploaded photos. Small, but it must survive a redeploy. Once R2 is
+      # configured these live in a bucket instead -- see deploy/README.md.
+      - uploads:/app/uploads
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,urllib.request; urllib.request.urlopen('http://127.0.0.1:'+os.environ.get('PORT','8000')+'/health',timeout=4)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 45s
+    logging:
+      driver: json-file
+      options: {max-size: "20m", max-file: "5"}
+
+  cloudflared:
+    # Named tunnel, token-based: the ingress rules live in the Cloudflare
+    # dashboard, so this container needs no config file and no cert.
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:?set TUNNEL_TOKEN from the Cloudflare Zero Trust dashboard}
+    depends_on:
+      app:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+
+volumes:
+  pgdata:
+  uploads:

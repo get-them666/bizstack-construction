@@ -48,6 +48,8 @@ from email.message import EmailMessage
 from con_ai_agent import BusinessAIAgent, ModelUnavailable, ToolBudgetExhausted
 from loan_outreach import start_outreach_tasks
 import copilot_memory
+import lead_pipeline
+import outreach_queue
 import copilot_tasks
 import copilot_ops
 from stripe_service import StripeService, default_deposit_cents
@@ -716,6 +718,14 @@ async def lifecycle(app: FastAPI):
         print("🎯 bid_opportunities ready.")
     except Exception as e:
         print(f"⚠️ bid_opportunities init skipped: {e}")
+
+    # Lead pipeline orchestrator: auto-enrich → contact → quote flow
+    try:
+        with psycopg.connect(db_url) as conn:
+            lead_pipeline.ensure_schema(conn)
+        print("🔄 Lead pipeline orchestrator ready.")
+    except Exception as e:
+        print(f"⚠️ Lead pipeline init skipped: {e}")
 
     if not os.getenv("DISABLE_LOAN_OUTREACH"):
         _outreach_tasks = start_outreach_tasks()
@@ -2469,6 +2479,14 @@ async def submit_lead(
         _follow_up_new_lead(lead_id)
     except Exception as e:
         print(f"⚠️ submit-lead follow-up failed: {e}", flush=True)
+    # CASCADING PIPELINE: Lead created → auto-enrich → auto-contact → auto-quote
+    try:
+        await asyncio.to_thread(
+            lead_pipeline.on_lead_created, db, lead_id
+        )
+        print(f"🔄 Lead {lead_id} cascade initiated", flush=True)
+    except Exception as e:
+        print(f"⚠️ submit-lead cascade failed: {e}", flush=True)
     return JSONResponse(content={"status": "success", "lead_id": lead_id})
 
 
@@ -4029,6 +4047,58 @@ async def update_lead_status_route(lead_id: int, request: Request, status_val: s
         db.commit()
     lead_store.recompute(db, lead_id)
     return RedirectResponse(url=request.headers.get("referer") or "/leads", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/api/quotes/{quote_id}/accept")
+async def accept_quote(quote_id: int, request: Request, db=Depends(get_db)):
+    """Accept a quote and trigger project creation + payment flow."""
+    require_admin(request)
+    try:
+        quoting.ensure_schema(db)
+        quote_result = quoting.set_status(db, quote_id, quoting.STATUS_ACCEPTED)
+        if not quote_result.get("ok"):
+            raise HTTPException(status_code=400, detail=quote_result.get("error"))
+        
+        # CASCADE: Quote accepted → Project created
+        project_result = lead_pipeline.on_quote_accepted(db, quote_id)
+        if project_result.get("project_created"):
+            print(f"✅ Quote {quote_id} accepted → Project {project_result['project_id']} created", flush=True)
+        
+        return JSONResponse(content={"status": "success", "quote_id": quote_id, "project_id": project_result.get("project_id")})
+    except Exception as e:
+        logger.error(f"Quote accept failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/bids/{bid_id}/won")
+async def mark_bid_won(bid_id: int, request: Request, db=Depends(get_db)):
+    """Mark a bid won and trigger project creation."""
+    require_admin(request)
+    try:
+        import bid_opportunities
+        bid_opportunities.set_status(db, bid_id, "won", "construction")
+        
+        # CASCADE: Bid won → Project created
+        lead_pipeline.on_bid_won(db, bid_id)
+        if project_result.get("project_created"):
+            print(f"✅ Bid {bid_id} won → Project {project_result['project_id']} created", flush=True)
+        
+        return JSONResponse(content={"status": "success", "bid_id": bid_id, "project_id": project_result.get("project_id")})
+    except Exception as e:
+        logger.error(f"Bid won failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/leads/{lead_id}/pipeline-trigger")
+async def trigger_lead_pipeline(lead_id: int, request: Request, db=Depends(get_db)):
+    """Manually trigger pipeline for a single lead (enrich → contact → quote)."""
+    require_admin(request)
+    try:
+        result = await asyncio.to_thread(lead_pipeline.on_lead_created, db, lead_id)
+        return JSONResponse(content={"status": "success", "cascaded": True})
+    except Exception as e:
+        logger.error(f"Pipeline trigger failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # --- Pipeline board ---------------------------------------------------------

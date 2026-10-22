@@ -1,0 +1,27 @@
+{% macro conversion_js() %}
+<script>
+/* Conversion events for GA4.
+ *
+ * Page views already work -- the base template loads gtag. What was missing
+ * was anything that says what HAPPENED, so the property could show traffic
+ * without ever showing whether a visit became work. Page views are not a
+ * business outcome.
+ *
+ * gtag is defined in <head> on every page. These helpers no-op if it is not,
+ * so nothing here can throw on a page that loads late.
+ */
+window.bsTrack = function (name, params) {
+    try {
+        if (typeof window.gtag === 'function') {
+            window.gtag('event', name, params || {});
+        }
+    } catch (e) { /* analytics must never break a page */ }
+};
+window.bsTrackPage = function () {
+    var path = window.location.pathname;
+    if (window.bsTrack) {
+        window.bsTrack('page_view_custom', { page_path: path });
+    }
+};
+</script>
+{% endmacro %}
