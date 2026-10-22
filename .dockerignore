@@ -13,6 +13,11 @@ myenv/
 # vendored SDK checkout — the package is already in requirements.txt
 signalwire-python/
 
+# nested copies of other apps — `COPY . .` would pull 143 MB + 23 MB of
+# source that this app never imports
+bizstack-construction/
+bizstack-perks/
+
 __pycache__/
 *.py[cod]
 *.pyo

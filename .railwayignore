@@ -57,6 +57,10 @@ AGENTS.md
 # A stale 143 MB copy of this repo nested inside itself. Breaks builds on
 # upload size and is not referenced by the Procfile.
 bizstack-construction/*
+# A 23 MB copy of the separate BuildStack Perks app. Not part of
+# construction_main:app and never imported. Uploading it wastes build time and
+# puts another product's source in this app's image.
+bizstack-perks/*
 *.bak
 *.orig
 scratch
