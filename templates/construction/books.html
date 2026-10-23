@@ -63,6 +63,32 @@
         </div>
         {% endif %}
 
+        {# ── Legacy entries that were never posted to double-entry lines ───── #}
+        {% if legacy_unposted %}
+        <div class="bg-amber-50 rounded-2xl border border-amber-300 p-5 mb-6">
+            <p class="text-sm font-bold text-amber-900">{{ legacy_unposted|length }} older ledger records are not included in these reports</p>
+            <p class="text-xs text-amber-800 mt-1">These records have no debit/credit journal lines, so the reports cannot safely count them. Review them against source records before migration; do not rely on their legacy totals.</p>
+            <div class="mt-3 space-y-1.5">
+                {% for e in legacy_unposted[:12] %}
+                <div class="text-xs text-slate-700">#{{ e.id }} · {{ e.created_at }} · {{ e.tx_type }} · {{ e.description }} · ${{ "%.2f"|format((e.amount_cents or 0) / 100) }}</div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+
+        {# ── Record actual operating expense ───────────────────────────────── #}
+        <div class="bg-white rounded-2xl border border-slate-200 p-5 mb-6">
+            <p class="text-sm font-bold text-slate-900">Record an actual business expense</p>
+            <p class="text-xs text-slate-500 mt-1 mb-3">Enter each actual charge from a receipt or statement. Historical charges need their actual dates. An estimate of $150/month is not enough to reconstruct transaction records.</p>
+            <form method="post" action="/books/expense" class="flex flex-wrap gap-2 items-end">
+                <label class="text-xs font-semibold text-slate-600">Amount<input name="amount" inputmode="decimal" placeholder="150.00" required class="block text-sm border border-slate-200 rounded-lg px-3 py-2 w-32"></label>
+                <label class="text-xs font-semibold text-slate-600">Category<select name="account" class="block text-sm border border-slate-200 rounded-lg px-3 py-2"><option value="6050">Marketing</option><option value="6010">Office and administrative</option><option value="6060">Bank and merchant fees</option><option value="6020">Vehicle and fuel</option><option value="6030">Insurance</option><option value="6040">Rent</option></select></label>
+                <label class="text-xs font-semibold text-slate-600">Vendor / description<input name="description" placeholder="Bid pipeline subscription" required class="block text-sm border border-slate-200 rounded-lg px-3 py-2 w-64"></label>
+                <label class="text-xs font-semibold text-slate-600">Transaction date<input name="when" type="date" required class="block text-sm border border-slate-200 rounded-lg px-3 py-2"></label>
+                <button class="px-4 py-2 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg">Post expense</button>
+            </form>
+        </div>
+
         {# ── Opening balances ──────────────────────────────────────────────── #}
         {% if not tb.rows %}
         <div class="bg-white rounded-2xl border border-slate-200 p-5 mb-6">

@@ -487,25 +487,31 @@ def trial_balance(conn, as_of=None, company: str = "construction") -> dict:
 
 
 def _balances(conn, types: tuple, as_of=None, company: str = "construction") -> dict:
+    date_clause = ""
     params: list = [company]
-    clause = ""
     if as_of:
-        clause = "AND e.entry_date <= %s"
+        date_clause = "AND e.entry_date <= %s"
         params.append(as_of)
-    # Driven from the chart, LEFT JOINed to activity. A balance sheet that
-    # silently omits Cash just because it happens to be zero is worse than
-    # useless -- it reads as though there is no cash account at all.
+    # Aggregate through entries first, filtering by company and date before
+    # joining against the chart. Joining ledger_lines by account_code alone
+    # mixes companies' activity and can include unrelated entries.
     with conn.cursor() as cur:
         cur.execute(f"""
             SELECT a.code AS account_code, a.name, a.type,
-                   COALESCE(SUM(l.debit_cents), 0)::bigint AS dr,
-                   COALESCE(SUM(l.credit_cents), 0)::bigint AS cr
+                   COALESCE(x.dr, 0)::bigint AS dr,
+                   COALESCE(x.cr, 0)::bigint AS cr
             FROM ledger_accounts a
-            LEFT JOIN ledger_lines l ON l.account_code = a.code
-            LEFT JOIN ledger_entries e ON e.id = l.entry_id
-            WHERE a.company = %s AND a.type = ANY(%s) {clause}
-            GROUP BY a.code, a.name, a.type
-        """, [company, list(types)] + params[1:])
+            LEFT JOIN (
+                SELECT l.account_code, e.company,
+                       SUM(l.debit_cents)::bigint AS dr,
+                       SUM(l.credit_cents)::bigint AS cr
+                FROM ledger_lines l
+                JOIN ledger_entries e ON e.id = l.entry_id
+                WHERE e.company = %s {date_clause}
+                GROUP BY l.account_code, e.company
+            ) x ON x.account_code = a.code AND x.company = a.company
+            WHERE a.company = %s AND a.type = ANY(%s)
+        """, params + [company, list(types)])
         rows = cur.fetchall()
     out = {}
     for r in rows:
@@ -665,6 +671,22 @@ def entries(conn, limit: int = 50, company: str = "construction") -> list[dict]:
             FROM ledger_entries e
             LEFT JOIN ledger_lines l ON l.entry_id = e.id
             WHERE e.company = %s
-            GROUP BY e.id ORDER BY e.entry_date DESC, e.id DESC LIMIT %s
+              AND EXISTS (SELECT 1 FROM ledger_lines posted_line WHERE posted_line.entry_id = e.id)
+            GROUP BY e.id ORDER BY e.entry_date DESC NULLS LAST, e.id DESC LIMIT %s
         """, (company, limit))
+        return cur.fetchall()
+
+
+def legacy_unposted_entries(conn, limit: int = 100, company: str = "construction") -> list[dict]:
+    """Find pre-double-entry rows with no journal lines; never treat them as posted books."""
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT e.id, e.tx_type, e.ref_type, e.ref_id, e.description,
+                   e.amount_cents, e.created_at
+            FROM ledger_entries e
+            WHERE e.company = %s
+              AND NOT EXISTS (SELECT 1 FROM ledger_lines l WHERE l.entry_id = e.id)
+            ORDER BY e.created_at DESC, e.id DESC
+            LIMIT %s
+        """, (company, max(1, min(int(limit), 500))))
         return cur.fetchall()

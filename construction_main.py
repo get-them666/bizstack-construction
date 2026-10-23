@@ -3376,6 +3376,7 @@ async def books_page(request: Request, as_of: str = "", db=Depends(get_db)):
                  "jobs": ledger.job_pnl(db, company=_BID_COMPANY),
                  "entries": ledger.entries(db, 25, company=_BID_COMPANY),
                  "pending": ledger_sync.pending(db, company=_BID_COMPANY),
+                 "legacy_unposted": ledger.legacy_unposted_entries(db, company=_BID_COMPANY),
                  "as_of": as_of, "today": date.today()})
 
 
@@ -3387,6 +3388,23 @@ async def books_retry(request: Request, db=Depends(get_db)):
     result = ledger_sync.retry_all(db, company=_BID_COMPANY)
     back = request.headers.get("referer") or "/books"
     return RedirectResponse(url=back, status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/books/expense")
+async def books_expense(request: Request, amount: str = Form(...), account: str = Form("6010"),
+                        description: str = Form(...), when: str = Form(...),
+                        db=Depends(get_db)):
+    """Post one evidenced historical/operating expense with its actual date."""
+    require_admin(request)
+    ledger_sync.ensure_schema(db)
+    try:
+        result = ledger_bridge.record_operating_expense(
+            db, account, amount, description.strip(), when=when, company=_BID_COMPANY)
+        if not result.get("posted") and result.get("reason") != "already posted":
+            raise HTTPException(status_code=400, detail=result.get("reason", "Expense was not posted"))
+    except (ValueError, ledger.LedgerError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return RedirectResponse(url="/books", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.post("/books/open")

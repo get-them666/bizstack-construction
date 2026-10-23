@@ -238,16 +238,21 @@ def record_operating_expense(conn, code, amount, description="", when=None,
                              company: str = "construction") -> dict:
     """Overhead — insurance, fuel, rent, the things that are not a job."""
     acct = str(code or "").strip()
-    if acct not in {a[0] for a in ledger.CHART}:
+    account_types = {a[0]: a[2] for a in ledger.CHART}
+    if acct not in account_types:
         raise ledger.LedgerError(f"{acct} is not in the chart")
+    if account_types[acct] != ledger.EXPENSE:
+        raise ledger.LedgerError(f"{acct} is not an expense account")
     amt = _d(amount, "amount")
     if amt <= 0:
         return {"posted": False, "reason": "no amount"}
+    normalized_date = str(when or date.today().isoformat())
+    detail = (description or "")[:200]
     return ledger.post(conn, [
-        {"account": acct, "debit": amt, "description": (description or "")[:200]},
+        {"account": acct, "debit": amt, "description": detail},
         {"account": "1010", "credit": amt, "description": "Cash out"},
-    ], entry_date=when, memo=f"{acct} — {description}"[:200],
-        source_type="opex", source_id=f"{acct}:{when or date.today().isoformat()}:{(description or '')[:40]}",
+    ], entry_date=when, memo=f"{acct} — {detail}"[:200],
+        source_type="opex", source_id=f"{acct}:{normalized_date}:{detail[:40]}",
         company=company)
 
 # --------------------------------------------------------------------------
