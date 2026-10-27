@@ -25,6 +25,14 @@ def get_zoho_access_token():
 
 
 def send_to_zoho_crm(lead_payload):
+    client_id = os.getenv("ZOHO_CLIENT_ID")
+    client_secret = os.getenv("ZOHO_CLIENT_SECRET")
+    refresh_token = os.getenv("ZOHO_REFRESH_TOKEN")
+    
+    if not all([client_id, client_secret, refresh_token]) or "your_" in str(client_id):
+        print("[zoho_sync] Missing or placeholder Zoho credentials - skipping sync. Set ZOHO_CLIENT_ID, ZOHO_CLIENT_SECRET, ZOHO_REFRESH_TOKEN", flush=True)
+        return None
+    
     token = get_zoho_access_token()
     if not token:
         print("[zoho_sync] No access token obtained, skipping Zoho sync", flush=True)
