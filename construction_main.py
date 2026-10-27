@@ -71,6 +71,7 @@ import bid_sources
 import enrichment
 from signalwire_service import SignalWireService
 import vapi_service
+import zoho_sync
 import property_service
 import estimating_service
 import auto_reply
@@ -2487,6 +2488,19 @@ async def submit_lead(
         print(f"🔄 Lead {lead_id} cascade initiated", flush=True)
     except Exception as e:
         print(f"⚠️ submit-lead cascade failed: {e}", flush=True)
+    try:
+        zoho_sync.send_to_zoho_crm({
+            "First_Name": name.split(" ")[0] if name else "",
+            "Last_Name": " ".join(name.split(" ")[1:]) if name and " " in name else name or "",
+            "Email": (email or "").strip(),
+            "Phone": phone,
+            "Street": address,
+            "Description": description,
+            "Lead_Source": src,
+            "Company": "BuildStack Construction",
+        })
+    except Exception as e:
+        print(f"⚠️ submit-lead zoho sync failed: {e}", flush=True)
     return JSONResponse(content={"status": "success", "lead_id": lead_id})
 
 
@@ -2606,6 +2620,19 @@ async def finance_submit(
             _follow_up_new_lead(lead_id)
         except Exception as e:
             print(f"[finance] follow-up failed: {e}", flush=True)
+        try:
+            zoho_sync.send_to_zoho_crm({
+                "First_Name": name.split(" ")[0] if name else "",
+                "Last_Name": " ".join(name.split(" ")[1:]) if name and " " in name else name or "",
+                "Email": (email or "").strip(),
+                "Phone": phone,
+                "Street": address,
+                "Description": message,
+                "Lead_Source": "financing",
+                "Company": "BuildStack Construction",
+            })
+        except Exception as e:
+            print(f"[finance] zoho sync failed: {e}", flush=True)
     else:
         # A repeat application is still worth flagging to the owner -- it is a
         # second signal of intent, not a duplicate to discard silently.
@@ -8396,6 +8423,95 @@ async def bids_page(request: Request, status: str = "", db=Depends(get_db)):
             "pulls_since": pulls_since,
         },
     )
+
+
+# --- Website lead webhook (for external sites/forms) -------------------------
+@app.post("/api/webhooks/leads")
+async def website_lead_webhook(request: Request, db=Depends(get_db)):
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+    
+    name = data.get("name") or data.get("full_name") or ""
+    phone = data.get("phone") or ""
+    email = data.get("email") or ""
+    project_type = data.get("project_type") or data.get("service") or ""
+    address = data.get("address") or ""
+    description = data.get("description") or data.get("message") or data.get("notes") or ""
+    source = data.get("source") or "website_webhook"
+    
+    if not name:
+        raise HTTPException(status_code=400, detail="Name is required")
+    
+    try:
+        res = lead_intake.intake_lead(
+            db, company="construction", source=source, name=name, phone=phone,
+            email=(email or "").strip(), address=address, description=description,
+            project_type=project_type,
+            extra=data,
+        )
+        lead_id = res["lead_id"]
+        created = res.get("created", True)
+        
+        if created:
+            try:
+                auto_reply.notify_owner_email(
+                    "construction", lead_id=lead_id, name=name, phone=phone,
+                    email=(email or "").strip(), service=(project_type or ""), address=address,
+                    budget=data.get("budget", ""), timeline=data.get("timeline", ""),
+                    message=description, source=source,
+                )
+            except Exception as e:
+                print(f"⚠️ webhook lead owner notify failed: {e}", flush=True)
+            try:
+                auto_reply.auto_reply_to_lead(
+                    db, "construction", name=name, phone=phone, email=(email or "").strip(),
+                    service=(project_type or ""), address=address,
+                    budget=data.get("budget", ""), timeline=data.get("timeline", ""),
+                    message=description, source=source, lead_id=lead_id,
+                )
+            except Exception as e:
+                print(f"⚠️ webhook lead auto-reply failed: {e}", flush=True)
+            try:
+                _follow_up_new_lead(lead_id)
+            except Exception as e:
+                print(f"⚠️ webhook lead follow-up failed: {e}", flush=True)
+            try:
+                await asyncio.to_thread(lead_pipeline.on_lead_created, db, lead_id)
+            except Exception as e:
+                print(f"⚠️ webhook lead cascade failed: {e}", flush=True)
+            try:
+                zoho_sync.send_to_zoho_crm({
+                    "First_Name": name.split(" ")[0] if name else "",
+                    "Last_Name": " ".join(name.split(" ")[1:]) if name and " " in name else (name or ""),
+                    "Email": (email or "").strip(),
+                    "Phone": phone,
+                    "Street": address,
+                    "Description": description,
+                    "Lead_Source": source,
+                    "Company": "BuildStack Construction",
+                })
+            except Exception as e:
+                print(f"⚠️ webhook lead zoho sync failed: {e}", flush=True)
+        
+        return JSONResponse(content={"status": "success", "lead_id": lead_id, "created": created})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- Zoho CRM webhook (for updates from Zoho) ---------------------------------
+@app.post("/api/webhooks/zoho")
+async def zoho_webhook(request: Request, db=Depends(get_db)):
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+    
+    # Zoho can send lead updates in different formats
+    # This is a basic receiver - can be expanded based on actual Zoho webhook format
+    print(f"📥 Zoho webhook received: {json.dumps(data)[:200]}", flush=True)
+    return JSONResponse(content={"status": "received"})
 
 
 # --- Inbound bid webhook ----------------------------------------------------
