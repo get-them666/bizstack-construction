@@ -68,6 +68,20 @@ def intake_lead(db, *, company, source, name="", phone="", email="", address="",
                 merged[field] = value
         if merged:
             store.update_lead_fields(db, existing["id"], merged)
+        try:
+            import zoho_sync
+            zoho_sync.send_to_zoho_crm({
+                "First_Name": name.split(" ")[0] if name else existing.get("name", "").split(" ")[0] if existing.get("name") else "",
+                "Last_Name": " ".join((name or existing.get("name", "")).split(" ")[1:]) if (name or existing.get("name", "")) and " " in (name or existing.get("name", "")) else (name or existing.get("name", "") or ""),
+                "Email": email or existing.get("email", ""),
+                "Phone": phone or existing.get("phone", ""),
+                "Street": address or existing.get("address", ""),
+                "Description": description or existing.get("description", ""),
+                "Lead_Source": source,
+                "Company": "BuildStack Construction",
+            })
+        except Exception:
+            pass
         lead = store.recompute(db, existing["id"])
         return {
             "lead_id": existing["id"], "created": False, "merged": bool(merged),
@@ -84,6 +98,20 @@ def intake_lead(db, *, company, source, name="", phone="", email="", address="",
         fields.update(extra)
 
     lead_id = store.insert_lead(db, fields)
+    try:
+        import zoho_sync
+        zoho_sync.send_to_zoho_crm({
+            "First_Name": name.split(" ")[0] if name else "",
+            "Last_Name": " ".join(name.split(" ")[1:]) if name and " " in name else name or "",
+            "Email": email,
+            "Phone": phone,
+            "Street": address,
+            "Description": description,
+            "Lead_Source": source,
+            "Company": "BuildStack Construction",
+        })
+    except Exception:
+        pass
     lead = store.recompute(db, lead_id)
     return {
         "lead_id": lead_id, "created": True, "merged": False,
