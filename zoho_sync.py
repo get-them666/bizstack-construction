@@ -2,14 +2,36 @@ import os
 import requests
 
 DC_SUFFIX = os.getenv("ZOHO_DC_SUFFIX", "com")  # Change to "eu" or "in" if your account isn't US-based
+MCP_TOKEN_URL = os.getenv("ZOHO_MCP_TOKEN_URL", "https://mcp.zoho.com/baas/mcp/v1/oauth/079a8f081168a82c71bf6fcf859c3233/137816000000014284/token")
 
 
 def get_zoho_access_token():
+    refresh_token = os.getenv("ZOHO_REFRESH_TOKEN")
+    client_id = os.getenv("ZOHO_CLIENT_ID")
+    client_secret = os.getenv("ZOHO_CLIENT_SECRET")
+    
+    # Try MCP token URL first (for MCP-based OAuth)
+    try:
+        body = {
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+            "client_id": client_id,
+            "client_secret": client_secret
+        }
+        response = requests.post(MCP_TOKEN_URL, data=body)
+        data = response.json()
+        if response.status_code == 200 and data.get("access_token"):
+            return data.get("access_token")
+        print(f"[zoho_sync] MCP token refresh failed: {response.status_code} {data}", flush=True)
+    except Exception as e:
+        print(f"[zoho_sync] MCP token refresh error: {e}", flush=True)
+    
+    # Fallback to standard Zoho OAuth
     url = f"https://accounts.zoho.{DC_SUFFIX}/oauth/v2/token"
     params = {
-        "refresh_token": os.getenv("ZOHO_REFRESH_TOKEN"),
-        "client_id": os.getenv("ZOHO_CLIENT_ID"),
-        "client_secret": os.getenv("ZOHO_CLIENT_SECRET"),
+        "refresh_token": refresh_token,
+        "client_id": client_id,
+        "client_secret": client_secret,
         "grant_type": "refresh_token"
     }
     try:
