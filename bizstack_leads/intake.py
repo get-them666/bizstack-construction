@@ -36,6 +36,56 @@ def normalise_email(value) -> str:
     return (value or "").strip().lower()
 
 
+def _sync_to_zoho_comprehensive(lead_data, created=False):
+    """Sync lead to all Zoho services - CRM, Books, Campaigns."""
+    try:
+        # Try new comprehensive modules first
+        try:
+            import zoho_crm
+            import zoho_books
+            import zoho_campaigns
+            
+            # Sync to CRM as Lead
+            zoho_crm.upsert_lead(lead_data)
+            
+            # Create Deal in CRM if it's a real project lead
+            if lead_data.get("project_type") or lead_data.get("description"):
+                zoho_crm.create_deal({
+                    "name": lead_data.get("name") or "Project",
+                    "description": lead_data.get("description", ""),
+                    "status": lead_data.get("status", "new"),
+                    "source": lead_data.get("source", "Website"),
+                    "address": lead_data.get("address", "")
+                })
+            
+            # Sync to Books as Customer
+            zoho_books.create_customer(lead_data)
+            
+            # Add to Campaigns if email provided
+            if lead_data.get("email"):
+                zoho_campaigns.add_subscriber(lead_data)
+                
+        except Exception as e:
+            print(f"[zoho_sync] Comprehensive sync error: {e}", flush=True)
+            # Fallback to old zoho_sync
+            try:
+                import zoho_sync
+                zoho_sync.send_to_zoho_crm({
+                    "First_Name": lead_data.get("name", "").split(" ")[0] if lead_data.get("name") else "",
+                    "Last_Name": " ".join(lead_data.get("name", "").split(" ")[1:]) if lead_data.get("name") and " " in lead_data.get("name", "") else lead_data.get("name", "") or "",
+                    "Email": lead_data.get("email", ""),
+                    "Phone": lead_data.get("phone", ""),
+                    "Street": lead_data.get("address", ""),
+                    "Description": lead_data.get("description", ""),
+                    "Lead_Source": lead_data.get("source", "Website"),
+                    "Company": "BuildStack Construction",
+                })
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
 def intake_lead(db, *, company, source, name="", phone="", email="", address="",
                 description="", project_type="", source_ref=None, status=None,
                 extra=None) -> dict:
@@ -68,20 +118,17 @@ def intake_lead(db, *, company, source, name="", phone="", email="", address="",
                 merged[field] = value
         if merged:
             store.update_lead_fields(db, existing["id"], merged)
-        try:
-            import zoho_sync
-            zoho_sync.send_to_zoho_crm({
-                "First_Name": name.split(" ")[0] if name else existing.get("name", "").split(" ")[0] if existing.get("name") else "",
-                "Last_Name": " ".join((name or existing.get("name", "")).split(" ")[1:]) if (name or existing.get("name", "")) and " " in (name or existing.get("name", "")) else (name or existing.get("name", "") or ""),
-                "Email": email or existing.get("email", ""),
-                "Phone": phone or existing.get("phone", ""),
-                "Street": address or existing.get("address", ""),
-                "Description": description or existing.get("description", ""),
-                "Lead_Source": source,
-                "Company": "BuildStack Construction",
-            })
-        except Exception:
-            pass
+        lead_data = {
+            "name": name or existing.get("name", ""),
+            "email": email or existing.get("email", ""),
+            "phone": phone or existing.get("phone", ""),
+            "address": address or existing.get("address", ""),
+            "description": description or existing.get("description", ""),
+            "source": source,
+            "status": existing.get("status", "new"),
+            "project_type": project_type or existing.get("project_type", ""),
+        }
+        _sync_to_zoho_comprehensive(lead_data, created=False)
         lead = store.recompute(db, existing["id"])
         return {
             "lead_id": existing["id"], "created": False, "merged": bool(merged),
@@ -98,20 +145,17 @@ def intake_lead(db, *, company, source, name="", phone="", email="", address="",
         fields.update(extra)
 
     lead_id = store.insert_lead(db, fields)
-    try:
-        import zoho_sync
-        zoho_sync.send_to_zoho_crm({
-            "First_Name": name.split(" ")[0] if name else "",
-            "Last_Name": " ".join(name.split(" ")[1:]) if name and " " in name else name or "",
-            "Email": email,
-            "Phone": phone,
-            "Street": address,
-            "Description": description,
-            "Lead_Source": source,
-            "Company": "BuildStack Construction",
-        })
-    except Exception:
-        pass
+    lead_data = {
+        "name": name,
+        "email": email,
+        "phone": phone,
+        "address": address,
+        "description": description,
+        "source": source,
+        "status": fields["status"],
+        "project_type": project_type,
+    }
+    _sync_to_zoho_comprehensive(lead_data, created=True)
     lead = store.recompute(db, lead_id)
     return {
         "lead_id": lead_id, "created": True, "merged": False,

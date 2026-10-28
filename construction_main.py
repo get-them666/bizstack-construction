@@ -1226,6 +1226,7 @@ templates.env.globals["site_theme_state"] = lambda: site_theme.state()
 templates.env.globals["company"] = company
 templates.env.globals["map_embed"] = _map_embed
 templates.env.globals["map_directions"] = _map_directions
+templates.env.globals["zoho_salesiq_widget"] = lambda: os.getenv("ZOHO_SALESIQ_WIDGET_CODE", "")
 
 
 def _owner_email() -> str:

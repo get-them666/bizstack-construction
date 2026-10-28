@@ -1,5 +1,6 @@
 <!-- Zoho Global Suite Streamline -->
 <script type="text/javascript">
-  var $zoho = $zoho || {};
-  // Put your master SalesIQ / PageSense widget snippet here
+  var $zoho=$zoho || {};
+  $zoho.salesiq = $zoho.salesiq || {widgetcode:"{{ zoho_salesiq_widget() if zoho_salesiq_widget else '' }}", values:{}, ready:function(){}};
 </script>
+<script type="text/javascript" src="https://salesiq.zohopublic.com/widget" defer></script>
