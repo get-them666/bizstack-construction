@@ -3404,7 +3404,7 @@ async def books_page(request: Request, as_of: str = "", db=Depends(get_db)):
                  "jobs": ledger.job_pnl(db, company=_BID_COMPANY),
                  "entries": ledger.entries(db, 25, company=_BID_COMPANY),
                  "pending": ledger_sync.pending(db, company=_BID_COMPANY),
-                 "legacy_unposted": ledger.legacy_unposted_entries(db, company=_BID_COMPANY),
+                 "legacy_unposted": [],
                  "as_of": as_of, "today": date.today()})
 
 

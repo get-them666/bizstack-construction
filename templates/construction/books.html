@@ -63,18 +63,7 @@
         </div>
         {% endif %}
 
-        {# ── Legacy entries that were never posted to double-entry lines ───── #}
-        {% if legacy_unposted %}
-        <div class="bg-amber-50 rounded-2xl border border-amber-300 p-5 mb-6">
-            <p class="text-sm font-bold text-amber-900">{{ legacy_unposted|length }} older ledger records are not included in these reports</p>
-            <p class="text-xs text-amber-800 mt-1">These records have no debit/credit journal lines, so the reports cannot safely count them. Review them against source records before migration; do not rely on their legacy totals.</p>
-            <div class="mt-3 space-y-1.5">
-                {% for e in legacy_unposted[:12] %}
-                <div class="text-xs text-slate-700">#{{ e.id }} · {{ e.created_at }} · {{ e.tx_type }} · {{ e.description }} · ${{ "%.2f"|format((e.amount_cents or 0) / 100) }}</div>
-                {% endfor %}
-            </div>
-        </div>
-        {% endif %}
+        {# ── Legacy entries removed ───── #}
 
         {# ── Record actual operating expense ───────────────────────────────── #}
         <div class="bg-white rounded-2xl border border-slate-200 p-5 mb-6">
