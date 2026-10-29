@@ -140,6 +140,37 @@ custom one as of 2026-10-29: body `#0a0a0a`, accent `#48413d`, Georgia serif,
 🎃 pinned bottom-right. Not any preset; `site_theme.py` applies it with
 `!important` over every indigo CTA. Left alone pending the owner's say-so.
 
+## Zoho is the owner's suite now (2026-10-29) — not Google
+
+Owner: "I use Zoho now, not Google." The Railway refresh token works and
+carries `ZohoCRM.modules.ALL ZohoCRM.settings.READ ZohoBooks.settings.READ
+ZohoBooks.fullaccess.all ZohoCampaigns.contact.ALL` — CRM and Campaigns answer,
+Mail and Calendar answer INVALID_OAUTHSCOPE. `zoho_oauth.py` adds a Connect
+button on Settings that requests the full scope set (incl. `ZohoMail.messages.CREATE`,
+`ZohoCalendar.event.ALL`) and stores the refresh token in `app_settings`
+(`zoho_refresh_token`, `zoho_scopes`); `zoho_client` prefers it over the env
+token. **The owner must add `https://construction.bizstackperks.com/oauth/zoho/callback`
+as an Authorized Redirect URI on the client in api-console.zoho.com first** (a
+Self Client cannot do redirects; it must be a Server-based client).
+
+- CRM: `zoho_sync.after_intake` is the one chokepoint (inbound forms, phone
+  bot webhook, materials list; enrichment when a permit lead gains a contact).
+  Placeholder `@lead.local` leads never sync — before this, the newest CRM
+  records were all address-only permits. `leads.zoho_lead_id` is kept so status
+  changes (`sync_status` from the status route), booking notes and opt-outs
+  update the same record.
+- Campaigns: only one list exists ("My Sample List", key `3z0d50…`, 16
+  contacts). The picker on Settings stores `zoho_campaigns_list_key`; until it
+  is chosen nothing is added. Inbound leads only; STOP unsubscribes. The API is
+  form/query based (`json/listsubscribe`, `contactinfo` as a JSON string) — the
+  old code posted a JSON body and never added anyone.
+- Mail: `EMAIL_TRANSPORT=auto` (set 2026-10-29): Zoho Mail REST API the moment
+  the connection has mail scopes, else Gmail, else SMTP ladder. Until the owner
+  connects, mail still leaves via the old Google Workspace mailbox — fine for
+  delivery, but check the domain's SPF still includes Google or it lands in spam.
+- Calendar: bookings go to Zoho Calendar when connected (default calendar or
+  `BOOKING_CALENDAR_UID`), else Google.
+
 ## Account map — audited 2026-10-20 (supersedes AGENTS.md's Zen section)
 
 - **OpenAI** — funded again. New project key (`sk-proj-x-Dy…`) in Railway; the old

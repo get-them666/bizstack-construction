@@ -213,6 +213,12 @@ def run_once(db=None, force: bool = False, limit=None) -> dict:
                     print(f"[lead-enrich] recompute failed for {lead['id']}: {exc}", flush=True)
                 if merged["gained_contact"]:
                     summary["enriched"] += 1
+                    # A permit lead with a real email/phone is a CRM contact now.
+                    try:
+                        import zoho_sync
+                        zoho_sync.sync_lead(db, lead["id"])
+                    except Exception as exc:
+                        print(f"[lead-enrich] zoho sync failed for {lead['id']}: {exc}", flush=True)
                 else:
                     summary["name_only"] += 1
             else:

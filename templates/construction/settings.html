@@ -124,6 +124,51 @@
         </p>
     </div>
 
+    <!-- Zoho -->
+    <div id="zoho" class="mt-4 bg-white rounded-2xl border border-slate-200 p-5">
+        <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-xl bg-red-50 flex items-center justify-center text-red-600 font-bold">Z</div>
+            <div>
+                <p class="text-base font-bold text-slate-900">Zoho</p>
+                <p class="text-xs text-slate-500">CRM, Campaigns, Books, Mail and Calendar — one sign-in</p>
+            </div>
+            {{ pill(zoho.connected and zoho.mail and zoho.calendar, "Fully connected", ("Partly connected" if zoho.connected else "Not connected")) }}
+        </div>
+        <div class="mt-3 grid grid-cols-2 sm:grid-cols-5 gap-2 text-xs">
+            {% for label, ok, what in [("CRM", zoho.crm, "leads & status"), ("Campaigns", zoho.campaigns, "mailing list"), ("Books", zoho.books, "accounting"), ("Mail", zoho.mail, "sends email"), ("Calendar", zoho.calendar, "walkthroughs")] %}
+            <div class="rounded-xl border {{ 'border-emerald-200 bg-emerald-50' if ok else 'border-slate-200 bg-slate-50' }} px-3 py-2">
+                <p class="font-bold text-slate-800">{{ label }}</p>
+                <p class="{{ 'text-emerald-700' if ok else 'text-slate-500' }}">{{ 'on' if ok else 'needs connect' }} · {{ what }}</p>
+            </div>
+            {% endfor %}
+        </div>
+        <div class="mt-4 flex flex-wrap items-center gap-3">
+            {% if zoho.configured %}
+            <a href="/oauth/zoho/start" class="px-4 py-2 text-xs font-bold text-white bg-red-600 hover:bg-red-700 rounded-xl">{{ 'Reconnect Zoho (add Mail + Calendar)' if zoho.connected and not (zoho.mail and zoho.calendar) else ('Reconnect Zoho' if zoho.connected else 'Connect Zoho') }}</a>
+            <span class="text-xs text-slate-500">Signs in as the Zoho user who owns the mailbox and CRM.{% if zoho.email %} Connected as {{ zoho.email }}.{% endif %}</span>
+            {% else %}
+            <span class="text-xs text-red-700">Set <code>ZOHO_CLIENT_ID</code> and <code>ZOHO_CLIENT_SECRET</code> in Railway first.</span>
+            {% endif %}
+        </div>
+        {% if not (zoho.mail and zoho.calendar) %}
+        <div class="mt-3 rounded-xl bg-amber-50 border border-amber-200 p-3 text-xs text-amber-800">
+            Before clicking Connect, add this exact redirect URL to your Zoho API Console client (api-console.zoho.com → your client → Client Details → Authorized Redirect URIs):
+            <code class="block mt-1 bg-amber-100 px-2 py-1 rounded font-mono">{{ zoho.redirect_uri }}</code>
+            Until Mail is connected, email still goes out through the old Google mailbox.
+        </div>
+        {% endif %}
+        <form method="post" action="/api/settings/zoho" class="mt-4 flex flex-wrap items-end gap-3">
+            <label class="block text-xs font-semibold text-slate-700">Campaigns list for new inbound leads
+                <select name="list_key" class="mt-1 block px-3 py-2 rounded-xl border border-slate-200 text-sm font-normal bg-white min-w-[16rem]">
+                    <option value="">— don't add leads to Campaigns —</option>
+                    {% for l in zoho_lists %}<option value="{{ l.listkey }}" {% if l.listkey == zoho_list_key %}selected{% endif %}>{{ l.listname }} ({{ l.contacts }} contacts)</option>{% endfor %}
+                </select>
+            </label>
+            <button class="px-4 py-2 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl">Save</button>
+            <span class="text-xs text-slate-400">Only people who contacted you are added; a STOP reply removes them. Create a list named e.g. "BuildStack Leads" in Campaigns and pick it here.</span>
+        </form>
+    </div>
+
     <!-- Sign-in -->
     <div id="security" class="mt-4 bg-white rounded-2xl border border-slate-200 p-5">
         <div class="flex items-center gap-3">

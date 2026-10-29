@@ -760,6 +760,25 @@ async def send_email(cfg: dict, to: str, subject: str, body: str, attachment: by
     # it every outbound message was dropped. A Gmail failure now degrades to the
     # SMTP ladder below. EMAIL_TRANSPORT=legacy still skips Gmail entirely.
     transport = (os_getenv("EMAIL_TRANSPORT", "gmail") or "gmail").strip().lower()
+    # The owner runs on Zoho now. "zoho" sends only through the Zoho Mail API;
+    # "auto" (the deployed setting) prefers Zoho the moment it is connected
+    # with mail scopes and otherwise behaves exactly like "gmail", so flipping
+    # the mailbox needs no redeploy -- just the Connect Zoho button.
+    if transport in ("zoho", "auto"):
+        try:
+            import zoho_mail
+            if zoho_mail.available():
+                if await asyncio.to_thread(
+                        zoho_mail.send, to, subject, body + (("\n\n" + physical) if physical else ""),
+                        sender=cfg.get("SMTP_FROM") or "", sender_name=cfg.get("SMTP_NAME") or "",
+                        cc=cc, attachment=attachment, filename=filename):
+                    print(f"[EMAIL] sent via Zoho Mail to {to}", flush=True)
+                    return True
+                print("[EMAIL] Zoho Mail refused; falling through", flush=True)
+            elif transport == "zoho":
+                print("[EMAIL] EMAIL_TRANSPORT=zoho but Zoho is not connected with mail scopes; falling through", flush=True)
+        except Exception as exc:
+            print(f"[EMAIL] Zoho Mail attempt failed ({type(exc).__name__}): {exc}", flush=True)
     if transport != "legacy":
         sent_ok = await _send_via_gmail(cfg, to, subject, body, cc=cc,
                                         attachment=attachment, filename=filename,

@@ -27,7 +27,13 @@ def get_access_token(force_refresh: bool = False) -> Optional[str]:
     if not force_refresh and _token_cache["access_token"] and _token_cache["expires_at"] > now + 60:
         return _token_cache["access_token"]
     
-    refresh_token = os.getenv("ZOHO_REFRESH_TOKEN")
+    # A token connected from Settings (zoho_oauth) wins over the one pasted
+    # into Railway: it is newer and carries the Mail/Calendar scopes.
+    try:
+        import zoho_oauth
+        refresh_token = zoho_oauth.stored_refresh_token()
+    except Exception:
+        refresh_token = os.getenv("ZOHO_REFRESH_TOKEN")
     client_id = os.getenv("ZOHO_CLIENT_ID")
     client_secret = os.getenv("ZOHO_CLIENT_SECRET")
     
@@ -98,5 +104,14 @@ def api_request(method: str, url: str, **kwargs) -> Optional[Dict[Any, Any]]:
 def is_configured() -> bool:
     client_id = os.getenv("ZOHO_CLIENT_ID", "")
     client_secret = os.getenv("ZOHO_CLIENT_SECRET", "")
-    refresh_token = os.getenv("ZOHO_REFRESH_TOKEN", "")
+    try:
+        import zoho_oauth
+        refresh_token = zoho_oauth.stored_refresh_token()
+    except Exception:
+        refresh_token = os.getenv("ZOHO_REFRESH_TOKEN", "")
     return all([client_id, client_secret, refresh_token]) and "your_" not in client_id
+
+
+def invalidate_token_cache() -> None:
+    _token_cache["access_token"] = None
+    _token_cache["expires_at"] = 0

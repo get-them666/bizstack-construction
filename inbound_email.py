@@ -215,6 +215,11 @@ def _ingest(db, company_key, msgs, mailbox_from):
                 import followups
                 if followups.is_opt_out(text):
                     followups.mark_opted_out(db, lead_id, "email", text)
+                    try:
+                        import zoho_sync
+                        zoho_sync.on_opt_out(db, lead_id)
+                    except Exception as exc:
+                        print(f"[inbound-email] zoho opt-out sync failed: {exc}", flush=True)
                     print(f"[inbound-email] lead #{lead_id} opted out", flush=True)
                     continue
             except Exception as exc:

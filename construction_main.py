@@ -813,6 +813,13 @@ async def lifecycle(app: FastAPI):
     except Exception as exc:
         print(f"⚠️ team messages init skipped: {exc}", flush=True)
 
+    try:
+        with psycopg.connect(db_url, row_factory=dict_row) as conn:
+            zoho_sync.ensure_schema(conn)
+            followups.ensure_schema(conn)
+    except Exception as exc:
+        print(f"⚠️ zoho/followups schema init skipped: {exc}", flush=True)
+
     # Inbound-lead follow-ups (day 1/3/7 with a booking link). Review mode
     # (LEAD_AUTO_SEND unset) and DISABLE_FOLLOWUPS both stop it.
     try:
@@ -2583,19 +2590,7 @@ async def submit_lead(
         print(f"🔄 Lead {lead_id} cascade initiated", flush=True)
     except Exception as e:
         print(f"⚠️ submit-lead cascade failed: {e}", flush=True)
-    try:
-        zoho_sync.send_to_zoho_crm({
-            "First_Name": name.split(" ")[0] if name else "",
-            "Last_Name": " ".join(name.split(" ")[1:]) if name and " " in name else name or "",
-            "Email": (email or "").strip(),
-            "Phone": phone,
-            "Street": address,
-            "Description": description,
-            "Lead_Source": src,
-            "Company": brand.name(),
-        })
-    except Exception as e:
-        print(f"⚠️ submit-lead zoho sync failed: {e}", flush=True)
+    await asyncio.to_thread(zoho_sync.after_intake, db, lead_id)
     return JSONResponse(content={"status": "success", "lead_id": lead_id})
 
 
@@ -2674,9 +2669,25 @@ async def book_walkthrough_submit(token: str, request: Request, slot: str = Form
         except Exception as e:
             print(f"⚠️ booking confirmation failed: {e}", flush=True)
     try:
+        await asyncio.to_thread(zoho_sync.on_booking, db, lead_id, label, note)
+    except Exception as e:
+        print(f"⚠️ booking zoho sync failed: {e}", flush=True)
+    placed = False
+    try:
+        import zoho_calendar
+        if zoho_calendar.available():
+            end = when + timedelta(hours=3)
+            placed = await asyncio.to_thread(
+                zoho_calendar.create_event,
+                f"Walkthrough — {lead.get('name') or 'homeowner'} ({lead.get('project_type') or 'project'})",
+                when, end, location=lead.get("address") or "",
+                description=f"Lead #{lead_id}. {lead.get('phone') or ''} {lead.get('email') or ''}\n{note or ''}".strip())
+    except Exception as e:
+        print(f"⚠️ booking zoho calendar failed: {e}", flush=True)
+    try:
         import google_calendar
         owner = (os.getenv("GMAIL_OWNER") or os.getenv("SMTP_FROM") or "").strip()
-        if owner:
+        if owner and not placed:
             end = when + timedelta(hours=3)
             google_calendar.create_event("construction", owner, os.getenv("BOOKING_CALENDAR_ID", "primary"), {
                 "summary": f"Walkthrough — {lead.get('name') or 'homeowner'} ({lead.get('project_type') or 'project'})",
@@ -2827,19 +2838,7 @@ async def finance_submit(
             _follow_up_new_lead(lead_id)
         except Exception as e:
             print(f"[finance] follow-up failed: {e}", flush=True)
-        try:
-            zoho_sync.send_to_zoho_crm({
-                "First_Name": name.split(" ")[0] if name else "",
-                "Last_Name": " ".join(name.split(" ")[1:]) if name and " " in name else name or "",
-                "Email": (email or "").strip(),
-                "Phone": phone,
-                "Street": address,
-                "Description": message,
-                "Lead_Source": "financing",
-                "Company": brand.name(),
-            })
-        except Exception as e:
-            print(f"[finance] zoho sync failed: {e}", flush=True)
+        await asyncio.to_thread(zoho_sync.after_intake, db, lead_id)
     else:
         # A repeat application is still worth flagging to the owner -- it is a
         # second signal of intent, not a duplicate to discard silently.
@@ -3033,6 +3032,46 @@ async def api_logout():
 
 
 # --- GOOGLE OAUTH ---
+
+@app.get("/oauth/zoho/start")
+async def zoho_oauth_start(request: Request):
+    """Connect Zoho with every scope the app uses (CRM, Books, Campaigns, Mail,
+    Calendar). One click from Settings; the refresh token is stored in
+    app_settings and preferred over the one in Railway."""
+    require_admin(request)
+    if not zoho_oauth.configured():
+        raise HTTPException(status_code=400, detail="ZOHO_CLIENT_ID / ZOHO_CLIENT_SECRET are not set")
+    return RedirectResponse(url=zoho_oauth.auth_url(zoho_oauth.new_state()), status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.get("/oauth/zoho/callback")
+async def zoho_oauth_callback(request: Request, code: str = "", state: str = "", error: str = ""):
+    require_admin(request)
+    if error:
+        return RedirectResponse(url=f"/settings?error={urllib.parse.quote('Zoho: ' + error)}#zoho", status_code=status.HTTP_303_SEE_OTHER)
+    if not code or not zoho_oauth.consume_state(state):
+        return RedirectResponse(url="/settings?error=Zoho+sign-in+did+not+complete+(state)#zoho", status_code=status.HTTP_303_SEE_OTHER)
+    try:
+        tokens = await asyncio.to_thread(zoho_oauth.exchange_code, code)
+    except Exception as e:
+        return RedirectResponse(url=f"/settings?error={urllib.parse.quote('Zoho: ' + str(e)[:160])}#zoho", status_code=status.HTTP_303_SEE_OTHER)
+    actor = current_actor(request) or {}
+    zoho_oauth.save_connection(tokens["refresh_token"], tokens.get("scope", ""), str(actor.get("email") or ""))
+    try:
+        import zoho_client
+        zoho_client.invalidate_token_cache()
+    except Exception:
+        pass
+    return RedirectResponse(url="/settings?saved=zoho#zoho", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/api/settings/zoho")
+async def settings_zoho(request: Request, list_key: str = Form(""), db=Depends(get_db)):
+    """Pick the Campaigns mailing list inbound leads are added to."""
+    require_admin(request)
+    zoho_campaigns.set_list_key(db, list_key)
+    return RedirectResponse(url="/settings?saved=zoho#zoho", status_code=status.HTTP_303_SEE_OTHER)
+
 
 @app.get("/oauth/autodesk/start")
 async def autodesk_oauth_start(request: Request):
@@ -3990,6 +4029,10 @@ async def materials_picker_submit(request: Request, name: str = Form(""),
             print(f"⚠️ materials sandbox lead save failed: {e}", flush=True)
             made_lead = False
         if made_lead:
+            try:
+                zoho_sync.after_intake(db, lead_id)
+            except Exception as e:
+                print(f"⚠️ materials zoho sync failed: {e}", flush=True)
             # Every other public form tells the owner. A picked materials list
             # is the strongest buying signal the site collects, and it was the
             # one submission that notified nobody.
@@ -4410,6 +4453,11 @@ async def update_lead_status_route(lead_id: int, request: Request, status_val: s
         allowed = lead_store._columns(cur, "leads")
         if "status" in allowed:
             cur.execute("UPDATE leads SET status = %s WHERE id = %s;", (stage, lead_id))
+            db.commit()
+            try:
+                zoho_sync.sync_status(db, lead_id)
+            except Exception as e:
+                print(f"⚠️ zoho status sync failed for {lead_id}: {e}", flush=True)
         db.commit()
     lead_store.recompute(db, lead_id)
     return RedirectResponse(url=request.headers.get("referer") or "/leads", status_code=status.HTTP_303_SEE_OTHER)
@@ -5022,6 +5070,9 @@ async def settings_page(request: Request, db=Depends(get_db)):
             "guardrails": settings_status.outbound_guardrails(),
             "otp_on": _otp_enabled(db),
             "otp_env_locked": otp_env in ("0", "false", "no", "off", "1", "true", "yes", "on"),
+            "zoho": zoho_oauth.status(),
+            "zoho_lists": await asyncio.to_thread(zoho_campaigns.mailing_lists),
+            "zoho_list_key": zoho_campaigns.list_key(),
         },
     )
 
@@ -5930,6 +5981,10 @@ async def inbound_sms_webhook(request: Request, db=Depends(get_db)):
             db.commit()
         for lid in ids:
             followups.mark_opted_out(db, lid, "sms", Body)
+            try:
+                zoho_sync.on_opt_out(db, lid)
+            except Exception as e:
+                print(f"⚠️ zoho opt-out sync failed for {lid}: {e}", flush=True)
         print(f"[sms] opt-out from {From}: {len(ids)} lead(s)", flush=True)
         return Response(content=f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response><Message to="{From}">You're unsubscribed from {brand.short_name()} messages and won't hear from us again. Reply START to re-subscribe.</Message></Response>""", media_type="application/xml")
@@ -7430,6 +7485,7 @@ async def embed_quote_submit(
     except Exception as e:
         print(f"⚠️ embed quote intake failed: {e}", flush=True)
         return back("We hit a glitch saving your request — please try again.", 500)
+    await asyncio.to_thread(zoho_sync.after_intake, db, lead_id)
 
     # Same notifications as the full form. Guarded individually so one failure
     # does not cost the lead.
@@ -7539,6 +7595,7 @@ async def get_started_submit(
     except Exception as e:
         print(f"⚠️ get-started lead save failed: {e}", flush=True)
         return _form_error_redirect("/get-started", "Something went wrong — please try again or call us directly", **typed)
+    await asyncio.to_thread(zoho_sync.after_intake, db, lead_id)
 
     summary = (
         f"🛠 New acquisition lead (#{lead_id}) — {name}, {phone}"
@@ -8898,19 +8955,7 @@ async def website_lead_webhook(request: Request, db=Depends(get_db)):
                 await asyncio.to_thread(lead_pipeline.on_lead_created, db, lead_id)
             except Exception as e:
                 print(f"⚠️ webhook lead cascade failed: {e}", flush=True)
-            try:
-                zoho_sync.send_to_zoho_crm({
-                    "First_Name": name.split(" ")[0] if name else "",
-                    "Last_Name": " ".join(name.split(" ")[1:]) if name and " " in name else (name or ""),
-                    "Email": (email or "").strip(),
-                    "Phone": phone,
-                    "Street": address,
-                    "Description": description,
-                    "Lead_Source": source,
-                    "Company": brand.name(),
-                })
-            except Exception as e:
-                print(f"⚠️ webhook lead zoho sync failed: {e}", flush=True)
+            await asyncio.to_thread(zoho_sync.after_intake, db, lead_id)
         
         return JSONResponse(content={"status": "success", "lead_id": lead_id, "created": created})
     except Exception as e:

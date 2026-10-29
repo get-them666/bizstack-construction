@@ -1,82 +1,109 @@
+"""Zoho Campaigns: mailing-list subscribe / unsubscribe, list discovery.
+
+The Campaigns API is form/query based, not JSON-bodied: `listkey` and
+`contactinfo` (itself a JSON string) go as parameters with `resfmt=JSON`.
+The previous version posted a JSON body to /addlistsubscribers, which the
+API ignores, so nothing was ever added -- and the list key was never set
+anyway. The list key now comes from app_settings (picked on Settings) with
+ZOHO_CAMPAIGNS_LIST_KEY as the fallback.
 """
-Zoho Campaigns integration - Email lists/subscribers
-"""
+from __future__ import annotations
+
+import json
 import os
-from typing import Dict, Any, Optional
+from typing import Any, Dict, List, Optional
+
 try:
-    from . import zoho_client
+    from . import zoho_client  # type: ignore
 except Exception:
     import zoho_client
 
 DC_SUFFIX = os.getenv("ZOHO_DC_SUFFIX", "com")
 CAMPAIGNS_BASE = f"https://campaigns.zoho.{DC_SUFFIX}/api/v1.1"
-LIST_KEY = os.getenv("ZOHO_CAMPAIGNS_LIST_KEY", "")
+LIST_KEY_SETTING = "zoho_campaigns_list_key"
+
+
+def _setting(key: str) -> str:
+    try:
+        import psycopg
+        from psycopg.rows import dict_row
+        with psycopg.connect(os.getenv("DATABASE_URL", ""), row_factory=dict_row) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT value FROM app_settings WHERE key = %s;", (key,))
+                row = cur.fetchone()
+        return (row or {}).get("value") or ""
+    except Exception:
+        return ""
+
+
+def list_key() -> str:
+    return _setting(LIST_KEY_SETTING) or (os.getenv("ZOHO_CAMPAIGNS_LIST_KEY") or "").strip()
+
+
+def set_list_key(conn, key: str) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO app_settings (key, value, updated_at) VALUES (%s, %s, NOW()) "
+            "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW();",
+            (LIST_KEY_SETTING, (key or "").strip()))
+    conn.commit()
+
+
+def _call(path: str, params: Dict[str, Any]) -> Optional[Dict]:
+    if not zoho_client.is_configured():
+        return None
+    params = {**params, "resfmt": "JSON"}
+    resp = zoho_client.api_request("POST", f"{CAMPAIGNS_BASE}/{path}", params=params,
+                                   headers={"Content-Type": "application/x-www-form-urlencoded"})
+    if resp is None:
+        return None
+    try:
+        body = resp.json()
+    except Exception:
+        body = {"raw": resp.text[:300]}
+    if resp.status_code not in (200, 201) or str(body.get("status", "")).lower() == "error":
+        print(f"[zoho_campaigns] {path} failed: {resp.status_code} {str(body)[:200]}", flush=True)
+        return None
+    return body
+
+
+def mailing_lists() -> List[Dict[str, Any]]:
+    """[{listkey, listname, contacts}] for the Settings picker."""
+    if not zoho_client.is_configured():
+        return []
+    resp = zoho_client.api_request("GET", f"{CAMPAIGNS_BASE}/getmailinglists",
+                                   params={"resfmt": "JSON", "range": 100})
+    if resp is None or resp.status_code != 200:
+        return []
+    try:
+        rows = resp.json().get("list_of_details") or []
+    except Exception:
+        return []
+    return [{"listkey": r.get("listkey"), "listname": r.get("listname"),
+             "contacts": r.get("noofcontacts")} for r in rows if r.get("listkey")]
 
 
 def add_subscriber(subscriber_data: Dict[str, Any]) -> Optional[Dict]:
-    """Add a subscriber to a mailing list."""
-    if not zoho_client.is_configured():
+    """Add one contact to the configured list."""
+    key = list_key()
+    if not key:
+        print("[zoho_campaigns] no mailing list selected (Settings → Zoho)", flush=True)
         return None
-    if not LIST_KEY:
-        print("[zoho_campaigns] ZOHO_CAMPAIGNS_LIST_KEY not set", flush=True)
+    email = (subscriber_data.get("email") or "").strip()
+    if not email:
         return None
-    
-    headers = zoho_client.get_headers()
-    if not headers:
-        return None
-    
-    # Zoho Campaigns expects form data or specific format
-    name = subscriber_data.get("name", "")
-    first_name = name.split()[0] if name else subscriber_data.get("first_name", "")
-    last_name = " ".join(name.split()[1:]) if name and len(name.split()) > 1 else subscriber_data.get("last_name", "")
-    
-    payload = {
-        "listkey": LIST_KEY,
-        "contactinfo": {
-            "First Name": first_name,
-            "Last Name": last_name,
-            "Email": subscriber_data.get("email", "")
-        }
-    }
-    
-    resp = zoho_client.api_request("POST", f"{CAMPAIGNS_BASE}/addlistsubscribers", json=payload, headers=headers)
-    if not resp:
-        return None
-    if resp.status_code not in (200, 201):
-        print(f"[zoho_campaigns] add_subscriber failed: {resp.status_code} {resp.text[:200]}", flush=True)
-        return None
-    
-    try:
-        return resp.json()
-    except Exception as e:
-        print(f"[zoho_campaigns] add_subscriber parse error: {e}", flush=True)
-        return None
+    name = (subscriber_data.get("name") or "").strip()
+    parts = name.split()
+    info = {"Contact Email": email}
+    if parts:
+        info["First Name"] = parts[0]
+    if len(parts) > 1:
+        info["Last Name"] = " ".join(parts[1:])
+    return _call("json/listsubscribe", {"listkey": key, "contactinfo": json.dumps(info)})
 
 
 def unsubscribe(email: str) -> Optional[Dict]:
-    """Unsubscribe from mailing list."""
-    if not zoho_client.is_configured() or not LIST_KEY:
+    key = list_key()
+    if not key or not (email or "").strip():
         return None
-    
-    headers = zoho_client.get_headers()
-    if not headers:
-        return None
-    
-    payload = {
-        "listkey": LIST_KEY,
-        "contactinfo": {
-            "Email": email
-        }
-    }
-    
-    resp = zoho_client.api_request("POST", f"{CAMPAIGNS_BASE}/removelistsubscribers", json=payload, headers=headers)
-    if not resp or resp.status_code not in (200, 201):
-        if resp:
-            print(f"[zoho_campaigns] unsubscribe failed: {resp.status_code}", flush=True)
-        return None
-    
-    try:
-        return resp.json()
-    except Exception as e:
-        print(f"[zoho_campaigns] unsubscribe parse error: {e}", flush=True)
-        return None
+    return _call("json/listunsubscribe", {"listkey": key, "contactinfo": json.dumps({"Contact Email": email.strip()})})
