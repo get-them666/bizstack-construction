@@ -91,6 +91,18 @@ insured" with no number (Virginia DPOR requires it on advertising). And the
 `/.webmcp/bridge.js` script on every page (75 KB, `data-packs="c2pa,mcp-server-client"`)
 is injected by Cloudflare at the edge, not by this app.
 
+**And a fifth, which hid the other four: no git push had deployed since
+2026-10-08.** Railway's "Wait for CI" was skipping every commit because a
+`Deploy to Cloud Run` GitHub workflow (no GCP vars, fails in 8s) ran on each
+push. Every "fix" committed in that window only reached production if someone
+also ran `railway up` by hand. The workflow is manual-only now. Both this and
+the watchPatterns story are in AGENTS.md under Deploy.
+
+The live **appearance theme** (set from `/appearance`, stored in the DB) is a
+custom one as of 2026-10-29: body `#0a0a0a`, accent `#48413d`, Georgia serif,
+🎃 pinned bottom-right. Not any preset; `site_theme.py` applies it with
+`!important` over every indigo CTA. Left alone pending the owner's say-so.
+
 ## Account map — audited 2026-10-20 (supersedes AGENTS.md's Zen section)
 
 - **OpenAI** — funded again. New project key (`sk-proj-x-Dy…`) in Railway; the old
