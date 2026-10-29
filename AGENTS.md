@@ -89,7 +89,8 @@ for f in test_*.py; do
 done
 ```
 
-No CI exists (`.github/` is absent) — nothing runs these for you.
+No test CI exists — nothing runs these for you. The only workflow in `.github/` is a
+manual-only Cloud Run deploy that must **never** get a `push:` trigger again (see Deploy below).
 
 ### Known failures at HEAD `3b4fd69` (clean tree)
 
@@ -369,3 +370,11 @@ looks like clutter, it is probably a source artifact for `docs/CHECKLIST.md`.
   this is one service; there is nothing to gate. After a push, confirm with
   `railway deployment list --json` that the newest deployment is `SUCCESS`, not
   `SKIPPED`.
+
+  **The second way a push gets `SKIPPED`: a failing GitHub check.** The service has
+  "Wait for CI" on (`source.checkSuites: true`), so any red check suite on the commit
+  makes Railway skip it with `meta.skippedReason: "CI check suite failed"`. From
+  2026-10-08 to 2026-10-29 a `Deploy to Cloud Run` workflow with a `push:` trigger and
+  no GCP variables failed in 8s on every commit, and **every git deploy in that window
+  was skipped** — the only deploys that shipped were manual `railway up`. The workflow is
+  now `workflow_dispatch` only. Read `skippedReason` before blaming `watchPatterns`.

@@ -1,9 +1,12 @@
 name: Deploy to Cloud Run
 
+# Manual-only. This app deploys to Railway, which has "Wait for CI" enabled
+# and skips any commit whose check suite fails. With a push trigger here and
+# no GCP_* repository variables set, this job failed in ~8s on every push to
+# main from 2026-10-08 on, so Railway skipped every git deploy
+# ("skippedReason": "CI check suite failed") and only manual `railway up`
+# ever shipped. Run it from the Actions tab if Cloud Run is ever wanted.
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
 
 permissions:
