@@ -1,0 +1,209 @@
+{% extends "base.html" %}
+{% set co = company() %}
+{% block title %}Messages | {{ co.name }}{% endblock %}
+{% block meta %}<meta name="robots" content="noindex, nofollow">{% endblock %}
+
+{% block content %}
+<section class="bg-gradient-to-b from-slate-50 to-white">
+    <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
+        <div class="mb-8 flex items-start justify-between gap-4">
+            <div>
+                <p class="text-xs font-semibold text-indigo-600 uppercase tracking-wider">Team</p>
+                <h1 class="text-3xl font-extrabold tracking-tight text-slate-900">Messages</h1>
+                <p class="mt-2 text-slate-600">Private messages with each crew member, and announcements that reach the whole crew in their app.</p>
+            </div>
+            {% if actor.role == 'admin' %}
+            <button id="clear-chat-btn" type="button"
+                class="shrink-0 text-xs font-bold text-red-600 bg-red-50 hover:bg-red-100 border border-red-100 rounded-xl px-3 py-2 transition-all">
+                🗑 Clear all
+            </button>
+            {% endif %}
+        </div>
+
+        <div class="bg-white rounded-3xl border border-slate-200 shadow-xl shadow-slate-100 flex flex-col" style="height: 62vh; min-height: 440px;">
+            <div id="message-list" class="flex-1 overflow-y-auto px-5 py-4 space-y-3">
+                <div class="text-center text-xs text-slate-400 py-6">Loading…</div>
+            </div>
+            <form id="message-form" class="border-t border-slate-100 p-4">
+                {% if actor.role == 'admin' %}
+                <div class="flex flex-wrap items-center gap-2 mb-2">
+                    <select id="message-kind" class="shrink-0 px-3 py-2 rounded-xl border border-slate-200 text-xs bg-white">
+                        <option value="dm">👤 Private message</option>
+                        <option value="announcement">📣 Announcement to the whole crew</option>
+                    </select>
+                    <select id="message-recipient" class="shrink-0 px-3 py-2 rounded-xl border border-slate-200 text-xs bg-white max-w-[16rem]"></select>
+                    <span id="roster-empty" class="hidden text-xs text-slate-500">No active crew yet — add them under <a href="/crew/admin" class="font-semibold text-indigo-600">Crew</a>.</span>
+                </div>
+                {% else %}
+                <input type="hidden" id="message-kind" value="dm">
+                {% endif %}
+                <div class="flex items-end gap-2">
+                    <textarea id="message-input" rows="1" placeholder="Type a message… (Enter to send, Shift+Enter for a new line)" class="flex-1 px-4 py-2.5 rounded-xl border border-slate-200 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400"></textarea>
+                    <button type="submit" class="shrink-0 inline-flex items-center justify-center px-5 py-2.5 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl">Send</button>
+                </div>
+                <p id="message-status" class="mt-2 text-xs text-slate-400"></p>
+            </form>
+        </div>
+        <p class="mt-4 text-xs text-slate-500">Crew members read and reply from the Crew app (💬 tab). Messages are kept until you clear them.</p>
+    </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+    const me = {{ actor | tojson }};
+    let lastId = 0;
+    let ws = null;
+    let roster = [];
+    const list = document.getElementById('message-list');
+    const statusEl = document.getElementById('message-status');
+
+    function esc(s) {
+        return String(s == null ? '' : s).replace(/[<>&"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]));
+    }
+    function roleLabel(r) { return r === 'admin' ? 'Office' : 'Crew'; }
+    function when(iso) {
+        if (!iso) return '';
+        const d = new Date(iso);
+        const today = new Date();
+        const sameDay = d.toDateString() === today.toDateString();
+        return sameDay ? d.toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'})
+                       : d.toLocaleDateString([], {month: 'short', day: 'numeric'}) + ' ' + d.toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'});
+    }
+
+    const seen = new Set();
+    function appendMessage(m) {
+        if (seen.has(m.id)) return;
+        seen.add(m.id);
+        const isSelf = m.author_role === me.role && (me.role !== 'crew' || m.author_id === me.id);
+        const isAnnouncement = m.kind === 'announcement';
+        let header = esc(m.author_name || roleLabel(m.author_role));
+        if (isAnnouncement) header += ' <span class="opacity-70">· 📣 whole crew</span>';
+        else if (m.recipient_name) header += ' <span class="opacity-70">→ ' + esc(m.recipient_name) + '</span>';
+        const el = document.createElement('div');
+        el.className = 'flex ' + (isSelf && !isAnnouncement ? 'justify-end' : 'justify-start');
+        const bubble = isAnnouncement
+            ? 'bg-amber-50 border border-amber-100 text-slate-900 rounded-bl-sm'
+            : (isSelf ? 'bg-indigo-600 text-white rounded-br-sm' : 'bg-slate-100 text-slate-800 rounded-bl-sm');
+        const head = isAnnouncement ? 'text-amber-700' : (isSelf ? 'text-indigo-200' : 'text-indigo-600');
+        el.innerHTML =
+            '<div class="max-w-[78%] rounded-2xl px-4 py-2.5 text-sm ' + bubble + '">' +
+                '<div class="text-xs font-bold ' + head + '">' + header + '</div>' +
+                '<div class="whitespace-pre-wrap break-words mt-0.5">' + esc(m.body) + '</div>' +
+                '<div class="text-[10px] mt-1 opacity-60">' + esc(when(m.created_at || m.at)) + '</div>' +
+            '</div>';
+        list.querySelector('.py-6')?.remove();
+        list.appendChild(el);
+        list.scrollTop = list.scrollHeight;
+        lastId = Math.max(lastId, m.id);
+    }
+
+    function connect() {
+        const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+        ws = new WebSocket(proto + '://' + location.host + '/ws/messages');
+        ws.onopen = () => { ws.send(String(lastId)); statusEl.textContent = ''; };
+        ws.onmessage = ev => {
+            const m = JSON.parse(ev.data);
+            if (m.clear) { seen.clear(); lastId = 0; list.innerHTML = '<div class="text-center text-xs text-slate-400 py-6">Cleared.</div>'; return; }
+            appendMessage(m);
+        };
+        ws.onclose = ev => {
+            if (ev.code === 1008) { statusEl.textContent = 'Session expired — reload and log in again.'; return; }
+            statusEl.textContent = 'Reconnecting…';
+            setTimeout(connect, 3000);
+        };
+    }
+
+    function fillRoster() {
+        const kindEl = document.getElementById('message-kind');
+        const recSel = document.getElementById('message-recipient');
+        const empty = document.getElementById('roster-empty');
+        if (!kindEl || !recSel) return;
+        const crew = roster.filter(u => u.role === 'crew');
+        recSel.innerHTML = '';
+        const office = document.createElement('option');
+        office.value = 'admin:'; office.textContent = 'Office inbox (note to self / other admins)';
+        recSel.appendChild(office);
+        crew.forEach(u => {
+            const opt = document.createElement('option');
+            opt.value = 'crew:' + u.id; opt.textContent = u.name;
+            recSel.appendChild(opt);
+        });
+        if (crew.length) recSel.selectedIndex = 1;
+        empty.classList.toggle('hidden', crew.length > 0);
+        const toggle = () => recSel.classList.toggle('hidden', kindEl.value !== 'dm');
+        kindEl.addEventListener('change', toggle);
+        toggle();
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+        if (me.role === 'admin') {
+            fetch('/api/messages/roster', {credentials: 'same-origin'})
+                .then(r => r.ok ? r.json() : {roster: []})
+                .then(d => { roster = d.roster || []; fillRoster(); })
+                .catch(fillRoster);
+        }
+        fetch('/api/messages?after=0', {credentials: 'same-origin'})
+            .then(r => r.json())
+            .then(d => {
+                list.innerHTML = '';
+                (d.messages || []).forEach(appendMessage);
+                if (!(d.messages || []).length) {
+                    list.innerHTML = '<div class="text-center text-xs text-slate-400 py-6">No messages yet. Anything a crew member sends from the app shows up here.</div>';
+                }
+            })
+            .catch(() => { list.innerHTML = '<div class="text-center text-xs text-red-500 py-6">Could not load messages.</div>'; });
+        connect();
+
+        const input = document.getElementById('message-input');
+        const form = document.getElementById('message-form');
+        form.addEventListener('submit', async e => {
+            e.preventDefault();
+            const text = input.value.trim();
+            if (!text) return;
+            const body = new URLSearchParams({body: text});
+            const kindEl = document.getElementById('message-kind');
+            const kind = kindEl ? kindEl.value : 'dm';
+            body.append('kind', kind);
+            const recSel = document.getElementById('message-recipient');
+            if (kind === 'dm' && recSel && recSel.value) {
+                const [rrole, rid] = recSel.value.split(':');
+                body.append('to_role', rrole);
+                body.append('to_id', rid || '');
+            }
+            input.value = '';
+            try {
+                const res = await fetch('/api/messages', {method: 'POST', credentials: 'same-origin',
+                    headers: {'Content-Type': 'application/x-www-form-urlencoded'}, body});
+                if (!res.ok) {
+                    const j = await res.json().catch(() => ({}));
+                    statusEl.textContent = 'Not sent: ' + (j.detail || res.status);
+                    input.value = text;
+                    return;
+                }
+                const j = await res.json();
+                if (j.message) appendMessage(j.message);   // in case the socket is mid-reconnect
+                statusEl.textContent = '';
+            } catch (err) { statusEl.textContent = 'Not sent — connection problem.'; input.value = text; }
+        });
+        input.addEventListener('keydown', e => {
+            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); form.dispatchEvent(new Event('submit', {cancelable: true})); }
+        });
+
+        const clearBtn = document.getElementById('clear-chat-btn');
+        if (clearBtn) clearBtn.addEventListener('click', async () => {
+            if (!confirm('Delete ALL messages for everyone? This cannot be undone.')) return;
+            clearBtn.disabled = true;
+            try {
+                const res = await fetch('/api/messages/clear', {method: 'POST', credentials: 'same-origin'});
+                if (!res.ok) throw new Error();
+                seen.clear(); lastId = 0;
+                list.innerHTML = '<div class="text-center text-xs text-slate-400 py-6">Cleared.</div>';
+            } catch (err) { alert('Could not clear messages.'); }
+            clearBtn.disabled = false;
+        });
+    });
+})();
+</script>
+{% endblock %}

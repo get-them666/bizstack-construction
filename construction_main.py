@@ -48,6 +48,7 @@ from email.message import EmailMessage
 from con_ai_agent import BusinessAIAgent, ModelUnavailable, ToolBudgetExhausted
 from loan_outreach import start_outreach_tasks
 import brand
+import team_messages
 import copilot_memory
 import lead_pipeline
 import outreach_queue
@@ -798,6 +799,17 @@ async def lifecycle(app: FastAPI):
         print(f"🧭 Lead pipeline ready ({tagged} lead(s) tagged).", flush=True)
     except Exception as exc:
         print(f"⚠️ lead pipeline init skipped: {exc}", flush=True)
+
+    # Team messages (owner <-> crew). Nothing in the startup DDL ever created
+    # this table -- production has it only because it was forked from the
+    # shared database, with company DEFAULT 'broom'. A fresh database 500'd
+    # on the crew chat without this.
+    try:
+        with psycopg.connect(db_url, row_factory=dict_row) as conn:
+            team_messages.ensure_schema(conn)
+        print("💬 Team messages ready.", flush=True)
+    except Exception as exc:
+        print(f"⚠️ team messages init skipped: {exc}", flush=True)
 
     # Daily lead-enrichment autopilot: free parcel lookup -> Skip Sherpa (one
     # capped credit) -> conservative write-back -> staged first-touch draft.
@@ -9738,96 +9750,143 @@ async def worker_app_photos_upload(request: Request, project_id: int = Form(0), 
 
 
 # --- Crew app: Messages with the office ---------------------------------------
+# --- Team messages: owner <-> crew -------------------------------------------
+# One module (team_messages) owns the table, the visibility rule and the
+# serializer. The crew PWA keeps its /api/crew/app/messages endpoints and
+# payload shape; the owner gets /messages. Both share the authenticated
+# WebSocket below.
+
+def _message_actor(conn_or_ws) -> dict | None:
+    """Admin session or crew session -> {role, id, name}; None otherwise.
+
+    Works for both Request and WebSocket (both expose .cookies).
+    """
+    return team_messages.normalize_actor(current_actor(conn_or_ws), current_worker(conn_or_ws))
+
+
+MSG_CLIENTS: dict = {}   # WebSocket -> actor
+
+
+async def _push_message(row: dict) -> None:
+    """Fan one serialized message out to every socket allowed to see it."""
+    for ws, viewer in list(MSG_CLIENTS.items()):
+        try:
+            if team_messages.visible(row, viewer):
+                await ws.send_json(row)
+        except Exception:
+            MSG_CLIENTS.pop(ws, None)
+
+
 @app.get("/api/crew/app/messages")
 async def worker_app_messages(request: Request, after: int = 0, db=Depends(get_db)):
     worker = require_worker(request)
     _require_crew_feature(db, "messages")
-    with db.cursor() as cur:
-        cur.execute("""
-            SELECT m.id, m.author_role, m.author_id, m.author_name, m.company, m.kind,
-                   m.audience, m.scope, m.recipient_role, m.recipient_id, m.recipient_name,
-                   m.body, m.created_at
-            FROM messages m
-            WHERE m.id > %s
-              AND (m.company = 'construction'
-                   OR m.author_id = %s
-                   OR m.recipient_id = %s)
-            ORDER BY m.id ASC LIMIT 500;
-        """, (after, worker.get("id"), worker.get("id")))
-        rows = cur.fetchall()
-    msgs = [_crew_message_visible_and_serialize(m, worker) for m in rows]
-    msgs = [m for m in msgs if m is not None]
-    return JSONResponse(content={"messages": msgs})
-
-
-def _crew_message_visible_and_serialize(m, worker):
-    """Visibility semantics for construction crew: a DM is
-    shown if this crew member wrote it or it is addressed to them; office
-    announcements show whenever the scope covers construction/all."""
-    kind = m.get("kind") or "announcement"
-    if kind == "dm":
-        is_author = (m["author_role"] == "crew" and m["author_id"] == worker.get("id"))
-        is_recipient = (m["recipient_id"] == worker.get("id"))
-        if not (is_author or is_recipient):
-            return None
-    else:
-        scope = m.get("scope") or "all"
-        if scope not in ("all", "construction"):
-            return None
-    return {
-        "id": m["id"], "kind": kind,
-        "author": ("crew" if m["author_role"] == "crew" else "office"),
-        "author_id": m["author_id"],
-        "author_name": m["author_name"] or ("Office" if m["author_role"] == "admin" else "Crew"),
-        "recipient_role": m["recipient_role"], "recipient_id": m["recipient_id"],
-        "body": m["body"], "at": m["created_at"].isoformat(),
-    }
+    actor = team_messages.normalize_actor(None, worker)
+    return JSONResponse(content={"messages": team_messages.list_after(db, after, actor)})
 
 
 @app.post("/api/crew/app/messages")
 async def worker_app_messages_send(request: Request, body: str = Form(...), db=Depends(get_db)):
     worker = require_worker(request)
     _require_crew_feature(db, "messages")
-    body = (body or "").strip()[:2000]
-    if not body:
-        return JSONResponse(content={"status": "error", "error": "Empty message"}, status_code=400)
-    with db.cursor() as cur:
-        cur.execute(
-            "INSERT INTO messages (author_role, author_id, author_name, company, kind, audience, scope, recipient_role, body) "
-            "VALUES ('crew', %s, %s, 'construction', 'dm', 'office', 'all', 'admin', %s) RETURNING id, created_at;",
-            (worker.get("id"), worker.get("name", ""), body),
-        )
-        row = cur.fetchone()
-        new_id = row["id"]
-        db.commit()
-    _broadcast_ws({
-        "id": new_id, "kind": "dm", "author": "crew",
-        "author_id": worker.get("id"), "author_name": worker.get("name", "Crew"),
-        "recipient_role": "admin", "body": body, "at": row["created_at"].isoformat(),
+    actor = team_messages.normalize_actor(None, worker)
+    try:
+        row = team_messages.send(db, actor, body)
+    except ValueError as e:
+        return JSONResponse(content={"status": "error", "error": str(e)}, status_code=400)
+    await _push_message(row)
+    return JSONResponse(content={"status": "ok", "id": row["id"]})
+
+
+@app.get("/messages", response_class=HTMLResponse)
+async def messages_page(request: Request):
+    is_authed, user_email = require_auth(request)
+    if not is_authed:
+        return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
+    actor = _message_actor(request)
+    if not actor:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Owner login required")
+    return templates.TemplateResponse(request=request, name="messages.html", context={
+        "user": {"email": user_email}, "actor": actor,
     })
-    return JSONResponse(content={"status": "ok", "id": new_id})
 
 
-WS_CLIENTS: set = set()
+@app.get("/api/messages")
+async def messages_list(request: Request, after: int = 0, db=Depends(get_db)):
+    actor = _message_actor(request)
+    if not actor:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Login required")
+    return JSONResponse(content={"ok": True, "messages": team_messages.list_after(db, after, actor)})
+
+
+@app.get("/api/messages/roster")
+async def messages_roster(request: Request, db=Depends(get_db)):
+    require_admin(request)
+    return JSONResponse(content={"ok": True, "roster": team_messages.roster(db)})
+
+
+@app.post("/api/messages")
+async def messages_send(request: Request, body: str = Form(...), kind: str = Form("dm"),
+                        to_role: str = Form(""), to_id: str = Form(""), db=Depends(get_db)):
+    actor = _message_actor(request)
+    if not actor:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Login required")
+    try:
+        row = team_messages.send(db, actor, body, kind=kind, to_role=to_role, to_id=to_id)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    await _push_message(row)
+    return JSONResponse(content={"ok": True, "message": row})
+
+
+@app.post("/api/messages/clear")
+async def messages_clear(request: Request, db=Depends(get_db)):
+    require_admin(request)
+    cleared = team_messages.clear(db)
+    for ws in list(MSG_CLIENTS):
+        try:
+            await ws.send_json({"clear": True})
+        except Exception:
+            MSG_CLIENTS.pop(ws, None)
+    return JSONResponse(content={"ok": True, "cleared": cleared})
 
 
 @app.websocket("/ws/messages")
 async def ws_messages(websocket: WebSocket):
+    """Live feed. Authenticated, and filtered per viewer.
+
+    The previous socket accepted anyone and broadcast every crew DM to every
+    connection, so an anonymous client could read the office inbox. Now a
+    session is required to connect (close 1008 otherwise -- the crew PWA
+    already treats that code as "locked out"), and each push goes through
+    team_messages.visible for that viewer. A client may send its last seen
+    id as text to get a replay of what it missed.
+    """
+    actor = _message_actor(websocket)
+    if not actor:
+        await websocket.close(code=1008)
+        return
     await websocket.accept()
-    WS_CLIENTS.add(websocket)
+    MSG_CLIENTS[websocket] = actor
     try:
         while True:
-            await websocket.receive_text()
+            text = await websocket.receive_text()
+            try:
+                after_id = int(text)
+            except (TypeError, ValueError):
+                continue
+            conn = psycopg.connect(db_url, row_factory=dict_row)
+            try:
+                for row in team_messages.list_after(conn, after_id, actor, limit=200):
+                    await websocket.send_json(row)
+            finally:
+                conn.close()
     except WebSocketDisconnect:
-        WS_CLIENTS.discard(websocket)
-
-
-def _broadcast_ws(message: dict):
-    for client in list(WS_CLIENTS):
-        try:
-            asyncio.create_task(client.send_json(message))
-        except Exception:
-            WS_CLIENTS.discard(client)
+        pass
+    except Exception:
+        pass
+    finally:
+        MSG_CLIENTS.pop(websocket, None)
 
 
 # --- Training: safety orientation (OSHA-10 baseline) + trade skills tests -------------

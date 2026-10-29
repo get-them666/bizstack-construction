@@ -2,7 +2,7 @@
 {% macro act(t) %}{% if path == t or (t != '/' and path.startswith(t ~ '/')) %}nav-active{% endif %}{% endmacro %}
 {% set tools_on = path in ['/copilot', '/instant-quote', '/appearance', '/inventory'] or path.startswith('/copilot/') or path.startswith('/instant-quote/') or path.startswith('/appearance/') or path.startswith('/inventory/') %}
 {% set leads_on = path in ['/leads', '/job-leads', '/skiptrace'] or path.startswith('/leads/') or path.startswith('/job-leads/') or path.startswith('/skiptrace/') %}
-{% set jobs_on = path in ['/bids', '/books', '/projects', '/crew', '/crew/admin', '/payroll', '/payments', '/backlog', '/dashboard'] or path.startswith('/projects/') or path.startswith('/crew/') or path.startswith('/payroll/') or path.startswith('/payments/') or path.startswith('/backlog/') or path.startswith('/bids/') %}
+{% set jobs_on = path in ['/bids', '/books', '/projects', '/crew', '/crew/admin', '/messages', '/payroll', '/payments', '/backlog', '/dashboard'] or path.startswith('/projects/') or path.startswith('/crew/') or path.startswith('/payroll/') or path.startswith('/payments/') or path.startswith('/backlog/') or path.startswith('/bids/') %}
 <header class="dash-nav sticky top-0 z-50 border-b border-white/10 shadow-lg shadow-slate-900/[0.12]">
     <div class="w-full px-4 sm:px-6 lg:px-10 xl:px-14">
         <div class="flex items-center justify-between h-16 gap-2">
@@ -40,6 +40,7 @@
                         <a href="/payments" class="nav-dropdown-item {{ act('/payments') }}">Payments</a>
                         <a href="/books" class="nav-dropdown-item {{ act('/books') }}">Books</a>
                         <a href="/crew/admin" class="nav-dropdown-item {{ act('/crew/admin') }}">Crew</a>
+                        <a href="/messages" class="nav-dropdown-item {{ act('/messages') }}">Messages</a>
                         <a href="/payroll" class="nav-dropdown-item {{ act('/payroll') }}">Payroll</a>
                         <a href="/backlog" class="nav-dropdown-item {{ act('/backlog') }}">Back-log</a>
                     </div>
@@ -114,6 +115,7 @@
             <a href="/payments" class="mobile-link {{ act('/payments') }}">Payments</a>
             <a href="/books" class="mobile-link {{ act('/books') }}">Books</a>
             <a href="/crew/admin" class="mobile-link {{ act('/crew/admin') }}">Crew</a>
+            <a href="/messages" class="mobile-link {{ act('/messages') }}">Messages</a>
             <a href="/payroll" class="mobile-link {{ act('/payroll') }}">Payroll</a>
             <a href="/backlog" class="mobile-link {{ act('/backlog') }}">Back-log</a>
         </div>

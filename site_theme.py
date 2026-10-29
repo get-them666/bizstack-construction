@@ -233,7 +233,17 @@ def state(force=False):
                 return cached
             return {"skin": "default", "css": "", "emoji": "", "decor": "", "promo_on": False, "auto": True, "auto_season": ""}
         try:
-            settings = _read_settings(conn)
+            try:
+                settings = _read_settings(conn)
+            except Exception:
+                # base.html calls this on every render. A missing app_settings
+                # table or a transient DB error must degrade to the last good
+                # theme (or the default), never to a 500 on every page.
+                conn.close()
+                cached = _cache["state"]
+                if cached:
+                    return cached
+                return {"skin": "default", "css": "", "emoji": "", "decor": "", "promo_on": False, "auto": True, "auto_season": ""}
             theme = {}
             try:
                 theme = json.loads(settings.get("theme") or "{}")
