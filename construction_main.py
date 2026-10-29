@@ -813,6 +813,13 @@ async def lifecycle(app: FastAPI):
     except Exception as exc:
         print(f"⚠️ team messages init skipped: {exc}", flush=True)
 
+    # Inbound-lead follow-ups (day 1/3/7 with a booking link). Review mode
+    # (LEAD_AUTO_SEND unset) and DISABLE_FOLLOWUPS both stop it.
+    try:
+        followups.start(_run_followups)
+    except Exception as exc:
+        print(f"[followups] could not start: {exc}", flush=True)
+
     # BuildingConnected -> bid board, every few hours, once the owner has
     # signed in to Autodesk. Invitations should land on the board by
     # themselves; the Today screen shows what is due.
@@ -2590,6 +2597,96 @@ async def submit_lead(
     except Exception as e:
         print(f"⚠️ submit-lead zoho sync failed: {e}", flush=True)
     return JSONResponse(content={"status": "success", "lead_id": lead_id})
+
+
+def _run_followups() -> dict:
+    """One sweep of the inbound follow-up schedule, with the app's own
+    transports and caps. Called hourly by followups.start()."""
+    conn = psycopg.connect(db_url, row_factory=dict_row)
+    try:
+        cfg = documents_service.smtp_config_from_env()
+
+        def _send_email(to, subject, body):
+            if not documents_service.smtp_configured(cfg):
+                return False
+            return bool(auto_reply.run_coro(documents_service.send_email(cfg, to, subject, body.replace("\n", "<br>"))))
+
+        _send_sms = signalwire.send_sms if signalwire.is_configured() else None
+        return followups.run_once(
+            conn, send_email=_send_email, send_sms=_send_sms,
+            channel_allowed=lambda ch: auto_reply._channel_allowed(conn, ch),
+            review_mode=auto_reply._review_mode(),
+        )
+    finally:
+        conn.close()
+
+
+@app.get("/book/{token}", response_class=HTMLResponse)
+async def book_walkthrough_page(token: str, request: Request, db=Depends(get_db)):
+    """Self-serve walkthrough booking, reached from every follow-up message."""
+    lead_id = followups.verify_booking_token(token)
+    lead = followups.lead_for_booking(db, lead_id) if lead_id else None
+    if not lead:
+        return templates.TemplateResponse(request=request, name="book.html",
+                                          context={"invalid": True, "token": token}, status_code=404)
+    return templates.TemplateResponse(request=request, name="book.html", context={
+        "lead": lead, "token": token, "slots": followups.slots(),
+        "booked": lead.get("walkthrough_at"),
+        "booked_label": followups.window_label(lead["walkthrough_at"]) if lead.get("walkthrough_at") else "",
+        "saved": request.query_params.get("saved", ""), "error": request.query_params.get("error", ""),
+    })
+
+
+@app.post("/book/{token}")
+async def book_walkthrough_submit(token: str, request: Request, slot: str = Form(""),
+                                  note: str = Form(""), phone: str = Form(""), email: str = Form(""),
+                                  company_website: str = Form(""), db=Depends(get_db)):
+    lead_id = followups.verify_booking_token(token)
+    if not lead_id or _is_form_bot(company_website, "booking"):
+        return RedirectResponse(url=f"/book/{token}?saved=1", status_code=status.HTTP_303_SEE_OTHER)
+    when = followups.parse_slot(slot)
+    if not when:
+        return RedirectResponse(url=f"/book/{token}?error=Pick+one+of+the+listed+times", status_code=status.HTTP_303_SEE_OTHER)
+    lead = followups.book(db, lead_id, when, note=note, phone=phone, email=email)
+    if not lead:
+        return RedirectResponse(url=f"/book/{token}?error=We+could+not+find+your+request", status_code=status.HTTP_303_SEE_OTHER)
+    label = followups.window_label(when)
+    # The owner hears about a booking (one of the few things worth an alert);
+    # the homeowner gets a confirmation; the calendar gets the event.
+    try:
+        auto_reply.notify_owner_email(
+            "construction", lead_id=lead_id, name=lead.get("name") or "", phone=lead.get("phone") or "",
+            email=lead.get("email") or "", service=lead.get("project_type") or "", address=lead.get("address") or "",
+            message=f"WALKTHROUGH BOOKED: {label}" + (f" — {note[:200]}" if note else ""), source="booking",
+        )
+    except Exception as e:
+        print(f"⚠️ booking owner notify failed: {e}", flush=True)
+    to = (lead.get("email") or "").strip()
+    if to and not to.lower().endswith("@lead.local"):
+        try:
+            cfg = documents_service.smtp_config_from_env()
+            if documents_service.smtp_configured(cfg):
+                body = (f"Hi {followups._first_name(lead.get('name'))},\n\nYou're booked: {label}.\n"
+                        f"Address on file: {lead.get('address') or 'we will confirm'}.\n\n"
+                        f"Shaun will text when he's on the way. Need to change it? Reply to this email or call/text "
+                        f"{os.getenv('COMPANY_PHONE', '+1 (757) 908-7121')}.\n\n{brand.name()}")
+                await documents_service.send_email(cfg, to, f"Walkthrough booked — {label}", body.replace("\n", "<br>"))
+        except Exception as e:
+            print(f"⚠️ booking confirmation failed: {e}", flush=True)
+    try:
+        import google_calendar
+        owner = (os.getenv("GMAIL_OWNER") or os.getenv("SMTP_FROM") or "").strip()
+        if owner:
+            end = when + timedelta(hours=3)
+            google_calendar.create_event("construction", owner, os.getenv("BOOKING_CALENDAR_ID", "primary"), {
+                "summary": f"Walkthrough — {lead.get('name') or 'homeowner'} ({lead.get('project_type') or 'project'})",
+                "location": lead.get("address") or "",
+                "description": f"Lead #{lead_id}. {lead.get('phone') or ''} {lead.get('email') or ''}\n{note or ''}".strip(),
+                "start": {"dateTime": when.isoformat()}, "end": {"dateTime": end.isoformat()},
+            })
+    except Exception as e:
+        print(f"⚠️ booking calendar event failed: {e}", flush=True)
+    return RedirectResponse(url=f"/book/{token}?saved=1", status_code=status.HTTP_303_SEE_OTHER)
 
 
 def _form_error_redirect(path: str, error: str, **fields) -> RedirectResponse:
@@ -5818,8 +5915,26 @@ async def inbound_sms_webhook(request: Request, db=Depends(get_db)):
     From = form.get("From", "")
     Body = form.get("Body", "")
 
+    # STOP / UNSUBSCRIBE: honour it before the bot gets a word in. Every lead
+    # with this phone is opted out; the only reply is the confirmation the
+    # carriers require.
+    if followups.is_opt_out(Body):
+        digits = re.sub(r"\D", "", From or "")[-10:]
+        with db.cursor() as cur:
+            cur.execute("INSERT INTO comms_logs (direction, channel, sender, recipient, message_body) VALUES ('inbound', 'sms', %s, 'system', %s);", (From, Body))
+            if digits:
+                cur.execute("SELECT id FROM leads WHERE company = 'construction' AND regexp_replace(COALESCE(phone,''), '\\D', '', 'g') LIKE %s;", (f"%{digits}",))
+                ids = [r["id"] for r in cur.fetchall()]
+            else:
+                ids = []
+            db.commit()
+        for lid in ids:
+            followups.mark_opted_out(db, lid, "sms", Body)
+        print(f"[sms] opt-out from {From}: {len(ids)} lead(s)", flush=True)
+        return Response(content=f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response><Message to="{From}">You're unsubscribed from {brand.short_name()} messages and won't hear from us again. Reply START to re-subscribe.</Message></Response>""", media_type="application/xml")
     agent = BusinessAIAgent(knowledge_path="construction_knowledge.md", tool_handlers=build_tool_handlers(db, stripe_svc))
-    ai_reply = agent.process_inbound_text(f"Inbound SMS from {From}: {Body}")
+    ai_reply = await asyncio.to_thread(agent.process_inbound_text, f"Inbound SMS from {From}: {Body}")
 
     with db.cursor() as cur:
         cur.execute("INSERT INTO comms_logs (direction, channel, sender, recipient, message_body) VALUES ('inbound', 'sms', %s, 'system', %s);", (From, Body))

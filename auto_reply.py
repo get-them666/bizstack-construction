@@ -215,6 +215,8 @@ def _build_message(company_key, co_name, quote=None, **ctx):
         + quote_line + ".",
         "A project estimator will text you within one business day with next steps and a free walkthrough.",
     ]
+    if ctx.get("booking_link"):
+        lines.append(f"Want to skip the phone tag? Pick a walkthrough time here: {ctx['booking_link']}")
     if detail:
         lines.append(f"In the meantime, here's what we noted: {detail[:180]}")
     return " ".join(lines) + footer
@@ -426,6 +428,13 @@ def contact_policy_allows(db, recipient: str, channel: str, lead_id=None) -> tup
         return False, "automated contact disabled (LEAD_MAX_TOUCHES=0)"
     if not recipient or db is None:
         return False, "no recipient"
+    if lead_id:
+        try:
+            import followups
+            if followups.opted_out(db, lead_id):
+                return False, "lead opted out (STOP)"
+        except Exception:
+            return False, "opt-out status unavailable"
     try:
         with db.cursor() as cur:
             # When the lead is known, count EVERY outbound touch to that lead
@@ -758,7 +767,14 @@ def ensure_lead_reply(db, company_key, *, name="", phone="", email="", service="
             print(f"[auto-reply {company_key}] estimate stamp failed for lead {lead_id}: {exc}", flush=True)
 
     co_name = COMPANIES[company_key]["name"]
-    msg = _build_message(company_key, co_name, quote=quote, name=name, service=service, address=address,
+    booking_link = ""
+    try:
+        import followups
+        if lead_id and (source or "").lower() in followups.inbound_sources():
+            booking_link = followups.booking_url(lead_id)
+    except Exception:
+        booking_link = ""
+    msg = _build_message(company_key, co_name, quote=quote, booking_link=booking_link, name=name, service=service, address=address,
                          budget=budget, timeline=timeline, message=message, source=source, funding=funding)
 
     sent = staged = False

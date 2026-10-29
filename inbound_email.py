@@ -208,6 +208,17 @@ def _ingest(db, company_key, msgs, mailbox_from):
             # Commit the inbound row + reply note before any AI work, so a slow or
             # failing draft call can never roll the recorded reply away.
             db.commit()
+            # "Reply STOP" has been in every email; this is the first thing that
+            # honours it. An opt-out ends every automated touch for the lead and
+            # must not be answered by the reply bot.
+            try:
+                import followups
+                if followups.is_opt_out(text):
+                    followups.mark_opted_out(db, lead_id, "email", text)
+                    print(f"[inbound-email] lead #{lead_id} opted out", flush=True)
+                    continue
+            except Exception as exc:
+                print(f"[inbound-email] opt-out check failed for #{lead_id}: {exc}", flush=True)
             try:
                 import auto_reply
                 auto_reply.ensure_lead_reply(
