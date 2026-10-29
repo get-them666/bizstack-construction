@@ -360,6 +360,155 @@ def fetch_permits(timeout: int = DEFAULT_TIMEOUT) -> list[dict]:
     return rows
 
 
+BC_API = "/construction/buildingconnected/v2"
+BC_PAGE_LIMIT = 100
+BC_MAX_PAGES = 10
+# Bid Board states that mean the invitation is closed for us; everything else
+# lands on the board. Matched loosely because the API spells these in caps.
+BC_CLOSED_STATES = {"DECLINED", "NOT_BIDDING", "LOST", "ARCHIVED", "DELETED", "WITHDRAWN"}
+BC_STATE_TO_STATUS = {
+    "WON": "won", "LOST": "lost", "AWARDED": "won",
+    "SUBMITTED": "submitted", "BID_SUBMITTED": "submitted",
+    "ACCEPTED": "pricing", "BIDDING": "pricing",
+    "UNDECIDED": "new", "INVITED": "new", "VIEWED": "new",
+}
+
+
+def _bc_get(path: str, user_email: str, timeout: int):
+    import autodesk_oauth as ao
+    return ao.api_get(path, user_email, timeout)
+
+
+def _bc_str(v) -> str:
+    if isinstance(v, dict):
+        return str(v.get("name") or v.get("complete") or v.get("title") or "").strip()
+    return str(v or "").strip()
+
+
+def _bc_person(lead: dict) -> tuple[str, str, str]:
+    if not isinstance(lead, dict):
+        return "", "", ""
+    name = " ".join(x for x in (str(lead.get("firstName") or ""), str(lead.get("lastName") or "")) if x).strip() \
+        or str(lead.get("name") or "")
+    return name.strip(), str(lead.get("email") or "").strip(), str(lead.get("phone") or lead.get("phoneNumber") or "").strip()
+
+
+def _bc_location(loc) -> str:
+    if isinstance(loc, str):
+        return loc.strip()
+    if not isinstance(loc, dict):
+        return ""
+    if loc.get("complete"):
+        return str(loc["complete"]).strip()
+    street = " ".join(x for x in (str(loc.get("streetNumber") or ""), str(loc.get("streetName") or "")) if x)
+    tail = ", ".join(x for x in (street, str(loc.get("city") or ""),
+                                 " ".join(y for y in (str(loc.get("state") or ""), str(loc.get("zip") or "")) if y)) if x)
+    return tail.strip(", ")
+
+
+def normalize_bc_opportunity(o: dict) -> dict | None:
+    """One Bid Board invitation -> one board row. None when it is closed to us.
+
+    The GC is under `client` (company + the lead who invited us); the dates we
+    care about are dueAt (bids due), jobWalkAt and rfisDueAt; the project
+    address is `location`. The opportunity id is both our reference and the
+    deep link into Bid Board, which is where the plans live and where the bid
+    is submitted.
+    """
+    if not isinstance(o, dict):
+        return None
+    state = str(o.get("state") or o.get("bidState") or "").upper()
+    if state in BC_CLOSED_STATES:
+        return None
+    oid = str(o.get("id") or o.get("_id") or "").strip()
+    name = _bc_str(o.get("name")) or _bc_str(o.get("projectName")) or _bc_str((o.get("project") or {}).get("name") if isinstance(o.get("project"), dict) else "")
+    if not name:
+        return None
+    client = o.get("client") if isinstance(o.get("client"), dict) else {}
+    company = _bc_str(client.get("company")) or _bc_str(client.get("office")) or _bc_str(o.get("client")) \
+        or _bc_str(o.get("generalContractor")) or _bc_str(o.get("invitedBy"))
+    cname, cemail, cphone = _bc_person(client.get("lead") or client.get("contact") or o.get("invitedBy") or {})
+    due = _first(o, "dueAt", "bidsDueAt", "bidDueAt", "dueDate")
+    notes = []
+    for label, key in (("Job walk", "jobWalkAt"), ("RFIs due", "rfisDueAt"),
+                       ("Expected start", "expectedStartAt"), ("Expected finish", "expectedFinishAt")):
+        v = o.get(key)
+        if v:
+            notes.append(f"{label}: {str(v)[:10]}")
+    for label, key in (("Trade", "tradeName"), ("Size", "projectSize"), ("Architect", "architect"),
+                       ("Market", "marketSector"), ("Competition", "competitionLevel"), ("Bid Board state", "state")):
+        v = o.get(key)
+        if v not in (None, "", []):
+            notes.append(f"{label}: {_bc_str(v) if isinstance(v, dict) else v}")
+    if o.get("isNdaRequired"):
+        notes.append("NDA required")
+    trade = _bc_str(o.get("tradeName")) or _bc_str(o.get("trade"))
+    if not trade and isinstance(o.get("trades"), list) and o["trades"]:
+        trade = _bc_str(o["trades"][0])
+    value = _num(_first(o, "value", "estimatedValue", "projectValue"))
+    return {
+        "name": name[:200],
+        "owner": company[:160],
+        "contact_name": cname[:160], "contact_email": cemail[:160], "contact_phone": cphone[:40],
+        "reference": (f"bc:{oid}" if oid else "")[:120],
+        "trade": trade[:120],
+        "location": _bc_location(o.get("location"))[:255],
+        "due_date": _date(due),
+        "bid_amount": value,
+        "notes": " · ".join(notes)[:2000],
+        "status": BC_STATE_TO_STATUS.get(state, "new"),
+        "role": "sub",
+        "external_url": f"https://app.buildingconnected.com/opportunities/{oid}/info" if oid else "",
+    }
+
+
+def fetch_buildingconnected(timeout: int = DEFAULT_TIMEOUT, user_email: str = "") -> list[dict]:
+    """Every open invitation on the owner's Bid Board, via the BuildingConnected API.
+
+    The earlier note here said BuildingConnected had no public API. It does:
+    Autodesk shipped the read API in 2023 and the write API in March 2024,
+    both under APS at /construction/buildingconnected/v2, three-legged OAuth
+    only -- the same sign-in autodesk_oauth already implements. Reading
+    opportunities needs a Bid Board Pro subscription on the signed-in account.
+    """
+    import autodesk_oauth as ao
+    if not ao.configured():
+        raise SourceError("Autodesk is not configured; missing " + ", ".join(
+            m for m in ao.missing() if m != "APS_PROJECT_ID") + " (see /oauth/autodesk/start)")
+    if not user_email:
+        raise SourceError("No signed-in Autodesk account; sign in at /oauth/autodesk/start first.")
+    rows: list[dict] = []
+    path = f"{BC_API}/opportunities?limit={BC_PAGE_LIMIT}"
+    for _ in range(BC_MAX_PAGES):
+        try:
+            data = _bc_get(path, user_email, timeout)
+        except Exception as e:
+            text = str(e)
+            if "403" in text or "forbidden" in text.lower():
+                raise SourceError("BuildingConnected refused the request (403). Reading opportunities "
+                                  "needs Bid Board Pro on the signed-in account, and the signed-in "
+                                  "Autodesk user must be a member of the BuildingConnected office.") from e
+            if "401" in text:
+                raise SourceError("Autodesk sign-in has expired; sign in again at /oauth/autodesk/start.") from e
+            raise SourceError(f"BuildingConnected: {text[:200]}") from e
+        results = data.get("results") if isinstance(data, dict) else data
+        for o in (results or []):
+            row = normalize_bc_opportunity(o)
+            if row:
+                rows.append(row)
+        nxt = ""
+        if isinstance(data, dict):
+            pag = data.get("pagination") if isinstance(data.get("pagination"), dict) else {}
+            nxt = str(pag.get("nextUrl") or data.get("nextUrl") or "")
+            if not nxt and pag.get("cursorState"):
+                nxt = f"{BC_API}/opportunities?limit={BC_PAGE_LIMIT}&cursorState={pag['cursorState']}"
+        if not nxt:
+            break
+        # api_get takes a path relative to the APS host; nextUrl is absolute.
+        path = nxt.replace("https://developer.api.autodesk.com", "")
+    return rows
+
+
 SOURCES = {
     "json_feed": {"label": "JSON feed", "fn": fetch_json_feed,
                   "needs": ["BIDS_FEED_URL"]},
@@ -370,12 +519,8 @@ SOURCES = {
     "autodesk": {"label": "Autodesk Construction Cloud", "fn": fetch_autodesk,
                  "needs": ["APS_CLIENT_ID", "APS_CLIENT_SECRET", "APS_REDIRECT_URI",
                            "APS_PROJECT_ID"]},
-    "buildingconnected": {"label": "BuildingConnected", "fn": None,
-                          "needs": [], "unavailable": (
-                              "No public API. Access is by contract through the "
-                              "Procore partner network, so this cannot be wired "
-                              "from here. Keep using the inbound webhook -- point "
-                              "it at POST /api/webhooks/bids and it will store.")},
+    "buildingconnected": {"label": "BuildingConnected (Bid Board)", "fn": fetch_buildingconnected,
+                          "needs": ["APS_CLIENT_ID", "APS_CLIENT_SECRET", "APS_REDIRECT_URI"]},
 }
 
 

@@ -813,6 +813,15 @@ async def lifecycle(app: FastAPI):
     except Exception as exc:
         print(f"⚠️ team messages init skipped: {exc}", flush=True)
 
+    # BuildingConnected -> bid board, every few hours, once the owner has
+    # signed in to Autodesk. Invitations should land on the board by
+    # themselves; the Today screen shows what is due.
+    try:
+        import bid_sync
+        bid_sync.start(_owner_email)
+    except Exception as exc:
+        print(f"[bid-sync] could not start: {exc}", flush=True)
+
     # Daily lead-enrichment autopilot: free parcel lookup -> Skip Sherpa (one
     # capped credit) -> conservative write-back -> staged first-touch draft.
     # Research and staging only; nothing sends. Started here, after the DDL
@@ -8709,6 +8718,11 @@ async def bids_page(request: Request, status: str = "", db=Depends(get_db)):
             "sources": bid_sources.source_status(),
             "pulls": pulls,
             "pulls_since": pulls_since,
+            # BuildingConnected is the source that matters: configured means the
+            # APS app vars exist; connected means the owner has completed the
+            # Autodesk sign-in and a token is stored for them.
+            "bc_configured": autodesk_oauth.configured(),
+            "bc_connected": bool(autodesk_oauth.get_tokens(_owner_email())) if autodesk_oauth.configured() else False,
         },
     )
 
