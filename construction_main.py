@@ -38,7 +38,7 @@ try:
     from psycopg_pool import ConnectionPool
 except ImportError:  # psycopg_pool is optional; falls back to per-request connections
     ConnectionPool = None
-from fastapi import FastAPI, Request, Form, UploadFile, File, Response, Depends, HTTPException, status, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, Form, UploadFile, File, Query, Response, Depends, HTTPException, status, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -3139,7 +3139,15 @@ async def read_dashboard(request: Request, db=Depends(get_db)):
 
 
 @app.get("/leads", response_class=HTMLResponse)
-async def leads_page(request: Request, status_filter: str = "", q: str = "", lane: str = "contactable",
+async def leads_page(request: Request,
+                     # Every link into this page (Pipeline stage cards, the permits
+                     # lane) passes ?status=won / ?status=quoted. The parameter was
+                     # named status_filter with no alias, so FastAPI dropped the
+                     # value and "Won (1)" opened the unfiltered queue. The name is
+                     # kept (fastapi.status is in scope) and the alias restores the
+                     # links.
+                     status_filter: str = Query("", alias="status"),
+                     q: str = "", lane: str = "contactable",
                      action: str = "", closed: str = "", db=Depends(get_db)):
     is_authed, user_email = require_auth(request)
     if not is_authed:

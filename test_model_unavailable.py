@@ -157,3 +157,14 @@ def test_transient_failures_are_retried(message):
 @pytest.mark.parametrize("message", NOT_RETRYABLE)
 def test_permanent_failures_are_not_retried(message):
     assert not BusinessAIAgent._unavailable_model(Exception(message))
+
+def test_leads_page_accepts_the_status_links_the_pipeline_emits():
+    """Pipeline stage cards link to /leads?status=won. The handler's parameter is
+    status_filter (fastapi.status is in scope), so it must carry alias="status";
+    without it the value was silently dropped and "Won (1)" opened the whole
+    unfiltered queue (reported 2026-10-29)."""
+    import inspect
+    import construction_main
+    sig = inspect.signature(construction_main.leads_page)
+    param = sig.parameters["status_filter"]
+    assert getattr(param.default, "alias", None) == "status"
