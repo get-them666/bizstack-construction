@@ -40,7 +40,7 @@
                         data-pair="{{ '/static/listing/projects2/' }}{{ slug }}{{ '-gallery.jpg' if is_gallery else '-before-after.jpg' }}"
                         data-before="{{ '/static/listing/projects2/' }}{{ slug }}-1.jpg"
                         data-after="{{ '/static/listing/projects2/' }}{{ slug }}-2.jpg"
-                        data-extra="{{ '/static/listing/projects2/' }}{{ slug }}-3.jpg"
+                        {% if is_gallery %}data-extra="{{ '/static/listing/projects2/' }}{{ slug }}-3.jpg"{% endif %}
                         aria-label="View {{ title | safe }} before and after photos">
                     <img src="/static/listing/projects2/{{ slug }}-{{ 'gallery' if is_gallery else 'before-after' }}.jpg"
                          alt="{{ title | safe }} — before and after, {{ subtitle | safe }}"
@@ -56,7 +56,7 @@
                             data-pair="{{ '/static/listing/projects2/' }}{{ slug }}{{ '-gallery.jpg' if is_gallery else '-before-after.jpg' }}"
                             data-before="{{ '/static/listing/projects2/' }}{{ slug }}-1.jpg"
                             data-after="{{ '/static/listing/projects2/' }}{{ slug }}-2.jpg"
-                            data-extra="{{ '/static/listing/projects2/' }}{{ slug }}-3.jpg">
+                            {% if is_gallery %}data-extra="{{ '/static/listing/projects2/' }}{{ slug }}-3.jpg"{% endif %}>
                         See full size →
                     </button>
                 </div>

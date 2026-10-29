@@ -162,7 +162,7 @@ def test_avm_and_lookup_share_one_counter(monkeypatch):
     conn = _use_fake_db(monkeypatch)
     _spy(monkeypatch)
     monkeypatch.setattr(ps, "_api_call", lambda a: {"formattedAddress": a, "squareFootage": 1000})
-    ps.lookup_address("1 Real Rd")
+    ps.lookup_address("1 Real Rd, Chesapeake, VA")
     avm.estimate_value("5500 Grand Lake Dr")
     assert ps.calls_remaining() == ps._month_limit() - 2
 

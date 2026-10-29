@@ -18,12 +18,21 @@
     <meta name="description" content="32 years in the trade. Licensed, bonded &amp; insured general contractor serving {{ co.service_area }}. Whole-home renovations, additions, and repairs — done right the first time">
     <meta name="robots" content="index, follow">
     {% endblock %}
-    <link rel="canonical" href="{{ request.base_url }}">
+    {# Built from the configured domain, not request.base_url: that was the
+       bare origin on every page (so all 20 pages canonicalized to "/"), and
+       uvicorn sees plain http behind the proxy. #}
+    {% set page_url = 'https://' ~ co.domain ~ request.url.path %}
+    <link rel="canonical" href="{{ page_url }}">
     <meta name="theme-color" content="#1d4ed8">
     <meta property="og:type" content="website">
     <meta property="og:site_name" content="{{ co.name }}">
-    <meta property="og:title" content="{{ co.name }} | Licensed Renovation & Repair Contractor">
-    <meta property="og:url" content="{{ request.base_url }}">
+    <meta property="og:title" content="{{ self.title() }}">
+    <meta property="og:description" content="Licensed, bonded &amp; insured general contractor serving {{ co.service_area }}. Whole-home renovations, additions and repairs. Free on-site estimates.">
+    <meta property="og:url" content="{{ page_url }}">
+    <meta property="og:image" content="https://{{ co.domain }}/static/og.png">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="{{ self.title() }}">
+    <meta name="twitter:image" content="https://{{ co.domain }}/static/og.png">
     <link rel="icon" href="/static/construction_favicon.svg" type="image/svg+xml">
     {# Static Tailwind build (see tailwind.config.js). Replaces the Play CDN,
        which shipped ~400 KB of render-blocking JS and compiled the stylesheet
@@ -32,15 +41,18 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+    {# tojson, not autoescape: HTML entities are not decoded inside <script>,
+       so the "&" in the service area was reaching crawlers as a literal "&amp;". #}
     <script type="application/ld+json">
     {
       "@context": "https://schema.org",
       "@type": "GeneralContractor",
-      "name": "{{ co.name }}",
-      "telephone": "{{ co.phone }}",
-      "email": "{{ co.email }}",
-      "url": "https://{{ co.domain }}",
-      "areaServed": "{{ co.service_area }}",
+      "name": {{ co.name | tojson }},
+      "telephone": {{ co.phone | tojson }},
+      "email": {{ co.email | tojson }},
+      "url": {{ ('https://' ~ co.domain) | tojson }},
+      "image": {{ ('https://' ~ co.domain ~ '/static/og.png') | tojson }},
+      "areaServed": {{ co.service_area | tojson }},
       "priceRange": "$$",
       "description": "Licensed, insured general contractor for whole-home renovations and repairs."
     }

@@ -105,24 +105,32 @@ document.addEventListener('DOMContentLoaded', function() {
     const addr = document.getElementById('prop-address');
     const row = document.getElementById('prop-detect-row');
     const msg = document.getElementById('prop-detect');
-    let timer;
-    addr.addEventListener('input', function() {
-        clearTimeout(timer);
-        timer = setTimeout(async function() {
-            const v = addr.value.trim();
-            if (v.length < 6) { row.classList.add('hidden'); return; }
-            try {
-                const res = await fetch('/api/property?address=' + encodeURIComponent(v));
-                const json = await res.json();
-                if (json.sqft) {
-                    msg.textContent = '🏠 Found: ' + json.address + ' · ' + (json.sqft ? Math.round(json.sqft).toLocaleString() + ' sq ft · ' : '') + (json.beds ? json.beds + ' bd / ' : '') + (json.baths ? json.baths + ' ba' : '');
-                    row.classList.remove('hidden');
-                } else {
-                    row.classList.add('hidden');
-                }
-            } catch (e) { row.classList.add('hidden'); }
-        }, 700);
-    });
+    // Look up once the visitor finishes the field, not per keystroke: every
+    // distinct partial address was a billed miss against a 50-call MONTH.
+    // Mirrors property_service.looks_like_full_address so we never even ask
+    // for something the server would refuse.
+    let last = '';
+    function looksComplete(v) {
+        return /^\d/.test(v) && v.split(/\s+/).length >= 3 && (v.indexOf(',') !== -1 || /\b\d{5}\b/.test(v));
+    }
+    async function detect() {
+        const v = addr.value.trim();
+        if (v === last) return;
+        last = v;
+        if (!looksComplete(v)) { row.classList.add('hidden'); return; }
+        try {
+            const res = await fetch('/api/property?address=' + encodeURIComponent(v));
+            const json = await res.json();
+            if (json.sqft) {
+                msg.textContent = '🏠 Found: ' + json.address + ' · ' + (json.sqft ? Math.round(json.sqft).toLocaleString() + ' sq ft · ' : '') + (json.beds ? json.beds + ' bd / ' : '') + (json.baths ? json.baths + ' ba' : '');
+                row.classList.remove('hidden');
+            } else {
+                row.classList.add('hidden');
+            }
+        } catch (e) { row.classList.add('hidden'); }
+    }
+    addr.addEventListener('change', detect);
+    addr.addEventListener('blur', detect);
 });
 </script>
 {% endif %}

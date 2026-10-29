@@ -29,6 +29,9 @@
   button:hover{filter:brightness(1.08)}
   .err{background:#fef2f2;color:#b91c1c;padding:9px 11px;border-radius:8px;
     font-size:13px;margin-bottom:14px;border:1px solid #fecaca}
+  .ok{background:#ecfdf5;color:#065f46;padding:14px 16px;border-radius:10px;
+    font-size:14px;border:1px solid #a7f3d0}
+  .ok strong{display:block;font-size:16px;margin-bottom:4px}
   .fine{color:var(--muted);font-size:11px;margin:10px 0 0;text-align:center}
   a{color:var(--brand)}
   @media(max-width:420px){.row{grid-template-columns:1fr}}
@@ -43,7 +46,18 @@
   <div class="err">{{ error }}</div>
   {% endif %}
 
+  {% if posted and not error %}
+  {# Without this the form re-rendered pre-filled after a successful POST and
+     looked like nothing happened, so visitors pressed the button again and
+     created duplicate leads. #}
+  <div class="ok" role="status">
+    <strong>Thanks{% if name %}, {{ name.split(' ')[0] }}{% endif %} — we got it.</strong>
+    We'll email your quote to {{ email }} and call to set up a free walkthrough.
+    Questions now? <a href="tel:{{ co.phone_e164 }}" target="_top">{{ co.phone }}</a>
+  </div>
+  {% else %}
   <form method="post" action="/embed/quote">
+    <div style="position:absolute;left:-9999px;top:-9999px" aria-hidden="true"><label>Company website<input type="text" name="company_website" tabindex="-1" autocomplete="off"></label></div>
     <fieldset>
       <label for="eq-name">Name</label>
       <input id="eq-name" name="name" value="{{ name or '' }}" autocomplete="name" required>
@@ -81,8 +95,9 @@
     </div>
 
     <button type="submit">Get my quote</button>
-    <p class="fine">{{ co.name }} · <a href="/">{{ co.phone }}</a></p>
+    <p class="fine">{{ co.name }} · <a href="tel:{{ co.phone_e164 }}" target="_top">{{ co.phone }}</a></p>
   </form>
+  {% endif %}
 </div>
 </body>
 </html>

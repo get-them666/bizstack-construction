@@ -39,6 +39,9 @@
     {% endif %}
 
     <form method="post" action="/get-started" class="max-w-2xl mx-auto bg-white rounded-3xl border border-slate-200 p-6 sm:p-8 shadow-sm space-y-6">
+            {# Honeypot: hidden from people, filled by form bots. The server treats a
+               value here as spam and quietly does nothing. #}
+            <div class="hidden" aria-hidden="true"><label>Company website<input type="text" name="company_website" tabindex="-1" autocomplete="off"></label></div>
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-5">
             <div>
                 <label for="full_name" class="block text-sm font-semibold text-slate-700 mb-1.5">Full name *</label>
@@ -103,7 +106,7 @@
         <p class="text-2xl">🤝</p>
         <h2 class="mt-2 text-xl font-extrabold text-slate-900">Know someone getting work done?</h2>
         <p class="mt-2 text-sm text-slate-600 max-w-lg mx-auto">Refer an owner or contractor in our area and we'll take care of the rest. Ask our team for your personal referral link and earn a reward on every project that books.</p>
-        <p class="mt-4 text-sm font-semibold text-slate-900"><a href="tel:{{ co.phone_e164 }}" class="text-indigo-600 hover:text-indigo-700">Call or text {{ co.phone }}</a> for your referral link, or enter a referral code below.</p>
+        <p class="mt-4 text-sm font-semibold text-slate-900"><a href="tel:{{ co.phone_e164 }}" class="text-indigo-600 hover:text-indigo-700">Call or text {{ co.phone }}</a> for your referral link.</p>
     </div>
 </section>
 {% endblock %}

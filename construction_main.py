@@ -834,6 +834,28 @@ async def api_exception_handler(request: Request, exc: Exception):
         )
     return HTMLResponse(content="Internal server error", status_code=500)
 
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    """Clickjacking and sniffing protection on every response.
+
+    /embed/* is the one surface built to be framed by other sites (the
+    copy-paste iframe from /embed/snippet), so it is left frameable. Everything
+    else -- including the owner dashboard and the Stripe return pages -- is
+    restricted to same-origin frames. A full CSP is deliberately not set here:
+    the pages carry inline scripts and GA, and a blocking policy would need a
+    nonce pipeline to be safe.
+    """
+    response = await call_next(request)
+    path = request.url.path
+    if not path.startswith("/embed/"):
+        response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
+        response.headers.setdefault("Content-Security-Policy", "frame-ancestors 'self'")
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    return response
+
+
 os.makedirs("static", exist_ok=True)
 os.makedirs("uploads", exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -2436,7 +2458,8 @@ async def robots_txt(request: Request):
 async def sitemap_xml(request: Request):
     base = _site_base(request)
     today = date.today().isoformat()
-    pages = ["/", "/services", "/portfolio", "/about", "/quote", "/contact", "/legal"]
+    pages = ["/", "/services", "/get-started", "/instant-quote", "/portfolio", "/finance",
+             "/about", "/quote", "/contact", "/legal"]
     urls = "".join(
         f'  <url><loc>{base}{p}</loc><lastmod>{today}</lastmod><changefreq>weekly</changefreq><priority>{"1.0" if p == "/" else "0.8"}</priority></url>\n'
         for p in pages
@@ -2451,6 +2474,21 @@ async def sitemap_xml(request: Request):
 
 
 # --- Lead capture -----------------------------------------------------------
+def _is_form_bot(honeypot: str, source: str = "") -> bool:
+    """A filled honeypot is a bot. Log it and let the caller fake success.
+
+    Every public form here costs money on submit -- an owner email, an
+    auto-reply to whatever address was typed, a Zoho CRM push, sometimes a
+    RentCast call -- and none had any abuse gate. The field is visually
+    hidden with tabindex=-1, so a person never fills it. Faking success
+    rather than erroring keeps the bot from learning which field tripped it.
+    """
+    if (honeypot or "").strip():
+        print(f"[spam] honeypot tripped on {source or 'form'}; dropped", flush=True)
+        return True
+    return False
+
+
 @app.post("/submit-lead")
 async def submit_lead(
     name: str = Form(...),
@@ -2462,9 +2500,12 @@ async def submit_lead(
     timeline: str = Form(""),
     description: str = Form(""),
     source: str = Form("website"),
+    company_website: str = Form(""),
     db=Depends(get_db),
 ):
     src = (source or "").strip().lower() or "website"
+    if _is_form_bot(company_website, src):
+        return JSONResponse(content={"status": "success", "lead_id": 0})
     res = lead_intake.intake_lead(
         db, company="construction", source=src, name=name, phone=phone,
         email=(email or "").strip(), address=address, description=description,
@@ -2521,6 +2562,25 @@ async def submit_lead(
     return JSONResponse(content={"status": "success", "lead_id": lead_id})
 
 
+def _form_error_redirect(path: str, error: str, **fields) -> RedirectResponse:
+    """Bounce back to a public form with the error AND what was typed.
+
+    /finance and /get-started are plain POST forms that redirect on a
+    validation error. Their templates refill every field from the query
+    string, but the redirects used to carry only ?error=, so a homeowner who
+    missed one required field got "please fix the issue" on a blank form and
+    had to type everything again. Carry the submission along (capped, since
+    it rides in a URL).
+    """
+    params = {"error": error}
+    for key, value in fields.items():
+        value = (value or "").strip()
+        if value:
+            params[key] = value[:500]
+    return RedirectResponse(url=f"{path}?{urllib.parse.urlencode(params)}",
+                            status_code=status.HTTP_303_SEE_OTHER)
+
+
 @app.get("/finance", response_class=HTMLResponse)
 async def finance_page(request: Request):
     """Project-financing application page.
@@ -2546,6 +2606,7 @@ async def finance_submit(
     loan_purpose: str = Form("home"),
     when_start: str = Form(""),
     message: str = Form(""),
+    company_website: str = Form(""),
     db=Depends(get_db),
 ):
     """Record a financing application as a lead, then confirm in-page.
@@ -2560,10 +2621,13 @@ async def finance_submit(
     Form(...) would hand a homeowner who just pressed Submit a raw JSON
     validation error instead.
     """
+    if _is_form_bot(company_website, "finance"):
+        return RedirectResponse(url="/finance?sent=1", status_code=status.HTTP_303_SEE_OTHER)
     name = (full_name or "").strip()
+    typed = dict(full_name=full_name, phone=phone, project_type=project_type, email=email,
+                 address=address, amount_needed=amount_needed, message=message)
     if not name or not (phone or "").strip() or not (project_type or "").strip():
-        return RedirectResponse(url="/finance?error=Name%2C+phone+and+project+type+are+required",
-                                status_code=status.HTTP_303_SEE_OTHER)
+        return _form_error_redirect("/finance", "Name, phone and project type are required", **typed)
 
     amount_cents = None
     raw_amount = (amount_needed or "").strip()
@@ -2589,8 +2653,7 @@ async def finance_submit(
         )
     except Exception as exc:
         logger.warning("[finance] intake failed: %s", exc)
-        return RedirectResponse(url="/finance?error=We+could+not+save+that+just+now",
-                                status_code=status.HTTP_303_SEE_OTHER)
+        return _form_error_redirect("/finance", "We could not save that just now", **typed)
 
     lead_id = res["lead_id"]
 
@@ -3607,11 +3670,30 @@ async def materials_picker_quote(request: Request, items: str = Form("[]"),
             logger.warning("sandbox estimate failed: %s", e)
             est = None
 
+    estimate = _jsonable_estimate(est)
+    if estimate:
+        # quote_form.html reads low/high/total_low/total_high (cents) and
+        # confidence. estimating_service names them low_cents/high_cents and
+        # has no confidence field, so the card rendered nothing but
+        # "Confidence: ballpark" -- the one number the visitor came for was
+        # computed and then dropped on the floor.
+        subtotal = int(priced.get("subtotal") or 0)
+        low, high = estimate.get("low_cents"), estimate.get("high_cents")
+        estimate.setdefault("low", low)
+        estimate.setdefault("high", high)
+        if low is not None and high is not None and subtotal:
+            estimate.setdefault("total_low", int(low) + subtotal)
+            estimate.setdefault("total_high", int(high) + subtotal)
+        estimate.setdefault(
+            "confidence",
+            "property-based" if prop else ("square-footage" if manual > 0 else "ballpark"),
+        )
+
     return JSONResponse(content={
         "materials_subtotal": priced["subtotal"],
         "lines": priced["lines"],
         "count": priced["count"],
-        "estimate": _jsonable_estimate(est),
+        "estimate": estimate,
         "address": address.strip(),
         "project_type": project_type.strip(),
     })
@@ -3725,7 +3807,11 @@ async def materials_picker_submit(request: Request, name: str = Form(""),
         raise HTTPException(status_code=400, detail="That email does not look right.")
     made_lead = False
     lead_id = None
-    if material_picker.submission_creates_lead() and email.strip():
+    # Email OR phone raises a lead. This used to require an email, so a
+    # homeowner who left only a phone number got "Got it -- we'll be in touch"
+    # and was never recorded anywhere. The quote below still needs an email
+    # (it has to be findable from the account page), but the lead does not.
+    if material_picker.submission_creates_lead() and (email.strip() or phone.strip()):
         lines = priced["lines"]
         summary = "; ".join(
             f"{(ln.get('description') or ln.get('item_number') or '?')}"
@@ -3735,7 +3821,9 @@ async def materials_picker_submit(request: Request, name: str = Form(""),
         if len(lines) > 8:
             summary += f"; +{len(lines) - 8} more"
         try:
-            subtotal_cents = int(round(priced["subtotal"] * 100))
+            # price_list() already returns cents (customer_price() does), so the
+            # old `* 100` stored every sandbox estimate at 100x.
+            subtotal_cents = int(priced["subtotal"] or 0)
             res = lead_intake.intake_lead(
                 db, company="construction", source="sandbox",
                 name=name.strip(), phone=phone.strip(), email=email.strip(),
@@ -3763,6 +3851,20 @@ async def materials_picker_submit(request: Request, name: str = Form(""),
             # A failed write must not lose their selection.
             print(f"⚠️ materials sandbox lead save failed: {e}", flush=True)
             made_lead = False
+        if made_lead:
+            # Every other public form tells the owner. A picked materials list
+            # is the strongest buying signal the site collects, and it was the
+            # one submission that notified nobody.
+            try:
+                auto_reply.notify_owner_email(
+                    "construction", lead_id=lead_id, name=name.strip(),
+                    phone=phone.strip(), email=email.strip(), service="materials",
+                    message=f"Material list ({priced['count']} items, "
+                            f"{_money(subtotal_cents)} est.): {summary}",
+                    source="sandbox",
+                )
+            except Exception as e:
+                print(f"⚠️ materials sandbox owner notify failed: {e}", flush=True)
 
     # A quote needs an email to be findable later, and needs a price to be a
     # quote at all. Lines that could not be priced are carried through as None
@@ -6966,6 +7068,7 @@ async def embed_quote_submit(
     address: str = Form(""),
     project_type: str = Form(""),
     sqft: str = Form(""),
+    company_website: str = Form(""),
     db=Depends(get_db),
 ):
     def back(error=None, code=200):
@@ -6980,6 +7083,8 @@ async def embed_quote_submit(
         )
 
     email = (email or "").strip()
+    if _is_form_bot(company_website, "embed_quote"):
+        return back(None, 200)
     if not email:
         return back("Please add your email — we'll send your quote there.", 422)
 
@@ -7068,15 +7173,19 @@ async def get_started_submit(
     timeline: str = Form(""),
     message: str = Form(""),
     ref: str = Form(""),
+    company_website: str = Form(""),
     db=Depends(get_db),
 ):
+    if _is_form_bot(company_website, "get-started"):
+        return RedirectResponse(url="/get-started?sent=1", status_code=status.HTTP_303_SEE_OTHER)
     name = (full_name or "").strip()
     phone = (phone or "").strip()
     email = (email or "").strip()
+    typed = dict(full_name=name, phone=phone, email=email, address=address, message=message)
     if not name or not phone:
-        return RedirectResponse(url="/get-started?error=Please+add+your+name+and+phone", status_code=status.HTTP_303_SEE_OTHER)
+        return _form_error_redirect("/get-started", "Please add your name and phone", **typed)
     if not email:
-        return RedirectResponse(url="/get-started?error=Please+add+your+email+%E2%80%94+we%27ll+send+your+quote+there", status_code=status.HTTP_303_SEE_OTHER)
+        return _form_error_redirect("/get-started", "Please add your email — we'll send your quote there", **typed)
 
     ref_code = (ref or "").strip().lower()[:50]
     partner_id = None
@@ -7111,7 +7220,7 @@ async def get_started_submit(
         lead_id = res["lead_id"]
     except Exception as e:
         print(f"⚠️ get-started lead save failed: {e}", flush=True)
-        return RedirectResponse(url="/get-started?error=Something+went+wrong+—+please+try+again+or+call+us+directly", status_code=status.HTTP_303_SEE_OTHER)
+        return _form_error_redirect("/get-started", "Something went wrong — please try again or call us directly", **typed)
 
     summary = (
         f"🛠 New acquisition lead (#{lead_id}) — {name}, {phone}"
@@ -7725,7 +7834,10 @@ async def web_chat(
         tool_handlers=build_tool_handlers(db, stripe_svc),
         subset="guest",
     )
-    reply = agent.process_conversation(history, message)
+    # The model round-trip is synchronous (several seconds, more with tools).
+    # Run it off the event loop or every other visitor's page load waits
+    # behind this one chat reply.
+    reply = await asyncio.to_thread(agent.process_conversation, history, message)
     copilot_memory.append_turn(db, "webchat", session_key, "user", message)
     copilot_memory.append_turn(db, "webchat", session_key, "assistant", reply)
     # Visitor transcripts carry home addresses and phone numbers; enforce the
@@ -10268,7 +10380,10 @@ async def copilot_chat(request: Request, message: str = Form(...), db=Depends(ge
         subset="copilot",
     )
     try:
-        reply = agent.process_conversation(history, message)
+        # Off the event loop: a Copilot turn can run tools for up to
+        # COPILOT_TOOL_DEADLINE_SECONDS (180 in production). Synchronous here,
+        # that was 180 seconds during which no homeowner could load any page.
+        reply = await asyncio.to_thread(agent.process_conversation, history, message)
     except ToolBudgetExhausted as exc:
         # Surfaced as a real error on purpose. Returning the fallback string here
         # is what made this look like missing data: the agent would report it

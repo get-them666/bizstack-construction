@@ -256,8 +256,7 @@
                 out.className = 'text-sm font-semibold text-center text-emerald-700';
                 var msg = 'Got it — we\'ll be in touch about your ' + res.j.count + ' item(s).';
                 if (res.j.quote_no) {
-                    msg += ' Your estimate is ' + res.j.quote_no +
-                           ' — save it from your account page.';
+                    msg += ' Your estimate number is ' + res.j.quote_no + ' — keep it handy when we call.';
                 } else if (res.j.quote_error) {
                     msg += ' ' + res.j.quote_error;
                 }

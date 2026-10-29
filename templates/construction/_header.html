@@ -77,8 +77,12 @@
                 </span>
                 <a href="/api/auth/logout" class="inline-flex items-center justify-center px-4 py-2 text-sm font-semibold text-white bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-700 hover:to-blue-700 rounded-xl transition-all shadow-md shadow-indigo-500/20 whitespace-nowrap">Log Out</a>
                 {% else %}
-                <a href="/login" class="text-sm font-semibold text-slate-300 hover:text-blue-300 transition-colors hidden xl:inline">Owner Login</a>
-                <a href="tel:{{ co.phone_e164 }}" class="text-sm font-semibold text-slate-300 hover:text-blue-300 transition-colors hidden 2xl:inline">{{ co.phone }}</a>
+                {# The phone number is the conversion path for a contractor; it
+                   was hidden below 1536px while "Owner Login" showed at 1280px.
+                   Swapped: phone wherever the desktop nav shows, login only on
+                   the widest screens (owner can always type /login). #}
+                <a href="tel:{{ co.phone_e164 }}" class="text-sm font-semibold text-white hover:text-blue-300 transition-colors whitespace-nowrap">{{ co.phone }}</a>
+                <a href="/login" class="text-sm font-semibold text-slate-400 hover:text-blue-300 transition-colors hidden 2xl:inline">Owner Login</a>
                 <a href="/quote" class="inline-flex items-center justify-center px-4 py-2 text-sm font-semibold text-white bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-700 hover:to-blue-700 rounded-xl transition-all shadow-md shadow-indigo-500/20">Get a Free Quote</a>
                 {% endif %}
             </div>

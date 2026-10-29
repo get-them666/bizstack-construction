@@ -24,6 +24,9 @@
     {% endif %}
 
     <form method="post" action="/finance" class="bg-white rounded-3xl border border-slate-200 p-6 sm:p-8 shadow-sm space-y-6">
+            {# Honeypot: hidden from people, filled by form bots. The server treats a
+               value here as spam and quietly does nothing. #}
+            <div class="hidden" aria-hidden="true"><label>Company website<input type="text" name="company_website" tabindex="-1" autocomplete="off"></label></div>
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-5">
             <div>
                 <label for="full_name" class="block text-sm font-semibold text-slate-700 mb-1.5">Full name *</label>

@@ -189,11 +189,11 @@ def test_miss_is_cached_and_free_on_repeat(monkeypatch):
 def test_cached_miss_does_not_leak_into_a_later_hit(monkeypatch):
     """A cached miss must never be mistaken for a cached property."""
     conn = _use_fake_db(monkeypatch)
-    responses = [None, {"formattedAddress": "1 Nowhere Rd", "squareFootage": 1500}]
+    responses = [None, {"formattedAddress": "1 Nowhere Rd, Chesapeake, VA", "squareFootage": 1500}]
     monkeypatch.setattr(ps, "_api_call", lambda address: responses.pop(0))
 
-    assert ps.lookup_address("1 Nowhere Rd") is None
-    assert ps.lookup_address("1 Nowhere Rd") is None
+    assert ps.lookup_address("1 Nowhere Rd, Chesapeake, VA") is None
+    assert ps.lookup_address("1 Nowhere Rd, Chesapeake, VA") is None
 
 
 def test_hit_is_served_from_cache(monkeypatch):
@@ -205,8 +205,8 @@ def test_hit_is_served_from_cache(monkeypatch):
         return {"formattedAddress": address, "squareFootage": 1878}
 
     monkeypatch.setattr(ps, "_api_call", _api)
-    ps.lookup_address("1 Real Rd")
-    ps.lookup_address("1 Real Rd")
+    ps.lookup_address("1 Real Rd, Chesapeake, VA")
+    ps.lookup_address("1 Real Rd, Chesapeake, VA")
     assert len(calls) == 1
     assert calls_this_month(conn) == 1
 
@@ -232,7 +232,7 @@ def test_budget_allows_the_final_call(monkeypatch):
     monkeypatch.setattr(ps, "_api_call", lambda address: {
         "formattedAddress": address, "squareFootage": 1878,
     })
-    assert ps.lookup_address("5500 Grand Lake Dr") is not None
+    assert ps.lookup_address("5500 Grand Lake Dr, San Antonio, TX 78244") is not None
     assert calls_this_month(conn) == limit
 
 
@@ -240,7 +240,7 @@ def test_no_key_configured_makes_no_call(monkeypatch):
     monkeypatch.delenv("RENTCAST_API_KEY", raising=False)
     _use_fake_db(monkeypatch)
     _never_called(monkeypatch)
-    assert ps.lookup_address("5500 Grand Lake Dr") is None
+    assert ps.lookup_address("5500 Grand Lake Dr, San Antonio, TX 78244") is None
     assert ps.is_configured() is False
 
 
@@ -252,4 +252,34 @@ def test_lot_size_reads_the_documented_field(monkeypatch):
     monkeypatch.setattr(ps, "_api_call", lambda address: {
         "formattedAddress": address, "lotSize": 8843, "squareFootage": 1878,
     })
-    assert ps.lookup_address("5500 Grand Lake Dr")["lot_sqft"] == 8843
+    assert ps.lookup_address("5500 Grand Lake Dr, San Antonio, TX 78244")["lot_sqft"] == 8843
+
+# --- the completeness pre-flight ---------------------------------------------
+# instant_quote.html used to call /api/property on every debounced keystroke,
+# and each distinct partial was a cache miss billed against a 50-call MONTH.
+# lookup_address now refuses anything that cannot match before spending.
+
+@pytest.mark.parametrize("partial", [
+    "", "4701", "4701 Win", "4701 Winthrop St", "Winthrop Street, Norfolk, VA",
+    "Norfolk, VA 23508",
+])
+def test_partial_addresses_never_reach_rentcast(monkeypatch, partial):
+    conn = _use_fake_db(monkeypatch)
+    _never_called(monkeypatch)
+    assert ps.looks_like_full_address(partial) is False
+    assert ps.lookup_address(partial) is None
+    assert calls_this_month(conn) == 0
+
+
+@pytest.mark.parametrize("full", [
+    "4701 Winthrop St, Norfolk, VA",
+    "4701 Winthrop Street Norfolk VA 23508",
+    "5500 Grand Lake Dr, San Antonio, TX 78244",
+])
+def test_complete_addresses_still_look_up(monkeypatch, full):
+    _use_fake_db(monkeypatch)
+    monkeypatch.setattr(ps, "_api_call", lambda address: {
+        "formattedAddress": address, "squareFootage": 1500,
+    })
+    assert ps.looks_like_full_address(full) is True
+    assert ps.lookup_address(full) is not None

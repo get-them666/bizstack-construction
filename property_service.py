@@ -18,6 +18,7 @@ brand-new address return ``None`` and the caller falls back to manual sqft entry
 import datetime
 import os
 import json
+import re
 import urllib.error
 import urllib.request
 import urllib.parse
@@ -308,6 +309,28 @@ def _api_call(address: str):
     return (results or [None])[0]
 
 
+_ZIP_RE = re.compile(r"\b\d{5}(?:-\d{4})?\b")
+
+
+def looks_like_full_address(address: str) -> bool:
+    """Cheap pre-flight: is this worth a billed RentCast call at all?
+
+    RentCast matches on "number street, city, state [zip]". A house number
+    plus a street name alone is almost always a miss, and a half-typed
+    "4701 Win" is a guaranteed one. The instant-quote page used to send every
+    debounced keystroke here unauthenticated, and each distinct partial was a
+    cache miss billed against a 50-call MONTH -- so a single visitor typing one
+    address could spend a third of the budget. Require a leading house number,
+    three or more tokens, and either a comma or a ZIP before spending.
+    """
+    addr = (address or "").strip()
+    if not addr or not addr[0].isdigit():
+        return False
+    if len(addr.split()) < 3:
+        return False
+    return ("," in addr) or bool(_ZIP_RE.search(addr))
+
+
 def lookup_address(address: str):
     """Look up a US property by street address. Returns a normalized dict or None.
 
@@ -320,6 +343,8 @@ def lookup_address(address: str):
     """
     addr = (address or "").strip()
     if not addr or not is_configured():
+        return None
+    if not looks_like_full_address(addr):
         return None
     key = _key(addr)
 

@@ -175,6 +175,9 @@
             <p class="mt-4 text-slate-600">We'll call to set up a free on-site walkthrough — no obligation, no pressure.</p>
         </div>
         <form id="lead-form" class="bg-slate-50 rounded-3xl border border-slate-200 p-6 sm:p-8 space-y-5">
+            {# Honeypot: hidden from people, filled by form bots. The server treats a
+               value here as spam and quietly does nothing. #}
+            <div class="hidden" aria-hidden="true"><label>Company website<input type="text" name="company_website" tabindex="-1" autocomplete="off"></label></div>
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-5">
                 <div>
                     <label class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Full Name *</label>
