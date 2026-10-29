@@ -48,9 +48,13 @@ from email.message import EmailMessage
 from con_ai_agent import BusinessAIAgent, ModelUnavailable, ToolBudgetExhausted
 from loan_outreach import start_outreach_tasks
 import brand
+import documents_service
 import team_messages
 import settings_status
 import today
+import followups
+import zoho_oauth
+import zoho_campaigns
 import copilot_memory
 import lead_pipeline
 import outreach_queue
@@ -4492,8 +4496,9 @@ async def mark_bid_won(bid_id: int, request: Request, db=Depends(get_db)):
         import bid_opportunities
         bid_opportunities.set_status(db, bid_id, "won", "construction")
         
-        # CASCADE: Bid won → Project created
-        lead_pipeline.on_bid_won(db, bid_id)
+        # CASCADE: Bid won → Project created. (This route 500'd on every
+        # click: project_result was never assigned.)
+        project_result = lead_pipeline.on_bid_won(db, bid_id) or {}
         if project_result.get("project_created"):
             print(f"✅ Bid {bid_id} won → Project {project_result['project_id']} created", flush=True)
         

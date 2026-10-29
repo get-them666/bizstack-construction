@@ -168,3 +168,16 @@ def test_leads_page_accepts_the_status_links_the_pipeline_emits():
     sig = inspect.signature(construction_main.leads_page)
     param = sig.parameters["status_filter"]
     assert getattr(param.default, "alias", None) == "status"
+
+
+def test_the_app_module_has_no_undefined_names():
+    """construction_main.py is 10k lines of inline routes with imports in three
+    styles. On 2026-10-29 a batch of edits referenced `followups` and
+    `documents_service` at module scope without importing them; py_compile
+    and the suite were green, and /book 500'd in production while the
+    follow-up loop failed to start. pyflakes catches this class in seconds."""
+    import subprocess, sys
+    out = subprocess.run([sys.executable, "-m", "pyflakes", "construction_main.py"],
+                         capture_output=True, text=True)
+    undefined = [l for l in out.stdout.splitlines() if "undefined name" in l]
+    assert not undefined, "\n".join(undefined)
