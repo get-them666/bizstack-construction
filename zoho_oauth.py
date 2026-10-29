@@ -104,6 +104,25 @@ def exchange_code(code: str) -> dict:
     return body
 
 
+def exchange_grant_code(code: str) -> dict:
+    """Self Client path: the owner generates a grant code in the API console
+    (Self Client -> Generate Code, scopes pasted, 10-minute validity) and we
+    swap it for a refresh token. No redirect URI is involved, which is what
+    makes this usable when the client has a different one configured."""
+    cid, sec = client()
+    data = urllib.parse.urlencode({
+        "grant_type": "authorization_code", "client_id": cid, "client_secret": sec, "code": code.strip(),
+    }).encode()
+    with urllib.request.urlopen(urllib.request.Request(f"{ACCOUNTS}/oauth/v2/token", data=data, method="POST"),
+                                timeout=30) as r:
+        body = json.loads(r.read())
+    if body.get("error"):
+        raise RuntimeError(f"Zoho: {body['error']} — codes expire in a few minutes; generate a fresh one")
+    if not body.get("refresh_token"):
+        raise RuntimeError(f"Zoho returned no refresh token: {str(body)[:200]}")
+    return body
+
+
 def _setting(conn, key: str) -> str:
     with conn.cursor() as cur:
         cur.execute("SELECT value FROM app_settings WHERE key = %s;", (key,))

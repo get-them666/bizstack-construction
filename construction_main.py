@@ -3069,6 +3069,27 @@ async def zoho_oauth_callback(request: Request, code: str = "", state: str = "",
     return RedirectResponse(url="/settings?saved=zoho#zoho", status_code=status.HTTP_303_SEE_OTHER)
 
 
+@app.post("/api/settings/zoho/grant")
+async def settings_zoho_grant(request: Request, grant_code: str = Form(""), db=Depends(get_db)):
+    """Connect Zoho from a Self Client grant code pasted on Settings."""
+    require_admin(request)
+    code = (grant_code or "").strip()
+    if not code:
+        return RedirectResponse(url="/settings?error=Paste+the+grant+code#zoho", status_code=status.HTTP_303_SEE_OTHER)
+    try:
+        tokens = await asyncio.to_thread(zoho_oauth.exchange_grant_code, code)
+    except Exception as e:
+        return RedirectResponse(url=f"/settings?error={urllib.parse.quote(str(e)[:180])}#zoho", status_code=status.HTTP_303_SEE_OTHER)
+    actor = current_actor(request) or {}
+    zoho_oauth.save_connection(tokens["refresh_token"], tokens.get("scope", ""), str(actor.get("email") or ""))
+    try:
+        import zoho_client
+        zoho_client.invalidate_token_cache()
+    except Exception:
+        pass
+    return RedirectResponse(url="/settings?saved=zoho#zoho", status_code=status.HTTP_303_SEE_OTHER)
+
+
 @app.post("/api/settings/zoho")
 async def settings_zoho(request: Request, list_key: str = Form(""), db=Depends(get_db)):
     """Pick the Campaigns mailing list inbound leads are added to."""
@@ -5076,6 +5097,7 @@ async def settings_page(request: Request, db=Depends(get_db)):
             "otp_on": _otp_enabled(db),
             "otp_env_locked": otp_env in ("0", "false", "no", "off", "1", "true", "yes", "on"),
             "zoho": zoho_oauth.status(),
+            "zoho_scope_string": ",".join(zoho_oauth.SCOPES),
             "zoho_lists": await asyncio.to_thread(zoho_campaigns.mailing_lists),
             "zoho_list_key": zoho_campaigns.list_key(),
         },
