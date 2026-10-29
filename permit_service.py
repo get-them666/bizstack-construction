@@ -8,7 +8,7 @@ Providers, in priority order:
      - Virginia Beach: ArcGIS FeatureServer (Building Permits Applications)
      - Norfolk: Socrata dataset fahm-yuh4
    These are the reliable defaults, so the pipeline works with zero config.
-3. With neither available we seed demo permits so the admin UX still renders.
+3. With neither available, nothing. There is no invented supply.
 
 Neither the open feeds nor Shovels publish applicant phone/email: the cities
 pseudonymize the applicant (Virginia Beach exposes `CreatedBy` as an opaque
@@ -81,9 +81,8 @@ def _permit_status(raw) -> str:
 def permit_is_live(p: dict) -> bool:
     """True unless the permit is finalised, cancelled or otherwise closed out.
 
-    A permit with no status at all is treated as live: the Shovels path and the
-    demo seed publish none, and refusing to score them would silently drop
-    every row from a source that has no status vocabulary to offer.
+    A permit with no status at all is treated as live: some sources publish no
+    status vocabulary, and refusing to score them would silently drop every row.
     """
     status = _permit_status(p.get("status"))
     if not status:
@@ -98,58 +97,11 @@ TRADE_RE = re.compile(
     re.I,
 )
 
-DEMO = [
-    {
-        "permit_number": "VA-CHE-2026-04117",
-        "property_address": "4120 Longhill Road, Chesapeake, VA",
-        "city": "Chesapeake", "state": "VA",
-        "work_type": "Additions",
-        "job_description": "Two-story addition with primary suite",
-        "contractor_name": "Self",
-        "issue_date": "2026-09-02",
-        "estimated_value": 185000,
-    },
-    {
-        "permit_number": "VA-VB-2026-03341",
-        "property_address": "889 Shore Drive, Virginia Beach, VA",
-        "city": "Virginia Beach", "state": "VA",
-        "work_type": "Residential Alteration",
-        "job_description": "Whole-home renovation, kitchen + baths, roof replacement",
-        "contractor_name": "",
-        "issue_date": "2026-09-05",
-        "estimated_value": 120000,
-    },
-    {
-        "permit_number": "VA-NFK-2026-08217",
-        "property_address": "512 Granby Street, Norfolk, VA",
-        "city": "Norfolk", "state": "VA",
-        "work_type": "Structural Repair",
-        "job_description": "Foundation and floor repair, interior rework",
-        "contractor_name": "",
-        "issue_date": "2026-09-08",
-        "estimated_value": 62000,
-    },
-    {
-        "permit_number": "VA-CHE-2026-00512",
-        "property_address": "178 Sowers Street, Chesapeake, VA",
-        "city": "Chesapeake", "state": "VA",
-        "work_type": "Residential Alteration",
-        "job_description": "Full gut rehab, add rental unit",
-        "contractor_name": "",
-        "issue_date": "2026-09-09",
-        "estimated_value": 98000,
-    },
-    {
-        "permit_number": "VA-VB-2026-1077",
-        "property_address": "36 Duck Road, Virginia Beach, VA",
-        "city": "Virginia Beach", "state": "VA",
-        "work_type": "Additions",
-        "job_description": "Deck rebuild and room addition",
-        "contractor_name": "",
-        "issue_date": "2026-09-11",
-        "estimated_value": 54000,
-    },
-]
+# There is deliberately no DEMO fallback here. Fake permits in job_leads made
+# the pipeline look stocked while every row was unworkable, and one of them
+# ("4120 Longhill Road, Chesapeake") was a real address. When no live source is
+# configured or reachable the importer returns nothing and says so; it never
+# invents a job.
 
 
 def is_configured() -> bool:
@@ -410,8 +362,10 @@ def search_permits(geo_ids=None, days: int = 21, per_geo: int = 4):
 def fetch_permits(city: str, state: str = "", days: int = 21, limit: int = 25):
     """Fetch recent permits for the service area. Returns a list of permit dicts.
 
-    Order: Shovels when configured, else the city's open data feed. Demo permits
-    are only a last resort, so a missing Shovels key still yields real leads.
+    Order: Shovels when configured, else the city's open data feed. When
+    neither returns anything this returns an EMPTY LIST. It used to seed five
+    fabricated permits so the admin page had cards to draw; those rows were
+    indistinguishable from real supply and one used a real address.
     """
     city = (city or "").strip().title()
     if not city:
@@ -431,25 +385,12 @@ def fetch_permits(city: str, state: str = "", days: int = 21, limit: int = 25):
         if rows:
             return rows
 
-    # Municipal open data is keyless and published for reuse, so prefer it over
-    # seeding demo rows: real permits beat fake ones even if a key is missing.
+    # Municipal open data is keyless and published for reuse.
     open_rows = fetch_open_data(city, days=max(int(days or 21), 1), limit=max(int(limit or 25), 25) * 4)
     if open_rows:
         return open_rows
 
-    return _seed_demo(city, state or "VA")
-
-
-def _seed_demo(city: str, state: str):
-    seeded = []
-    for d in DEMO:
-        row = dict(d)
-        if city.lower() not in ("", "demo", "any"):
-            row["city"] = city
-            row["state"] = state
-        row["_demo"] = True
-        seeded.append(row)
-    return seeded
+    return []
 
 
 # --- Municipal open data ----------------------------------------------------

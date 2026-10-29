@@ -1,181 +1,87 @@
-## Bizstack Construction: Event-Driven Lead Pipeline
+# The lead pipeline, as it actually runs
 
-### What Changed
+This file used to describe an "event-driven cascade" that auto-enriched, auto-texted,
+auto-quoted and auto-created projects. That code existed, but it was the wrong shape for
+this business and it was actively harmful: a permit row with no homeowner contact could be
+sent a cheerful SMS and quoted at a made-up midpoint, with nobody reviewing either. The
+cascade is gone. This is what replaced it.
 
-Your backend was a **disconnected collection of modules** where data would sit stale and nothing flowed automatically. Now it's a **cascading event system** where each event triggers the next one.
+## The one lifecycle
 
----
+`bizstack_leads/lifecycle.py` defines the stages and the next action:
 
-### The Flow (Fully Automated)
+| Stage | Meaning |
+|---|---|
+| `new` | arrived, nothing sent |
+| `contacted` | at least one outbound touch, no reply |
+| `engaged` | they replied; the ball is in our court |
+| `quoted` | a price was sent |
+| `won` | converted |
+| `lost` | closed, or asked us to stop |
 
-```
-1. LEAD CREATED
-   ↓
-2. Auto-ENRICHED (if address → PDL reverse lookup)
-   ↓
-3. Auto-CONTACTED (has phone/email now)
-   ↓
-4. Auto-SMS sent (first outreach)
-   ↓
-5. Auto-QUOTED (draft quote created)
-   ↓
-6. Ready for Owner Review
-   ↓
-7. Owner accepts quote
-   ↓
-8. Auto-PROJECT created
-   ↓
-9. Deposit payment link ready
-```
+Legacy statuses (`deposit`, `in_progress`, `completed`, `analyzed`, …) translate on read.
+Nothing else may write `next_action`, `next_action_at`, `last_outbound_at`, `touch_count`.
+Only `bizstack_leads/store.recompute` writes them, so the queue cannot drift from the rules.
 
-**No manual intervention needed.** Lead to project is automatic.
+## Where the owner works
 
----
+- **`/pipeline`** — today: the 12 people to call (replies first, then follow-ups, then
+  first touches), the canonical funnel, permit-door supply, and open pipeline value.
+- **`/leads`** — the full work queue, grouped by next action, plus the permits lane.
+  `?action=first_touch|follow_up|respond|enrich`, `?status=<stage>`, `?lane=permits`.
+- **`/leads/{id}`** — one lead: activity, notes, draft, deposit, stage.
+- **`/bids`** — solicitations. Real pull data and owner-entered bids only.
+- **`/job-leads`** — permit rows, including the ones that have not become leads.
 
-### New Files
+## What is automatic
 
-**`lead_pipeline.py`** — The orchestrator
-- `on_lead_created(db, lead_id)` — Entry point when a lead is created
-- `on_lead_enriched(db, lead_id)` — Auto-cascade to contact
-- `on_lead_contacted(db, lead_id)` — Auto-cascade to quote
-- `on_lead_quoted(db, lead_id)` — Ready for owner review
-- `on_quote_accepted(db, quote_id)` — Auto-cascade to project creation
-- `on_bid_won(db, bid_id)` — Auto-cascade bid to project
-- Event logging with audit trail for debugging
+Only these, and each is capped or review-gated:
 
-**`outreach_queue.py`** — Automatic SMS/email respecting contact policies
-- Auto-sends first SMS when lead becomes contacted
-- Respects "don't spam" policies (5 days between SMS, 7 days between email)
-- Contact policy table in comms_logs for tracking
+| Job | Code | Guard |
+|---|---|---|
+| Permit import | `run_permit_import` → `ingest_permits` | `PERMIT_SCAN_HOURS`, live open-data feeds only |
+| Contact enrichment | `lead_enrich_loop` | `LEAD_ENRICH_MAX` (25/day), one Skip Sherpa credit per address |
+| Lead-source scan | `lead_sources.scan` | Scrap.io only; no federal sources |
+| Inbound email poll | `_gmail_inbound_loop` | 900s |
+| Loan outreach | `loan_outreach` | hourly, own caps |
 
----
+What is **not** automatic any more:
 
-### Integration Points in `construction_main.py`
+- Creating a lead does not enrich it, text it, or quote it. `lead_pipeline.on_lead_created`
+  only records the event and recomputes the queue state.
+- `on_lead_enriched`, `on_lead_contacted` and `on_lead_quoted` are inert. They remain so
+  old callers do not break.
+- `on_quote_accepted` and `on_bid_won` still create projects. Those follow a human
+  accepting money, not a guess.
 
-**1. Lead Creation (submit-lead endpoint)**
-```python
-await asyncio.to_thread(lead_pipeline.on_lead_created, db, lead_id)
-# Cascades: enrich → contact → quote automatically
-```
+## Contact supply
 
-**2. Quote Acceptance (new endpoint: /api/quotes/{quote_id}/accept)**
-```python
-lead_pipeline.on_quote_accepted(db, quote_id)
-# Cascades: create project, move lead to deposit_pending
-```
+1. `skiptrace_service` reads the public parcel record: owner **name**, free, cached.
+2. `skip_sherpa_service` returns phone/email for one address. It is billable, so the batch
+   button is capped at 10 and the daily loop at `LEAD_ENRICH_MAX`.
+3. `data_enrichment.lookup_address` runs them in cost order, caches misses, and writes back
+   only non-empty fields.
+4. `data_enrichment.merge` then `store.recompute` turns a gained phone into a first-touch
+   action immediately. A name-only result does **not** count as a hit.
 
-**3. Bid Won (new endpoint: /api/bids/{bid_id}/won)**
-```python
-lead_pipeline.on_bid_won(db, bid_id)
-# Cascades: create project linked to bid
-```
+RentCast is not the contact provider. Its 50-call monthly budget is exhausted and it never
+had phone/email anyway.
 
-**4. Manual Trigger (existing endpoint: /api/leads/{lead_id}/pipeline-trigger)**
-```python
-await asyncio.to_thread(lead_pipeline.on_lead_created, db, lead_id)
-# For re-processing or triggering on demand
-```
+## Permits are supply, not a call list
 
----
+`job_leads` holds real residential permits from the Virginia Beach and Norfolk open-data
+feeds. Most have no homeowner phone. They appear on `/pipeline` as **doors**, and on
+`/leads?lane=permits` for mailing/door-knocking. The importer now creates **one lead per
+normalized address**, not one per permit, so a house with four trade permits is one door.
 
-### Database Schema Additions
+There is no demo fallback. When no source is configured or reachable, the importer returns
+nothing and says so.
 
-**`lead_pipeline_events` table**
-- Audit trail of every event
-- Links events for debugging ("this lead enriched, then contacted, then quoted")
-- `cascade_triggered` flag shows which events auto-cascaded
+## What was removed and why
 
----
-
-### Money Flow
-
-1. **Lead submitted → enriched → quoted automatically** (no owner action yet)
-2. **Owner reviews draft quote** (owner sees it on dashboard)
-3. **Owner clicks "Accept Quote"**
-4. **→ Automatically:**
-   - Project created (linked to lead)
-   - Lead moved to `deposit_pending` status
-   - Quote marked `accepted`
-5. **Owner clicks "Send Deposit Link"**
-6. **Customer pays deposit → Stripe webhook**
-7. **Lead moves to `in_progress`**
-8. **Project is now active with paid deposit**
-
----
-
-### Contact Policy (No Spam)
-
-`outreach_queue.py` enforces:
-- SMS: Don't text same number twice in 5 days
-- Email: Don't email same address twice in 7 days
-- Call: Don't call twice in 14 days
-
-Checked against `comms_logs` before sending. Respects history of all touches.
-
----
-
-### What Happens to Stale Data
-
-**Before:**
-- Lead sits with no contact → never moves forward → money never made
-- Permits imported but never enriched → owner manually runs PDL → slow
-- Quote created but owner never notices → no project → no payment
-
-**After:**
-- Lead created → immediately enriched → contacted → quoted within seconds
-- Permit imported → auto-enriched → auto-contacted
-- Quote auto-created → owner sees it → accepts → project created → payment ready
-- Contact history tracked so no spam
-
----
-
-### Testing the Flow
-
-**Manual trigger (e.g., lead #42):**
-```bash
-curl -X POST http://localhost:8000/api/leads/42/pipeline-trigger \
-  -H "Authorization: Bearer YOUR_TOKEN"
-```
-
-**Check event trail:**
-```sql
-SELECT event_type, details, created_at 
-FROM lead_pipeline_events 
-WHERE lead_id = 42 
-ORDER BY created_at;
-```
-
----
-
-### Key Differences from "Connected"
-
-| Before | After |
-|--------|-------|
-| Lead created → sits | Lead created → enriched → contacted → quoted (auto) |
-| Enrichment manual batch job | Enrichment automatic on lead create |
-| No auto-qualify | Auto-qualify when contact info exists |
-| Quote manual | Quote auto-generated on contact |
-| Project manual | Project auto-created on quote accept |
-| No SMS queuing | Auto-SMS on contact with policy enforcement |
-| Stale data/unclear transitions | Event log shows exact cascade path |
-
----
-
-### Configuration
-
-All auto-triggers work if:
-- **PDL API key set** (for enrichment) → `PDL_API_KEY` env var
-- **SignalWire credentials set** (for SMS) → `SIGNALWIRE_PHONE` env var
-- **Postgres database** with created schema
-
-Each event fails gracefully and logs. A missing API key doesn't break the flow—it just skips that step.
-
----
-
-### Next Steps (Optional Enhancements)
-
-1. **Web hooks** — Notify owner immediately when lead becomes quoted
-2. **Deposit link auto-send** — Email deposit link when quote accepted
-3. **Project assignment** — Auto-assign crew based on project type
-4. **Automatic invoicing** — Create invoice on project.in_progress
-5. **AI copilot hook** — Let copilot monitor and nudge owner if quotes sitting unreviewed
+- `permit_service.DEMO` / `_seed_demo`: five fabricated permits, one at a real address.
+- The fabricated `Month 1 … Month 4` bids and the ten projects created from them: these
+  populated the "won" column with work that never happened.
+- LinkedIn/Reddit radar rows with no address, phone, email or communication history: names
+  scraped from a post, not customers. Backed up before deletion by
+  `tools/purge_mock_data.py`.

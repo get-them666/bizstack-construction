@@ -154,14 +154,22 @@ def lookup_address(db, raw_address: str, cur) -> dict:
             except Exception as exc:
                 trace = {"ok": False, "found": False, "message": str(exc)[:120]}
                 out["steps"].append("skip_sherpa: error")
-            if trace.get("found"):
+            if trace.get("ok") or trace.get("found"):
                 emails = trace.get("emails") or []
                 preferred = str(trace.get("preferred_phone") or trace.get("raw_phone") or "").strip()
+                owner_name = str(trace.get("owner") or "").strip()
+                if not out["name"] and owner_name and not skiptrace_service.is_placeholder_name(owner_name):
+                    out["name"] = owner_name
                 if is_placeholder_email(out["email"]) and emails:
                     out["email"] = str(emails[0])
                 if not out["phone"] and preferred:
                     out["phone"] = preferred
-                out["steps"].append("skip_sherpa: hit")
+                if trace.get("found"):
+                    out["steps"].append("skip_sherpa: contact")
+                elif trace.get("owner_found"):
+                    out["steps"].append("skip_sherpa: name only (no phone/email)")
+                else:
+                    out["steps"].append("skip_sherpa: no owner")
             else:
                 out["steps"].append(f"skip_sherpa: no owner ({(trace.get('message') or '')[:60]})")
 
@@ -260,6 +268,16 @@ def report(candidates, db, commit: bool) -> int:
                     (merged["name"][:255], merged["email"][:255], merged["phone"][:50], lead["id"]),
                 )
             db.commit()
+            # Adding a phone/email changes the lead's next action from
+            # "needs contact info" to "needs first contact". The queue columns
+            # are cached, so without this the newly-contactable lead stayed
+            # buried in the enrich bucket forever -- that is how 74 leads with
+            # a phone number were still filed as uncontactable.
+            try:
+                from bizstack_leads import store as lead_store
+                lead_store.recompute(db, lead["id"])
+            except Exception as exc:
+                print(f"[enrich] recompute failed for lead {lead['id']}: {exc}")
             stats["written"] += 1
 
     print("\n%-6s %-14s %-40s %s" % ("lead", "result", "address", "steps"))

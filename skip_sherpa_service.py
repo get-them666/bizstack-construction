@@ -152,10 +152,24 @@ def _put(path: str, payload: dict) -> dict:
             return json.loads(resp.read().decode("utf-8", "replace"))
     except urllib.error.HTTPError as exc:
         detail = ""
+        body = ""
         try:
-            detail = exc.read().decode("utf-8", "replace")[:300]
+            body = exc.read().decode("utf-8", "replace")
+            detail = body[:300]
         except Exception:
             pass
+        # 404 is an ANSWER, not a failure: the API returns a full
+        # property_results row with status_code 404 and issue
+        # `contact_info_not_found` when it matched the property but found no
+        # reachable owner. Raising here turned every one of those into a
+        # provider error, so the caller could not tell "nobody to call" from
+        # "the API is down" -- and the same address would be retried and
+        # re-billed. Parse the body instead.
+        if exc.code == 404 and body.strip().startswith("{"):
+            try:
+                return json.loads(body)
+            except ValueError:
+                pass
         if exc.code in (401, 403):
             lowered = (detail or "").lower()
             if "1010" in lowered or "cloudflare" in lowered or "just a moment" in lowered:
@@ -348,9 +362,15 @@ def trace(street: str, city: str, state: str, zipcode: str) -> dict:
             unique_emails.append(e)
 
     usable = [p for p in seen_phones if p["usable"]]
+    # `found` means "we have a way to reach a person", not "we matched a name".
+    # The old return set found=True whenever a person object existed, so a
+    # name-only owner counted as a hit and the enrichment loop reported success
+    # while writing nothing. Keep the name separately via owner_found/owner.
+    found = bool(unique_emails or seen_phones)
     return {
         "ok": True,
-        "found": True,
+        "found": found,
+        "owner_found": bool(names),
         "owner": names[0] if names else "",
         "all_owners": names[:4],
         "phones": seen_phones[:6],
@@ -361,6 +381,7 @@ def trace(street: str, city: str, state: str, zipcode: str) -> dict:
         "emails": unique_emails[:6],
         "email": unique_emails[0] if unique_emails else "",
         "email_count": len(unique_emails),
+        "message": "" if found else "Matched the property owner but found no phone or email on file.",
         "owner_occupied": prop.get("owner_occupied"),
         "value": prop.get("estimated_value"),
         "checked_at": time.strftime("%Y-%m-%d %H:%M:%S"),

@@ -77,11 +77,11 @@ def test_railway_string_false_does_not_disable(monkeypatch):
     assert loop._env_flag("DISABLE_LEAD_ENRICH") is True
 
 
-def test_daily_max_defaults_to_ten_and_survives_garbage(monkeypatch):
+def test_daily_max_defaults_to_twenty_five_and_survives_garbage(monkeypatch):
     monkeypatch.delenv("LEAD_ENRICH_MAX", raising=False)
-    assert loop._daily_max() == 10
+    assert loop._daily_max() == 25
     monkeypatch.setenv("LEAD_ENRICH_MAX", "garbage")
-    assert loop._daily_max() == 10
+    assert loop._daily_max() == 25
     monkeypatch.setenv("LEAD_ENRICH_MAX", "0")
     assert loop._daily_max() == 0
 
@@ -159,7 +159,8 @@ def test_select_batch_orders_newest_first_and_filters_unreachable():
     assert "LIMIT %s" in sql
     assert params[-1] == 5
     dead = ("cancelled", "canceled", "closed", "lost", "won", "archived")
-    assert params[:-1] == dead
+    social = ("reddit", "linkedin")
+    assert params[:-1] == dead + social
 
 
 # --- the waterfall ----------------------------------------------------------

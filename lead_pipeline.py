@@ -1,14 +1,22 @@
-"""Event-driven lead pipeline orchestrator.
+"""Lead lifecycle helpers: quote acceptance and bid wins create projects.
 
-Connects enrichment → qualification → quoting → project creation → payment.
-EVERY EVENT automatically triggers the NEXT event(s) in sequence.
+THIS IS NOT AN AUTOMATION ENGINE ANY MORE
+-----------------------------------------
+This module used to describe itself as a "fully automated cascade": a lead was
+created, enriched, texted, quoted and turned into a project without a human
+ever looking at it. In production it never ran the way the docstring claimed
+(`lead_pipeline_events` was empty after weeks), but the parts that did run were
+worse than nothing: an address-only permit row could be auto-texted a cheerful
+"let's schedule a walkthrough" and auto-quoted at a made-up midpoint price,
+with no qualification, no review, and no check that the number belonged to the
+homeowner rather than the contractor who pulled the permit.
 
-No manual steps. Lead created → auto-enriched → auto-contacted → auto-quoted → 
-auto-project → ready for deposit/payment, all without human intervention.
-
-Flow:
-  lead.created → (if address-only) → lead.enriched → lead.contacted → 
-  lead.quoted → project.created → ready for payment
+So the cascade is deliberately gone. `on_lead_created` now only records the
+event and refreshes the work-queue columns; enrichment is the capped daily loop
+(`lead_enrich_loop`) and contact is the owner working the call list. The two
+transitions that genuinely follow from a decision the owner made --
+`on_quote_accepted` and `on_bid_won` -- still create projects, because those
+are consequences of a human accepting money, not guesses.
 """
 
 import os
@@ -195,22 +203,11 @@ def _contact_lead_internal(db, lead_id: int) -> Dict:
     if not _is_contactable(lead):
         return {"contacted": False, "reason": "not contactable (no phone/email)"}
 
-    # Move to contacted
+    # Move to contacted. This used to also auto-queue a first SMS here, which
+    # meant any code path that marked a lead contacted sent a message. The
+    # owner sends from the call list; this function only records the state.
     if _update_lead_status(db, lead_id, LEAD_STATUS_CONTACTED):
-        logger.info(f"✅ Lead {lead_id} moved to CONTACTED")
-        
-        # AUTO OUTREACH: Send first SMS
-        try:
-            import outreach_queue
-            project = (_get_project_type(lead) or "your project").lower()
-            name = (lead.get("name") or "there").split()[0]
-            msg = f"Hi {name}! 👋 We're excited to help with your {project}. Let's schedule a free walkthrough. Reply or call us!"
-            result = outreach_queue.queue_sms(db, lead_id, msg)
-            if result.get("queued"):
-                logger.info(f"✅ SMS auto-queued for lead {lead_id}")
-        except Exception as e:
-            logger.error(f"Outreach queue failed for {lead_id}: {e}")
-        
+        logger.info(f"Lead {lead_id} moved to CONTACTED")
         return {"contacted": True}
     
     return {"contacted": False, "error": "status update failed"}
@@ -275,55 +272,35 @@ def _quote_lead_internal(db, lead_id: int) -> Dict:
         return {"quote_created": False, "error": str(e)}
 
 
-# --- CASCADE ENTRY POINTS (called on each event) ---
+# --- TRANSITION ENTRY POINTS ------------------------------------------------
+# `created` is informational only. `enriched`/`contacted`/`quoted` were cascade
+# steps and are now inert on purpose: nothing in this app should text a permit
+# address or invent a quote without the owner making that call. They remain so
+# callers and the CLI do not break.
 
 def on_lead_created(db, lead_id: int):
-    """EVENT: Lead created → trigger enrichment."""
-    _log_event(db, EVENT_LEAD_CREATED, lead_id, cascade=True)
-    
-    # Cascade: Try enrichment immediately
+    """Record that a lead exists and refresh its next-action columns.
+
+    No enrichment, no SMS, no quote. See the module docstring for why.
+    """
+    _log_event(db, EVENT_LEAD_CREATED, lead_id, cascade=False)
     try:
-        enrich_result = _enrich_lead_internal(db, lead_id)
-        if enrich_result.get("enriched"):
-            _log_event(db, EVENT_LEAD_ENRICHED, lead_id, cascade=True, 
-                      details=f"enriched via {enrich_result.get('method')}")
-            on_lead_enriched(db, lead_id)
-        else:
-            # If we have contact already without enrichment, move forward
-            lead = _get_lead(db, lead_id)
-            if lead and _is_contactable(lead):
-                on_lead_enriched(db, lead_id)
+        from bizstack_leads import store as lead_store
+        lead_store.recompute(db, lead_id)
     except Exception as e:
-        logger.error(f"Failed to cascade on_lead_created for {lead_id}: {e}")
+        logger.error(f"Failed to recompute queue state for {lead_id}: {e}")
 
 
 def on_lead_enriched(db, lead_id: int):
-    """EVENT: Lead enriched → trigger contact qualification."""
-    _log_event(db, EVENT_LEAD_ENRICHED, lead_id, cascade=True)
-    
-    # Cascade: Try moving to contacted
-    try:
-        contact_result = _contact_lead_internal(db, lead_id)
-        if contact_result.get("contacted"):
-            _log_event(db, EVENT_LEAD_CONTACTED, lead_id, cascade=True)
-            on_lead_contacted(db, lead_id)
-    except Exception as e:
-        logger.error(f"Failed to cascade on_lead_enriched for {lead_id}: {e}")
+    """Deprecated no-op. Kept for callers; see the module docstring."""
+    _log_event(db, EVENT_LEAD_ENRICHED, lead_id, cascade=False,
+               details="cascade disabled; enrichment is an owner-reviewed step")
 
 
 def on_lead_contacted(db, lead_id: int):
-    """EVENT: Lead contacted → trigger quoting."""
-    _log_event(db, EVENT_LEAD_CONTACTED, lead_id, cascade=True)
-    
-    # Cascade: Try creating quote
-    try:
-        quote_result = _quote_lead_internal(db, lead_id)
-        if quote_result.get("quote_created"):
-            _log_event(db, EVENT_LEAD_QUOTED, lead_id, cascade=True,
-                      details=f"quote {quote_result['quote_id']} created")
-            on_lead_quoted(db, lead_id)
-    except Exception as e:
-        logger.error(f"Failed to cascade on_lead_contacted for {lead_id}: {e}")
+    """Deprecated no-op. Kept for callers; see the module docstring."""
+    _log_event(db, EVENT_LEAD_CONTACTED, lead_id, cascade=False,
+               details="cascade disabled; quoting is an owner-reviewed step")
 
 
 def on_lead_quoted(db, lead_id: int):

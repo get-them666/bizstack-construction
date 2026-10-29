@@ -196,7 +196,7 @@ def test_customer_role_has_no_crew_features():
 
 def test_login_redirects_a_customer_to_their_account():
     import construction_main as m
-    assert m._login_redirect("admin") == "/dashboard"
+    assert m._login_redirect("admin") == "/pipeline"
     assert m._login_redirect("customer") == "/account"
 
 

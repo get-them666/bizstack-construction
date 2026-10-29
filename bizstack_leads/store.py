@@ -235,7 +235,7 @@ def record_touch(db, lead_id, channel, detail="") -> dict:
     channel = (channel or "").strip().lower()
     if channel == "text":
         channel = "sms"
-    allowed = {"letter", "door-knock", "phone", "sms", "in-person", "other"}
+    allowed = {"letter", "door-knock", "phone", "sms", "in-person", "email", "other"}
     if channel not in allowed:
         return {"ok": False, "error": f"channel must be one of {sorted(allowed)}"}
     if not lead_id or db is None:

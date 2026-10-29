@@ -153,7 +153,7 @@ if __name__ == "__main__":
     check(f"{len(PAGES)} page routes return <500", not bad,
           "; ".join(f"{p} -> {c}" for p, c in bad))
 
-    print("\n[4] pipeline board moves cards and validates stages")
+    print("\n[4] pipeline page renders the work queue and legacy moves still validate")
     # Regression: the board's SQL originally interpolated a hand-built WHERE
     # fragment with a mismatched placeholder count, which raised "no result
     # available" and 500'd the page.
@@ -167,7 +167,7 @@ if __name__ == "__main__":
     pdb.commit()
 
     r = client.post("/api/pipeline/move", data={"stream": "permits", "item_id": permit_id, "status": "knocked"})
-    check("moving a card returns ok", r.status_code == 200, f"got {r.status_code}")
+    check("moving a permit returns ok", r.status_code == 200, f"got {r.status_code}")
     with pdb.cursor() as cur:
         cur.execute("SELECT status FROM job_leads WHERE id = %s;", (permit_id,))
         check("status persisted to the database", cur.fetchone()["status"] == "knocked")
@@ -177,8 +177,12 @@ if __name__ == "__main__":
     r = client.post("/api/pipeline/move", data={"stream": "nope", "item_id": permit_id, "status": "new"})
     check("unknown stream is rejected", r.status_code == 400, f"got {r.status_code}")
 
-    r = client.get("/pipeline?q=Board Test")
-    check("board search finds the card", r.status_code == 200 and "Board Test" in r.text, f"got {r.status_code}")
+    r = client.get("/pipeline")
+    check("pipeline renders the call list and funnel",
+          r.status_code == 200 and "Call these people" in r.text and "Funnel" in r.text,
+          f"got {r.status_code}")
+    check("pipeline no longer renders every permit as a board card",
+          "data-stream=" not in r.text)
 
     # Regression: the board used require_admin(), which raises a bare 401 and left a
     # signed-out user on a dead end. Every other owner page redirects to /login.
@@ -189,25 +193,18 @@ if __name__ == "__main__":
           f"got {r.status_code} -> {r.headers.get('location')}")
     signed_out.close()
 
-    # Regression: backlog rows are source='backlog' and have their own board
-    # stream. The leads query used to include them too, so every back-logged job
-    # rendered twice and was double-counted in the header totals.
+    # Backlog rows are source='backlog'. They are deliberately not part of the
+    # working pipeline, so they must not leak into the call list.
     with pdb.cursor() as cur:
         cur.execute("""INSERT INTO leads (name, phone, address, project_type, source, status,
                                       company, created_at)
-                       VALUES ('Board Dup Job', '', '5 Dup St', 'Deck', 'backlog', 'new',
+                       VALUES ('Board Dup Job', '+17575550199', '5 Dup St', 'Deck', 'backlog', 'new',
                                'construction', NOW()) RETURNING id;""")
         dup_id = note_lead(cur.fetchone()["id"])
     pdb.commit()
-    r = client.get("/pipeline?stream=leads&q=Board Dup Job")
-    check("back-log job is not in the leads stream", r.text.count('data-id="%d"' % dup_id) == 0,
-          "back-log job leaked into the leads stream")
-    r = client.get("/pipeline?stream=backlog&q=Board Dup Job")
-    # The needle is built outside the f-string: a backslash inside an f-string
-    # expression is a SyntaxError before 3.12, and this venv is 3.10.
-    _dup_needle = 'data-id="%d"' % dup_id
-    check("back-log job is in the back-log stream", r.text.count(_dup_needle) == 1,
-          f"expected exactly 1, got {r.text.count(_dup_needle)}")
+    r = client.get("/pipeline")
+    check("back-log job is not in the working pipeline", "Board Dup Job" not in r.text,
+          "back-log job leaked into the call list")
 
     print("\n[5] a disabled lead source is hidden everywhere, and reversible")
     # Scrap.io is now the only gated source: SAM.gov was removed on 2026-10-13, so

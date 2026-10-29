@@ -76,9 +76,9 @@ def _env_flag(name: str) -> bool:
 
 def _daily_max() -> int:
     try:
-        return max(0, int(os.getenv("LEAD_ENRICH_MAX") or 10))
+        return max(0, int(os.getenv("LEAD_ENRICH_MAX") or 25))
     except (TypeError, ValueError):
-        return 10
+        return 25
 
 
 def select_batch(db, limit: int) -> list:
@@ -93,6 +93,11 @@ def select_batch(db, limit: int) -> list:
     if limit <= 0:
         return []
     dead = ("cancelled", "canceled", "closed", "lost", "won", "archived")
+    # Social radar rows are names lifted from a post, not a property and not a
+    # person we can reach. They have no address to trace, so including them
+    # spent the daily cap on rows that could never resolve. Permits, inbound
+    # forms and other address-bearing sources are the only useful inputs.
+    social = ("reddit", "linkedin")
     sql = (
         "SELECT id, name, email, phone, address, source, status, draft_reply "
         "FROM leads "
@@ -101,10 +106,12 @@ def select_batch(db, limit: int) -> list:
         "  AND COALESCE(TRIM(phone), '') = '' "
         "  AND LOWER(COALESCE(status, 'new')) NOT IN ("
         + ",".join(["%s"] * len(dead)) + ") "
+        "  AND LOWER(COALESCE(source, '')) NOT IN ("
+        + ",".join(["%s"] * len(social)) + ") "
         "ORDER BY id DESC LIMIT %s"
     )
     with db.cursor() as cur:
-        cur.execute(sql, (*dead, limit))
+        cur.execute(sql, (*dead, *social, limit))
         return cur.fetchall()
 
 
@@ -189,6 +196,14 @@ def run_once(db=None, force: bool = False, limit=None) -> dict:
                          merged["phone"][:50], lead["id"]),
                     )
                 db.commit()
+                # Cached queue columns must follow the write. The old loop
+                # updated the contact and left next_action='enrich', so a lead
+                # that just gained a phone never entered the call list.
+                try:
+                    from bizstack_leads import store as lead_store
+                    lead_store.recompute(db, lead["id"])
+                except Exception as exc:
+                    print(f"[lead-enrich] recompute failed for {lead['id']}: {exc}", flush=True)
                 if merged["gained_contact"]:
                     summary["enriched"] += 1
                 else:

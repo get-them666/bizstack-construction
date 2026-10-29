@@ -1277,7 +1277,7 @@ def _secure_cookies() -> bool:
 
 
 def _login_redirect(role: str) -> str:
-    return {"admin": "/dashboard", "customer": "/account"}.get(role or "", "/")
+    return {"admin": "/pipeline", "customer": "/account"}.get(role or "", "/")
 
 
 def _site_base(request: Request) -> str:
@@ -4165,239 +4165,164 @@ PIPELINE_STREAMS = ("leads", "permits", "backlog")
 
 
 @app.get("/pipeline", response_class=HTMLResponse)
-async def pipeline_board(
-    request: Request,
-    stream: str = "",
-    q: str = "",
-    owner: str = "",
-    show_all: int = 0,
-    db=Depends(get_db),
-):
-    """Kanban of everything in the sales pipeline, newest work first per column."""
+async def pipeline_page(request: Request, db=Depends(get_db)):
+    """The one page that answers: who do I call, and what is it worth?
+
+    Replaces a 3-stream x 7-column kanban. That board was impressive and
+    unusable: every permit row in the county appeared as a card, most of them
+    had no contact, and a "won" column was populated by fabricated demo jobs.
+    The shared lead lifecycle already knows the single next action for every
+    lead, so this page is built around that instead of around column-dragging.
+
+    Nothing here writes. It reads the queue, the canonical stages, and the
+    permit counts, and links into the existing work surfaces.
+    """
     # Redirect to /login like the other owner pages. require_admin() raises a
     # bare 401, which showed the signed-out user a dead end instead of a login.
     is_authed, user_email = require_auth(request)
     if not is_authed:
         return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
-    actor = current_actor(request) or {}
-
-    streams = [s for s in (stream or "").split(",") if s in PIPELINE_STREAMS] or list(PIPELINE_STREAMS)
-    cols: dict[str, list[dict]] = {}
-
-    def _search(term: str, *fields: str):
-        """Return (sql_fragment, params) filtering `fields` ILIKE the search term."""
-        term = (term or "").strip()
-        if not term or not fields:
-            return "", []
-        clause = " AND (" + " OR ".join(f"COALESCE({f}, '') ILIKE %s" for f in fields) + ")"
-        return clause, [f"%{term}%"] * len(fields)
 
     vis = source_visibility_clause()
-    vis_params = source_visibility_params()
-    # Per-status fetch limit, and how many cards actually render. Separate on
-    # purpose: fetch a little more than we render so a card moving between
-    # columns does not blank the target column on the next load.
-    lead_totals: dict = {}
-    permit_totals: dict = {}
-    backlog_totals: dict = {}
-    permit_hidden_demo = 0
-    permit_hidden_commercial = 0
+    vis_where = vis[len(" AND "):] if vis.startswith(" AND ") else vis.strip()
+    vis_params = tuple(source_visibility_params())
 
-    if "leads" in streams:
-        frag, params = _search(q, "name", "phone", "address", "project_type")
-        # Same defect as the permit stream: a single LIMIT 400 meant 417 of 817
-        # construction leads were absent with no indication. Counts are taken
-        # over the whole matching set, then cards are fetched per status.
-        base = (
-            " FROM leads WHERE company = 'construction' AND source <> 'backlog'"
-            + frag + vis
+    queue_where = "source <> 'backlog'"
+    if vis_where:
+        queue_where += " AND " + vis_where
+    rows = lead_store.list_leads(
+        db, "construction", limit=1000, include_closed=False,
+        where_extra=queue_where, extra_params=vis_params,
+    )
+    buckets = lead_queue.group(rows)
+    by_action = {b["action"]: b for b in buckets}
+    action_counts = lead_queue.action_counts(buckets)
+
+    def _real_value_cents(lead) -> int:
+        """The lead's dollar value, but only when it is not an assumed ballpark.
+
+        48 permit leads carry a whole-home quote built from an *assumed* 1,750
+        sqft. Every one of them is exactly $306,250, so the call list showed the
+        same invented number twelve times and "Open pipeline" summed them into
+        $49M. A ballpark with a guessed square footage is not a pipeline value.
+        The permit's own declared job value has no `estimate_json`, so it still
+        shows.
+        """
+        cents = int(lead.get("estimate_high_cents")
+                    or lead.get("estimate_low_cents") or 0)
+        if not cents:
+            return 0
+        raw = lead.get("estimate_json")
+        if raw:
+            try:
+                meta = json.loads(raw) if isinstance(raw, str) else raw
+            except (TypeError, ValueError):
+                meta = {}
+            if isinstance(meta, dict) and meta.get("assumed_sqft"):
+                return 0
+        return cents
+
+    # The call list. Phone first because a phone call is the only channel that
+    # reliably closes a remodel; email-only leads follow, marked as such.
+    call_list = []
+    seen_ids = set()
+    for action in (lead_lifecycle.ACTION_RESPOND,
+                   lead_lifecycle.ACTION_FOLLOW_UP,
+                   lead_lifecycle.ACTION_FIRST_TOUCH):
+        for lead in (by_action.get(action) or {}).get("leads", []):
+            if lead["id"] in seen_ids:
+                continue
+            phone = (lead.get("phone") or "").strip()
+            email = (lead.get("email") or "").strip()
+            if email.lower().endswith("@lead.local"):
+                email = ""
+            if not phone and not email:
+                continue
+            seen_ids.add(lead["id"])
+            call_list.append({
+                "id": lead["id"],
+                "name": lead.get("name") or "(no name)",
+                "address": lead.get("address") or "",
+                "project_type": lead.get("project_type") or "",
+                "source": lead.get("source") or "",
+                "phone": phone,
+                "email": email,
+                "action": action,
+                "action_label": lead_lifecycle.ACTION_LABELS.get(action, action),
+                "value_cents": _real_value_cents(lead),
+            })
+            if len(call_list) >= 12:
+                break
+        if len(call_list) >= 12:
+            break
+
+    # Canonical stage funnel. Raw status values still include the legacy
+    # vocabulary (quoted/deposit/in_progress/completed), so translate rather
+    # than pretending the column is clean.
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT status, count(*)::int AS c FROM leads "
+            "WHERE company = 'construction' AND source <> 'backlog'" + vis +
+            " GROUP BY status;",
+            vis_params,
         )
-        with db.cursor() as cur:
-            cur.execute(
-                "SELECT COALESCE(status, 'new') AS status, count(*) AS c"
-                + base + " GROUP BY 1;",
-                tuple(params + vis_params),
-            )
-            lead_totals = {r["status"]: int(r["c"]) for r in cur.fetchall()}
-            cur.execute("SELECT DISTINCT status FROM leads WHERE company = 'construction'"
-                        " AND source <> 'backlog'" + frag + vis + ";",
-                        tuple(params + vis_params))
-            lead_statuses = [r["status"] for r in cur.fetchall()]
-            rows = []
-            for st in lead_statuses:
-                cur.execute(
-                    "SELECT id, name, phone, email, address, project_type, status, source, "
-                    "COALESCE(estimate_high_cents, estimate_low_cents, 0) AS value, created_at"
-                    + base + " AND COALESCE(status, 'new') = %s ORDER BY created_at DESC LIMIT %s;",
-                    tuple(params + vis_params) + (st, CARD_FETCH_PER_STATUS),
-                )
-                rows.extend(cur.fetchall())
-        for r in rows:
-            cols.setdefault(f"leads:{r['status']}", []).append({
-                "id": r["id"], "stream": "leads",
-                "title": r["name"] or "(no name)",
-                "sub": r["address"] or r["project_type"] or "",
-                "meta": [r["source"] or "", (r["phone"] or r["email"] or "")],
-                "value": int(r["value"] or 0),
-                "when": r["created_at"].strftime("%b %d") if r.get("created_at") else "",
-            })
+        stage_counts = {stage: 0 for stage in lead_lifecycle.STAGES}
+        for r in cur.fetchall():
+            stage_counts[lead_lifecycle.to_stage(r["status"])] += int(r["c"])
 
-    if "permits" in streams:
-        frag, params = _search(q, "address", "work_type", "permit_number", "contractor_name")
-        # Demo rows are fake data (Chesapeake/W MB fall back to demo on purpose)
-        # and commercial rows are work that already has a contractor engaged.
-        # Neither is a job to knock, so they are excluded by default -- but the
-        # totals below report what was excluded and the owner can bring them back
-        # with show_all=1, so nothing is ever silently dropped.
-        excl = "" if show_all else " AND NOT is_demo AND COALESCE(use_class,'') <> 'commercial'"
-        base = " FROM job_leads WHERE 1=1" + excl + frag
-        with db.cursor() as cur:
-            # TRUE per-column counts, computed over every matching row. These are
-            # what the column headers show. Previously `count` was derived from
-            # the rows actually fetched, so it always equalled the number on
-            # screen and the "+N more" warning could never fire -- which is how
-            # 1,516 permits went missing with no indication on the page at all.
-            cur.execute(
-                "SELECT COALESCE(status, 'new') AS status, count(*) AS c"
-                + base + " GROUP BY 1;",
-                tuple(params),
-            )
-            permit_totals = {r["status"]: int(r["c"]) for r in cur.fetchall()}
+        # "Work in play" is money attached to a lead we have actually spoken to,
+        # and only real values: a whole-home ballpark from an assumed square
+        # footage is excluded above, and untouched permit supply is not a deal
+        # yet. Summing every open estimate produced $49M of fiction.
+        cur.execute(
+            "SELECT estimate_low_cents, estimate_high_cents, estimate_json "
+            "FROM leads WHERE company = 'construction'"
+            " AND status NOT IN ('new', 'won', 'lost', 'cancelled', 'canceled', 'closed', 'archived')"
+            " AND source <> 'backlog'" + vis + ";",
+            vis_params,
+        )
+        work_in_play_cents = sum(_real_value_cents(r) for r in cur.fetchall())
 
-            # What is being held back, so the UI can say so out loud.
-            if not show_all:
-                cur.execute(
-                    "SELECT count(*) FILTER (WHERE is_demo) AS demo,"
-                    " count(*) FILTER (WHERE COALESCE(use_class,'') = 'commercial') AS commercial"
-                    + base + ";",
-                    tuple(params),
-                )
-                r = cur.fetchone()
-                permit_hidden_demo = int(r["demo"] or 0)
-                permit_hidden_commercial = int(r["commercial"] or 0)
-            else:
-                permit_hidden_demo = permit_hidden_commercial = 0
+        cur.execute(
+            "SELECT count(*)::int AS c FROM comms_logs "
+            "WHERE direction = 'outbound' AND created_at >= NOW() - INTERVAL '7 days';"
+        )
+        touches_this_week = int(cur.fetchone()["c"] or 0)
 
-            # Cards to RENDER is a separate, smaller limit than the pool. Fetch
-            # per-column rather than one global LIMIT so a single big column
-            # cannot starve the others.
-            cur.execute(
-                "SELECT DISTINCT status FROM job_leads WHERE 1=1" + excl + frag + ";",
-                tuple(params),
-            )
-            statuses = [r["status"] for r in cur.fetchall()]
-            rows = []
-            for st in statuses:
-                cur.execute(
-                    "SELECT id, permit_number, address, work_type, job_description, status, "
-                    "estimated_value, found_at FROM job_leads WHERE 1=1" + excl + frag
-                    + " AND COALESCE(status, 'new') = %s ORDER BY found_at DESC LIMIT %s;",
-                    tuple(params) + (st, CARD_FETCH_PER_STATUS),
-                )
-                rows.extend(cur.fetchall())
-        for r in rows:
-            desc = (r["job_description"] or "").strip()
-            if desc.lower().startswith("<") or len(desc) > 90:
-                desc = ""
-            cols.setdefault(f"permits:{r['status'] or 'new'}", []).append({
-                "id": r["id"], "stream": "permits",
-                "title": r["address"] or "(no address)",
-                "sub": r["work_type"] or desc or r["permit_number"] or "",
-                "meta": [r["permit_number"] or "", r["work_type"] or ""],
-                "value": int(float(r["estimated_value"] or 0)),
-                "when": r["found_at"].strftime("%b %d") if r.get("found_at") else "",
-            })
+        # Supply, by source, so the page says where the work is coming from.
+        cur.execute(
+            "SELECT COALESCE(NULLIF(source, ''), 'unknown') AS source, count(*)::int AS c, "
+            "count(*) FILTER (WHERE COALESCE(phone, '') <> '' "
+            "  OR (COALESCE(email, '') <> '' AND email NOT LIKE '%%@lead.local'))::int AS reachable "
+            "FROM leads WHERE company = 'construction' AND status <> ALL(%s)" + vis +
+            " GROUP BY 1 ORDER BY c DESC;",
+            (list(lead_lifecycle.CLOSED_STAGES), *vis_params),
+        )
+        sources = cur.fetchall()
 
-    if "backlog" in streams:
-        frag, params = _search(q, "name", "address", "project_type")
-        base = (" FROM leads WHERE source = 'backlog' AND company = 'construction'" + frag)
-        with db.cursor() as cur:
-            cur.execute(
-                "SELECT COALESCE(status, 'new') AS status, count(*) AS c"
-                + base + " GROUP BY 1;",
-                tuple(params),
-            )
-            backlog_totals = {r["status"]: int(r["c"]) for r in cur.fetchall()}
-            cur.execute("SELECT DISTINCT status FROM leads WHERE source = 'backlog'"
-                        " AND company = 'construction'" + frag + ";", tuple(params))
-            bl_statuses = [r["status"] for r in cur.fetchall()]
-            rows = []
-            for st in bl_statuses:
-                cur.execute(
-                    "SELECT id, name, address, project_type, status, "
-                    "COALESCE(estimate_high_cents, estimate_low_cents, 0) AS value, created_at"
-                    + base + " AND COALESCE(status, 'new') = %s ORDER BY created_at DESC LIMIT %s;",
-                    tuple(params) + (st, CARD_FETCH_PER_STATUS),
-                )
-                rows.extend(cur.fetchall())
-        for r in rows:
-            cols.setdefault(f"backlog:{r['status']}", []).append({
-                "id": r["id"], "stream": "backlog",
-                "title": r["name"] or "(unnamed job)",
-                "sub": r["address"] or r["project_type"] or "",
-                "meta": [r["project_type"] or "", ""],
-                "value": int(r["value"] or 0),
-                "when": r["created_at"].strftime("%b %d") if r.get("created_at") else "",
-            })
+        pstats = permit_stats.permit_stats(cur)
 
-    groups = []
-    totals_by_stream = {"leads": lead_totals, "permits": permit_totals, "backlog": backlog_totals}
-    for s in streams:
-        if s == "leads":
-            stages = [(f"leads:{st}", STATUS_LABELS.get(st, st)) for st in LEAD_STATUSES]
-        elif s == "permits":
-            stages = [(f"permits:{st}", PERMIT_STATUS_LABELS.get(st, st)) for st in PERMIT_STATUSES]
-        else:
-            stages = [(f"backlog:{st}", STATUS_LABELS.get(st, st)) for st in LEAD_STATUSES]
-        totals = totals_by_stream.get(s, {})
-        columns = []
-        for key, label in stages:
-            # Not named `status`: assigning that anywhere in this function makes
-            # it a local for the WHOLE body, which shadowed the `starlette.status`
-            # module used by the signed-out redirect at the top -- so that
-            # redirect raised UnboundLocalError and 500'd instead of sending a
-            # logged-out visitor to /login.
-            col_status = key.split(":", 1)[1]
-            rendered = cols.get(key, [])
-            true_count = totals.get(col_status, 0)
-            # `count` is the number that EXISTS, not the number fetched. The
-            # "+N more" row at the bottom of the column depends on this being
-            # the true total; when it was derived from the fetched rows it
-            # always equalled the rendered count and the warning never fired.
-            columns.append({
-                "key": key,
-                "label": label,
-                "count": true_count,
-                "value": sum(c["value"] for c in rendered),
-                "shown": len(rendered[:CARD_RENDER_CAP]),
-                "hidden": max(0, true_count - CARD_RENDER_CAP),
-                "cards": rendered[:CARD_RENDER_CAP],
-            })
-        groups.append({
-            "stream": s,
-            "title": {"leads": "Leads — can call or email",
-                      "permits": "Permits — work the address",
-                      "backlog": "Back-log — jobs you've decided to do"}[s],
-            "columns": columns,
+    stage_rows = []
+    max_stage = max(stage_counts.values()) or 1
+    for stage in lead_lifecycle.STAGES:
+        count = stage_counts.get(stage, 0)
+        stage_rows.append({
+            "key": stage,
+            "label": lead_lifecycle.STAGE_LABELS[stage],
+            "count": count,
+            "pct": round(count / max_stage * 100),
         })
 
-    # sum() the counts INSIDE each stream's dict. Summing the dict_values
-    # objects themselves is `0 + dict_values`, which is a TypeError, not a
-    # number -- it took /pipeline down as a 500 on every request.
-    total_cards = sum(sum(totals_by_stream.get(s, {}).values()) for s in streams)
-    total_value = sum(c["value"] for v in cols.values() for c in v)
-
     return templates.TemplateResponse(request=request, name="pipeline.html", context={
-        "user": {"email": user_email or owner or actor.get("email", "")},
-        "groups": groups,
-        "streams": list(PIPELINE_STREAMS),
-        "active_streams": streams,
-        "q": q,
-        "total_cards": total_cards,
-        "total_value": total_value,
-        "show_all": bool(show_all),
-        "permit_hidden_demo": permit_hidden_demo,
-        "permit_hidden_commercial": permit_hidden_commercial,
+        "user": {"email": user_email},
+        "call_list": call_list,
+        "action_counts": action_counts,
+        "action_labels": lead_lifecycle.ACTION_LABELS,
+        "stage_rows": stage_rows,
+        "work_in_play_cents": work_in_play_cents,
+        "touches_this_week": touches_this_week,
+        "sources": sources,
+        "permits": pstats,
         "permit_status": _permit_status(),
     })
 
@@ -4510,7 +4435,7 @@ async def record_lead_touch(lead_id: int, request: Request, channel: str = Form(
                             detail: str = Form(""), db=Depends(get_db)):
     require_admin(request)
     ch = channel.strip().lower() if channel else "sms"
-    if ch not in {"letter", "door-knock", "phone", "sms", "in-person", "text"}:
+    if ch not in {"letter", "door-knock", "phone", "sms", "in-person", "email"}:
         ch = "sms"
     if ch == "text":
         ch = "sms"
@@ -5350,6 +5275,30 @@ async def fire_all_drafts_route(request: Request, db=Depends(get_db)):
     if request.headers.get("hx-request"):
         return JSONResponse(content=result)
     return RedirectResponse(url=request.headers.get("referer") or "/leads", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/api/leads/enrich-batch")
+async def enrich_leads_batch(request: Request, limit: int = Form(10), db=Depends(get_db)):
+    """Find phone/email for a small batch of address-only leads.
+
+    This is the real provider path: `lead_enrich_loop` checks the free parcel
+    cache first and only calls Skip Sherpa when there is no contact, so a
+    repeat run over the same addresses costs nothing. The cap is deliberately
+    small and clamped -- Skip Sherpa bills per lookup, and 1,700 address-only
+    permits sitting in the database is exactly the kind of backlog that turns
+    an uncapped button into a surprise invoice.
+
+    Runs in a worker thread because each lookup is a network round trip; the
+    request would otherwise block the event loop for every other page.
+    """
+    require_admin(request)
+    try:
+        n = max(1, min(int(limit or 10), 25))
+    except (TypeError, ValueError):
+        n = 10
+    import lead_enrich_loop
+    result = await asyncio.to_thread(lead_enrich_loop.run_once, db, True, n)
+    return JSONResponse(content=result)
 
 
 @app.post("/api/leads/{lead_id}/delete")
@@ -7821,6 +7770,23 @@ def ingest_permits(conn, permits):
             added += 1
             if p.get("_demo") or not permit_service.wants_lead(p):
                 continue
+            # One door, one lead. The same house routinely pulls several
+            # permits (a remodel plus electrical plus plumbing), and each one
+            # used to become its own lead with a different placeholder email,
+            # so dedupe never matched. 1,286 permit leads covered 1,036 doors;
+            # the work queue showed the same address three times and the
+            # mailing list paid for the same letter twice.
+            addr_norm = re.sub(r"[^a-z0-9 ]", "", (p.get("property_address") or "").lower()).strip()
+            if addr_norm:
+                cur.execute(
+                    "SELECT id FROM leads WHERE company = 'construction' "
+                    "AND source = 'permit_finder' "
+                    "AND regexp_replace(lower(COALESCE(address, '')), '[^a-z0-9 ]', '', 'g') = %s "
+                    "LIMIT 1;",
+                    (addr_norm,),
+                )
+                if cur.fetchone():
+                    continue
             raw = p["permit_number"] or p.get("_id") or p["property_address"]
             digest = hashlib.sha256(raw.encode()).hexdigest()
             listing = f"https://api.shovels.ai/v2/permits?id={urllib.parse.quote(p.get('_id') or '')}" if p.get("_id") else (p["permit_number"] or "")
@@ -7851,6 +7817,12 @@ def ingest_permits(conn, permits):
                     "referral_code": p["permit_number"],
                     "campaign": "permit-radar",
                     "analysis_json": meta,
+                    # The permit's declared job value is the only real dollar
+                    # figure attached to a permit lead. Carrying it on the lead
+                    # is what lets the pipeline show a value instead of "$0"
+                    # for the entire permit supply.
+                    **({"estimate_low_cents": int(est_val * 100),
+                        "estimate_high_cents": int(est_val * 100)} if est_val > 0 else {}),
                 },
             )
             lead_id = res["lead_id"]

@@ -52,43 +52,43 @@ document.addEventListener('DOMContentLoaded', function() {
     if (enrichBtn) {
         enrichBtn.addEventListener('click', async function() {
             const out = document.getElementById('enrich-out');
+            const original = enrichBtn.textContent;
             enrichBtn.disabled = true;
             enrichBtn.textContent = 'Looking up…';
             out.classList.remove('hidden');
-            out.innerHTML = '<p class="text-slate-500">Tracing address-only leads. Cached addresses are free; new ones use the monthly quota.</p>';
+            out.innerHTML = '<p class="text-slate-500">Tracing up to 10 address-only leads. One Skip Sherpa credit per address; cached addresses are free.</p>';
             try {
                 const body = new FormData();
-                body.set('company', 'construction');
-                const res = await fetch('/api/skiptrace/enrich', { method: 'POST', body: body });
+                body.set('limit', '10');
+                const res = await fetch('/api/leads/enrich-batch', { method: 'POST', body: body });
                 const json = await res.json();
                 if (!res.ok) {
                     out.innerHTML = '<p class="text-rose-700 text-xs">' + escapeHtml(json.detail || 'Failed') + '</p>';
                     enrichBtn.disabled = false;
-                    enrichBtn.textContent = 'Run owner lookup on address-only leads';
+                    enrichBtn.textContent = original;
                     return;
                 }
-                const notes = (json.notes || []).map(function(n) {
+                const steps = (json.steps || []).map(function(n) {
                     return '<li>' + escapeHtml(n) + '</li>';
                 }).join('');
                 out.innerHTML = '<div class="text-xs space-y-1">'
-                    + '<p><b>' + json.examined + '</b> address-only lead(s) · '
-                    + '<b>' + json.updated + '</b> name(s) filled in</p>'
-                    + '<p>' + json.spent + ' provider call(s) spent this run · '
-                    + json.cached + ' already cached · '
-                    + json.skipped + ' skipped</p>'
-                    + (notes ? '<ul class="list-disc pl-4 text-amber-700">' + notes + '</ul>' : '')
-                    + '<p class="text-slate-400 pt-1">The free plan allows 50 calls per month, '
-                    + 'shared with instant-quote. Repeat runs are free.</p>'
+                    + '<p><b>' + json.examined + '</b> address(es) examined · '
+                    + '<b>' + json.enriched + '</b> phone/email found · '
+                    + json.name_only + ' name only</p>'
+                    + '<p>' + json.sherpa_lookups + ' Skip Sherpa lookup(s) · '
+                    + json.unchanged + ' unchanged · '
+                    + json.drafts + ' draft(s) staged</p>'
+                    + (json.skipped ? '<p class="text-amber-700">' + escapeHtml(json.skipped) + '</p>' : '')
+                    + (steps ? '<ul class="list-disc pl-4 text-slate-500 max-h-40 overflow-y-auto">' + steps + '</ul>' : '')
                     + '<button type="button" id="enrich-reload" class="mt-2 px-3 py-1.5 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg">Refresh the list</button>'
                     + '</div>';
-                document.getElementById('enrich-reload').addEventListener('click', function() {
-                    window.location.reload();
-                });
+                const reload = document.getElementById('enrich-reload');
+                if (reload) reload.addEventListener('click', function() { window.location.reload(); });
                 enrichBtn.textContent = 'Done';
             } catch (e) {
                 out.innerHTML = '<p class="text-rose-700 text-xs">Network error.</p>';
                 enrichBtn.disabled = false;
-                enrichBtn.textContent = 'Run owner lookup on address-only leads';
+                enrichBtn.textContent = original;
             }
         });
     }

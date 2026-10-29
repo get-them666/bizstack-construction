@@ -96,8 +96,8 @@ if __name__ == "__main__":
         row = dict(deck, status=live)
         check(f"{live!r} is still a lead", ps.wants_lead(row) is True)
 
-    # A source with no status vocabulary must not be silently dropped: Shovels and
-    # the demo seed publish none, and treating absent as dead would empty both.
+    # A source with no status vocabulary must not be silently dropped: Shovels
+    # publishes none, and treating absent as dead would empty it.
     check("no status is treated as live", ps.wants_lead(deck) is True)
     check("permit_is_live is True when status is blank", ps.permit_is_live(deck) is True)
     check("permit_is_live is False when finalised",
@@ -121,9 +121,8 @@ if __name__ == "__main__":
           not ps.OPEN_DATA_SOURCES.get("chesapeake"),
           f"unexpectedly registered: {ps.OPEN_DATA_SOURCES.get('chesapeake')}")
     che = ps.fetch_permits("Chesapeake", "VA", days=90, limit=25)
-    check("Chesapeake falls back to clearly-marked demo rows",
-          che and all(r.get("_demo") for r in che),
-          f"got {len(che)} rows, demo={sum(1 for r in che if r.get('_demo'))}")
+    check("Chesapeake returns nothing rather than invented permits",
+          che == [], f"got {len(che)} rows")
 
     print("\n[6] live endpoints return usable leads (PERMIT_LIVE=1)")
     if os.getenv("PERMIT_LIVE") == "1":

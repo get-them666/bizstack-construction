@@ -3,208 +3,235 @@
 {% block title %}Pipeline | {{ co.name }} Owner Portal{% endblock %}
 {% block meta %}<meta name="robots" content="noindex, nofollow">{% endblock %}
 
-{# Visual pipeline board. One row per stream (leads / permits / back-log),
-   one column per stage, drag a card to move it. #}
+{# One page, one question: who do I call next, and what is it worth?
+   The old board was three streams of every permit in the county. It looked
+   busy and told the owner nothing. This is the work queue, the funnel, and the
+   permit supply, in that order. #}
 
 {% block content %}
 <section class="py-8 bg-slate-50 min-h-[80vh]">
-    <div class="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
 
-        <div class="flex flex-wrap items-end justify-between gap-4 mb-5">
+        <div class="flex flex-wrap items-end justify-between gap-4 mb-6">
             <div>
-                <p class="text-sm font-bold text-indigo-600 uppercase tracking-widest">Owner portal · Sales flow</p>
+                <p class="text-sm font-bold text-indigo-600 uppercase tracking-widest">Owner portal · Today</p>
                 <h1 class="text-3xl font-black tracking-tight text-slate-900">Pipeline</h1>
                 <p class="text-sm text-slate-500 mt-1">
-                    Every job you are chasing, in the order it moves. Drag a card to change its stage.
+                    Work the people who can be reached. Permits without a contact are supply, not a call list.
                 </p>
             </div>
             <div class="flex flex-wrap gap-2">
-                <a href="/leads" class="px-4 py-2.5 text-sm font-semibold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 rounded-xl transition-colors">Lead list</a>
-                <a href="/dashboard" class="px-4 py-2.5 text-sm font-semibold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 rounded-xl transition-colors">← Dashboard</a>
+                <a href="/leads" class="px-4 py-2.5 text-sm font-bold text-white bg-slate-900 hover:bg-slate-700 rounded-xl transition-colors">Full work queue</a>
+                <a href="/leads?lane=permits" class="px-4 py-2.5 text-sm font-semibold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 rounded-xl transition-colors">Permits</a>
+                <a href="/bids" class="px-4 py-2.5 text-sm font-semibold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 rounded-xl transition-colors">Bids</a>
             </div>
         </div>
 
-        {# Totals + stream filter + search #}
-        <div class="flex flex-wrap items-center gap-3 mb-5 bg-white rounded-2xl border border-slate-200 px-4 py-3">
-            <div class="flex items-center gap-5 pr-4 border-r border-slate-200">
-                <div>
-                    <div class="text-2xl font-black text-slate-900 leading-none">{{ total_cards }}</div>
-                    <div class="text-[11px] font-bold uppercase tracking-wider text-slate-400 mt-0.5">Open items</div>
-                </div>
-                <div>
-                    <div class="text-2xl font-black text-emerald-600 leading-none">${{ '{:,.0f}'.format(total_value/100) }}</div>
-                    <div class="text-[11px] font-bold uppercase tracking-wider text-slate-400 mt-0.5">Est. value</div>
-                </div>
+        {# KPI row. Every number is a thing the owner can act on today. #}
+        <div class="grid grid-cols-2 lg:grid-cols-6 gap-3 mb-6">
+            <a href="/leads?action=first_touch" class="bg-white rounded-2xl border border-slate-200 p-4 hover:border-indigo-300 transition-colors">
+                <div class="text-3xl font-black text-slate-900 leading-none">{{ action_counts.first_touch + action_counts.follow_up }}</div>
+                <div class="text-[11px] font-bold uppercase tracking-wider text-slate-500 mt-2">Calls to make</div>
+                <div class="text-[11px] text-slate-400 mt-1">{{ action_counts.first_touch }} new · {{ action_counts.follow_up }} follow-up</div>
+            </a>
+            <a href="/leads?action=respond" class="bg-white rounded-2xl border {% if action_counts.respond %}border-emerald-300 ring-1 ring-emerald-200{% else %}border-slate-200{% endif %} p-4 hover:border-emerald-400 transition-colors">
+                <div class="text-3xl font-black {% if action_counts.respond %}text-emerald-600{% else %}text-slate-900{% endif %} leading-none">{{ action_counts.respond }}</div>
+                <div class="text-[11px] font-bold uppercase tracking-wider text-slate-500 mt-2">Replies waiting</div>
+                <div class="text-[11px] text-slate-400 mt-1">Answer these first</div>
+            </a>
+            <a href="/leads?status=quoted" class="bg-white rounded-2xl border border-slate-200 p-4 hover:border-indigo-300 transition-colors">
+                <div class="text-3xl font-black text-slate-900 leading-none">{{ stage_rows | selectattr('key', 'equalto', 'quoted') | map(attribute='count') | first }}</div>
+                <div class="text-[11px] font-bold uppercase tracking-wider text-slate-500 mt-2">Quotes out</div>
+                <div class="text-[11px] text-slate-400 mt-1">Awaiting a decision</div>
+            </a>
+            <a href="/leads?status=won&amp;closed=1" class="bg-white rounded-2xl border border-slate-200 p-4 hover:border-indigo-300 transition-colors">
+                <div class="text-3xl font-black text-slate-900 leading-none">{{ stage_rows | selectattr('key', 'equalto', 'won') | map(attribute='count') | first }}</div>
+                <div class="text-[11px] font-bold uppercase tracking-wider text-slate-500 mt-2">Won</div>
+                <div class="text-[11px] text-slate-400 mt-1">All time</div>
+            </a>
+            <a href="/leads?lane=permits" class="bg-white rounded-2xl border border-slate-200 p-4 hover:border-indigo-300 transition-colors">
+                <div class="text-3xl font-black text-slate-900 leading-none">{{ permits.actionable_doors }}</div>
+                <div class="text-[11px] font-bold uppercase tracking-wider text-slate-500 mt-2">Permit doors</div>
+                <div class="text-[11px] text-slate-400 mt-1">{{ permits.untouched_doors }} not yet worked</div>
+            </a>
+            <div class="bg-white rounded-2xl border border-slate-200 p-4" title="Money attached to leads we have already contacted. Assumed-square-footage ballparks and untouched permit supply are excluded.">
+                <div class="text-3xl font-black text-emerald-600 leading-none">{{ work_in_play_cents | money }}</div>
+                <div class="text-[11px] font-bold uppercase tracking-wider text-slate-500 mt-2">Work in play</div>
+                <div class="text-[11px] text-slate-400 mt-1">{{ touches_this_week }} touches this week</div>
             </div>
-
-            <form method="get" action="/pipeline" class="flex flex-wrap items-center gap-2">
-                {% for s in streams %}
-                <label class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-full border cursor-pointer transition-colors
-                    {% if s in active_streams %}bg-slate-900 text-white border-slate-900{% else %}bg-white text-slate-600 border-slate-200 hover:border-slate-400{% endif %}">
-                    <input type="checkbox" name="stream" value="{{ s }}" class="sr-only"
-                           {% if s in active_streams %}checked{% endif %}
-                           onchange="this.form.submit()">
-                    {{ {'leads':'Leads','permits':'Permits','backlog':'Back-log'}[s] }}
-                </label>
-                {% endfor %}
-                <input type="search" name="q" value="{{ q }}" placeholder="Search name, address, permit #…"
-                       class="px-4 py-2 text-sm rounded-xl bg-slate-50 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 w-full sm:w-72">
-                <button type="submit" class="px-4 py-2 text-sm font-semibold text-white bg-slate-900 hover:bg-slate-700 rounded-xl transition-colors">Search</button>
-            </form>
         </div>
 
-        {% for g in groups %}
-        <div class="mb-8">
-            <div class="flex items-center gap-2 mb-3">
-                <h2 class="text-sm font-black uppercase tracking-wider text-slate-500">{{ g.title }}</h2>
-                <span class="text-[11px] font-semibold text-slate-400">
-                    {{ g.columns | sum(attribute='count') }} total
-                </span>
-                {% if g.stream == 'permits' and not show_all and (permit_hidden_demo or permit_hidden_commercial) %}
-                <span class="text-[11px] font-semibold text-slate-500 bg-amber-50 border border-amber-200 text-amber-800 rounded-full px-2.5 py-0.5"
-                      title="Demo rows are fake fallback data for cities whose open feed is unusable. Commercial permits already have a contractor engaged.">
-                    {{ permit_hidden_demo }} demo
-                    {%- if permit_hidden_commercial %} · {{ permit_hidden_commercial }} commercial{% endif %} hidden —
-                    <a href="/pipeline?stream=permits{% if active_streams | length > 1 %}&amp;stream={{ active_streams | join(',') }}{% endif %}&amp;show_all=1"
-                       class="underline hover:text-amber-900">show them</a>
-                </span>
-                {% elif g.stream == 'permits' and show_all %}
-                <span class="text-[11px] font-semibold text-slate-500 bg-slate-100 border border-slate-200 rounded-full px-2.5 py-0.5">
-                    showing demo + commercial —
-                    <a href="/pipeline?stream=permits{% if active_streams | length > 1 %}&amp;stream={{ active_streams | join(',') }}{% endif %}"
-                       class="underline hover:text-indigo-600">hide</a>
-                </span>
-                {% endif %}
-            </div>
+        <div class="grid lg:grid-cols-3 gap-6">
 
-            <div class="grid gap-3 overflow-x-auto pb-2"
-                 style="grid-template-columns: repeat({{ g.columns | length }}, minmax(210px, 1fr));">
-                {% for col in g.columns %}
-                <div class="bg-slate-100/70 rounded-2xl border border-slate-200 flex flex-col min-h-[120px]"
-                     data-stream="{{ g.stream }}" data-status="{{ col.key.split(':')[1] }}">
-
-                    <div class="flex items-center justify-between gap-2 px-3 py-2.5 border-b border-slate-200">
-                        <span class="text-xs font-black uppercase tracking-wider text-slate-600 truncate">{{ col.label }}</span>
-                        <span class="flex items-center gap-1.5 shrink-0">
-                            {% if col.value %}
-                            <span class="text-[11px] font-bold text-emerald-600">${{ '{:,.0f}'.format(col.value/100) }}</span>
-                            {% endif %}
-                            <span class="text-[11px] font-black bg-white text-slate-600 border border-slate-200 rounded-full px-2 py-0.5">{{ col.count }}</span>
-                        </span>
+            {# ── The call list ─────────────────────────────────────────── #}
+            <div class="lg:col-span-2">
+                <div class="bg-white rounded-3xl border border-slate-200 overflow-hidden">
+                    <div class="flex flex-wrap items-center justify-between gap-3 px-5 py-4 border-b border-slate-200">
+                        <div>
+                            <h2 class="text-lg font-black text-slate-900">Call these people</h2>
+                            <p class="text-xs text-slate-500">Replies first, then overdue follow-ups, then leads nobody has touched.</p>
+                        </div>
+                        <a href="/leads" class="text-xs font-bold text-indigo-600 hover:text-indigo-800">See all {{ action_counts.first_touch + action_counts.follow_up + action_counts.respond }} →</a>
                     </div>
 
-                    <div class="flex-1 p-2 space-y-2 overflow-y-auto max-h-[460px] cardslot">
-                        {% for c in col.cards %}
-                        <article class="bg-white rounded-xl border border-slate-200 shadow-sm p-3 cursor-grab active:cursor-grabbing hover:border-indigo-300 transition-colors"
-                                 draggable="true"
-                                 data-stream="{{ c.stream }}" data-id="{{ c.id }}">
-                            <div class="text-sm font-bold text-slate-900 leading-snug">{{ c.title }}</div>
-                            {% if c.sub %}<div class="text-xs text-slate-500 mt-0.5 truncate">{{ c.sub }}</div>{% endif %}
-                            {% if c.meta %}
-                            <div class="flex flex-wrap items-center gap-1 mt-2">
-                                {% for m in c.meta if m %}
-                                <span class="text-[10px] font-semibold text-slate-500 bg-slate-100 rounded px-1.5 py-0.5 truncate max-w-[130px]">{{ m }}</span>
-                                {% endfor %}
-                                {% if c.when %}<span class="text-[10px] font-semibold text-slate-400">{{ c.when }}</span>{% endif %}
-                                {% if c.value %}<span class="text-[10px] font-bold text-emerald-600">${{ '{:,.0f}'.format(c.value/100) }}</span>{% endif %}
+                    {% if call_list %}
+                    <ul class="divide-y divide-slate-100">
+                        {% for lead in call_list %}
+                        <li class="px-5 py-4 hover:bg-slate-50 transition-colors">
+                            <div class="flex flex-wrap items-start justify-between gap-3">
+                                <div class="min-w-0 flex-1">
+                                    <div class="flex flex-wrap items-center gap-2">
+                                        <a href="/leads/{{ lead.id }}" class="text-sm font-bold text-slate-900 hover:text-indigo-600 truncate">{{ lead.name }}</a>
+                                        <span class="text-[10px] font-bold uppercase tracking-wider rounded-full px-2 py-0.5
+                                            {% if lead.action == 'respond' %}bg-emerald-100 text-emerald-700
+                                            {% elif lead.action == 'follow_up' %}bg-amber-100 text-amber-700
+                                            {% else %}bg-indigo-100 text-indigo-700{% endif %}">{{ lead.action_label }}</span>
+                                        {% if lead.value_cents %}
+                                        <span class="text-[11px] font-bold text-emerald-600" title="Declared value on the permit. Not our quote.">{{ lead.value_cents | money }}</span>
+                                        {% endif %}
+                                    </div>
+                                    {% if lead.address %}
+                                    <div class="text-xs text-slate-500 mt-1 truncate">{{ lead.address }}</div>
+                                    {% endif %}
+                                    <div class="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1.5 text-xs">
+                                        {% if lead.phone %}
+                                        <a href="tel:{{ lead.phone | replace(' ', '') | replace('(', '') | replace(')', '') | replace('-', '') }}" class="font-bold text-indigo-600 hover:text-indigo-800">{{ lead.phone }}</a>
+                                        {% endif %}
+                                        {% if lead.email %}
+                                        <a href="mailto:{{ lead.email }}" class="text-slate-600 hover:text-indigo-600 truncate max-w-[240px]">{{ lead.email }}</a>
+                                        {% endif %}
+                                        {% if lead.project_type %}<span class="text-slate-400">{{ lead.project_type }}</span>{% endif %}
+                                        {% if lead.source %}<span class="text-slate-300">· {{ lead.source }}</span>{% endif %}
+                                    </div>
+                                </div>
+                                <div class="flex items-center gap-2 shrink-0">
+                                    {% if lead.phone %}
+                                    <a href="tel:{{ lead.phone | replace(' ', '') | replace('(', '') | replace(')', '') | replace('-', '') }}"
+                                       class="px-3 py-2 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg">Call</a>
+                                    {% elif lead.email %}
+                                    <a href="mailto:{{ lead.email }}"
+                                       class="px-3 py-2 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg">Email</a>
+                                    {% endif %}
+                                    <form method="POST" action="/api/leads/{{ lead.id }}/touch">
+                                        <input type="hidden" name="channel" value="{% if lead.phone %}phone{% else %}email{% endif %}">
+                                        <input type="hidden" name="detail" value="Touched from pipeline call list">
+                                        <button type="submit" class="px-3 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-200 hover:border-emerald-300 hover:text-emerald-700 rounded-lg">Log touch</button>
+                                    </form>
+                                </div>
                             </div>
-                            {% endif %}
-                        </article>
+                        </li>
                         {% endfor %}
+                    </ul>
+                    {% else %}
+                    <div class="px-6 py-12 text-center">
+                        <p class="font-bold text-slate-700">No one is waiting on a call.</p>
+                        <p class="text-sm text-slate-500 mt-1">Permits are the supply. Open the permits lane and work the newest doors, or find contact details for address-only leads.</p>
+                        <div class="flex flex-wrap justify-center gap-2 mt-4">
+                            <a href="/leads?lane=permits" class="px-4 py-2.5 text-sm font-bold text-white bg-slate-900 rounded-xl">Work permits</a>
+                            <a href="/leads" class="px-4 py-2.5 text-sm font-semibold text-slate-700 bg-white border border-slate-200 rounded-xl">Open queue</a>
+                        </div>
+                    </div>
+                    {% endif %}
+                </div>
 
-                        {% if not col.cards %}
-                        <p class="text-[11px] text-slate-400 text-center py-6 px-2">Empty</p>
-                        {% elif col.hidden %}
-                        <p class="text-[11px] font-semibold text-slate-500 text-center py-2 px-2 border-t border-slate-200 pt-2">
-                            Showing {{ col.shown }} of {{ col.count }} —
-                            <a href="/leads?lane=permits&amp;status={{ col.key.split(':')[1] }}{% if g.stream == 'leads' or g.stream == 'backlog' %}&amp;q={% endif %}"
-                               class="underline hover:text-indigo-600">see the other {{ col.hidden }}</a>
-                        </p>
-                        {% endif %}
+                {# Enrichment is a real provider call with a real cost. Make that
+                   explicit so nobody clicks it twice out of impatience. #}
+                <div class="mt-4 bg-white rounded-2xl border border-slate-200 p-4">
+                    <div class="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                            <h3 class="text-sm font-bold text-slate-900">Need more numbers?</h3>
+                            <p class="text-xs text-slate-500 mt-0.5">
+                                Looks up owner phone/email for up to 10 address-only leads via Skip Sherpa. One credit per address; cached addresses are free.
+                            </p>
+                        </div>
+                        <button type="button" id="enrich-btn"
+                                class="px-4 py-2.5 text-sm font-bold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 rounded-xl transition-colors">
+                            Find contacts
+                        </button>
+                    </div>
+                    <div id="enrich-out" class="hidden mt-3 bg-slate-50 rounded-xl border border-slate-200 p-3"></div>
+                </div>
+            </div>
+
+            {# ── Funnel + supply ───────────────────────────────────────── #}
+            <div class="space-y-6">
+                <div class="bg-white rounded-3xl border border-slate-200 p-5">
+                    <h2 class="text-lg font-black text-slate-900">Funnel</h2>
+                    <p class="text-xs text-slate-500 mb-4">Every lead in exactly one canonical stage.</p>
+                    <div class="space-y-3">
+                        {% for row in stage_rows %}
+                        <a href="/leads?status={{ row.key }}{% if row.key in ('won', 'lost') %}&amp;closed=1{% endif %}" class="block group">
+                            <div class="flex items-center justify-between text-xs mb-1">
+                                <span class="font-bold text-slate-700 group-hover:text-indigo-600">{{ row.label }}</span>
+                                <span class="font-black text-slate-900">{{ row.count }}</span>
+                            </div>
+                            <div class="h-2.5 rounded-full bg-slate-100 overflow-hidden">
+                                <div class="h-full rounded-full
+                                    {% if row.key == 'won' %}bg-emerald-500
+                                    {% elif row.key == 'lost' %}bg-slate-300
+                                    {% elif row.key == 'quoted' %}bg-amber-500
+                                    {% elif row.key == 'engaged' %}bg-indigo-500
+                                    {% else %}bg-slate-500{% endif %}"
+                                     style="width: {{ row.pct }}%"></div>
+                            </div>
+                        </a>
+                        {% endfor %}
                     </div>
                 </div>
-                {% endfor %}
+
+                <div class="bg-white rounded-3xl border border-slate-200 p-5">
+                    <div class="flex items-start justify-between gap-3">
+                        <div>
+                            <h2 class="text-lg font-black text-slate-900">Permit supply</h2>
+                            <p class="text-xs text-slate-500">Real, open, residential doors.</p>
+                        </div>
+                        <a href="/leads?lane=permits" class="text-xs font-bold text-indigo-600 hover:text-indigo-800 shrink-0">Open →</a>
+                    </div>
+                    <div class="grid grid-cols-2 gap-3 mt-4">
+                        <div class="rounded-xl bg-slate-50 border border-slate-100 p-3">
+                            <div class="text-2xl font-black text-slate-900">{{ permits.actionable_doors }}</div>
+                            <div class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Doors</div>
+                        </div>
+                        <div class="rounded-xl bg-slate-50 border border-slate-100 p-3">
+                            <div class="text-2xl font-black text-emerald-600">{{ permits.untouched_doors }}</div>
+                            <div class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Untouched</div>
+                        </div>
+                    </div>
+                    {% if permits.by_city %}
+                    <div class="mt-4 space-y-1.5">
+                        {% for city in permits.by_city[:4] %}
+                        <div class="flex items-center justify-between text-xs">
+                            <span class="text-slate-600">{{ city.city }}</span>
+                            <span class="font-bold text-slate-900">{{ city.doors }} doors</span>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+                    {% if permit_status.last_run %}
+                    <p class="text-[11px] text-slate-400 mt-4 pt-3 border-t border-slate-100">
+                        Last scan {{ permit_status.last_run }} · +{{ permit_status.added }} permits
+                        {% if permit_status.error %}<span class="font-bold text-amber-700"> · {{ permit_status.error }}</span>{% endif %}
+                    </p>
+                    {% endif %}
+                </div>
+
+                <div class="bg-white rounded-3xl border border-slate-200 p-5">
+                    <h2 class="text-sm font-black uppercase tracking-wider text-slate-500">Where the work comes from</h2>
+                    <div class="mt-3 space-y-2">
+                        {% for s in sources %}
+                        <div class="flex items-center justify-between text-xs">
+                            <span class="text-slate-600 truncate">{{ s.source }}</span>
+                            <span class="text-slate-400 shrink-0 ml-2">{{ s.reachable }} reachable / {{ s.c }} open</span>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
             </div>
         </div>
-        {% endfor %}
-
-        {% if not total_cards %}
-        <div class="rounded-2xl bg-white border border-slate-200 px-6 py-10 text-center">
-            <p class="font-bold text-slate-700">Nothing in the pipeline yet.</p>
-            <p class="text-sm text-slate-500 mt-1">
-                Permits land here automatically from the Virginia Beach and Norfolk open-data feeds.
-                Hit “Scan now” on the permits lane to pull the latest.
-            </p>
-            <a href="/leads?lane=permits" class="inline-block mt-4 px-4 py-2.5 text-sm font-semibold text-white bg-slate-900 rounded-xl">Open permits</a>
-        </div>
-        {% endif %}
-
-        {% if permit_status.last_run %}
-        <p class="text-xs text-slate-400">Last permit scan {{ permit_status.last_run }} · +{{ permit_status.added }} found{% if permit_status.error %} · <span class="font-bold text-amber-700">{{ permit_status.error }}</span>{% endif %}</p>
-        {% endif %}
     </div>
 </section>
 {% endblock %}
 
 {% block scripts %}
 {% include "_shell_script.html" %}
-<script>
-(function () {
-  const board = document.currentScript.closest('section') || document;
-
-  function post(stream, id, status) {
-    const body = new URLSearchParams({stream: stream, item_id: id, status: status});
-    return fetch('/api/pipeline/move', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest'},
-      body: body
-    });
-  }
-
-  let dragging = null;
-
-  board.querySelectorAll('article[draggable="true"]').forEach(function (card) {
-    card.addEventListener('dragstart', function (e) {
-      dragging = card;
-      card.classList.add('opacity-40');
-      e.dataTransfer.effectAllowed = 'move';
-      // Firefox requires data to be set for the drag to start at all.
-      e.dataTransfer.setData('text/plain', card.dataset.id);
-    });
-    card.addEventListener('dragend', function () {
-      card.classList.remove('opacity-40');
-      dragging = null;
-    });
-  });
-
-  board.querySelectorAll('[data-stream][data-status]').forEach(function (col) {
-    const slot = col.querySelector('.cardslot');
-
-    col.addEventListener('dragover', function (e) {
-      e.preventDefault();
-      e.dataTransfer.dropEffect = 'move';
-      col.classList.add('ring-2', 'ring-indigo-400');
-    });
-    col.addEventListener('dragleave', function () {
-      col.classList.remove('ring-2', 'ring-indigo-400');
-    });
-    col.addEventListener('drop', function (e) {
-      e.preventDefault();
-      col.classList.remove('ring-2', 'ring-indigo-400');
-      if (!dragging) return;
-
-      var stream = col.dataset.stream;
-      var status = col.dataset.status;
-      // Same column, same stream, nothing to do.
-      if (dragging.dataset.stream !== stream || dragging.closest('[data-status]') === col) return;
-
-      var before = dragging.dataset.id;
-      slot.appendChild(dragging);
-      post(stream, before, status).then(function (res) {
-        if (!res.ok) location.reload();
-      }).catch(function () { location.reload(); });
-    });
-  });
-})();
-</script>
 {% endblock %}
