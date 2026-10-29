@@ -173,7 +173,9 @@ Self Client cannot do redirects; it must be a Server-based client).
 
 ## Account map — audited 2026-10-20 (supersedes AGENTS.md's Zen section)
 
-- **OpenAI** — funded again. New project key (`sk-proj-x-Dy…`) in Railway; the old
+- **OpenAI** — key rotated AGAIN 2026-10-29 (suffix `_v0A`) after the `sk-proj-x-Dy…`
+  key was rejected with 401 for at least a day (phone bot, chat and Copilot all
+  dark). Verified live: chat and `/vapi/llm` answer. Earlier history: new project key (`sk-proj-x-Dy…`) in Railway; the old
   key was retired with `credit_balance_exhausted`. Copilot is back on OpenAI
   (`COPILOT_MODEL=gpt-4o-mini`, `COPILOT_BASE_URL` deleted). Voice and web_search
   share this key. Verified with a live tool call.
