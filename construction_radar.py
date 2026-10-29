@@ -1,3 +1,4 @@
+import brand
 import hashlib
 import os
 import re
@@ -235,7 +236,7 @@ def outreach_draft(match):
     )
     return (
         f"Hey {match.get('author', '')} — saw your post in r/{match.get('subreddit', '')} about "
-        f"'{match.get('title', '')[:120]}'. I'm with Buildstack Construction, a licensed & insured general "
+        f"'{match.get('title', '')[:120]}'. I'm with {brand.name()}, a licensed & insured general "
         f"contractor in the Williamsburg–Hampton Roads area — we handle renovations, roofs, additions, and "
         f"everything in between, usually same-week walkthroughs with free estimates."
         f"{funding_note} Happy to help — no pressure at all."

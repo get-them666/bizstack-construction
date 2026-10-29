@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% set co = company() %}
 {% block title %}Contact | {{ co.name }} — We answer 24/7{% endblock %}
-{% block meta %}<meta name="description" content="Contact Buildstack Construction Co. by phone, text, or email. We answer 24/7 and serve {{ co.service_area }}.">{% endblock %}
+{% block meta %}<meta name="description" content="Contact {{ co.name }} by phone, text, or email. We answer 24/7 and serve {{ co.service_area }}.">{% endblock %}
 
 {% block content %}
 <section class="bg-gradient-to-br from-slate-900 to-indigo-900 text-white">

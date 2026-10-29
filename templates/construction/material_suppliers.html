@@ -51,9 +51,56 @@
       {% endfor %}
     </table>
     {% else %}
-    <p class="muted">No suppliers registered yet. Import a price sheet on
-      <a href="/materials">the price book</a>, or connect an API below.</p>
+    <p class="muted">No suppliers registered yet. Add one below — a pasted price
+      sheet is enough, and it goes live on the customer picker immediately.</p>
     {% endif %}
+  </section>
+
+  <section class="card">
+    <h2>Add a supplier &amp; load prices</h2>
+    <p class="muted">
+      Export a price sheet from the yard portal (Builders FirstSource, Kempsville,
+      Richards, your ABC branch, 84 Lumber…) as CSV or TSV and paste or upload it
+      here. Columns are matched by name — <code>item number / SKU</code>,
+      <code>description</code>, <code>price</code>, <code>UOM</code> in any order.
+      Or give a URL that returns CSV and it will be re-fetched on every Sync.
+    </p>
+    <form method="post" action="/materials/suppliers/add" enctype="multipart/form-data" class="space-y-4">
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <label class="block text-sm font-semibold text-slate-700">Supplier name
+          <input name="name" required placeholder="Builders FirstSource — Chesapeake" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-200 text-sm font-normal">
+        </label>
+        <label class="block text-sm font-semibold text-slate-700">Category <span class="font-normal text-slate-400">(optional)</span>
+          <input name="category" placeholder="lumber, roofing, drywall…" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-200 text-sm font-normal">
+        </label>
+        <label class="block text-sm font-semibold text-slate-700">Default unit
+          <input name="default_uom" value="each" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-200 text-sm font-normal">
+        </label>
+      </div>
+      <label class="block text-sm font-semibold text-slate-700">Paste the price sheet
+        <textarea name="sheet_text" rows="8" placeholder="Item Number,Description,UOM,Price&#10;2X4-8-SPF,2x4x8 SPF stud,each,4.28&#10;OSB-716,7/16 OSB 4x8,sheet,14.95" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-200 text-sm font-mono font-normal"></textarea>
+      </label>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <label class="block text-sm font-semibold text-slate-700">…or upload the file
+          <input type="file" name="sheet_file" accept=".csv,.tsv,.txt" class="mt-1 block w-full text-sm font-normal">
+        </label>
+        <label class="block text-sm font-semibold text-slate-700">…or a feed URL that returns CSV
+          <input name="feed_url" type="url" placeholder="https://yard.example.com/pricelist.csv" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-200 text-sm font-normal">
+        </label>
+      </div>
+      <details class="text-sm text-slate-600">
+        <summary class="cursor-pointer font-semibold">Feed authentication (only if the URL needs it)</summary>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-2">
+          <input name="feed_auth_header" placeholder="Header name, e.g. Authorization" class="px-3 py-2 rounded-xl border border-slate-200 text-sm">
+          <input name="feed_token" placeholder="Header value / token" class="px-3 py-2 rounded-xl border border-slate-200 text-sm">
+        </div>
+      </details>
+      <label class="flex items-center gap-2 text-sm text-slate-700">
+        <input type="checkbox" name="public_ok" value="1" checked>
+        Publish to the customer picker (prices are shown with the markup applied; a cost is never displayed)
+      </label>
+      <button class="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-bold">Load prices</button>
+    </form>
   </section>
 
   <section class="card">
@@ -75,9 +122,10 @@
     {% endfor %}
     <p class="muted">
       Builders FirstSource, Kempsville and Richards have no API. For those,
-      export a price sheet from the yard portal and paste it on
-      <a href="/materials">the price book</a> &mdash; that path already works and
-      needs no credentials.
+      export a price sheet from the yard portal and load it in the form above
+      &mdash; that path needs no credentials. (The <a href="/materials">price book</a>
+      is a different table: it feeds the phone assistant's material answers, not
+      the customer picker.)
     </p>
   </section>
 

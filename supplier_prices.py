@@ -88,7 +88,23 @@ def _pick(row: dict, keys: tuple) -> str:
 
 
 # --- suppliers ---------------------------------------------------------------
-def ensure_schema(conn) -> None:
+_SCHEMA_READY = False
+
+
+def ensure_schema(conn, force: bool = False) -> None:
+    """Create/upgrade the two pricing tables. Runs the DDL once per process.
+
+    This used to run on every call, and material_picker.browse() calls it on
+    every public view of /materials-picker. Each ALTER TABLE ... ADD COLUMN IF
+    NOT EXISTS takes an ACCESS EXCLUSIVE lock even when there is nothing to
+    add, so a page view stalled behind any other connection that merely had
+    a transaction open on these tables (get_db() leaves one open after a
+    SELECT). The schema cannot change between calls inside one process, so
+    after the first success this is a no-op.
+    """
+    global _SCHEMA_READY
+    if _SCHEMA_READY and not force:
+        return
     with conn.cursor() as cur:
         cur.execute("""
             CREATE TABLE IF NOT EXISTS material_suppliers (
@@ -153,6 +169,7 @@ def ensure_schema(conn) -> None:
                 ON material_supplier_prices(supplier_id, observed_at DESC)
         """)
     conn.commit()
+    _SCHEMA_READY = True
 
 
 def list_suppliers(conn, company: str = "construction", include_disabled: bool = False) -> list[dict]:

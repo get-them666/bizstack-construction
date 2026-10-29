@@ -20,6 +20,7 @@ so the wording is pinned by a test rather than left to whoever edits the form.
 
 from __future__ import annotations
 
+import brand
 import time
 
 import documents_service
@@ -180,7 +181,7 @@ def values_from_quote(quote: dict, lines: list[dict] | None = None) -> dict:
         "deposit_line": _money(deposit) if deposit else "None",
         "total_line": _money(total),
         "total_words": documents_service.amount_to_words(total),
-        "seller": "Buildstack Construction Co.",
+        "seller": brand.name(),
         "seller_phone": "757-908-7121",
         "item_count": f"{len(rows)} item(s)",
         "paid_line": _money(0),

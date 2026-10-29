@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% set co = company() %}
 {% block title %}About | {{ co.name }} — Licensed Local General Contractor{% endblock %}
-{% block meta %}<meta name="description" content="Buildstack Construction Co. is a licensed, insured general contractor serving {{ co.service_area }}. Meet the crew and our standards.">{% endblock %}
+{% block meta %}<meta name="description" content="{{ co.name }} is a licensed, insured general contractor serving {{ co.service_area }}. Meet the crew and our standards.">{% endblock %}
 
 {% block content %}
 <section class="bg-gradient-to-br from-slate-900 to-indigo-900 text-white">

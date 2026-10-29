@@ -209,7 +209,8 @@
                     <span class="text-white font-bold text-lg">{{ co.name }}</span>
                 </div>
                 <p class="text-slate-400 max-w-md">Licensed, bonded &amp; insured general contractor serving {{ co.service_area }}. Whole-home renovations, additions, and repairs — done right the first time.</p>
-                {% if co.license %}<p class="mt-2 text-xs text-slate-500">VA Contractor License #{{ co.license }}</p>{% endif %}
+                <p class="mt-2 text-xs text-slate-500">{{ co.entity_line }} · {{ co.address }}</p>
+                {% if co.license %}<p class="mt-1 text-xs text-slate-500">VA Contractor License #{{ co.license }}</p>{% endif %}
                 <p class="mt-4 text-slate-400">
                     <a href="tel:{{ co.phone_e164 }}" class="font-semibold text-white hover:text-indigo-300">{{ co.phone }}</a> ·
                     <a href="mailto:{{ co.email }}" class="hover:text-indigo-300">{{ co.email }}</a>

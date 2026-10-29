@@ -5,6 +5,7 @@ USPS has no print-and-mail API. It sells postage; the printing, the envelope,
 the window addressing and the induction into the mail stream are what you pay
 someone else for. Lob is the one with an API for it, and its letter format is
 8.5x11 -- which is exactly what mail_letters.py already renders, so the PDFs
+import brand
 from that script go in as-is.
 
 Two things this refuses to do, both of which cost money:
@@ -47,7 +48,7 @@ LOB_LETTERS = "https://api.lob.com/v1/letters"
 # back to it. Confirmed by the owner: 701 Dana Dr, Chesapeake, VA 23321.
 FROM = {
     "name": os.getenv("LOB_FROM_NAME", "Shaun O'Leary"),
-    "company": os.getenv("LOB_FROM_COMPANY", "Buildstack Construction"),
+    "company": os.getenv("LOB_FROM_COMPANY", brand.name()),
     "address_line1": os.getenv("LOB_FROM_ADDRESS1", "701 Dana Dr"),
     "city": os.getenv("LOB_FROM_CITY", "Chesapeake"),
     "state": os.getenv("LOB_FROM_STATE", "VA"),

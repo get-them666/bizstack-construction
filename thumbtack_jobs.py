@@ -37,6 +37,7 @@ Usage
     python3 thumbtack_jobs.py --dry-run
 """
 
+import brand
 import argparse
 import email
 import json
@@ -52,7 +53,7 @@ MAIL_ROOT = os.path.expanduser("~/Library/Mail/V10")
 DEFAULT_OUT = os.path.expanduser("~/Thumbtack Jobs")
 
 BUSINESS = {
-    "name": "Buildstack Construction",
+    "name": brand.name(),
     "phone": "(757) 908-7121",
     "email": "hello@bizstackperks.com",
     "site": "https://construction.bizstackperks.com",

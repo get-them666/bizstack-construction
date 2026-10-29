@@ -1,3 +1,4 @@
+import brand
 import os
 
 import requests
@@ -125,7 +126,7 @@ class SignalWireService:
     def send_estimate_link(self, to: str, link: str) -> bool:
         """Text a secure link from Buildstack Construction (deposit checkout, estimate, or scheduling page)."""
         body = (
-            "Hi! Here is the secure link from Buildstack Construction Co.: "
+            f"Hi! Here is the secure link from {brand.name()}: "
             f"{link}. Reply here or call (757) 908-7121 anytime and we'll help."
         )
         return self.send_sms(to, body)

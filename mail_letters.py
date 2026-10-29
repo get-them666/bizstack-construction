@@ -16,6 +16,7 @@ every letter.
     python mail_letters.py --out outbox --id 42 --id 43   # specific leads
 """
 
+import brand
 import argparse
 import csv
 import os
@@ -30,7 +31,7 @@ from documents_service import _pdf_text
 
 BRAND = {
     "name": os.getenv("LETTER_BRAND_NAME", "BizStack"),
-    "legal": os.getenv("LETTER_BRAND_LEGAL", "Buildstack Construction"),
+    "legal": os.getenv("LETTER_BRAND_LEGAL", brand.name()),
     # Full contact block on the letter: phone, email, website and return
     # address, which is also what a homeowner needs in order to call back.
     # 757-908-7121 is the business line on both live sites. 252-665-5891 is the

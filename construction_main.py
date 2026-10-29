@@ -1,4 +1,4 @@
-"""Buildstack Construction Co. — FastAPI web app.
+"""BuildStack Construction LLC — FastAPI web app.
 
 Sister company to Broom Service (short-term rental operations). This site is a
 licensed general contractor's marketing + lead engine:
@@ -47,6 +47,7 @@ from email.message import EmailMessage
 
 from con_ai_agent import BusinessAIAgent, ModelUnavailable, ToolBudgetExhausted
 from loan_outreach import start_outreach_tasks
+import brand
 import copilot_memory
 import lead_pipeline
 import outreach_queue
@@ -310,7 +311,13 @@ def contacts_at_addresses(cur, rows, id_key: str = "id",
 # --- Company identity (env-driven so both brands stay configurable) ---------
 def company() -> dict:
     return {
-        "name": os.getenv("COMPANY_NAME", "Buildstack Construction Co."),
+        # Registered 2026-10-28 as BuildStack Construction LLC (SCC 12097281);
+        # brand.py is the single source for the name and entity details.
+        "name": brand.name(),
+        "short_name": brand.short_name(),
+        "entity_id": brand.entity_id(),
+        "entity_line": brand.entity_line(),
+        "address": brand.mailing_address(),
         "phone": os.getenv("COMPANY_PHONE", "+1 (757) 908-7121"),
         "phone_e164": os.getenv("VAPI_PHONE", "+17579087121"),
         "email": os.getenv("COMPANY_EMAIL", "hello@bizstackperks.com"),
@@ -811,7 +818,7 @@ async def lifecycle(app: FastAPI):
         close_db_pool()
 
 
-app = FastAPI(title="Buildstack Construction Co.", lifespan=lifecycle)
+app = FastAPI(title=brand.name(), lifespan=lifecycle)
 
 
 @app.exception_handler(Exception)
@@ -2555,7 +2562,7 @@ async def submit_lead(
             "Street": address,
             "Description": description,
             "Lead_Source": src,
-            "Company": "BuildStack Construction",
+            "Company": brand.name(),
         })
     except Exception as e:
         print(f"⚠️ submit-lead zoho sync failed: {e}", flush=True)
@@ -2709,7 +2716,7 @@ async def finance_submit(
                 "Street": address,
                 "Description": message,
                 "Lead_Source": "financing",
-                "Company": "BuildStack Construction",
+                "Company": brand.name(),
             })
         except Exception as e:
             print(f"[finance] zoho sync failed: {e}", flush=True)
@@ -4068,6 +4075,70 @@ async def materials_suppliers(request: Request, db=Depends(get_db)):
     })
 
 
+@app.post("/materials/suppliers/add")
+async def materials_supplier_add(request: Request, name: str = Form(""),
+                                 category: str = Form(""), default_uom: str = Form("each"),
+                                 public_ok: str = Form(""), feed_url: str = Form(""),
+                                 feed_auth_header: str = Form(""), feed_token: str = Form(""),
+                                 sheet_text: str = Form(""),
+                                 sheet_file: UploadFile | None = File(None),
+                                 db=Depends(get_db)):
+    """Register a supplier and load its prices in one step.
+
+    This is the form that was missing. supplier_prices could parse a yard's
+    CSV/TSV export and publish it to the customer picker since the module was
+    written, but nothing on any page reached register_sheet_supplier() -- the
+    only UI was a Sync button for suppliers that did not exist, and the help
+    text pointed at /materials/import, which writes materials_catalog (the
+    phone bot's table), not material_supplier_prices (the picker's). So the
+    public picker stayed empty no matter what was pasted where.
+
+    Two ways in: a pasted or uploaded price sheet (kind=manual, loaded now),
+    or a feed URL that returns CSV (kind=feed, fetched now and on every Sync).
+    """
+    require_admin(request)
+    supplier_prices.ensure_schema(db)
+    name = (name or "").strip()
+    if not name:
+        return RedirectResponse(url="/materials/suppliers?error=supplier name is required",
+                                status_code=status.HTTP_303_SEE_OTHER)
+    text = (sheet_text or "").strip()
+    if sheet_file is not None and getattr(sheet_file, "filename", ""):
+        try:
+            raw = await sheet_file.read()
+            text = raw.decode("utf-8-sig", errors="replace").strip() or text
+        except Exception as e:
+            return RedirectResponse(url=f"/materials/suppliers?error=could not read file: {str(e)[:120]}",
+                                    status_code=status.HTTP_303_SEE_OTHER)
+    is_public = (public_ok or "").lower() in ("1", "on", "true", "yes")
+    try:
+        if text:
+            res = supplier_adapters.register_sheet_supplier(
+                db, name, text, category=category, default_uom=default_uom or "each",
+                public_ok=is_public)
+        elif (feed_url or "").strip():
+            sid = supplier_prices.upsert_supplier(
+                db, name, kind="feed", feed_url=feed_url, default_uom=default_uom or "each",
+                feed_auth_header=feed_auth_header, feed_token=feed_token,
+                public_ok=is_public, category=category)
+            res = supplier_prices.sync_supplier(db, sid)
+        else:
+            return RedirectResponse(
+                url="/materials/suppliers?error=paste or upload a price sheet, or give a feed URL",
+                status_code=status.HTTP_303_SEE_OTHER)
+    except Exception as e:
+        return RedirectResponse(url=f"/materials/suppliers?error={str(e)[:200]}",
+                                status_code=status.HTTP_303_SEE_OTHER)
+    loaded = res.get("priced", res.get("rows", 0))
+    notice = f"{name}: {loaded} priced item(s) loaded"
+    if res.get("unpriced"):
+        notice += f", {res['unpriced']} without a price"
+    if is_public and loaded:
+        notice += " — now live on /materials-picker"
+    return RedirectResponse(url=f"/materials/suppliers?notice={notice}",
+                            status_code=status.HTTP_303_SEE_OTHER)
+
+
 @app.post("/materials/suppliers/sync")
 async def materials_supplier_sync(request: Request, supplier_id: int = Form(0),
                                   db=Depends(get_db)):
@@ -4974,7 +5045,7 @@ def _owner_draft_body(owner: str, address: str, property_data: dict) -> str:
         "and wanted to introduce myself in case you need help with a renovation "
         f"or repair.\n\n{listed_property}"
         "If this is not relevant, let me know and I won't follow up.\n\n"
-        "Thanks,\nBuildstack Construction"
+        f"Thanks,\n{brand.short_name()}"
     )
 
 
@@ -5256,7 +5327,7 @@ async def draft_email_route(lead_id: int, request: Request, db=Depends(get_db)):
 
     owner = (lead.get("name") or "").strip() or "there"
     first = owner.split()[0] if owner else "there"
-    subject = "Hello from Buildstack Construction"
+    subject = f"Hello from {brand.short_name()}"
     body = (
         f"Hi {first},\n\n"
         f"I hope this message finds you well! I'm reaching out from Buildstack "
@@ -5266,7 +5337,7 @@ async def draft_email_route(lead_id: int, request: Request, db=Depends(get_db)):
         f"Feel free to reply to this email or give us a call at "
         f"+1 (757) 908-7121 to discuss your ideas!\n\n"
         f"Best regards,\n"
-        f"Buildstack Construction"
+        f"{brand.short_name()}"
     )
     with db.cursor() as cur:
         cur.execute("UPDATE leads SET draft_reply = %s WHERE id = %s;",
@@ -8606,7 +8677,7 @@ async def website_lead_webhook(request: Request, db=Depends(get_db)):
                     "Street": address,
                     "Description": description,
                     "Lead_Source": source,
-                    "Company": "BuildStack Construction",
+                    "Company": brand.name(),
                 })
             except Exception as e:
                 print(f"⚠️ webhook lead zoho sync failed: {e}", flush=True)
@@ -9764,7 +9835,7 @@ def _broadcast_ws(message: dict):
 # safety orientation module covers OSHA implementing rules (29 CFR 1926) and site
 # safety requirements. It is informational company training — NOT official OSHA-10/30
 # certification, which only an authorized OSHA trainer can issue.
-TRAINING_DISCLAIMER = ("This is Buildstack Construction company training covering OSHA "
+TRAINING_DISCLAIMER = (f"This is {brand.short_name()} company training covering OSHA "
                        "implementing rules (29 CFR 1926) and site safety requirements. "
                        "It is informational and does NOT certify or replace official "
                        "OSHA-10/OSHA-30 training, which only an authorized OSHA trainer can provide.")

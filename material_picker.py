@@ -74,8 +74,25 @@ def customer_price(cost_cents: int, salt: str = "",
     if m <= 0:
         m = markup_pct(order_markup)
     raw = cost_cents * (1 + m)
-    step = max(100, PRICE_STEP_CENTS)
-    return int(-(-raw // step) * step)
+    return int(-(-raw // _step_for(raw)) * _step_for(raw))
+
+
+def _step_for(raw_cents: float) -> int:
+    """Rounding step scaled to the price.
+
+    A flat $5 step did what it was meant to on a $340 window, but it turned a
+    $4.28 stud into $10.00 -- a 134% effective markup that reads as gouging
+    next to a big-box shelf price. Cents-level jitter per line already stops
+    the cost being solved from two items, so the step only has to make the
+    figure look like a retail price: quarters under $10, dollars under $50,
+    then the configured step (default $5).
+    """
+    top = max(100, PRICE_STEP_CENTS)
+    if raw_cents < 1000:
+        return min(25, top)
+    if raw_cents < 5000:
+        return min(100, top)
+    return top
 
 
 def browse(search: str = "", category: str = "") -> list[dict]:

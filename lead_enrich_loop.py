@@ -28,6 +28,7 @@ first, Skip Sherpa last and only when a cheaper step found no channel, and
 never without a full ZIP.
 """
 
+import brand
 import os
 import threading
 import time
@@ -41,7 +42,7 @@ import data_enrichment
 # The standard first-touch note. Single source of truth: the Copilot's
 # draft_lead_email handler builds its body from this function too, so the
 # wording an owner sees staged by hand and staged by this loop is one copy.
-SUBJECT = "Hello from Buildstack Construction"
+SUBJECT = f"Hello from {brand.short_name()}"
 
 
 def first_touch_draft(name, address) -> tuple:
@@ -59,7 +60,7 @@ def first_touch_draft(name, address) -> tuple:
         f"Feel free to reply to this email or give us a call at "
         f"+1 (757) 908-7121 to discuss your ideas!\n\n"
         f"Best regards,\n"
-        f"Buildstack Construction"
+        f"{brand.short_name()}"
     )
     return SUBJECT, body
 

@@ -275,7 +275,10 @@ def _load_owner_draft_body():
     import pathlib
     src = pathlib.Path(__file__).resolve().parent / APP_MODULE
     text = src.read_text()
-    ns = {}
+    # The sign-off reads the registered company name from brand.py, which has
+    # no database dependency, so it is the one module global supplied here.
+    import brand
+    ns = {"brand": brand}
     # _owner_draft_body only needs its own body, not the module globals. Slice to
     # the next top-level def, not just @app.post -- on the construction site the
     # settings route is a plain @app.get and would otherwise be exec'd in too.

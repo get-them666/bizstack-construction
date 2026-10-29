@@ -1,5 +1,42 @@
 # Memory
 
+## The legal entity is BuildStack Construction LLC (since 2026-10-28)
+
+Organized with the Virginia State Corporation Commission on 2026-10-28:
+**BuildStack Construction LLC**, SCC entity ID **12097281**, filing no.
+26102810636640, registered to Shaun David OLeary at 701 Dana Dr, Chesapeake,
+VA 23321 (the owner supplied the certificate, order and $100 receipt on
+2026-10-29). Capital S in "BuildStack" — the registered spelling. Before this
+the business traded as "Buildstack Construction Co." (sole proprietorship,
+EIN 20-1755044).
+
+`brand.py` is the single source for the name (`name()`, `short_name()`,
+`entity_id()`, `entity_line()`, `mailing_address()`), defaulting to the LLC
+and overridable by `COMPANY_NAME` / `COMPANY_ENTITY_ID` /
+`SENDER_PHYSICAL_ADDRESS` — all three set to the LLC in Railway on
+2026-10-29, along with `SMTP_NAME`. Every customer-facing string (emails,
+SMS, Stripe product, PDFs, quote seller, Zoho company, knowledge files,
+templates) reads from it. `short_name()` ("BuildStack Construction") is for
+greetings and subject lines; the legal page and footer carry `entity_line()`.
+
+**Not changed, on purpose — owner decisions pending:**
+- **Lending material** (`SBA_7a_LOAN_PITCH.md`, `LOAN_OUTREACH_SEQUENCE.md`,
+  `build_loan_package.py`, `docs/`, `send_today/LOAN_PACKAGE.pdf`) still
+  describes a sole proprietorship. An SBA application names a legal entity;
+  switching it is a loan decision (new EIN? new bank account? the PNC trail is
+  the owner's), not a find-and-replace.
+- **Stripe** account `acct_1UAeKoJ6MbAT3Jcc` is registered as an individual /
+  "BuildStack Construction". Business type must be changed to LLC in the
+  Dashboard (Settings → Business details) and will re-verify with the LLC's
+  EIN; payouts can pause during review.
+- **10DLC brand** `460486de-…` was registered with TCR as "Buildstack
+  Construction Co.", PRIVATE_PROFIT, EIN 20-1755044. If the LLC has a new EIN
+  the brand must be updated or re-registered, or the pending campaign will
+  fail carrier vetting on an EIN/name mismatch.
+- **Vapi** assistant `80156d94-…` `firstMessage` lives in the Vapi dashboard
+  and still says the old name; the bot's prompt (knowledge files) is updated.
+- `CONTRACTOR_LICENSE` is still unset (owner chose "skip for now" 2026-10-29).
+
 ## Project facts that aren't obvious from the code
 
 **Construction and Hosts are now two separate companies.** On 2026-10-11 the

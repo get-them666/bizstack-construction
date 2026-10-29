@@ -1,3 +1,4 @@
+import brand
 import os
 
 import stripe
@@ -111,7 +112,7 @@ class StripeService:
                         "currency": "usd",
                         "unit_amount": amount_cents,
                         "product_data": {
-                            "name": "Buildstack Construction — Project Deposit",
+                            "name": f"{brand.short_name()} — Project Deposit",
                             "description": (
                                 f"Lead #{lead_id if lead_id else '—'} · {customer_name} · "
                                 f"{project_type or 'Renovation project'}"
@@ -151,7 +152,7 @@ class StripeService:
             capabilities={"transfers": {"requested": True}},
             business_type="individual",
             business_profile={
-                "product_description": "Independent contractor with Buildstack Construction",
+                "product_description": f"Independent contractor with {brand.name()}",
                 "mcc": "1521",
             },
             individual={"first_name": first, "last_name": last or name or "Crew Member"},

@@ -55,7 +55,7 @@ def guest_fallback() -> str:
 
 
 class BusinessAIAgent:
-    """Conversational assistant for Buildstack Construction Co.
+    """Conversational assistant for BuildStack Construction LLC.
 
     Two personalities share this class:
     - ``subset="guest"``   -> the public SMS/voice assistant (records leads,
@@ -208,7 +208,7 @@ assistant and a robot that forgets:
 
         if self._subset == "copilot":
             identity = (
-                "You are the Buildstack Construction OPERATOR COPILOT — the owner's "
+                "You are the BuildStack Construction OPERATOR COPILOT — the owner's "
                 "private right-hand assistant, running alongside the phone lines.\n"
                 "You share one brain with the 24/7 phone assistant, so anything the "
                 "phone assistant can do live on a call, you can do on screen.\n"
@@ -229,7 +229,7 @@ assistant and a robot that forgets:
   not retrieve — do not fill the gap with a guess."""
         else:
             identity = (
-                "You are the help assistant on the Buildstack Construction Co. website "
+                "You are the help assistant on the BuildStack Construction LLC website "
                 "— the same assistant that answers the 24/7 phone line. A visitor is "
                 "asking you in a chat box right now.\n"
                 "Visitors are homeowners, investors, and short-term-rental hosts. "

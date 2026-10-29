@@ -1,6 +1,7 @@
 """
 Zoho CRM integration - Leads, Contacts, Deals (Pipeline)
 """
+import brand
 import os
 from typing import Dict, Any, Optional, List
 try:
@@ -23,7 +24,7 @@ def upsert_lead(lead_data: Dict[str, Any]) -> Optional[Dict]:
         "Last_Name": " ".join(lead_data.get("name", "").split()[1:]) if lead_data.get("name") and len(lead_data.get("name", "").split()) > 1 else lead_data.get("name", "") or "Unknown",
         "Email": lead_data.get("email", ""),
         "Phone": lead_data.get("phone", ""),
-        "Company": lead_data.get("company_name") or "BuildStack Construction",
+        "Company": lead_data.get("company_name") or brand.name(),
         "Street": lead_data.get("address", ""),
         "City": lead_data.get("city", ""),
         "State": lead_data.get("state", ""),

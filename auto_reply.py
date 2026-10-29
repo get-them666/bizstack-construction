@@ -1,3 +1,4 @@
+import brand
 import os
 import re
 import json
@@ -108,7 +109,7 @@ def notify_owner_email(company_key, *, lead_id, name="", phone="", email="", ser
     return ok
 
 COMPANIES = {
-    "construction": {"name": "Buildstack Construction", "cta": "Call or text us at (757) 908-7121 anytime."},
+    "construction": {"name": brand.short_name(), "legal_name": brand.name(), "cta": "Call or text us at (757) 908-7121 anytime."},
 }
 
 
@@ -194,7 +195,7 @@ def _build_message(company_key, co_name, quote=None, **ctx):
             greeting,
             f"We noticed a recent permit for work at {address}" if address else "We came across your project recently,"
             + (f" ({service})" if service else ""),
-            "Buildstack Construction is available for an estimate"
+            f"{brand.short_name()} is available for an estimate"
             + quote_line
             + " We'd love to walk through it with you this week. Free, no obligation.",
         ]
@@ -1024,7 +1025,7 @@ def build_bid_inquiry(company_key, *, title="", solicitation="", contact_name=""
     sol = (solicitation or "").strip()
     ref_line = f"Solicitation {sol}" if sol else (title.strip() or "your recent opportunity")
     blurb = (
-        "Buildstack Construction is a licensed and insured general contractor serving Virginia "
+        f"{brand.name()} is a licensed and insured general contractor serving Virginia "
         "and North Carolina, specializing in residential and light-commercial remodeling, roofing, "
         "and specialty trade work."
     )
