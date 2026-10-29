@@ -19,7 +19,7 @@ No network: the model call is stubbed.
 """
 import pytest
 
-from con_ai_agent import BusinessAIAgent, ModelUnavailable
+from con_ai_agent import BusinessAIAgent, ModelUnavailable, guest_fallback
 
 
 class _Msg:
@@ -81,18 +81,38 @@ def test_copilot_raises_on_empty_credits(monkeypatch):
 
 
 def test_copilot_still_falls_back_on_other_errors(monkeypatch):
-    """Only billing is surfaced. A transient fault keeps the old behaviour so a
-    blip does not turn into a scary 503."""
+    """Only billing and auth are surfaced. A transient fault keeps the old
+    behaviour so a blip does not turn into a scary 503."""
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     out = _agent(RuntimeError("Error code: 500 - internal error")).process_conversation([], "hi")
-    assert "follow up" in out
+    assert out == guest_fallback()
+
+
+def test_copilot_raises_on_a_rejected_key(monkeypatch):
+    """2026-10-28: OPENAI_API_KEY was 401ing and the Copilot answered with the
+    customer fallback. A bad key is as fixable as an empty balance and must be
+    named, not hidden."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    exc = RuntimeError("Error code: 401 - Incorrect API key provided: sk-proj-****KmEA.")
+    with pytest.raises(ModelUnavailable) as raised:
+        _agent(exc).process_conversation([], "hello")
+    text = str(raised.value)
+    assert "OPENAI_API_KEY" in text, "must name the variable to rotate"
+    assert "401" in text
 
 
 def test_customer_assistant_keeps_its_fallback(monkeypatch):
-    """A homeowner texting in must get a polite answer, not an HTTP error."""
+    """A homeowner texting in must get a polite answer, not an HTTP error --
+    and not a promise. The old string said "our team will follow up", which
+    nobody could honour: nothing notifies the owner and no contact is captured.
+    """
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-    out = _agent(RuntimeError(QUOTA_ERRORS[0]), subset="guest").process_conversation([], "hi")
-    assert "follow up" in out
+    for exc in (RuntimeError(QUOTA_ERRORS[0]),
+                RuntimeError("Error code: 401 - invalid_api_key")):
+        out = _agent(exc, subset="guest").process_conversation([], "hi")
+        assert out == guest_fallback()
+        assert "follow up" not in out
+        assert "908-7121" in out, "must hand the visitor a channel that works"
 
 
 def test_endpoint_maps_it_to_503():

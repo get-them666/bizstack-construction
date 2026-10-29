@@ -25,7 +25,12 @@
     <meta property="og:title" content="{{ co.name }} | Licensed Renovation & Repair Contractor">
     <meta property="og:url" content="{{ request.base_url }}">
     <link rel="icon" href="/static/construction_favicon.svg" type="image/svg+xml">
-    <script src="https://cdn.tailwindcss.com"></script>
+    {# Static Tailwind build (see tailwind.config.js). Replaces the Play CDN,
+       which shipped ~400 KB of render-blocking JS and compiled the stylesheet
+       in the browser on every page view. Rebuild with `npm run css`. #}
+    <link rel="stylesheet" href="/static/css/tailwind.css?v={{ asset_version }}">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
     <script type="application/ld+json">
     {
@@ -270,9 +275,5 @@
     {% if site_theme_state().emoji %}
     <div aria-hidden="true" style="position:fixed;right:18px;bottom:14px;font-size:2rem;opacity:.35;pointer-events:none;z-index:40;transform:rotate(-8deg);">{{ site_theme_state().emoji }}</div>
     {% endif %}
-
-<script type="text/javascript">var $zoho=$zoho || {};
-// Paste your exact Zoho snippet text here
-</script>
 </body>
 </html>

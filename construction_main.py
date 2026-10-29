@@ -1220,10 +1220,26 @@ def _template_features(request: Request):
     return {}
 
 
+def _asset_version() -> str:
+    """Cache-buster for the built stylesheet: mtime of the file at boot.
+
+    Browsers cache /static aggressively, so a rebuilt tailwind.css would
+    otherwise sit behind a stale copy until the user hard-refreshed. Computed
+    once; the file only changes with a deploy, which restarts the process.
+    """
+    try:
+        return str(int(os.path.getmtime(os.path.join("static", "css", "tailwind.css"))))
+    except OSError:
+        return "0"
+
+
+ASSET_VERSION = _asset_version()
+
 templates.env.globals["current_actor"] = _template_actor
 templates.env.globals["current_features"] = _template_features
 templates.env.globals["site_theme_state"] = lambda: site_theme.state()
 templates.env.globals["company"] = company
+templates.env.globals["asset_version"] = ASSET_VERSION
 templates.env.globals["map_embed"] = _map_embed
 templates.env.globals["map_directions"] = _map_directions
 templates.env.globals["zoho_salesiq_widget"] = lambda: os.getenv("ZOHO_SALESIQ_WIDGET_CODE", "")
@@ -6407,6 +6423,12 @@ def _vapi_sse_response(text: str, model: str, completion_id: str) -> StreamingRe
                              headers={"Cache-Control": "no-cache", "Connection": "keep-alive"})
 
 
+VOICE_MODEL_DOWN_TEXT = (
+    "I'm sorry, I'm having trouble on my end right now. Please try calling back "
+    "in a few minutes, or request a free quote on our website and we'll call you."
+)
+
+
 @app.api_route("/vapi/llm", methods=["POST"])
 @app.api_route("/vapi/llm/chat/completions", methods=["POST"])
 async def vapi_llm(request: Request, db=Depends(get_db)):
@@ -6447,9 +6469,18 @@ async def vapi_llm(request: Request, db=Depends(get_db)):
     forced_choice = None
     if material_categories:
         forced_choice = {"type": "function", "function": {"name": "search_materials"}}
-    text = _vapi_assistant_text(client, model, messages, tools, db,
-                                tool_choice=forced_choice,
-                                material_categories=material_categories)
+    try:
+        text = _vapi_assistant_text(client, model, messages, tools, db,
+                                    tool_choice=forced_choice,
+                                    material_categories=material_categories)
+    except Exception as e:
+        # A 500 here is the worst outcome on a phone call: Vapi speaks the
+        # greeting and then goes silent for the rest of the call. That is what
+        # happened on 2026-10-28 when the OpenAI key was rejected (401) -- every
+        # caller to the business line got dead air. Speak a fallback instead,
+        # and log loudly: a model failure on the voice line is an outage.
+        print(f"❌ VAPI-LLM model call failed ({type(e).__name__}): {str(e)[:300]}", flush=True)
+        text = VOICE_MODEL_DOWN_TEXT
     completion_id = "chatcmpl-" + str(uuid.uuid4()).replace("-", "")
     if payload.get("stream"):
         return _vapi_sse_response(text, model, completion_id)

@@ -1,0 +1,5 @@
+/* Source for static/css/tailwind.css -- see tailwind.config.js. Do not link
+   this file directly; run `npm run css` and link the built output. */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;

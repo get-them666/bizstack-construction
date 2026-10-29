@@ -26,7 +26,7 @@ No network and no database: the OpenAI client is a stub.
 """
 import pytest
 
-from con_ai_agent import BusinessAIAgent, ModelUnavailable
+from con_ai_agent import BusinessAIAgent, ModelUnavailable, guest_fallback
 
 
 class _Msg:
@@ -152,13 +152,17 @@ def test_a_healthy_model_is_never_displaced(monkeypatch):
     assert a._client.chat.completions.models == ["gpt-5.5"]
 
 
-def test_a_bad_key_is_not_retried_and_still_falls_back_quietly(monkeypatch):
-    """Off Zen there is nowhere to go, so the customer-facing string stands --
-    that is the pre-existing behaviour for a non-billing failure."""
+def test_a_bad_key_is_not_retried_and_is_surfaced_to_the_owner(monkeypatch):
+    """A wrong key fails identically on every model, so it is tried once. And
+    since 2026-10-28 (a 401 that silently took down the Copilot, site chat and
+    phone line together) the Copilot raises it rather than answering with the
+    customer fallback."""
     a = _agent({"gpt-5.5": BAD_KEY})
     a._model = "gpt-5.5"
-    assert "follow up" in a.process_conversation([], "hello")
-    assert a._client.chat.completions.models == ["gpt-5.5"]
+    with pytest.raises(ModelUnavailable) as exc:
+        a.process_conversation([], "hello")
+    assert "OPENAI_API_KEY" in str(exc.value)
+    assert a._client.chat.completions.models == ["gpt-5.5"], "never retried"
 
 
 def test_every_candidate_failing_tries_them_all_then_falls_back(monkeypatch):
@@ -174,7 +178,7 @@ def test_every_candidate_failing_tries_them_all_then_falls_back(monkeypatch):
     a = _agent({"gpt-5.5": RATE_LIMITED, "space-bunny-free": RATE_LIMITED,
                 "big-pickle": RATE_LIMITED})
     a._model = "gpt-5.5"
-    assert "follow up" in a.process_conversation([], "hello")
+    assert a.process_conversation([], "hello") == guest_fallback()
     assert a._client.chat.completions.models == ["gpt-5.5", "space-bunny-free", "big-pickle"]
 
 

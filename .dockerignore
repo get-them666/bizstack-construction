@@ -10,6 +10,11 @@ venv/
 .venv/
 myenv/
 
+# Tailwind build toolchain. The image has no node and does not need it: the
+# built static/css/tailwind.css is committed.
+node_modules/
+package-lock.json
+
 # vendored SDK checkout — the package is already in requirements.txt
 signalwire-python/
 

@@ -73,6 +73,9 @@ def test_create_deposit_session_still_returns_a_url():
     assert isinstance(url, str) and url.startswith("https://")
     assert captured["metadata"]["lead_id"] == "7"
     assert captured["mode"] == "payment"
+    # Stripe's 2026-09-30 API rejects this parameter on Checkout Sessions, and
+    # every live deposit link 502'd while it was present (2026-10-28 logs).
+    assert "payment_method_types" not in captured
     print("PASS  create_deposit_session still returns a plain URL string")
 
 

@@ -23,7 +23,7 @@ import json
 
 import pytest
 
-from con_ai_agent import BusinessAIAgent, ToolBudgetExhausted
+from con_ai_agent import BusinessAIAgent, ToolBudgetExhausted, guest_fallback
 
 
 class _Msg:
@@ -188,4 +188,4 @@ def test_non_budget_errors_still_return_the_fallback():
     a = BusinessAIAgent(subset="copilot", tool_handlers={"flaky": lambda: {"ok": True}})
     a._client = _StubClient([_Msg(tool_calls=[_TC("flaky")])] * 6)
     a._client.chat.completions.create = lambda **kw: (_ for _ in ()).throw(RuntimeError("boom"))
-    assert "follow up" in a.process_conversation([], "go")
+    assert a.process_conversation([], "go") == guest_fallback()

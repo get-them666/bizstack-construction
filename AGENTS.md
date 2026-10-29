@@ -57,6 +57,7 @@ is not. Extracting it is a real refactor of a live 8,176-line app — see `MEMOR
 
 ```bash
 venv/bin/python -m uvicorn construction_main:app --reload   # dev server
+npm run css                                                  # rebuild static/css/tailwind.css after editing templates
 venv/bin/python -m pytest -v                                 # 342 tests — see the trap below
 venv/bin/python test_sql_safety.py                           # script-style: one file at a time
 venv/bin/python -m pytest test_lead_pipeline_tools.py -v     # single file
@@ -349,6 +350,11 @@ looks like clutter, it is probably a source artifact for `docs/CHECKLIST.md`.
   that need the fallback.
 - `construction_main.py` is generated-adjacent and huge; prefer adding a focused module with its
   own `ensure_schema()` over growing it.
+- **CSS is a static Tailwind v3 build, not the Play CDN.** `base.html` and `app.html` link
+  `/static/css/tailwind.css` (built from `tailwind.config.js`, scanning `templates/**`, `*.py`
+  and `static/**/*.js`). The Docker image has no node, so the built file is **committed** —
+  after adding a class a template has never used, run `npm run css` and commit the result,
+  or that class renders unstyled in production. `?v=` on the link is the file's mtime at boot.
 - Python 3.10 target in `venv/`, 3.12 in the Dockerfile (`Dockerfile`, `python:3.12-slim`). Keep
   syntax compatible with 3.10.
 - Deploy is Railway, **Dockerfile** builder (`Dockerfile`, `python:3.12-slim`,

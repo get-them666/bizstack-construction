@@ -1,6 +1,8 @@
 .venv/
 venv/
 myenv/
+# Tailwind build toolchain only (npm run css). The built static/css/tailwind.css IS committed.
+node_modules/
 __pycache__/
 *.py[cod]
 .pytest_cache/

@@ -920,7 +920,15 @@ def fire_lead_draft(db, company_key, lead_id, *, force=False):
                     if not sw.is_configured():
                         result["why"] = "text not configured"
                         continue
-                    sw.send_sms(to, body)
+                    # send_sms swallows the provider error and returns False.
+                    # Ignoring that logged "sent text to ..." and marked the lead
+                    # contacted on 2026-10-28 while SignalWire was answering 422
+                    # inactive_campaign (10DLC still pending) -- a touch the
+                    # contact policy then counted against a text nobody got.
+                    if not sw.send_sms(to, body):
+                        print(f"[auto-reply {company_key}] fire sms to {to} not delivered (provider returned False)", flush=True)
+                        result["why"] = "text transport refused (see SignalWire error above)"
+                        continue
                 except Exception as exc:
                     print(f"[auto-reply {company_key}] fire sms failed: {exc}", flush=True)
                     result["why"] = str(exc)[:200]

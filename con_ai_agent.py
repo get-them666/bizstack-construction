@@ -37,6 +37,23 @@ class ModelUnavailable(RuntimeError):
     """
 
 
+def guest_fallback() -> str:
+    """What a customer hears when no model can answer.
+
+    This used to be "Message received. Our team will follow up with you
+    shortly." -- a promise nobody could keep. Web-chat transcripts are only
+    ever read back to the same visitor, no one is notified, and no contact
+    detail is captured, so when the OpenAI key was rejected on 2026-10-28 the
+    site chat spent the day telling homeowners a callback was coming that
+    never would. Point them at the two channels that do work instead.
+    """
+    phone = (os.getenv("COMPANY_PHONE") or "(757) 908-7121").strip()
+    return (
+        "Our assistant is offline for a moment. Call or text us at "
+        f"{phone}, or send the quote form on this page and we'll call you."
+    )
+
+
 class BusinessAIAgent:
     """Conversational assistant for Buildstack Construction Co.
 
@@ -1075,6 +1092,20 @@ OPERATING MANUAL:
                 return needle
         return ""
 
+    @staticmethod
+    def _auth_failure(exc: Exception) -> bool:
+        """True when the provider rejected the credential itself.
+
+        The SDK raises AuthenticationError for this, but the class is matched
+        by name so a fake client in tests (or a non-SDK transport) can raise a
+        plain exception with the same text and still be classified.
+        """
+        text = f"{type(exc).__name__} {exc}".lower()
+        return ("authenticationerror" in text
+                or "incorrect api key" in text
+                or "invalid api key" in text
+                or "invalid_api_key" in text)
+
     def _execute_tool(self, name: str, arguments: str) -> str:
         handler = self._tool_handlers.get(name)
         if handler is None:
@@ -1102,7 +1133,7 @@ OPERATING MANUAL:
         turns and they are replayed verbatim, so pronouns and follow-ups resolve
         against what was actually said.
         """
-        fallback = "Message received. Our team will follow up with you shortly."
+        fallback = guest_fallback()
         # Zen's free models need no key, so the key check is a provider check:
         # off Zen this is the original "no key, no model" bail-out.
         if not os.getenv("OPENAI_API_KEY") and not self._on_zen():
@@ -1205,6 +1236,16 @@ OPERATING MANUAL:
                        "platform.openai.com/settings/organization/billing/ — the ")
                     + "Copilot cannot run until you do."
                 ) from e
+            # Same for a rejected key. On 2026-10-28 OPENAI_API_KEY was 401ing
+            # and the Copilot answered with the customer fallback, so the
+            # owner saw a chatbot with nothing to say instead of the cause.
+            if self._subset == "copilot" and self._auth_failure(e):
+                raise ModelUnavailable(
+                    f"{'OpenCode Zen' if self._on_zen() else 'OpenAI'} rejected the "
+                    "API key (401). Rotate OPENAI_API_KEY in Railway — the phone "
+                    "line, site chat and Copilot all share it and are down until "
+                    "you do."
+                ) from e
             print(f"⚠️ AI agent fallback triggered: {e}")
             return fallback
 
@@ -1214,7 +1255,7 @@ OPERATING MANUAL:
         Stateless by design: SMS and voice callers arrive as isolated messages.
         The Copilot and the web widget use `process_conversation` instead.
         """
-        fallback = "Message received. Our team will follow up with you shortly."
+        fallback = guest_fallback()
         if not os.getenv("OPENAI_API_KEY") and not self._on_zen():
             return fallback
 
@@ -1277,7 +1318,7 @@ OPERATING MANUAL:
 
     def _simple_reply(self, messages: list) -> str:
         """No tools wired: single model call over the prepared message list."""
-        fallback = "Message received. Our team will follow up with you shortly."
+        fallback = guest_fallback()
         try:
             return self._complete(
                 messages, 800 if self._subset == "copilot" else 300

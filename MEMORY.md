@@ -55,6 +55,42 @@ greet as "Dear the homeowner," and why an empty `contractor_name` means
 *unpublished*, not *self-applied*. Applicant identity only comes from the VFOIA
 request drafted in `docs/records-request.md`, which is still unsigned.
 
+## 2026-10-29: the money path was broken in four places at once
+
+Found by reading the 2026-10-28 deploy logs, not by any alert — nothing in
+this app pages the owner. All four were silent from the outside.
+
+- **`OPENAI_API_KEY` is revoked.** The Railway value is still the `sk-proj-x-Dy…`
+  key the 2026-10-20 audit recorded, well-formed, but OpenAI answers 401
+  "Incorrect API key" (verified live from `railway run`). That one key powers
+  the Vapi phone line, the site chat widget and the Copilot, so all three went
+  down together. The phone failure is the worst: `/vapi/llm` let the
+  `AuthenticationError` escape as a 500, and Vapi's behaviour on a failed
+  custom-LLM call is greeting-then-silence. Fixed the *shape* of the failure
+  (the endpoint now speaks `VOICE_MODEL_DOWN_TEXT` and returns 200; the chat
+  widget answers `guest_fallback()` with the phone number instead of promising
+  a follow-up nobody is told about; the Copilot raises `ModelUnavailable`
+  naming the variable). **Only the owner can fix the cause: a new key at
+  platform.openai.com → Railway `OPENAI_API_KEY`.**
+- **`EMAIL_TRANSPORT=legacy` was left set in Railway.** `sessions.md` calls it a
+  debugging switch and says "Don't". It forced every send onto Zoho SMTP,
+  which times out on 587/465/25 from Railway egress, while the same boot's
+  preflight logged `Gmail send verified`. Owner lead notifications, homeowner
+  auto-replies and fired drafts were all dying. Set to `gmail` 2026-10-29.
+- **Stripe deposit links 502'd on every click.** `stripe>=16` pins API
+  `2026-09-30.endive`, which rejects `payment_method_types` on Checkout
+  Session creation. Removed; payment methods now come from the Dashboard.
+  `test_deposit_atomicity.py` pins the absence.
+- **Fired SMS drafts logged "sent text" on a 422.** `fire_lead_draft` ignored
+  `send_sms`'s False, so a SignalWire `inactive_campaign` refusal (10DLC still
+  pending) was recorded as a touch and counted against the contact policy.
+  Now reports `text transport refused`.
+
+Also: `CONTRACTOR_LICENSE` is unset, so the footer says "Licensed, bonded &
+insured" with no number (Virginia DPOR requires it on advertising). And the
+`/.webmcp/bridge.js` script on every page (75 KB, `data-packs="c2pa,mcp-server-client"`)
+is injected by Cloudflare at the edge, not by this app.
+
 ## Account map — audited 2026-10-20 (supersedes AGENTS.md's Zen section)
 
 - **OpenAI** — funded again. New project key (`sk-proj-x-Dy…`) in Railway; the old

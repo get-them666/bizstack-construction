@@ -100,9 +100,11 @@ class StripeService:
 
         base = (base_url or self._base_url()).rstrip("/")
 
+        # No payment_method_types: the 2026-09-30 API rejects it outright
+        # ("no longer supported when creating a Checkout Session"), and every
+        # deposit link 502'd. Payment methods come from the Dashboard now.
         session = stripe.checkout.Session.create(
             mode="payment",
-            payment_method_types=["card"],
             line_items=[
                 {
                     "price_data": {

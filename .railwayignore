@@ -13,6 +13,8 @@
 .venv
 venv
 myenv
+# Tailwind toolchain; the built static/css/tailwind.css is what ships
+node_modules
 __pycache__
 *.pyc
 *.pyo
