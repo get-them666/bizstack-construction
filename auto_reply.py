@@ -904,7 +904,14 @@ def fire_lead_draft(db, company_key, lead_id, *, force=False):
                         result["why"] = "email not configured"
                         continue
                     subject = (draft.split("\n", 1)[0] or "Thanks for reaching out")
-                    delivered = run_coro(documents_service.send_email(cfg, recipient, subject.replace("To: ", ""), body.replace("\n", "<br>")))
+                    # Every unattended email must carry a way out. Drafts are
+                    # written in several places; rather than trust each one,
+                    # append the opt-out here when the body lacks it. The
+                    # physical address is added by send_email itself.
+                    out_body = body
+                    if "stop" not in body.lower() and "opt out" not in body.lower():
+                        out_body = body.rstrip() + "\n\nIf you'd rather not hear from us, reply STOP and we won't write again."
+                    delivered = run_coro(documents_service.send_email(cfg, recipient, subject.replace("To: ", ""), out_body.replace("\n", "<br>")))
                     if not delivered:
                         print(f"[auto-reply {company_key}] fire email to {recipient} not delivered (provider returned False)", flush=True)
                         result["why"] = "transport refused"

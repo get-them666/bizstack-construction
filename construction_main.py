@@ -7547,15 +7547,10 @@ def run_lead_source_scan():
         push_db = psycopg.connect(db_url, row_factory=dict_row)
         push_db.autocommit = True
         try:
+            # Machine-sourced leads go straight to outreach below; the owner is
+            # not emailed one message per scraped row. The results are on the
+            # Today screen, and a lead that answers is what deserves attention.
             for r in rows:
-                try:
-                    auto_reply.notify_owner_email(
-                        "construction", lead_id=r["lead_id"], name=r["name"], phone=r["phone"],
-                        email=r["email"], service=r["service"], address=r["address"],
-                        message=r["title"], source=r["source"],
-                    )
-                except Exception as exc:
-                    print(f"[lead-source] owner notify failed for {r['lead_id']}: {exc}", flush=True)
                 if auto_email and r.get("email") and inquiries < inquiry_cap:
                     try:
                         if auto_reply.send_bid_inquiry(
@@ -7583,21 +7578,12 @@ def run_lead_source_scan():
                     _follow_up_new_lead(r["lead_id"])
                 except Exception as exc:
                     print(f"[lead-source] follow-up failed for {r['lead_id']}: {exc}", flush=True)
-            owner_digest = (os.getenv("LEAD_SOURCE_OWNER_DIGEST", "") or "").strip().lower() not in ("0", "false", "no", "off")
-            if owner_digest and rows:
-                try:
-                    digest_items = [
-                        {
-                            "title": r.get("title", ""), "solicitation": r.get("solicitation", ""),
-                            "contact_name": r.get("contact_name", ""), "service": r.get("service", ""),
-                            "address": r.get("address", ""), "state": r.get("state", ""),
-                            "url": r.get("url", ""), "phone": r.get("phone", ""), "email": r.get("email", ""),
-                        }
-                        for r in rows
-                    ]
-                    auto_reply.send_owner_lead_digest(push_db, "construction", digest_items)
-                except Exception as exc:
-                    print(f"[lead-source] owner digest failed: {exc}", flush=True)
+            # The "copy each draft into your email and send" digest is gone: it
+            # made the owner the relay for mail the bot had already written.
+            # send_bid_inquiry / auto_reply_to_lead above deliver it directly,
+            # inside auto_reply's caps and contact policy.
+            if rows:
+                print(f"[lead-source] {len(rows)} lead(s) processed, {pushed} inquiries sent", flush=True)
         finally:
             try:
                 push_db.close()
@@ -8100,22 +8086,14 @@ def ingest_permits(conn, permits):
                 "budget": f"${est_val:,.0f}" if est_val else "",
             })
         conn.commit()
-    for item in created_leads:
-        try:
-            auto_reply.notify_owner_email(
-                "construction", lead_id=item["lead_id"], name=item["name"], email="",
-                service=item["service"], address=item["address"], budget=item["budget"],
-                source="permit_finder",
-                message="A new building permit signals a homeowner who will need a contractor.",
-            )
-        except Exception as exc:
-            print(f"[permit-scan] notify failed for lead {item['lead_id']}: {exc}", flush=True)
-        try:
-            delay = float(os.getenv("PERMIT_NOTIFY_DELAY", "0.4") or 0.4)
-        except (TypeError, ValueError):
-            delay = 0.4
-        if delay > 0:
-            time.sleep(delay)
+    # No per-permit email to the owner. This used to send one for every
+    # imported permit -- 7 cities x 30 permits a day -- which is how the owner's
+    # inbox filled with hundreds of "a new building permit signals a homeowner"
+    # messages while nothing reached the homeowners themselves. Imported leads
+    # show on the Today screen; the enrichment loop works them and the bot
+    # sends the first touch. The owner hears about a permit lead when it replies.
+    if created_leads:
+        print(f"[permit-scan] {len(created_leads)} new permit lead(s) queued for enrichment", flush=True)
     return added, len(created_leads)
 
 

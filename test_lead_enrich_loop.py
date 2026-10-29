@@ -219,15 +219,28 @@ def test_first_touch_draft_carries_the_business_line_only():
     subject, body = loop.first_touch_draft("Bruce Oleary", "123 Main St")
     assert subject == loop.SUBJECT
     assert "Hi Bruce," in body
-    assert "+1 (757) 908-7121" in body
+    assert "908-7121" in body
     # The personal mobile belongs to lending material only.
     assert "252-665-5891" not in body
     assert "2526655891" not in body
+    # Sent unattended now, so it must say why we are writing and how to stop.
+    assert "permit" in body.lower()
+    assert "STOP" in body
+    assert "Buildstack" not in body, "registered spelling is BuildStack"
 
 
 def test_stage_is_an_update_that_cannot_overwrite_a_draft(handlers=None):
-    """run_once only stages into an empty draft_reply. Pin the SQL guard."""
+    """run_once only stages into an empty draft_reply. Pin the SQL guard.
+
+    Sending: on 2026-10-29 the owner reversed the review-gated design ("the bot
+    runs the show"). The loop may now send, but ONLY through
+    auto_reply.fire_lead_draft -- which re-checks caps, contact policy, the
+    federal block and suppression at send time -- and only outside review
+    mode. It must never call a transport directly.
+    """
     import inspect
     src = inspect.getsource(loop.run_once)
     assert "draft_reply IS NULL OR TRIM(draft_reply) = ''" in src
-    assert "fire_lead_draft" not in src, "the loop must never send"
+    assert "fire_lead_draft" in src, "sends go through the guardrailed fire path"
+    assert "_review_mode()" in src, "review mode (LEAD_AUTO_SEND unset) must still only stage"
+    assert "send_email(" not in src and "send_sms(" not in src, "never a raw transport"

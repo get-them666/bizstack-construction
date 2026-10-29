@@ -51,16 +51,22 @@ def first_touch_draft(name, address) -> tuple:
     if first.lower() in ("permit", "project", "job", "application", "unknown", "owner"):
         first = "there"
     addr = str(address or "").strip()
+    phone = (os.getenv("COMPANY_PHONE") or "+1 (757) 908-7121").strip()
+    # Sent unattended, so it says plainly why we are writing (a public permit
+    # record), what we do, and how to make it stop. "We noticed your property"
+    # read like surveillance; the permit is public and naming it is honest.
     body = (
         f"Hi {first},\n\n"
-        f"I hope this message finds you well! I'm reaching out from Buildstack "
-        f"Construction, as we noticed your property at {addr}. "
-        f"If you're considering any renovations or improvements, we'd love to help "
-        f"you with your project.\n\n"
-        f"Feel free to reply to this email or give us a call at "
-        f"+1 (757) 908-7121 to discuss your ideas!\n\n"
+        f"I'm Shaun with {brand.short_name()}, a licensed general contractor in "
+        f"Hampton Roads. A building permit was recently filed for {addr}, and if "
+        f"that project still needs a hand — or you have other work in mind — we "
+        f"handle whole-home renovations, kitchens, baths, roofing, decks and repairs "
+        f"with one crew and one fixed price.\n\n"
+        f"Estimates are free and there's no pressure. Reply to this email or call or "
+        f"text {phone}.\n\n"
+        f"If you'd rather not hear from us, reply STOP and we won't write again.\n\n"
         f"Best regards,\n"
-        f"{brand.short_name()}"
+        f"Shaun O'Leary\n{brand.name()}"
     )
     return SUBJECT, body
 
@@ -229,6 +235,23 @@ def run_once(db=None, force: bool = False, limit=None) -> dict:
                 db.commit()
                 if staged:
                     summary["drafts"] += 1
+                    # The bot runs the show: with LEAD_AUTO_SEND on, the draft
+                    # goes out now through fire_lead_draft, which re-checks the
+                    # daily caps, the contact-once-then-wait policy, the federal
+                    # block and the suppression list at send time. Staging for
+                    # the owner to click was the design the owner rejected --
+                    # it turned him into the relay for mail already written.
+                    # In review mode (LEAD_AUTO_SEND unset) it still just stages.
+                    if not auto_reply._review_mode():
+                        try:
+                            fired = auto_reply.fire_lead_draft(db, "construction", lead["id"])
+                            if fired.get("sent"):
+                                summary["sent"] = summary.get("sent", 0) + 1
+                            else:
+                                summary["held"] = summary.get("held", 0) + 1
+                                print(f"[lead-enrich] #{lead['id']} draft held: {fired.get('why')}", flush=True)
+                        except Exception as exc:
+                            print(f"[lead-enrich] #{lead['id']} auto-send failed: {exc}", flush=True)
 
             summary["steps"].append(
                 f"#{lead['id']} {str(lead.get('address') or '')[:34]} -> "

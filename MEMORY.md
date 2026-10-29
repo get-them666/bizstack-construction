@@ -362,6 +362,37 @@ the addresses that most needed a fallback were exactly the ones that threw.
 That was the reported "works sometimes, otherwise errors". Any new provider
 layer must return `NOT_FOUND` for both.
 
+## 2026-10-29: the owner reversed the review-gated design — "the bot runs the show"
+
+The owner's words: the whole design is that the bot runs it 100%, and it was
+failing because mail went to *him* instead of to customers and lenders — hundreds
+of "a new building permit signals a homeowner" emails (one per imported permit,
+`construction_main` permit scan), one per scraped lead-source row, plus a digest
+telling him to "copy each draft into your email and send". He does not want to be
+the relay. Changed:
+
+- Permit import and lead-source scans no longer email the owner per lead or send
+  the owner digest. Outreach to the lead (`send_bid_inquiry`, `auto_reply_to_lead`,
+  the AI follow-up call) is unchanged and is the point.
+- `lead_enrich_loop` now **sends** the first-touch it stages, via
+  `auto_reply.fire_lead_draft` (caps, contact-once-then-wait, federal block,
+  suppression — all re-checked at send time), when `LEAD_AUTO_SEND` is on. In
+  review mode it still only stages. The loop never touches a transport directly;
+  `test_lead_enrich_loop.py` pins that.
+- The permit first-touch names the public permit as the reason for writing,
+  carries "reply STOP", and `fire_lead_draft` appends an opt-out to any emailed
+  draft that lacks one. `send_email` already appends the physical address.
+- Owner alerts remain ONLY for genuine inbound leads (website form, finance,
+  get-started, embed, materials list, phone) — a few a week, each worth reading.
+
+What still stands: SMS to cold numbers is not automated (TCPA; consent exists only
+for inbound leads), and the business-contacts-only search boundary is unchanged.
+
+The lender cadence (`loan_outreach`) already sent directly to lenders; it was dead
+only because mail was dead. All 1/3/7/14 touches are now terminal (sent or
+missed). `send_catchup` exists for a re-engagement but its copy still describes
+the merged "BizStack" STR/cleaning company and Stripe payroll — rewrite before use.
+
 ## Daily lead enrichment autopilot — live since 2026-10-20
 
 `lead_enrich_loop.py` runs a daemon thread started from `lifecycle()`. Once per
