@@ -38,7 +38,13 @@ AUTH_URL = "https://developer.api.autodesk.com/authentication/v2/authorize"
 TOKEN_URL = "https://developer.api.autodesk.com/authentication/v2/token"
 API_BASE = "https://developer.api.autodesk.com"
 
-SCOPES = ["data:read", "project:read"]
+# APS scopes are a fixed list (data:read/write/create/search, bucket:*,
+# user-profile:read, user:read/write, account:read/write, viewables:read,
+# code:all, openid). "project:read" is not one of them, and the authorize
+# endpoint answered invalid_scope the first time the redirect URI was right.
+# BuildingConnected reads need data:read; user-profile:read lets us show who
+# signed in.
+SCOPES = ["data:read", "user-profile:read"]
 SCOPE_STRING = " ".join(SCOPES)
 
 STATE_COOKIE = "aps_oauth_state"
