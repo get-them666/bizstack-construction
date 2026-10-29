@@ -50,6 +50,7 @@ from loan_outreach import start_outreach_tasks
 import brand
 import team_messages
 import settings_status
+import today
 import copilot_memory
 import lead_pipeline
 import outreach_queue
@@ -3104,6 +3105,9 @@ async def read_dashboard(request: Request, db=Depends(get_db)):
     is_authed, user_email = require_auth(request)
     if not is_authed:
         return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
+    # One home screen. The old dashboard was a second, partial view of the
+    # same numbers; Today (/pipeline) is the owner's landing page.
+    return RedirectResponse(url="/pipeline", status_code=status.HTTP_303_SEE_OTHER)
 
     vis = source_visibility_clause()
     vis_params = tuple(source_visibility_params())
@@ -4523,8 +4527,23 @@ async def pipeline_page(request: Request, db=Depends(get_db)):
             "pct": round(count / max_stage * 100),
         })
 
-    return templates.TemplateResponse(request=request, name="pipeline.html", context={
+    # The rest of the home screen: money (any method), the few things only a
+    # person can do, and what the bot did while nobody was looking. Each
+    # helper swallows its own failure so one missing table cannot blank the
+    # page.
+    today.ensure_schema(db)
+    money = today.money_this_month(db)
+    health = {
+        "openai": settings_status.openai_health(),
+        "email": settings_status.email_status(_mail_status_safe()),
+        "phone": settings_status.phone_status(vapi.is_configured(), signalwire.is_configured()),
+        "jobs": settings_status.background_jobs(),
+        "review_mode": auto_reply._review_mode(),
+    }
+    return templates.TemplateResponse(request=request, name="today.html", context={
         "user": {"email": user_email},
+        "saved": request.query_params.get("saved", ""),
+        "error": request.query_params.get("error", ""),
         "call_list": call_list,
         "action_counts": action_counts,
         "action_labels": lead_lifecycle.ACTION_LABELS,
@@ -4534,7 +4553,51 @@ async def pipeline_page(request: Request, db=Depends(get_db)):
         "sources": sources,
         "permits": pstats,
         "permit_status": _permit_status(),
+        "money": money,
+        "deposits_pending": today.deposits_pending(db),
+        "quotes_out": today.quotes_out(db),
+        "bids_due": today.bids_due(db),
+        "jobs_week": today.jobs_this_week(db),
+        "activity": today.bot_activity(db),
+        "health": health,
+        "payment_methods": today.PAYMENT_METHODS,
+        "payment_kinds": today.PAYMENT_KINDS,
+        "today": date.today(),
     })
+
+
+@app.post("/api/payments/record")
+async def payments_record(request: Request, lead_id: str = Form(""), amount: str = Form(""),
+                          method: str = Form("cash"), kind: str = Form("deposit"),
+                          memo: str = Form(""), received_on: str = Form(""),
+                          db=Depends(get_db)):
+    """A customer paid by cash / check / Zelle / Venmo / ACH / card.
+
+    The owner rarely uses Stripe; until now the only way a payment reached
+    the books was the Stripe webhook, so most of the money the business took
+    in never appeared anywhere. One form: payments row, ledger entry, lead
+    marked paid/won.
+    """
+    require_admin(request)
+    try:
+        cents = int(round(float((amount or "0").replace("$", "").replace(",", "")) * 100))
+    except ValueError:
+        return RedirectResponse(url="/pipeline?error=Enter+an+amount+like+1500", status_code=status.HTTP_303_SEE_OTHER)
+    lid = int(lead_id) if (lead_id or "").strip().isdigit() else None
+    try:
+        when = date.fromisoformat(received_on) if received_on.strip() else None
+    except ValueError:
+        when = None
+    actor = current_actor(request) or {}
+    try:
+        res = today.record_payment(db, lead_id=lid, amount_cents=cents, method=method, kind=kind,
+                                   memo=memo, received_on=when, recorded_by=str(actor.get("email") or ""))
+    except ValueError as e:
+        return RedirectResponse(url=f"/pipeline?error={urllib.parse.quote(str(e))}", status_code=status.HTTP_303_SEE_OTHER)
+    note = f"Recorded {_money(cents)} {method} {kind}"
+    if not (res.get("ledger") or {}).get("posted", True):
+        note += " (books: " + str((res.get("ledger") or {}).get("reason", "not posted"))[:80] + ")"
+    return RedirectResponse(url=f"/pipeline?saved={urllib.parse.quote(note)}", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.post("/api/pipeline/move")

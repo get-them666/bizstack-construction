@@ -1,0 +1,248 @@
+{% extends "base.html" %}
+{% set co = company() %}
+{% block title %}Today | {{ co.name }} Owner Portal{% endblock %}
+{% block meta %}<meta name="robots" content="noindex, nofollow">{% endblock %}
+
+{# The owner's one screen. The bot runs outreach; this page shows the handful of
+   things only a person can do (answer a reply, show up to a walkthrough, bank a
+   payment, submit a bid), the money, and what the bot did overnight. #}
+
+{% macro tel(p) %}tel:{{ p | replace(' ', '') | replace('(', '') | replace(')', '') | replace('-', '') }}{% endmacro %}
+
+{% block content %}
+<section class="py-8 bg-slate-50 min-h-[80vh]">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+
+        <div class="flex flex-wrap items-end justify-between gap-4 mb-5">
+            <div>
+                <p class="text-sm font-bold text-indigo-600 uppercase tracking-widest">{{ today.strftime('%A, %B %-d') }}</p>
+                <h1 class="text-3xl font-black tracking-tight text-slate-900">Today</h1>
+            </div>
+            <div class="flex flex-wrap gap-2">
+                <a href="#record-payment" class="px-4 py-2.5 text-sm font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl">+ Record a payment</a>
+                <a href="/leads" class="px-4 py-2.5 text-sm font-semibold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 rounded-xl">All leads</a>
+                <a href="/messages" class="px-4 py-2.5 text-sm font-semibold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 rounded-xl">Crew messages</a>
+            </div>
+        </div>
+
+        {% if saved %}<div class="mb-4 rounded-2xl bg-emerald-50 border border-emerald-200 px-4 py-3 text-sm font-semibold text-emerald-800">✓ {{ saved }}</div>{% endif %}
+        {% if error %}<div class="mb-4 rounded-2xl bg-red-50 border border-red-200 px-4 py-3 text-sm font-semibold text-red-700">{{ error }}</div>{% endif %}
+
+        {# ── Is the bot alive? One strip; red only when something is actually broken. ── #}
+        {% set ai_ok = health.openai.ok %}
+        {% set mail_ok = health.email.ok %}
+        <div class="mb-6 rounded-2xl border {% if ai_ok and mail_ok %}border-slate-200 bg-white{% else %}border-red-200 bg-red-50{% endif %} px-4 py-3 flex flex-wrap items-center gap-x-6 gap-y-2 text-xs">
+            <span class="font-black uppercase tracking-wider {% if ai_ok and mail_ok %}text-slate-500{% else %}text-red-700{% endif %}">Bot status</span>
+            <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full {{ 'bg-emerald-500' if ai_ok else 'bg-red-500' }}"></span>Phone &amp; chat AI {% if not ai_ok %}<span class="text-red-700 font-semibold">— {{ health.openai.detail }}</span>{% endif %}</span>
+            <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full {{ 'bg-emerald-500' if mail_ok else 'bg-red-500' }}"></span>Email {% if not mail_ok %}<span class="text-red-700 font-semibold">— {{ health.email.detail }}</span>{% endif %}</span>
+            <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full {{ 'bg-emerald-500' if health.phone.sms_ok else 'bg-slate-300' }}"></span>Texting {{ 'ready' if health.phone.sms_ok else 'pending carrier approval' }}</span>
+            <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full {{ 'bg-amber-400' if health.review_mode else 'bg-emerald-500' }}"></span>{{ 'Review mode — drafts wait for you' if health.review_mode else 'Auto-send on' }}</span>
+            <span class="text-slate-400 ml-auto">Last 24 h: {{ activity.emails }} emails · {{ activity.texts }} texts · {{ activity.calls }} calls out · {{ activity.inbound }} in · {{ activity.new_leads }} new leads</span>
+            <a href="/settings" class="text-indigo-600 font-semibold">Settings →</a>
+        </div>
+
+        {# ── Numbers that mean money ── #}
+        <div class="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-6">
+            <div class="bg-white rounded-2xl border border-slate-200 p-4">
+                <div class="text-3xl font-black text-emerald-600 leading-none">{{ money.received_cents | money }}</div>
+                <div class="text-[11px] font-bold uppercase tracking-wider text-slate-500 mt-2">Banked this month</div>
+                <div class="text-[11px] text-slate-400 mt-1">{% for m in money.by_method[:3] %}{{ m.method }} {{ m.cents | money }}{% if not loop.last %} · {% endif %}{% else %}nothing recorded yet{% endfor %}</div>
+            </div>
+            <div class="bg-white rounded-2xl border border-slate-200 p-4" title="Deposits paid on jobs not yet complete">
+                <div class="text-3xl font-black text-slate-900 leading-none">{{ money.deposits_held_cents | money }}</div>
+                <div class="text-[11px] font-bold uppercase tracking-wider text-slate-500 mt-2">Deposits held</div>
+                <div class="text-[11px] text-slate-400 mt-1">on open jobs</div>
+            </div>
+            <div class="bg-white rounded-2xl border border-slate-200 p-4" title="Money attached to leads we have actually spoken to. Guessed ballparks excluded.">
+                <div class="text-3xl font-black text-slate-900 leading-none">{{ work_in_play_cents | money }}</div>
+                <div class="text-[11px] font-bold uppercase tracking-wider text-slate-500 mt-2">Work in play</div>
+                <div class="text-[11px] text-slate-400 mt-1">{{ stage_rows | selectattr('key', 'equalto', 'quoted') | map(attribute='count') | first }} quotes out</div>
+            </div>
+            <a href="/leads?action=respond" class="bg-white rounded-2xl border {% if action_counts.respond %}border-emerald-300 ring-1 ring-emerald-200{% else %}border-slate-200{% endif %} p-4 hover:border-emerald-400">
+                <div class="text-3xl font-black {% if action_counts.respond %}text-emerald-600{% else %}text-slate-900{% endif %} leading-none">{{ action_counts.respond }}</div>
+                <div class="text-[11px] font-bold uppercase tracking-wider text-slate-500 mt-2">Replies waiting</div>
+                <div class="text-[11px] text-slate-400 mt-1">a person answers these</div>
+            </a>
+            <a href="/leads?status=won&amp;closed=1" class="bg-white rounded-2xl border border-slate-200 p-4 hover:border-indigo-300">
+                <div class="text-3xl font-black text-slate-900 leading-none">{{ stage_rows | selectattr('key', 'equalto', 'won') | map(attribute='count') | first }}</div>
+                <div class="text-[11px] font-bold uppercase tracking-wider text-slate-500 mt-2">Won</div>
+                <div class="text-[11px] text-slate-400 mt-1">{{ money.net_cents | money if money.net_cents is not none else '—' }} net this month</div>
+            </a>
+        </div>
+
+        <div class="grid lg:grid-cols-3 gap-6">
+            <div class="lg:col-span-2 space-y-6">
+
+                {# ── People waiting on a human ── #}
+                <div class="bg-white rounded-3xl border border-slate-200 overflow-hidden">
+                    <div class="flex flex-wrap items-center justify-between gap-3 px-5 py-4 border-b border-slate-200">
+                        <div>
+                            <h2 class="text-lg font-black text-slate-900">Needs you</h2>
+                            <p class="text-xs text-slate-500">Replies first. Then follow-ups the bot couldn't close. New leads only appear here if they couldn't be reached automatically.</p>
+                        </div>
+                        <a href="/leads" class="text-xs font-bold text-indigo-600 hover:text-indigo-800">Queue: {{ action_counts.first_touch + action_counts.follow_up + action_counts.respond }} →</a>
+                    </div>
+                    {% if call_list %}
+                    <ul class="divide-y divide-slate-100">
+                        {% for lead in call_list %}
+                        <li class="px-5 py-3.5 hover:bg-slate-50">
+                            <div class="flex flex-wrap items-start justify-between gap-3">
+                                <div class="min-w-0 flex-1">
+                                    <div class="flex flex-wrap items-center gap-2">
+                                        <a href="/leads/{{ lead.id }}" class="text-sm font-bold text-slate-900 hover:text-indigo-600 truncate">{{ lead.name }}</a>
+                                        <span class="text-[10px] font-bold uppercase tracking-wider rounded-full px-2 py-0.5 {% if lead.action == 'respond' %}bg-emerald-100 text-emerald-700{% elif lead.action == 'follow_up' %}bg-amber-100 text-amber-700{% else %}bg-indigo-100 text-indigo-700{% endif %}">{{ lead.action_label }}</span>
+                                        {% if lead.value_cents %}<span class="text-[11px] font-bold text-emerald-600">{{ lead.value_cents | money }}</span>{% endif %}
+                                    </div>
+                                    <div class="text-xs text-slate-500 mt-0.5 truncate">{{ lead.address }}{% if lead.project_type %} · {{ lead.project_type }}{% endif %}{% if lead.source %} · {{ lead.source }}{% endif %}</div>
+                                </div>
+                                <div class="flex items-center gap-2 shrink-0">
+                                    {% if lead.phone %}<a href="{{ tel(lead.phone) }}" class="px-3 py-2 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg">Call</a>
+                                    {% elif lead.email %}<a href="mailto:{{ lead.email }}" class="px-3 py-2 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg">Email</a>{% endif %}
+                                    <form method="POST" action="/api/leads/{{ lead.id }}/touch">
+                                        <input type="hidden" name="channel" value="{% if lead.phone %}phone{% else %}email{% endif %}">
+                                        <input type="hidden" name="detail" value="Touched from Today">
+                                        <button class="px-3 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-200 hover:border-emerald-300 rounded-lg">Done</button>
+                                    </form>
+                                </div>
+                            </div>
+                        </li>
+                        {% endfor %}
+                    </ul>
+                    {% else %}
+                    <div class="px-6 py-10 text-center">
+                        <p class="font-bold text-slate-700">Nobody is waiting on you.</p>
+                        <p class="text-sm text-slate-500 mt-1">The bot is working {{ permits.untouched_doors }} untouched permit doors and {{ activity.new_leads }} new leads came in over the last day.</p>
+                    </div>
+                    {% endif %}
+                </div>
+
+                {# ── Money that is close ── #}
+                <div class="grid md:grid-cols-2 gap-6">
+                    <div class="bg-white rounded-3xl border border-slate-200 p-5">
+                        <div class="flex items-start justify-between"><h2 class="text-base font-black text-slate-900">Quotes out</h2><a href="/leads?status=quoted" class="text-xs font-bold text-indigo-600">All →</a></div>
+                        {% if quotes_out %}
+                        <ul class="mt-3 divide-y divide-slate-100 text-sm">
+                            {% for q in quotes_out %}
+                            <li class="py-2 flex items-center justify-between gap-3">
+                                <div class="min-w-0"><a href="/leads/{{ q.lead_id }}" class="font-semibold text-slate-800 hover:text-indigo-600 truncate block">{{ q.lead_name or ('Lead #' ~ q.lead_id) }}</a><span class="text-[11px] text-slate-400">{{ q.quote_no or ('#' ~ q.id) }} · {{ q.status }} · {{ q.created_at.strftime('%b %-d') if q.created_at else '' }}</span></div>
+                                <div class="text-right shrink-0"><div class="font-black text-slate-900">{{ q.job_price_cents | money }}</div>{% if q.phone %}<a href="{{ tel(q.phone) }}" class="text-[11px] font-bold text-indigo-600">nudge</a>{% endif %}</div>
+                            </li>
+                            {% endfor %}
+                        </ul>
+                        {% else %}<p class="mt-3 text-sm text-slate-500">No open quotes.</p>{% endif %}
+                    </div>
+                    <div class="bg-white rounded-3xl border border-slate-200 p-5">
+                        <div class="flex items-start justify-between"><h2 class="text-base font-black text-slate-900">Deposits pending</h2><a href="/payments" class="text-xs font-bold text-indigo-600">Payments →</a></div>
+                        {% if deposits_pending %}
+                        <ul class="mt-3 divide-y divide-slate-100 text-sm">
+                            {% for d in deposits_pending %}
+                            <li class="py-2 flex items-center justify-between gap-3">
+                                <div class="min-w-0"><a href="/leads/{{ d.id }}" class="font-semibold text-slate-800 hover:text-indigo-600 truncate block">{{ d.name }}</a><span class="text-[11px] text-slate-400">{{ d.project_type or '' }}</span></div>
+                                <div class="text-right shrink-0"><div class="font-black text-slate-900">{{ d.deposit_cents | money }}</div><a href="#record-payment" data-lead="{{ d.id }}" data-amount="{{ (d.deposit_cents or 0) / 100 }}" class="rp-prefill text-[11px] font-bold text-emerald-600">got it by cash/Zelle →</a></div>
+                            </li>
+                            {% endfor %}
+                        </ul>
+                        {% else %}<p class="mt-3 text-sm text-slate-500">No deposit links outstanding.</p>{% endif %}
+                    </div>
+                </div>
+
+                {# ── Record a payment, any method ── #}
+                <div id="record-payment" class="bg-white rounded-3xl border border-emerald-200 p-5">
+                    <h2 class="text-base font-black text-slate-900">Record a payment</h2>
+                    <p class="text-xs text-slate-500 mt-0.5">Cash, check, Zelle, Venmo, ACH or card. Goes straight to the books and marks the job paid. Stripe deposits record themselves.</p>
+                    <form method="post" action="/api/payments/record" class="mt-3 grid grid-cols-2 md:grid-cols-6 gap-3 items-end">
+                        <label class="block text-xs font-semibold text-slate-600 md:col-span-2">Customer (lead #)
+                            <input name="lead_id" id="rp-lead" placeholder="e.g. 1462 — optional" inputmode="numeric" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-200 text-sm font-normal">
+                        </label>
+                        <label class="block text-xs font-semibold text-slate-600">Amount $
+                            <input name="amount" id="rp-amount" required placeholder="1500" inputmode="decimal" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-200 text-sm font-normal">
+                        </label>
+                        <label class="block text-xs font-semibold text-slate-600">Method
+                            <select name="method" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-200 text-sm font-normal bg-white">
+                                {% for m in payment_methods %}<option value="{{ m }}">{{ m | capitalize }}</option>{% endfor %}
+                            </select>
+                        </label>
+                        <label class="block text-xs font-semibold text-slate-600">For
+                            <select name="kind" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-200 text-sm font-normal bg-white">
+                                {% for k in payment_kinds %}<option value="{{ k }}">{{ k | capitalize }}</option>{% endfor %}
+                            </select>
+                        </label>
+                        <label class="block text-xs font-semibold text-slate-600">Date
+                            <input name="received_on" type="date" value="{{ today.isoformat() }}" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-200 text-sm font-normal">
+                        </label>
+                        <input name="memo" placeholder="Memo (check #, job, note)" class="md:col-span-5 px-3 py-2 rounded-xl border border-slate-200 text-sm">
+                        <button class="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-bold">Save</button>
+                    </form>
+                </div>
+            </div>
+
+            <div class="space-y-6">
+                {# ── Bids due ── #}
+                <div class="bg-white rounded-3xl border border-slate-200 p-5">
+                    <div class="flex items-start justify-between"><h2 class="text-base font-black text-slate-900">Bids due soon</h2><a href="/bids" class="text-xs font-bold text-indigo-600">Bid board →</a></div>
+                    {% if bids_due %}
+                    <ul class="mt-3 divide-y divide-slate-100 text-sm">
+                        {% for b in bids_due %}
+                        <li class="py-2">
+                            <div class="flex items-center justify-between gap-2"><span class="font-semibold text-slate-800 truncate">{{ b.name }}</span><span class="text-xs font-bold {% if (b.due_date - today).days <= 2 %}text-red-600{% else %}text-slate-500{% endif %} shrink-0">{{ b.due_date.strftime('%a %b %-d') }}</span></div>
+                            <div class="text-[11px] text-slate-400 truncate">{{ b.owner or '' }}{% if b.trade %} · {{ b.trade }}{% endif %}</div>
+                        </li>
+                        {% endfor %}
+                    </ul>
+                    {% else %}<p class="mt-3 text-sm text-slate-500">Nothing due in the next 10 days.</p>{% endif %}
+                </div>
+
+                {# ── This week's jobs ── #}
+                <div class="bg-white rounded-3xl border border-slate-200 p-5">
+                    <div class="flex items-start justify-between"><h2 class="text-base font-black text-slate-900">Jobs this week</h2><a href="/projects" class="text-xs font-bold text-indigo-600">Projects →</a></div>
+                    {% if jobs_week %}
+                    <ul class="mt-3 divide-y divide-slate-100 text-sm">
+                        {% for j in jobs_week %}
+                        <li class="py-2"><a href="/projects" class="font-semibold text-slate-800 hover:text-indigo-600">{{ j.name }}</a><div class="text-[11px] text-slate-400 truncate">{{ j.address or '' }}{% if j.start_date %} · from {{ j.start_date.strftime('%b %-d') }}{% endif %} · {{ j.status or 'open' }}</div></li>
+                        {% endfor %}
+                    </ul>
+                    {% else %}<p class="mt-3 text-sm text-slate-500">No scheduled jobs. A paid deposit creates one.</p>{% endif %}
+                </div>
+
+                {# ── Funnel ── #}
+                <div class="bg-white rounded-3xl border border-slate-200 p-5">
+                    <h2 class="text-base font-black text-slate-900">Funnel</h2>
+                    <div class="mt-3 space-y-2.5">
+                        {% for row in stage_rows %}
+                        <a href="/leads?status={{ row.key }}{% if row.key in ('won', 'lost') %}&amp;closed=1{% endif %}" class="block group">
+                            <div class="flex items-center justify-between text-xs mb-1"><span class="font-bold text-slate-700 group-hover:text-indigo-600">{{ row.label }}</span><span class="font-black text-slate-900">{{ row.count }}</span></div>
+                            <div class="h-2 rounded-full bg-slate-100 overflow-hidden"><div class="h-full rounded-full {% if row.key == 'won' %}bg-emerald-500{% elif row.key == 'lost' %}bg-slate-300{% elif row.key == 'quoted' %}bg-amber-500{% elif row.key == 'engaged' %}bg-indigo-500{% else %}bg-slate-500{% endif %}" style="width: {{ row.pct }}%"></div></div>
+                        </a>
+                        {% endfor %}
+                    </div>
+                </div>
+
+                {# ── Supply the bot is working ── #}
+                <div class="bg-white rounded-3xl border border-slate-200 p-5">
+                    <div class="flex items-start justify-between"><h2 class="text-base font-black text-slate-900">What the bot is working</h2><a href="/leads?lane=permits" class="text-xs font-bold text-indigo-600">Permits →</a></div>
+                    <div class="grid grid-cols-2 gap-3 mt-3">
+                        <div class="rounded-xl bg-slate-50 border border-slate-100 p-3"><div class="text-2xl font-black text-slate-900">{{ permits.actionable_doors }}</div><div class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Permit doors</div></div>
+                        <div class="rounded-xl bg-slate-50 border border-slate-100 p-3"><div class="text-2xl font-black text-emerald-600">{{ permits.untouched_doors }}</div><div class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Not yet worked</div></div>
+                    </div>
+                    {% if activity.by_source %}
+                    <div class="mt-3 space-y-1 text-xs"><p class="text-[10px] font-bold uppercase tracking-wider text-slate-400">New in 24 h</p>
+                        {% for s in activity.by_source[:5] %}<div class="flex justify-between"><span class="text-slate-600">{{ s.source }}</span><span class="font-bold text-slate-900">{{ s.c }}</span></div>{% endfor %}
+                    </div>
+                    {% endif %}
+                    {% if permit_status.last_run %}<p class="text-[11px] text-slate-400 mt-3 pt-3 border-t border-slate-100">Last permit scan {{ permit_status.last_run }} · +{{ permit_status.added }}{% if permit_status.error %} · <span class="text-amber-700 font-bold">{{ permit_status.error }}</span>{% endif %}</p>{% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+{% include "_shell_script.html" %}
+<script>
+document.querySelectorAll('.rp-prefill').forEach(a => a.addEventListener('click', () => {
+    document.getElementById('rp-lead').value = a.dataset.lead || '';
+    document.getElementById('rp-amount').value = a.dataset.amount || '';
+}));
+</script>
+{% endblock %}

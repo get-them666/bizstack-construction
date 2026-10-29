@@ -1,4 +1,6 @@
 {% set co = company() %}
+{% set actor_role = (current_actor(request).role if current_actor(request) else none) %}
+{% set owner_view = actor_role == 'admin' %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -188,11 +190,12 @@
             header.dash-nav .flex.gap-2\.5 { gap: 0.6rem !important; }
         }
     </style>
-    {{ site_theme_state().css | safe }}
+    {# The public look (seasonal colours, fonts, decor) is for homeowners. The
+       owner's pages stay light, Inter, undecorated: a back office themed like a
+       Halloween landing page is why it read as a mess. #}
+    {% if not owner_view %}{{ site_theme_state().css | safe }}{% endif %}
 </head>
 <body class="bg-slate-50 text-slate-900 antialiased selection:bg-indigo-500 selection:text-white">
-    {% set actor_role = (current_actor(request).role if current_actor(request) else none) %}
-
     <!-- Header Navigation -->
     {% include "_header.html" %}
 
@@ -201,6 +204,14 @@
     </main>
 
     <!-- Footer -->
+    {% if owner_view %}
+    <footer class="bg-slate-900 text-slate-500 py-5 border-t border-slate-800 text-xs">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-wrap items-center justify-between gap-2">
+            <span>{{ co.name }} · owner portal</span>
+            <span><a href="/" class="hover:text-slate-300">Public site</a> · <a href="/settings" class="hover:text-slate-300">Settings</a> · <a href="/api/auth/logout" class="hover:text-slate-300">Log out</a></span>
+        </div>
+    </footer>
+    {% else %}
     <footer class="bg-slate-900 text-slate-400 py-14 border-t border-slate-800 text-sm">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 grid grid-cols-1 md:grid-cols-4 gap-10">
             <div class="md:col-span-2">
@@ -239,9 +250,10 @@
         </div>
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-10 pt-6 border-t border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-slate-500">
             <p><a href="/legal" class="hover:text-slate-300">Terms</a> · <a href="/legal" class="hover:text-slate-300">Privacy</a> · <a href="/legal" class="hover:text-slate-300">Disclaimer</a></p>
-            <p>&copy; {{ co.founded }} {{ co.name }}. Secure Stripe payments. All rights reserved.</p>
+            <p>&copy; {{ co.founded }} {{ co.name }}. All rights reserved.</p>
         </div>
     </footer>
+    {% endif %}
 
     <script>
         document.addEventListener('DOMContentLoaded', function() {
@@ -283,10 +295,12 @@
         });
     </script>
     {% block scripts %}{% endblock %}
+    {% if not owner_view %}
     {% include "chat_widget.html" %}
     {{ site_theme_state().decor | safe }}
     {% if site_theme_state().emoji %}
     <div aria-hidden="true" style="position:fixed;right:18px;bottom:14px;font-size:2rem;opacity:.35;pointer-events:none;z-index:40;transform:rotate(-8deg);">{{ site_theme_state().emoji }}</div>
+    {% endif %}
     {% endif %}
 </body>
 </html>
