@@ -11,6 +11,13 @@ CACHE_TTL = 30
 _cache = {"state": None, "at": 0.0}
 _lock = threading.Lock()
 
+FONT_LABELS = {
+    "modern": "Modern (Inter)",
+    "serif": "Serif (Georgia)",
+    "rounded": "Rounded",
+    "mono": "Monospace",
+}
+
 FONTS = {
     "modern": "'Inter', ui-sans-serif, system-ui, sans-serif",
     "serif": "Georgia, 'Times New Roman', serif",
@@ -231,7 +238,7 @@ def state(force=False):
             cached = _cache["state"]
             if cached:
                 return cached
-            return {"skin": "default", "css": "", "emoji": "", "decor": "", "promo_on": False, "auto": True, "auto_season": ""}
+            return {"skin": "default", "css": "", "emoji": "", "decor": "", "decor_on": True, "promo_on": False, "auto": True, "auto_season": ""}
         try:
             try:
                 settings = _read_settings(conn)
@@ -243,7 +250,7 @@ def state(force=False):
                 cached = _cache["state"]
                 if cached:
                     return cached
-                return {"skin": "default", "css": "", "emoji": "", "decor": "", "promo_on": False, "auto": True, "auto_season": ""}
+                return {"skin": "default", "css": "", "emoji": "", "decor": "", "decor_on": True, "promo_on": False, "auto": True, "auto_season": ""}
             theme = {}
             try:
                 theme = json.loads(settings.get("theme") or "{}")
@@ -267,6 +274,10 @@ def state(force=False):
                     base["font"] = str(theme["font"])
                 if "emoji" in theme and theme.get("emoji") is not None:
                     base["emoji"] = str(theme["emoji"])
+            # Decorations are on unless the owner turned them off on
+            # /appearance. Stored alongside the theme so it survives the
+            # seasonal auto-swap (a mood still renders with decor off).
+            decor_on = bool(theme.get("decor", True))
             state = {
                 "skin": skin_name,
                 "label": base.get("label") or skin_name,
@@ -275,7 +286,8 @@ def state(force=False):
                 "font_name": base["font"],
                 "emoji": base.get("emoji") or "",
                 "promo_on": settings.get("promo_first_clean") == "on",
-                "decor": _build_decor(base.get("mood") or ""),
+                "decor": _build_decor(base.get("mood") or "") if decor_on else "",
+                "decor_on": decor_on,
                 "css": css(base["bg"], base["accent"], base["font"]),
                 "auto": auto,
                 "auto_season": season_now,
@@ -287,7 +299,7 @@ def state(force=False):
         return _cache["state"]
 
 
-def save_theme(db, skin=None, bg=None, accent=None, font=None, emoji=None, auto=None):
+def save_theme(db, skin=None, bg=None, accent=None, font=None, emoji=None, auto=None, decor=None):
     with db.cursor() as cur:
         cur.execute("SELECT value FROM app_settings WHERE key = 'theme';")
         row = cur.fetchone()
@@ -298,6 +310,8 @@ def save_theme(db, skin=None, bg=None, accent=None, font=None, emoji=None, auto=
             theme = {}
         if auto is not None:
             theme["auto"] = bool(auto)
+        if decor is not None:
+            theme["decor"] = bool(decor)
         if not theme.get("auto", True):
             if skin is not None:
                 theme["skin"] = skin

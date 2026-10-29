@@ -11,15 +11,185 @@
    Secrets render as password fields with a "leave blank to keep current" hint and
    are never echoed back, matching the Turno card on the hosts site. #}
 
+{% set co = company() %}
+{% block title %}Settings | {{ co.name }} Owner Portal{% endblock %}
+{% block meta %}<meta name="robots" content="noindex, nofollow">{% endblock %}
+
+{% macro pill(ok, yes="Working", no="Attention") -%}
+    {% if ok %}<span class="ml-auto px-2 py-1 bg-emerald-50 text-emerald-700 text-[10px] font-semibold rounded-full">{{ yes }}</span>
+    {% else %}<span class="ml-auto px-2 py-1 bg-red-50 text-red-700 text-[10px] font-semibold rounded-full">{{ no }}</span>{% endif %}
+{%- endmacro %}
+
 {% block content %}
 <section class="max-w-3xl mx-auto px-4 py-10">
-    <h1 class="text-3xl font-extrabold text-slate-900">Settings</h1>
-    <p class="mt-2 text-slate-600">
+    <div class="flex flex-wrap items-end justify-between gap-4">
+        <div>
+            <p class="text-sm font-bold text-indigo-600 uppercase tracking-widest">Owner portal</p>
+            <h1 class="text-3xl font-extrabold text-slate-900">Settings</h1>
+            <p class="mt-2 text-slate-600">What's connected, what's switched on, and the two integrations behind Owner Lookup.</p>
+        </div>
+        {% if saved %}<span class="text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-full px-3 py-1">Saved ✓</span>{% endif %}
+    </div>
+
+    <!-- Account -->
+    <div class="mt-6 bg-white rounded-2xl border border-slate-200 p-5">
+        <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-xl bg-indigo-50 flex items-center justify-center text-indigo-600 font-bold">👤</div>
+            <div>
+                <p class="text-base font-bold text-slate-900">{{ co.name }}</p>
+                <p class="text-xs text-slate-500">Signed in as {{ user.email }} · {{ co.entity_line }}</p>
+            </div>
+        </div>
+        <div class="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+            <a href="/appearance" class="rounded-xl border border-slate-200 px-3 py-2 font-semibold text-slate-700 hover:border-indigo-300">🎨 Appearance</a>
+            <a href="/messages" class="rounded-xl border border-slate-200 px-3 py-2 font-semibold text-slate-700 hover:border-indigo-300">💬 Messages</a>
+            <a href="/crew/access" class="rounded-xl border border-slate-200 px-3 py-2 font-semibold text-slate-700 hover:border-indigo-300">🧰 Crew app access</a>
+            <a href="/materials/suppliers" class="rounded-xl border border-slate-200 px-3 py-2 font-semibold text-slate-700 hover:border-indigo-300">📦 Price lists</a>
+        </div>
+    </div>
+
+    <!-- AI -->
+    <div class="mt-4 bg-white rounded-2xl border border-slate-200 p-5">
+        <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center font-bold">🤖</div>
+            <div>
+                <p class="text-base font-bold text-slate-900">AI (OpenAI)</p>
+                <p class="text-xs text-slate-500">One key powers the phone line, the site chat and your Copilot</p>
+            </div>
+            {{ pill(openai.ok, "Key OK", "Not set" if not openai.configured else "Failing") }}
+        </div>
+        <p class="mt-3 text-xs {{ 'text-slate-600' if openai.ok else 'text-red-700' }}">
+            {{ openai.detail }} <span class="text-slate-400">· model {{ openai.model }} · checked {{ openai.checked_at }}</span>
+        </p>
+        {% if not openai.ok %}
+        <div class="mt-3 rounded-xl bg-red-50 border border-red-200 p-3 text-xs text-red-800">
+            Until this is fixed callers to {{ phone.business_line }} hear an apology and are asked to call back, the website chat says it is offline, and the Copilot returns an error. Create a key at platform.openai.com and set <code class="bg-red-100 px-1 rounded">OPENAI_API_KEY</code> in Railway.
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- Phone & SMS -->
+    <div class="mt-4 bg-white rounded-2xl border border-slate-200 p-5">
+        <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center text-blue-600 font-bold">📞</div>
+            <div>
+                <p class="text-base font-bold text-slate-900">Phone &amp; text</p>
+                <p class="text-xs text-slate-500">Business line {{ phone.business_line }} is answered by the AI assistant (Vapi)</p>
+            </div>
+            {{ pill(phone.vapi_ok and openai.ok, "Answering", "Check") }}
+        </div>
+        <dl class="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2 text-xs">
+            <div class="flex justify-between border-b border-slate-100 py-1"><dt class="text-slate-500">Voice assistant</dt><dd class="font-semibold">{{ 'connected' if phone.vapi_ok else 'VAPI_API_KEY not set' }}{% if phone.vapi_assistant %} · {{ phone.vapi_assistant }}{% endif %}</dd></div>
+            <div class="flex justify-between border-b border-slate-100 py-1"><dt class="text-slate-500">Outbound texts (SignalWire)</dt><dd class="font-semibold">{{ phone.sms_number or '—' }} · {{ 'configured' if phone.sms_ok else 'not configured' }}</dd></div>
+        </dl>
+        <p class="mt-2 text-[11px] text-slate-400">Texts send from the SignalWire number once the 10DLC campaign is approved; the business line stays on Vapi.</p>
+    </div>
+
+    <!-- Email -->
+    <div class="mt-4 bg-white rounded-2xl border border-slate-200 p-5">
+        <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-xl bg-emerald-50 flex items-center justify-center text-emerald-600 font-bold">✉️</div>
+            <div>
+                <p class="text-base font-bold text-slate-900">Email</p>
+                <p class="text-xs text-slate-500">Lead alerts, homeowner replies, quotes and invoices</p>
+            </div>
+            {{ pill(email.ok, "Delivering", "Broken") }}
+        </div>
+        <dl class="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2 text-xs">
+            <div class="flex justify-between border-b border-slate-100 py-1"><dt class="text-slate-500">Sends as</dt><dd class="font-semibold">{{ email.from_name }} &lt;{{ email.from_addr }}&gt;</dd></div>
+            <div class="flex justify-between border-b border-slate-100 py-1"><dt class="text-slate-500">New-lead alerts go to</dt><dd class="font-semibold">{{ email.notify_to }}</dd></div>
+            <div class="flex justify-between border-b border-slate-100 py-1"><dt class="text-slate-500">Transport</dt><dd class="font-semibold">{{ email.transport }}</dd></div>
+            <div class="flex justify-between border-b border-slate-100 py-1"><dt class="text-slate-500">Last check</dt><dd class="font-semibold">{{ email.detail or '—' }}</dd></div>
+        </dl>
+        {% if email.legacy_warning %}
+        <div class="mt-3 rounded-xl bg-red-50 border border-red-200 p-3 text-xs text-red-800">
+            <code>EMAIL_TRANSPORT=legacy</code> forces Zoho SMTP, which times out from Railway on every port. Set it to <code>gmail</code>.
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- Payments -->
+    <div class="mt-4 bg-white rounded-2xl border border-slate-200 p-5">
+        <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-xl bg-violet-50 flex items-center justify-center text-violet-600 font-bold">💳</div>
+            <div>
+                <p class="text-base font-bold text-slate-900">Payments (Stripe)</p>
+                <p class="text-xs text-slate-500">Deposit links from the lead board; {{ payments.mode }} mode · default deposit {{ payments.deposit_default }}</p>
+            </div>
+            {{ pill(payments.ok and payments.webhook_ok, "Connected", "Check") }}
+        </div>
+        <p class="mt-3 text-xs text-slate-600">
+            {% if not payments.ok %}<code>STRIPE_SECRET_KEY</code> is not set.{% elif not payments.webhook_ok %}The webhook secret is missing or malformed (<code>whsec_…</code>), so paid deposits will not mark the lead paid.{% else %}Webhook verified. Paid deposits flip the lead to <em>paid</em> automatically.{% endif %}
+            Remember to change the Stripe business type to <strong>LLC</strong> in the Dashboard now that the entity has changed.
+        </p>
+    </div>
+
+    <!-- Sign-in -->
+    <div id="security" class="mt-4 bg-white rounded-2xl border border-slate-200 p-5">
+        <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-xl bg-amber-50 flex items-center justify-center text-amber-700 font-bold">🔐</div>
+            <div>
+                <p class="text-base font-bold text-slate-900">Sign-in verification</p>
+                <p class="text-xs text-slate-500">Email a one-time code on owner password login</p>
+            </div>
+            {{ pill(otp_on, "On", "Off") }}
+        </div>
+        <form method="post" action="/api/settings/security" class="mt-3 flex flex-wrap items-center gap-4">
+            <label class="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                <input type="checkbox" name="otp_enabled" value="on" {% if otp_on %}checked{% endif %} {% if otp_env_locked %}disabled{% endif %} class="w-5 h-5 rounded accent-indigo-600">
+                Require a code for owner login
+            </label>
+            {% if otp_env_locked %}
+            <span class="text-xs text-slate-400">Locked by <code>OTP_ENABLED</code> in Railway — change it there.</span>
+            {% else %}
+            <button class="px-4 py-2 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl">Save</button>
+            {% endif %}
+            <span class="text-xs text-slate-400">Google sign-in is unaffected. Codes go to {{ email.notify_to }}.</span>
+        </form>
+    </div>
+
+    <!-- Background jobs -->
+    <div class="mt-4 bg-white rounded-2xl border border-slate-200 p-5">
+        <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center font-bold">⚙️</div>
+            <div>
+                <p class="text-base font-bold text-slate-900">Background jobs</p>
+                <p class="text-xs text-slate-500">Loops that run on their own. Switched in Railway, shown here.</p>
+            </div>
+        </div>
+        <ul class="mt-3 divide-y divide-slate-100 text-xs">
+            {% for j in jobs %}
+            <li class="flex items-center justify-between py-2">
+                <span><span class="font-semibold text-slate-800">{{ j.name }}</span> <span class="text-slate-400">· {{ j.cadence }}</span></span>
+                {% if j.off %}<span class="px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 font-semibold">off ({{ j.switch }})</span>{% else %}<span class="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 font-semibold">running</span>{% endif %}
+            </li>
+            {% endfor %}
+        </ul>
+    </div>
+
+    <!-- Outbound guardrails -->
+    <div class="mt-4 bg-white rounded-2xl border border-slate-200 p-5">
+        <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center font-bold">🛡️</div>
+            <div>
+                <p class="text-base font-bold text-slate-900">Outbound limits</p>
+                <p class="text-xs text-slate-500">What stops the lead bot from over-contacting anyone. Set in Railway; these fail closed.</p>
+            </div>
+        </div>
+        <dl class="mt-3 text-xs divide-y divide-slate-100">
+            {% for g in guardrails %}
+            <div class="flex items-center justify-between py-2"><dt class="text-slate-600">{{ g.name }}</dt><dd class="font-semibold text-slate-800 text-right">{{ g.value }} <span class="text-slate-400 font-mono font-normal">{{ g.var }}</span></dd></div>
+            {% endfor %}
+        </dl>
+    </div>
+
+    <h2 class="mt-10 text-lg font-extrabold text-slate-900">Owner Lookup integrations</h2>
+    <p class="mt-1 text-sm text-slate-600">
         API credentials for the tools that turn a permit address into a reachable homeowner.
     </p>
 
     <!-- Skip Sherpa -->
-    <div class="mt-6 bg-white rounded-2xl border border-slate-200 p-5">
+    <div class="mt-4 bg-white rounded-2xl border border-slate-200 p-5">
         <div class="flex items-center gap-3">
             <div class="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center text-slate-700 font-bold">🔍</div>
             <div>

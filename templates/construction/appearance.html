@@ -10,39 +10,54 @@
             <div>
                 <p class="text-sm font-bold text-indigo-600 uppercase tracking-widest">Owner portal</p>
                 <h1 class="text-3xl font-black tracking-tight text-slate-900">Appearance</h1>
-                <p class="mt-1 text-sm text-slate-500">Tune the look of your public site.</p>
+                <p class="mt-1 text-sm text-slate-500">The look of your public site. Everything here is stored in this site's own database.</p>
             </div>
-            <a href="/dashboard" class="px-4 py-2.5 text-sm font-semibold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 rounded-xl transition-colors">← Dashboard</a>
+            <div class="flex items-center gap-3">
+                {% if request.query_params.get("saved") %}
+                <span class="text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-full px-3 py-1">Saved ✓</span>
+                {% endif %}
+                <a href="/" target="_blank" rel="noopener" class="px-4 py-2.5 text-sm font-semibold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 rounded-xl transition-colors">Preview public site →</a>
+            </div>
         </div>
 
-        <form method="POST" action="/appearance" class="bg-white rounded-3xl border border-slate-200 p-6 sm:p-8 space-y-8">
+        <form method="POST" action="/appearance" id="theme-form" class="bg-white rounded-3xl border border-slate-200 p-6 sm:p-8 space-y-8">
+            <input type="hidden" name="skin" id="skin" value="{{ state.skin }}">
+
             <!-- Auto / seasonal -->
-            <div>
-                <label class="flex items-start gap-3 cursor-pointer">
-                    <input type="checkbox" name="auto" value="on" {% if state.auto %}checked{% endif %} class="mt-1 w-5 h-5 rounded accent-indigo-600">
-                    <span>
-                        <span class="font-bold text-slate-900 block">Automatic seasonal theming</span>
-                        <span class="text-sm text-slate-500 block">Auto-switches to seasonal skins (autumn, holiday, spring, summer, etc.).{% if state.auto_season %} Currently applying: <strong>{{ state.auto_season }}</strong>.{% endif %}</span>
-                    </span>
+            <div class="flex flex-wrap items-center justify-between gap-3 bg-slate-50 border border-slate-200 rounded-2xl px-4 py-3">
+                <label class="flex items-center gap-3 cursor-pointer select-none">
+                    <input type="checkbox" name="auto" value="on" id="auto_season" {% if state.auto %}checked{% endif %} class="w-5 h-5 rounded accent-indigo-600">
+                    <span class="text-sm font-bold text-slate-800">Auto-swap by season</span>
                 </label>
+                <div class="text-xs text-slate-500">
+                    {% if state.auto and state.auto_season %}
+                    <span class="font-semibold text-indigo-600">{{ presets[state.auto_season]['label'] }} is active today</span> — it changes itself on the schedule.
+                    {% elif state.auto %}
+                    No seasonal window is active today, so the default look shows.
+                    {% else %}
+                    Auto is off — the look below is pinned until you turn it back on.
+                    {% endif %}
+                </div>
             </div>
 
             <!-- Presets -->
             <div>
-                <p class="text-xs font-semibold text-slate-700 uppercase tracking-wider mb-3">Preset skins</p>
-                <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                <p class="text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">Preset looks</p>
+                <p class="text-xs text-slate-500 mb-3">Click one to <strong>apply it now</strong> (pins it; auto turns off). Schedule with auto on:
+                    {% for label, start, end in schedule %}<span class="whitespace-nowrap">{{ label }} {{ start }}→{{ end }}</span>{% if not loop.last %} · {% endif %}{% endfor %}.
+                </p>
+                <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
                     {% for key, p in presets.items() %}
-                    <label class="cursor-pointer">
-                        <input type="radio" name="skin" value="{{ key }}" {% if (not state.auto) and state.skin == key %}checked{% endif %} class="sr-only peer">
-                        <span class="block rounded-2xl border-2 border-slate-200 peer-checked:border-indigo-600 p-4 hover:border-indigo-300 transition-colors">
-                            <span class="flex items-center gap-2 mb-3">
-                                <span style="background:{{ p.bg }}" class="w-8 h-8 rounded-lg border border-slate-200 inline-block"></span>
-                                <span style="background:{{ p.accent }}" class="w-8 h-8 rounded-lg border border-slate-200 inline-block"></span>
-                            </span>
-                            <span class="font-bold text-slate-900 text-sm">{{ p.label }}</span>
-                            {% if p.emoji %}<span class="text-sm">{{ p.emoji }}</span>{% endif %}
+                    <button type="button" data-skin="{{ key }}" data-bg="{{ p.bg }}" data-accent="{{ p.accent }}" data-font="{{ p.font }}" data-emoji="{{ p.emoji }}"
+                        class="skin-card text-left rounded-2xl border-2 p-3 transition-all {% if (not state.auto) and state.skin == key %}border-indigo-600 ring-2 ring-indigo-200{% else %}border-slate-200 hover:border-slate-300{% endif %}"
+                        style="background-color:{{ p.bg }};">
+                        <span class="flex items-center justify-between">
+                            <span class="text-lg">{{ p.emoji or "⚙" }}</span>
+                            <span class="w-3.5 h-3.5 rounded-full border border-black/10" style="background-color:{{ p.accent }};"></span>
                         </span>
-                    </label>
+                        <span class="block mt-2 text-sm font-bold text-slate-800">{{ p.label }}</span>
+                        <span class="block text-[11px] text-slate-500">{{ font_labels.get(p.font, p.font) }}</span>
+                    </button>
                     {% endfor %}
                 </div>
             </div>
@@ -50,34 +65,95 @@
             <!-- Manual colors -->
             <div class="grid grid-cols-1 sm:grid-cols-3 gap-5">
                 <div>
-                    <label class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Background</label>
-                    <input type="color" name="bg" value="{{ state.bg }}" class="w-full h-12 rounded-xl border border-slate-200 cursor-pointer bg-white">
+                    <label class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Page background</label>
+                    <div class="flex items-center gap-2">
+                        <input type="color" id="bg" name="bg" value="{{ state.bg }}" class="h-11 w-14 rounded-xl border border-slate-200 cursor-pointer bg-white p-1">
+                        <input type="text" id="bg_hex" value="{{ state.bg }}" class="w-28 px-3 py-2.5 rounded-xl border border-slate-200 text-sm font-mono" aria-label="Background hex">
+                    </div>
                 </div>
                 <div>
-                    <label class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Accent</label>
-                    <input type="color" name="accent" value="{{ state.accent }}" class="w-full h-12 rounded-xl border border-slate-200 cursor-pointer bg-white">
+                    <label class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Accent (buttons & links)</label>
+                    <div class="flex items-center gap-2">
+                        <input type="color" id="accent" name="accent" value="{{ state.accent }}" class="h-11 w-14 rounded-xl border border-slate-200 cursor-pointer bg-white p-1">
+                        <input type="text" id="accent_hex" value="{{ state.accent }}" class="w-28 px-3 py-2.5 rounded-xl border border-slate-200 text-sm font-mono" aria-label="Accent hex">
+                    </div>
                 </div>
                 <div>
-                    <label class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Font</label>
-                    <select name="font" class="w-full px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
-                        {% for f in fonts %}
-                        <option value="{{ f }}" {% if state.font_name == f %}selected{% endif %}>{{ f }}</option>
+                    <label for="font" class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Font</label>
+                    <select name="font" id="font" class="w-full px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                        {% for key, label in fonts %}
+                        <option value="{{ key }}" {% if state.font_name == key %}selected{% endif %}>{{ label }}</option>
                         {% endfor %}
                     </select>
                 </div>
             </div>
 
-            <div>
-                <label class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Floating emoji (optional)</label>
-                <input type="text" name="emoji" value="{{ state.emoji }}" placeholder="e.g. 🔨" class="w-40 px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-5">
+                <div>
+                    <label for="emoji" class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Corner emoji (optional)</label>
+                    <input type="text" name="emoji" id="emoji" value="{{ state.emoji }}" maxlength="8" placeholder="e.g. 🔨 — sits bottom-right on public pages" class="w-full px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                </div>
+                <div class="flex items-end">
+                    <label class="flex items-center gap-3 cursor-pointer select-none pb-3">
+                        <input type="checkbox" name="decor" value="on" {% if state.decor_on %}checked{% endif %} class="w-5 h-5 rounded accent-indigo-600">
+                        <span class="text-sm text-slate-800"><span class="font-bold">Animated decorations</span><br><span class="text-xs text-slate-500">Falling leaves, snow, bats… for looks that have them.</span></span>
+                    </label>
+                </div>
             </div>
 
-            <button type="submit" class="w-full py-4 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-2xl transition-all uppercase tracking-wider shadow-lg shadow-indigo-100">Save Appearance</button>
+            <div class="flex flex-wrap items-center justify-between gap-3 pt-2">
+                <button type="submit" class="px-6 py-3.5 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-2xl transition-all uppercase tracking-wider shadow-lg shadow-indigo-100">Save appearance</button>
+                <button type="button" id="reset-default" class="text-sm font-semibold text-slate-500 hover:text-red-600">Reset to the default look</button>
+            </div>
         </form>
 
         <div class="mt-6 rounded-2xl border border-slate-200 bg-white p-5 text-sm text-slate-500">
-            <strong class="text-slate-700">Note:</strong> color and font choices apply everywhere. Seasonal themes override the palette while the schedule is active.
+            <strong class="text-slate-700">How it applies:</strong> the background colour and font cover every public page; the accent recolours every button and link. The owner pages keep their own layout. Changes show within about 30 seconds.
         </div>
     </div>
 </section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+    const form = document.getElementById('theme-form');
+    const skinField = document.getElementById('skin');
+    const autoBox = document.getElementById('auto_season');
+    const bgC = document.getElementById('bg'), bgH = document.getElementById('bg_hex');
+    const aC = document.getElementById('accent'), aH = document.getElementById('accent_hex');
+    const em = document.getElementById('emoji'), fSel = document.getElementById('font');
+
+    function syncHex(color, hex) {
+        color.addEventListener('input', () => hex.value = color.value);
+        hex.addEventListener('input', () => { if (/^#[0-9a-fA-F]{6}$/.test(hex.value)) color.value = hex.value; });
+    }
+    syncHex(bgC, bgH); syncHex(aC, aH);
+
+    document.querySelectorAll('.skin-card').forEach(card => {
+        card.addEventListener('click', e => {
+            e.preventDefault();
+            document.querySelectorAll('.skin-card').forEach(c => c.classList.remove('border-indigo-600', 'ring-2', 'ring-indigo-200'));
+            card.classList.add('border-indigo-600', 'ring-2', 'ring-indigo-200');
+            if (autoBox.checked) autoBox.checked = false;
+            skinField.value = card.dataset.skin;
+            bgC.value = bgH.value = card.dataset.bg;
+            aC.value = aH.value = card.dataset.accent;
+            em.value = card.dataset.emoji || '';
+            fSel.value = card.dataset.font;
+            form.requestSubmit();
+        });
+    });
+
+    // Picking a colour by hand is a manual look: pin it rather than let the
+    // season override it on the next render.
+    [bgC, aC, fSel, em].forEach(el => el.addEventListener('change', () => { if (autoBox.checked) autoBox.checked = false; skinField.value = 'default'; }));
+
+    document.getElementById('reset-default').addEventListener('click', () => {
+        if (!confirm('Reset to the default light look (indigo accent, Inter font, no emoji)?')) return;
+        const d = document.querySelector('.skin-card[data-skin="default"]');
+        if (d) d.click();
+    });
+})();
+</script>
 {% endblock %}

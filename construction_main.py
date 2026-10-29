@@ -49,6 +49,7 @@ from con_ai_agent import BusinessAIAgent, ModelUnavailable, ToolBudgetExhausted
 from loan_outreach import start_outreach_tasks
 import brand
 import team_messages
+import settings_status
 import copilot_memory
 import lead_pipeline
 import outreach_queue
@@ -4818,16 +4819,55 @@ async def settings_page(request: Request, db=Depends(get_db)):
     resimply_status = None
     if configured:
         resimply_status = await asyncio.to_thread(resimply_service.verify, getter)
+    # Status probes run off the loop: the OpenAI check is a real (cached)
+    # request, and the mail preflight may refresh a token.
+    openai_health, mail = await asyncio.gather(
+        asyncio.to_thread(settings_status.openai_health),
+        asyncio.to_thread(_mail_status_safe),
+    )
+    is_authed, user_email = require_auth(request)
+    otp_env = (os.getenv("OTP_ENABLED") or "").strip().lower()
     return templates.TemplateResponse(
         request=request,
         name="settings.html",
         context={
+            "user": {"email": user_email},
+            "saved": request.query_params.get("saved", ""),
             "skip_sherpa_configured": skip_sherpa_service.configured(),
             "resimply_configured": configured,
             "resimply_status": resimply_status,
             "resimply_missing": resimply_service.missing_ids(getter),
+            "openai": openai_health,
+            "email": settings_status.email_status(mail),
+            "phone": settings_status.phone_status(vapi.is_configured(), signalwire.is_configured()),
+            "payments": settings_status.payments_status(stripe_svc.is_configured(), default_deposit_cents()),
+            "jobs": settings_status.background_jobs(),
+            "guardrails": settings_status.outbound_guardrails(),
+            "otp_on": _otp_enabled(db),
+            "otp_env_locked": otp_env in ("0", "false", "no", "off", "1", "true", "yes", "on"),
         },
     )
+
+
+def _mail_status_safe() -> dict:
+    try:
+        import loan_outreach
+        return loan_outreach.mail_status()
+    except Exception as exc:
+        return {"ok": False, "detail": f"preflight failed: {exc}", "checked_at": ""}
+
+
+@app.post("/api/settings/security")
+async def settings_security(request: Request, otp_enabled: str = Form(""), db=Depends(get_db)):
+    """Master switch for emailed sign-in codes on the owner login.
+
+    Stored in app_settings; the OTP_ENABLED environment variable, when set,
+    overrides it (so a deploy can force it either way). Only the master switch
+    is exposed: per-role toggles would be buttons nothing reads yet.
+    """
+    require_admin(request)
+    _set_setting(db, "otp_enabled", "true" if otp_enabled.lower() in ("on", "1", "true", "yes") else "false")
+    return RedirectResponse(url="/settings?saved=security#security", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.post("/api/settings/resimply")
@@ -10631,11 +10671,17 @@ async def appearance_page(request: Request):
     if not is_authed:
         return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
     state = site_theme.state(force=True)
+    schedule = []
+    for skin, (sm, sd), (em, ed) in site_theme.SEASON_SCHEDULE:
+        label = site_theme.PRESETS.get(skin, {}).get("label", skin)
+        schedule.append((label, f"{sm}/{sd}", f"{em}/{ed}"))
     return templates.TemplateResponse(request=request, name="appearance.html", context={
         "user": {"email": user_email},
         "state": state,
         "presets": site_theme.PRESETS,
-        "fonts": list(site_theme.FONTS.keys()),
+        "schedule": schedule,
+        "fonts": [(k, site_theme.FONT_LABELS.get(k, k)) for k in site_theme.FONTS],
+        "font_labels": site_theme.FONT_LABELS,
     })
 
 
@@ -10648,12 +10694,16 @@ async def appearance_save(
     accent: str = Form(""),
     font: str = Form(""),
     emoji: str = Form(""),
+    decor: str = Form(""),
     db=Depends(get_db),
 ):
     require_admin(request)
+    # Unticked checkboxes post nothing, so "" means off for both switches.
     site_theme.save_theme(
         db,
         skin=skin, bg=bg or None, accent=accent or None,
-        font=font or None, emoji=emoji, auto=(auto.lower() in ("on", "true", "1", "yes")),
+        font=font or None, emoji=emoji,
+        auto=(auto.lower() in ("on", "true", "1", "yes")),
+        decor=(decor.lower() in ("on", "true", "1", "yes")),
     )
-    return RedirectResponse(url="/appearance", status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(url="/appearance?saved=1", status_code=status.HTTP_303_SEE_OTHER)
