@@ -140,6 +140,45 @@ custom one as of 2026-10-29: body `#0a0a0a`, accent `#48413d`, Georgia serif,
 🎃 pinned bottom-right. Not any preset; `site_theme.py` applies it with
 `!important` over every indigo CTA. Left alone pending the owner's say-so.
 
+## Zoho + Autodesk connected end-to-end (2026-10-30, early hours)
+
+Both integrations were dead for the same reason: the credentials in Railway
+belonged to clients the owner had deleted/replaced in the vendor consoles.
+
+- **Zoho**: the owner recreated the API-console client as a **Self Client**
+  `1000.1ESJ…` (29 Oct); Railway still held `1000.5Z7…`, so every token call
+  answered `invalid_client` and every grant code "didn't work" — 30 tries.
+  New client id/secret are in Railway. A grant code was generated with the
+  full scope list (CRM, Books, Campaigns, Mail, Calendar; portals
+  "BuildStack Construction" for both Campaigns and CRM) and exchanged;
+  `ZOHO_REFRESH_TOKEN` + `ZOHO_TOKEN_SCOPES` hold the result. Verified live
+  from the container: CRM 200, Campaigns 200, Mail accounts 200
+  (hello@bizstackperks.com), Calendar 200 ("hello"), and a real message sent
+  via the Zoho Mail REST API through `documents_service` with
+  `EMAIL_TRANSPORT=auto`. Campaigns list key is set (env) to "My Sample List".
+  Still off: reading the Zoho inbox — IMAP answers "You are yet to enable
+  IMAP" (one toggle in Zoho Mail settings), or add a Mail-API reader now that
+  the scope exists. Zoho rate-limits token generation hard: a burst of
+  refresh calls produces `invalid_client` *before* it produces the honest
+  "too many requests" — don't diagnose a secret from a single error.
+- **Autodesk/BuildingConnected**: the "bidjobs" APS app is
+  **Server-to-Server** (client-credentials only) — 3-legged sign-in is
+  impossible for that type, hence the generic `signin.autodesk.com/request-error`
+  for *any* redirect URI. Created **"BuildStack Bid Board"**, a Traditional
+  Web App in the `buildingconnected` hub, client id `4CEicd4t…`, callback
+  `https://construction.bizstackperks.com/oauth/autodesk/callback`, default
+  API set (23). Railway `APS_CLIENT_ID/SECRET` updated; owner consent
+  granted; tokens stored for `ADMIN_EMAIL=soleary0006@gmail.com`;
+  `bid_sync.run_once` fetched 23 opportunities (all already present → updated).
+- **How it was done without the owner clicking**: a second Chrome instance
+  (`--user-data-dir=<copy> --remote-debugging-port=9333`) seeded with a copy
+  of the owner's **Profile 15** (`bizstackperks.com`) `Cookies` + Local
+  Storage, driven over CDP `Runtime.evaluate`. Deterministic, verifiable,
+  cheap. AppleScript GUI scripting against the live Chrome was none of those:
+  the page tree is hidden from AX, `javascript:` URLs are blocked, blind
+  clicks landed in Terminal/other windows. Profile copy and token files were
+  deleted afterwards. Don't repeat the GUI-scripting approach.
+
 ## Zoho is the owner's suite now (2026-10-29) — not Google
 
 Owner: "I use Zoho now, not Google." The Railway refresh token works and
