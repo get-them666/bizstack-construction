@@ -963,3 +963,76 @@ def enrich_address_only_leads(cur, company: str = "construction", cap: int = Non
 
     summary["spent"] = spent
     return summary
+
+
+ZIP_BACKFILL_DEFAULT = 150
+
+
+def backfill_cap() -> int:
+    try:
+        return max(0, int(os.getenv("ZIP_BACKFILL_MAX", ZIP_BACKFILL_DEFAULT) or 0))
+    except (TypeError, ValueError):
+        return ZIP_BACKFILL_DEFAULT
+
+
+def backfill_lead_zips(cur, company: str = "construction", cap: int = None,
+                       status: str = "new") -> dict:
+    """Append the missing ZIP to `leads.address` so the envelope is deliverable.
+
+    Norfolk publishes its permit feed with no ZIP at all -- 166 of 1,009
+    address-only leads, every one of them in that city. `address_lines()` then
+    renders "Norfolk" / "VA" and the letter has no ZIP on the mailing block,
+    which is the one thing USPS actually sorts on. mail_letters.py already holds
+    those back rather than guess; this fills the gap instead of leaving the
+    batch short.
+
+    Free: zip_lookup hits the Census geocoder first and ArcGIS second, caches
+    successes, and returns zipcode "" rather than a guess. Nothing is written
+    when there is no street-level match, so a miss costs one lookup and leaves
+    the row exactly as it was -- the letter stays held back rather than mailed
+    to the wrong carrier route.
+    """
+    import zip_lookup
+
+    cap = backfill_cap() if cap is None else max(0, int(cap))
+    summary = {"examined": 0, "resolved": 0, "unresolved": 0, "errors": [], "cap": cap}
+    if not cap:
+        return summary
+
+    # Postgres \y is a word boundary; the address has a ZIP iff a 5-digit run
+    # stands alone. A ZIP+4 ("23502-1234") counts as having one.
+    cur.execute(
+        "SELECT id, address FROM leads "
+        "WHERE company = %s AND status = %s "
+        "  AND address IS NOT NULL AND BTRIM(address) <> '' "
+        "  AND address !~ '\\y\\d{5}\\y' "
+        "ORDER BY id LIMIT %s;",
+        (company, status, cap),
+    )
+    rows = cur.fetchall() or []
+    summary["examined"] = len(rows)
+
+    for row in rows:
+        lead_id = row["id"] if isinstance(row, dict) else row[0]
+        raw = row["address"] if isinstance(row, dict) else row[1]
+        parsed = parse_address(raw)
+        if not parsed.get("street") or not parsed.get("city") or not parsed.get("state"):
+            summary["unresolved"] += 1
+            continue
+        try:
+            got = zip_lookup.lookup_zip(parsed["street"], parsed["city"], parsed["state"])
+        except Exception as exc:  # provider outage: leave the row untouched
+            summary["errors"].append(f"lead {lead_id}: {type(exc).__name__}: {exc}")
+            summary["unresolved"] += 1
+            continue
+        zipcode = str((got or {}).get("zipcode") or "").strip()
+        if not zipcode:
+            summary["unresolved"] += 1
+            continue
+        cur.execute(
+            "UPDATE leads SET address = %s WHERE id = %s AND COALESCE(address, '') = %s;",
+            (f"{str(raw).strip()} {zipcode}", lead_id, raw),
+        )
+        summary["resolved"] += cur.rowcount or 0
+
+    return summary

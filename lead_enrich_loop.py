@@ -38,6 +38,12 @@ import psycopg
 from psycopg.rows import dict_row
 
 import data_enrichment
+# Imported at module level, not inside the loop: it was referenced only inside
+# the auto-send branch, so the NameError was swallowed by that branch's own
+# try/except and every run reported "auto-send failed" while the log line read
+# like a transient send problem. A first touch that never fires is the whole
+# difference between a bot-run pipeline and a staged draft nobody clicks.
+import auto_reply
 
 # The standard first-touch note. Single source of truth: the Copilot's
 # draft_lead_email handler builds its body from this function too, so the
@@ -186,6 +192,22 @@ def run_once(db=None, force: bool = False, limit=None) -> dict:
         # Marked BEFORE spending, not after: a crash mid-run must not let the
         # next restart re-spend the day's credits.
         _mark_ran(db)
+
+        # Norfolk's permit feed publishes no ZIP, and a letter or an envelope
+        # without one is undeliverable -- mail_letters.py holds those rows back
+        # rather than guess. Free (Census/ArcGIS), cached, and it runs first so
+        # the parcel lookup below gets a ZIP to disambiguate with.
+        try:
+            import skiptrace_service
+            with db.cursor() as cur:
+                zips = skiptrace_service.backfill_lead_zips(cur, "construction")
+            db.commit()
+            summary["zips_filled"] = zips.get("resolved", 0)
+            if zips.get("resolved"):
+                summary["steps"].append(
+                    f"zip backfill: {zips['resolved']}/{zips['examined']} address(es) gained a ZIP")
+        except Exception as exc:
+            summary["steps"].append(f"zip backfill failed: {type(exc).__name__}: {exc}")
 
         for lead in select_batch(db, cap):
             if data_enrichment.classify_reachable(lead):

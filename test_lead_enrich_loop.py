@@ -133,12 +133,16 @@ def test_limit_overrides_the_daily_cap_and_clamps(monkeypatch):
     monkeypatch.delenv("DISABLE_LEAD_ENRICH", raising=False)
     db = _Db(cursor=_Cur(rows=[]))
     loop.run_once(db=db, force=True, limit=1000)
-    selects = [p for sql, p in db._cur.executed if "FROM leads" in sql]
+    # The batch query, not just any statement that reads leads: the ZIP backfill
+    # also selects FROM leads, and matching it would assert on the wrong cap.
+    selects = [p for sql, p in db._cur.executed
+               if "FROM leads" in sql and "ORDER BY id DESC LIMIT" in sql]
     assert selects and selects[0][-1] == 25
 
     db = _Db(cursor=_Cur(rows=[]))
     loop.run_once(db=db, force=True, limit=0)
-    selects = [p for sql, p in db._cur.executed if "FROM leads" in sql]
+    selects = [p for sql, p in db._cur.executed
+               if "FROM leads" in sql and "ORDER BY id DESC LIMIT" in sql]
     assert selects and selects[0][-1] == 1
 
 
