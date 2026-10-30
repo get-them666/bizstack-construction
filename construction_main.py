@@ -11141,6 +11141,16 @@ async def copilot_chat(request: Request, message: str = Form(...), db=Depends(ge
     return JSONResponse(content={"reply": reply})
 
 
+@app.get("/api/places/autocomplete")
+async def places_autocomplete_api(request: Request, input: str = "", sessiontoken: str = ""):
+    try:
+        import google_maps
+        preds = google_maps.places_autocomplete(input or "", session_token=sessiontoken or None)
+        return JSONResponse({"predictions": preds})
+    except Exception as e:
+        return JSONResponse({"predictions": [], "error": str(e)}, status_code=200)
+
+
 @app.get("/api/copilot/history")
 async def copilot_history(request: Request, db=Depends(get_db)):
     """Replay the stored conversation so a refresh doesn't lose the thread."""

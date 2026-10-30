@@ -52,32 +52,61 @@
 
 {% block scripts %}
 <script>
-function initQuoteMaps() {
-    try {
-        var addrInput = document.getElementById('addr');
-        if (addrInput && window.google && google.maps && google.maps.places) {
-            var ac = new google.maps.places.Autocomplete(addrInput, { types: ['address'], componentRestrictions: { country: 'us' } });
-            ac.addListener('place_changed', function() {
-                var place = ac.getPlace();
-                if (place && place.formatted_address) {
-                    addrInput.value = place.formatted_address;
-                }
-            });
-        }
-    } catch(e) {}
-}
-// Also try on load in case callback doesn't fire
-document.addEventListener('DOMContentLoaded', function(){
-    if (!window.google || !window.google.maps) {
-        var s = document.createElement('script');
-        s.src = 'https://maps.googleapis.com/maps/api/js?key=AIzaSyAo5_xHUPxAiBTdrj0V1mppqHScHWAw1OI&libraries=places&callback=initQuoteMaps';
-        s.async = true;
-        s.defer = true;
-        document.body.appendChild(s);
-    } else {
-        initQuoteMaps();
+(function(){
+    var addrInput = document.getElementById('addr');
+    if (!addrInput) return;
+    function tryGoogle() {
+        try {
+            if (window.google && google.maps && google.maps.places) {
+                var ac = new google.maps.places.Autocomplete(addrInput, { types: ['address'], componentRestrictions: { country: 'us' } });
+                ac.addListener('place_changed', function() {
+                    var place = ac.getPlace();
+                    if (place && place.formatted_address) {
+                        addrInput.value = place.formatted_address;
+                    }
+                });
+                return true;
+            }
+        } catch(e) {}
+        return false;
     }
-});
+    if (tryGoogle()) return;
+    window.initQuoteMaps = tryGoogle;
+    var s = document.createElement('script');
+    s.src = 'https://maps.googleapis.com/maps/api/js?key=AIzaSyAo5_xHUPxAiBTdrj0V1mppqHScHWAw1OI&libraries=places&callback=initQuoteMaps';
+    s.async = true;
+    s.defer = true;
+    document.body.appendChild(s);
+    setTimeout(function(){
+        if (tryGoogle()) return;
+        var datalistId = 'addr-suggestions';
+        if (!document.getElementById(datalistId)) {
+            var dl = document.createElement('datalist');
+            dl.id = datalistId;
+            document.body.appendChild(dl);
+            addrInput.setAttribute('list', datalistId);
+        }
+        var dl = document.getElementById(datalistId);
+        var timer;
+        addrInput.addEventListener('input', function(){
+            clearTimeout(timer);
+            var v = addrInput.value;
+            if (v.length < 3) { dl.innerHTML = ''; return; }
+            timer = setTimeout(function(){
+                fetch('/api/places/autocomplete?input=' + encodeURIComponent(v))
+                    .then(r => r.json())
+                    .then(j => {
+                        dl.innerHTML = '';
+                        (j.predictions || []).slice(0,6).forEach(function(p){
+                            var opt = document.createElement('option');
+                            opt.value = p.description;
+                            dl.appendChild(opt);
+                        });
+                    }).catch(function(){});
+            }, 250);
+        });
+    }, 800);
+})();
 </script>
 <script>
 (function () {
