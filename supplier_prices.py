@@ -232,6 +232,87 @@ def delete_supplier(conn, supplier_id: int, company: str = "construction") -> bo
     return ok
 
 
+# --- manual entry ------------------------------------------------------------
+# The yards this business actually buys from. Every one of them was named in
+# the page's own help text before this list existed, so seeding them records a
+# decision the copy had already made rather than inventing vendors.
+#
+# They publish no API and no feed. A supplier record with zero prices is the
+# honest starting state: it gives a price somewhere to land, and it makes the
+# gap visible instead of hiding it behind an empty table.
+DEFAULT_SUPPLIERS = (
+    ("Builders FirstSource — Chesapeake", "lumber"),
+    ("Kempsville Building Materials", "lumber"),
+    ("Richards Building Supply", "roofing"),
+    ("84 Lumber — Chesapeake", "lumber"),
+    ("ABC Supply — Chesapeake", "roofing"),
+)
+
+
+def seed_default_suppliers(conn, company: str = "construction") -> int:
+    """Create the known yards, but only into a company with no suppliers.
+
+    Re-seeding after a deliberate delete would fight the owner, so this is a
+    one-time fill, not a guarantee.
+    """
+    with conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) AS n FROM material_suppliers WHERE company = %s",
+                    (company,))
+        if (cur.fetchone()["n"] or 0) > 0:
+            return 0
+    for name, category in DEFAULT_SUPPLIERS:
+        upsert_supplier(conn, name, kind="manual", category=category,
+                        public_ok=False, company=company)
+    return len(DEFAULT_SUPPLIERS)
+
+
+def add_price(conn, supplier_id: int, *, item_number: str, description: str = "",
+              uom: str = "each", price_cents=None, company: str = "construction") -> int:
+    """Record one price observed by hand -- a receipt, a quote, a shelf tag.
+
+    This is the path that needs no credential. Without it the price book can
+    only ever be empty, because every supplier API in this tree requires a
+    partner key and the yards publish nothing machine-readable.
+    """
+    if price_cents is None:
+        raise SupplierError("a price is required")
+    cents = int(price_cents)
+    if cents < 0:
+        raise SupplierError("a price cannot be negative")
+    item = (item_number or description or "").strip()
+    if not item:
+        raise SupplierError("give the item a name or a number")
+    rows = [{"item_number": item[:80], "description": (description or item)[:2000],
+             "uom": (uom or "each").strip()[:40] or "each", "price_cents": cents}]
+    n = save_prices(conn, supplier_id, rows, company=company)
+    _mark(conn, supplier_id, f"manual entry: {n} price(s)")
+    return n
+
+
+def delete_price(conn, price_id: int, company: str = "construction") -> bool:
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM material_supplier_prices WHERE id = %s AND company = %s RETURNING id",
+                    (price_id, company))
+        ok = cur.fetchone() is not None
+    conn.commit()
+    return ok
+
+
+def recent_prices(conn, company: str = "construction", limit: int = 50) -> list[dict]:
+    """The newest observations, so a loaded book is visible rather than assumed."""
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT p.id, p.item_number, p.description, p.uom, p.price_cents,
+                   p.observed_at, s.name AS supplier, s.public_ok
+              FROM material_supplier_prices p
+              JOIN material_suppliers s ON s.id = p.supplier_id
+             WHERE p.company = %s
+          ORDER BY p.observed_at DESC, p.id DESC
+             LIMIT %s
+        """, (company, max(1, min(int(limit), 500))))
+        return cur.fetchall()
+
+
 # --- parsing -----------------------------------------------------------------
 def parse_price_sheet(text: str, default_uom: str = "each") -> list[dict]:
     """Read a vendor price sheet into {item_number, description, uom, price_cents}.

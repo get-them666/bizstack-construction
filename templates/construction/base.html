@@ -189,6 +189,54 @@
             header.dash-nav .nav-dropdown-trigger { padding: 0.4rem 0.5rem; }
             header.dash-nav .flex.gap-2\.5 { gap: 0.6rem !important; }
         }
+
+        /* Back-office primitives.
+
+           Three pages -- /materials, /materials/suppliers and /account -- are
+           written against a small set of semantic classes (.wrap .card .muted
+           .flash) that were never defined anywhere. Tailwind's preflight also
+           strips the browser defaults from h1/h2/table/th/td/input, so those
+           pages rendered as an unstyled wall of text: headings the same size as
+           body copy, tables with no borders, inputs as bare boxes.
+
+           Everything here is scoped under .wrap, which no public page uses, and
+           element rules are restricted to elements carrying no utility class so
+           a page that styles itself with Tailwind (as the suppliers form does)
+           keeps its own look. */
+        .wrap { max-width: 72rem; margin: 0 auto; padding: 2rem 1rem 3rem; color: #0f172a; }
+        .wrap > h1 { font-size: 1.75rem; line-height: 1.2; font-weight: 800;
+                     letter-spacing: -0.01em; margin: 0 0 0.5rem; }
+        .wrap h2 { font-size: 1.125rem; line-height: 1.35; font-weight: 700; margin: 0 0 0.75rem; }
+        .wrap .muted { color: #64748b; }
+        .wrap .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 1rem;
+                      padding: 1.25rem; margin: 1.25rem 0;
+                      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05); }
+        .wrap .flash { border-radius: 0.75rem; padding: 0.75rem 1rem; margin: 1rem 0;
+                       font-size: 0.9rem; line-height: 1.5; border: 1px solid transparent; }
+        .wrap .flash.ok { background: #ecfdf5; border-color: #a7f3d0; color: #065f46; }
+        .wrap .flash.bad { background: #fef2f2; border-color: #fecaca; color: #991b1b; }
+        .wrap .flash.warn { background: #fffbeb; border-color: #fde68a; color: #92400e; }
+        .wrap table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+        .wrap th { text-align: left; font-weight: 700; color: #475569; font-size: 0.72rem;
+                   text-transform: uppercase; letter-spacing: 0.04em;
+                   padding: 0.5rem 0.6rem; border-bottom: 1px solid #e2e8f0; white-space: nowrap; }
+        .wrap td { padding: 0.6rem; border-bottom: 1px solid #f1f5f9; vertical-align: top; }
+        .wrap tr:last-child td { border-bottom: 0; }
+        .wrap form label:not([class]) { display: block; font-size: 0.8rem; font-weight: 600; color: #334155; }
+        .wrap form input:not([class]),
+        .wrap form select:not([class]),
+        .wrap form textarea:not([class]) {
+            display: block; width: 100%; margin-top: 0.25rem; padding: 0.5rem 0.65rem;
+            font-size: 0.9rem; font-weight: 400; color: #0f172a; background: #fff;
+            border: 1px solid #cbd5e1; border-radius: 0.6rem;
+        }
+        .wrap button:not([class]) {
+            display: inline-block; margin-top: 0.5rem; padding: 0.5rem 0.9rem;
+            font-size: 0.85rem; font-weight: 700; color: #fff; background: #4f46e5;
+            border: 0; border-radius: 0.6rem; cursor: pointer;
+        }
+        .wrap button:not([class]):hover { background: #4338ca; }
+        .wrap p a { color: #4f46e5; text-decoration: underline; }
     </style>
     {# The public look (seasonal colours, fonts, decor) is for homeowners. The
        owner's pages stay light, Inter, undecorated: a back office themed like a

@@ -36,15 +36,20 @@
         <td><strong>{{ s.name }}</strong>{% if s.category %}<br><small class="muted">{{ s.category }}</small>{% endif %}</td>
         <td>{{ s.kind }}</td>
         <td>{% if s.public_ok %}yes{% else %}no{% endif %}</td>
-        <td>{{ s.items }}</td>
+        <td>{{ s.price_count }}</td>
         <td><small>
           {{ s.last_synced_at.strftime('%Y-%m-%d %H:%M') if s.last_synced_at else 'never' }}
           {% if s.last_sync_note %}<br>{{ s.last_sync_note }}{% endif %}
         </small></td>
-        <td>
-          <form method="post" action="/materials/suppliers/sync">
+        <td class="whitespace-nowrap">
+          <form method="post" action="/materials/suppliers/sync" class="inline">
             <input type="hidden" name="supplier_id" value="{{ s.id }}">
             <button>Sync</button>
+          </form>
+          <form method="post" action="/materials/suppliers/delete" class="inline"
+                onsubmit="return confirm('Remove {{ s.name }} and every price loaded against it?')">
+            <input type="hidden" name="supplier_id" value="{{ s.id }}">
+            <button type="submit" class="text-sm text-red-600 hover:text-red-700">Remove</button>
           </form>
         </td>
       </tr>
@@ -53,6 +58,73 @@
     {% else %}
     <p class="muted">No suppliers registered yet. Add one below — a pasted price
       sheet is enough, and it goes live on the customer picker immediately.</p>
+    {% endif %}
+  </section>
+
+  <section class="card">
+    <h2>Record a price</h2>
+    <p class="muted">
+      The fastest way in, and the only one that needs no credential: type what a
+      receipt or a yard quote actually said. Every price carries the date it was
+      observed, so an old one is marked stale rather than quietly reused.
+    </p>
+    {% if suppliers %}
+    <form method="post" action="/materials/suppliers/price" class="space-y-4">
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <label class="block text-sm font-semibold text-slate-700">Supplier
+          <select name="supplier_id" required class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-200 text-sm font-normal">
+            {% for s in suppliers %}
+            <option value="{{ s.id }}">{{ s.name }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label class="block text-sm font-semibold text-slate-700">Item or SKU
+          <input name="item_number" required placeholder="2X4-8-SPF" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-200 text-sm font-normal">
+        </label>
+      </div>
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <label class="block text-sm font-semibold text-slate-700">Description
+          <input name="description" placeholder="2x4x8 SPF stud" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-200 text-sm font-normal">
+        </label>
+        <label class="block text-sm font-semibold text-slate-700">Unit
+          <input name="uom" value="each" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-200 text-sm font-normal">
+        </label>
+        <label class="block text-sm font-semibold text-slate-700">Price paid
+          <input name="price" required inputmode="decimal" placeholder="4.28" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-200 text-sm font-normal">
+        </label>
+      </div>
+      <button class="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-bold">Record price</button>
+    </form>
+    {% else %}
+    <p class="muted">Add a supplier first, then prices can be recorded against it.</p>
+    {% endif %}
+  </section>
+
+  <section class="card">
+    <h2>Priced items</h2>
+    {% if prices %}
+    <table>
+      <tr><th>Item</th><th>Supplier</th><th>Unit</th><th>Price</th><th>Observed</th><th></th></tr>
+      {% for p in prices %}
+      <tr>
+        <td><strong>{{ p.item_number }}</strong>{% if p.description and p.description != p.item_number %}<br><small class="muted">{{ p.description }}</small>{% endif %}</td>
+        <td>{{ p.supplier }}{% if p.public_ok %} <small class="muted">· public</small>{% endif %}</td>
+        <td>{{ p.uom }}</td>
+        <td>${{ '%.2f'|format((p.price_cents or 0) / 100) }}</td>
+        <td><small>{{ p.observed_at.strftime('%Y-%m-%d') if p.observed_at else '—' }}</small></td>
+        <td>
+          <form method="post" action="/materials/suppliers/price/delete" class="inline"
+                onsubmit="return confirm('Remove this price?')">
+            <input type="hidden" name="price_id" value="{{ p.id }}">
+            <button type="submit" class="text-sm text-red-600 hover:text-red-700">Remove</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% else %}
+    <p class="muted">Nothing priced yet. Record a price above and it appears here,
+      and on the customer picker once its supplier is marked public.</p>
     {% endif %}
   </section>
 

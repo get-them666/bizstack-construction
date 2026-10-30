@@ -4342,12 +4342,19 @@ async def materials_suppliers(request: Request, db=Depends(get_db)):
     """
     require_admin(request)
     supplier_prices.ensure_schema(db)
+    # A blank table reads as a broken page, so put the known yards in the
+    # first time somebody looks. Seeding writes supplier records, never
+    # prices -- a seeded yard still says "0 items" until a real price lands.
+    try:
+        supplier_prices.seed_default_suppliers(db)
+    except Exception as e:
+        print(f"[suppliers] seed skipped: {e}")
     with db.cursor() as cur:
         cur.execute("""
             SELECT s.id, s.name, s.kind, s.public_ok, s.category, s.last_synced_at,
                    s.last_sync_note,
                    (SELECT COUNT(*) FROM material_supplier_prices p
-                     WHERE p.supplier_id = s.id) AS items
+                     WHERE p.supplier_id = s.id) AS price_count
               FROM material_suppliers s
              WHERE s.company = 'construction'
           ORDER BY s.name;
@@ -4355,6 +4362,7 @@ async def materials_suppliers(request: Request, db=Depends(get_db)):
         rows = [dict(r) for r in cur.fetchall()]
     return templates.TemplateResponse(request=request, name="material_suppliers.html", context={
         "suppliers": rows,
+        "prices": supplier_prices.recent_prices(db, limit=40),
         "adapters": supplier_adapters.status(),
         "estimates": materials_service.bls_escalation(),
     })
@@ -4442,6 +4450,69 @@ async def materials_supplier_sync(request: Request, supplier_id: int = Form(0),
     except Exception as e:
         return RedirectResponse(url=f"/materials/suppliers?error={str(e)[:200]}",
                                 status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/materials/suppliers/price")
+async def materials_supplier_price(request: Request, supplier_id: int = Form(0),
+                                   item_number: str = Form(""),
+                                   description: str = Form(""),
+                                   uom: str = Form("each"),
+                                   price: str = Form(""),
+                                   db=Depends(get_db)):
+    """Record one price by hand -- a receipt, a quote, a shelf tag.
+
+    This is the path that needs no credential, and it is the only one that
+    can produce a price today: every supplier API in this tree wants a
+    partner key the business does not have, the yards publish no feed, and
+    Home Depot answers an unauthenticated product fetch with 403. A receipt
+    is a real observation with a real date, which is what the table stores.
+    """
+    require_admin(request)
+    supplier_prices.ensure_schema(db)
+    if not supplier_id:
+        return RedirectResponse(url="/materials/suppliers?error=pick a supplier first",
+                                status_code=status.HTTP_303_SEE_OTHER)
+    raw = (price or "").strip().replace("$", "").replace(",", "")
+    try:
+        if not raw:
+            raise ValueError("a price is required")
+        try:
+            cents = int(round(float(raw) * 100))
+        except ValueError:
+            raise ValueError(f"'{price.strip()}' is not a price — enter a number like 4.28")
+        supplier_prices.add_price(db, supplier_id, item_number=item_number,
+                                  description=description, uom=uom, price_cents=cents)
+    except Exception as e:
+        return RedirectResponse(url=f"/materials/suppliers?error={str(e)[:200]}",
+                                status_code=status.HTTP_303_SEE_OTHER)
+    label = (item_number or description or "item").strip()
+    return RedirectResponse(
+        url=f"/materials/suppliers?notice={label}: ${cents / 100:,.2f} recorded",
+        status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/materials/suppliers/price/delete")
+async def materials_supplier_price_delete(request: Request, price_id: int = Form(0),
+                                          db=Depends(get_db)):
+    """Remove a price entered against the wrong item -- the usual typo."""
+    require_admin(request)
+    if not price_id or not supplier_prices.delete_price(db, price_id):
+        return RedirectResponse(url="/materials/suppliers?error=price not found",
+                                status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(url="/materials/suppliers?notice=price removed",
+                            status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/materials/suppliers/delete")
+async def materials_supplier_delete(request: Request, supplier_id: int = Form(0),
+                                    db=Depends(get_db)):
+    """Drop a supplier and every price loaded against it."""
+    require_admin(request)
+    if not supplier_id or not supplier_prices.delete_supplier(db, supplier_id):
+        return RedirectResponse(url="/materials/suppliers?error=supplier not found",
+                                status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(url="/materials/suppliers?notice=supplier removed",
+                            status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.post("/materials/save")
