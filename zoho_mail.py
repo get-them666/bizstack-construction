@@ -110,25 +110,6 @@ def send(to: str, subject: str, body_text: str, *, sender: str = "", sender_name
 # Messages are flattened into the dict shape inbound_email._ingest consumes, so
 # matching, STOP handling and the reply bot are shared with every other path.
 
-_folder_cache: dict = {"account": "", "id": "", "at": 0.0}
-
-
-def _inbox_folder(account_id: str) -> str:
-    now = time.time()
-    if _folder_cache["id"] and _folder_cache["account"] == account_id and now - _folder_cache["at"] < 3600:
-        return _folder_cache["id"]
-    resp = zoho_client.api_request("GET", f"{MAIL_BASE}/accounts/{account_id}/folders")
-    if resp is None or resp.status_code != 200:
-        raise RuntimeError(f"Zoho Mail folders lookup failed: {getattr(resp, 'status_code', '?')}")
-    folders = resp.json().get("data") or []
-    inbox = next((f for f in folders if str(f.get("folderType") or "").lower() == "inbox"), None) \
-        or next((f for f in folders if str(f.get("folderName") or "").lower() == "inbox"), None)
-    if not inbox:
-        raise RuntimeError("no Inbox folder on the Zoho account")
-    _folder_cache.update({"account": account_id, "id": str(inbox.get("folderId")), "at": now})
-    return _folder_cache["id"]
-
-
 def _html_to_text(html_body: str) -> str:
     """Same cleaning the Gmail/IMAP paths get, so STOP detection sees one shape."""
     try:
@@ -145,14 +126,23 @@ def _html_to_text(html_body: str) -> str:
 
 
 def inbox_status() -> dict:
-    """Can the API see the inbox right now? One accounts call + one folders call."""
+    """Can the API read mail right now? One accounts call + a one-message list.
+
+    Deliberately no folders call: /folders needs ZohoMail.folders.READ, which
+    the grant does not carry, and messages/view works without a folderId --
+    every row names its own folderId, which is all the content call needs.
+    """
     out = {"ok": False, "reason": "", "mailbox": "", "via": "Zoho Mail API"}
     if not available():
         out["reason"] = "connection lacks the mail scope"
         return out
     try:
         account_id, address = _account(os.getenv("SMTP_FROM") or "")
-        _inbox_folder(account_id)
+        resp = zoho_client.api_request("GET", f"{MAIL_BASE}/accounts/{account_id}/messages/view",
+                                       params={"limit": 1})
+        if resp is None or resp.status_code != 200:
+            raise RuntimeError(f"Zoho Mail list failed: {getattr(resp, 'status_code', '?')} "
+                               f"{getattr(resp, 'text', '')[:120]}")
         out.update(ok=True, mailbox=address)
     except Exception as exc:
         out["reason"] = str(exc)[:200]
@@ -160,12 +150,11 @@ def inbox_status() -> dict:
 
 
 def list_recent(days: int = 7, limit: int = 30) -> list:
-    """Newest inbox messages as [{id, from, to, subject, date, received_ms, summary}]."""
+    """Newest messages across folders as [{id, folder_id, from, to, subject, date, received_ms, summary}]."""
     account_id, address = _account(os.getenv("SMTP_FROM") or "")
-    folder_id = _inbox_folder(account_id)
     resp = zoho_client.api_request(
         "GET", f"{MAIL_BASE}/accounts/{account_id}/messages/view",
-        params={"folderId": folder_id, "limit": max(1, min(int(limit), 200)), "sortorder": "false"})
+        params={"limit": max(1, min(int(limit), 200)), "sortorder": "false"})
     if resp is None or resp.status_code != 200:
         raise RuntimeError(f"Zoho Mail list failed: {getattr(resp, 'status_code', '?')} {getattr(resp, 'text', '')[:160]}")
     cutoff_ms = (time.time() - max(1, days) * 86400) * 1000
@@ -179,7 +168,7 @@ def list_recent(days: int = 7, limit: int = 30) -> list:
             continue
         out.append({
             "id": str(m.get("messageId") or ""),
-            "folder_id": folder_id,
+            "folder_id": str(m.get("folderId") or ""),
             "account_id": account_id,
             "from": str(m.get("fromAddress") or m.get("sender") or ""),
             "to": str(m.get("toAddress") or address),

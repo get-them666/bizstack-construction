@@ -31,17 +31,16 @@ def _fake_api(calls):
             return _Resp(200, {"data": [{"accountId": "acc1", "primaryEmailAddress": "hello@bizstackperks.com",
                                         "emailAddress": []}]})
         if url.endswith("/folders"):
-            return _Resp(200, {"data": [{"folderId": "f-sent", "folderName": "Sent", "folderType": "Sent"},
-                                        {"folderId": "f-in", "folderName": "Inbox", "folderType": "Inbox"}]})
+            return _Resp(401, {}, "INVALID_OAUTHSCOPE")   # we never asked for ZohoMail.folders.READ
         if "/messages/view" in url:
             return _Resp(200, {"data": [
-                {"messageId": "m1", "fromAddress": "barbara@example.com", "toAddress": "hello@bizstackperks.com",
+                {"messageId": "m1", "folderId": "f-in", "fromAddress": "barbara@example.com", "toAddress": "hello@bizstackperks.com",
                  "subject": "Re: your walkthrough", "receivedTime": str(NOW_MS - 3600_000), "summary": "Yes please"},
-                {"messageId": "m2", "fromAddress": "hello@bizstackperks.com", "toAddress": "x@y.com",
+                {"messageId": "m2", "folderId": "f-sent", "fromAddress": "hello@bizstackperks.com", "toAddress": "x@y.com",
                  "subject": "our own outbound", "receivedTime": str(NOW_MS - 60_000), "summary": "..."},
-                {"messageId": "m3", "fromAddress": "old@example.com", "toAddress": "hello@bizstackperks.com",
+                {"messageId": "m3", "folderId": "f-in", "fromAddress": "old@example.com", "toAddress": "hello@bizstackperks.com",
                  "subject": "ancient", "receivedTime": str(NOW_MS - 40 * 86400_000), "summary": "..."},
-                {"messageId": "m4", "fromAddress": "carl@example.com", "toAddress": "hello@bizstackperks.com",
+                {"messageId": "m4", "folderId": "f-in", "fromAddress": "carl@example.com", "toAddress": "hello@bizstackperks.com",
                  "subject": "STOP", "receivedTime": str(NOW_MS - 120_000), "summary": "STOP"},
             ]})
         if "/content" in url:
@@ -59,7 +58,6 @@ def wired(monkeypatch):
     monkeypatch.setattr(zm, "available", lambda: True)
     monkeypatch.setenv("SMTP_FROM", "hello@bizstackperks.com")
     zm._account_cache.update({"id": "", "address": "", "at": 0.0})
-    zm._folder_cache.update({"account": "", "id": "", "at": 0.0})
     return calls
 
 
@@ -79,10 +77,10 @@ class _Conn:
     def rollback(self): pass
 
 
-def test_inbox_status_finds_the_inbox_folder(wired):
+def test_inbox_status_never_touches_the_folders_api(wired):
     st = zm.inbox_status()
     assert st["ok"] and st["mailbox"] == "hello@bizstackperks.com" and st["via"] == "Zoho Mail API"
-    assert zm._folder_cache["id"] == "f-in", "Inbox, not Sent"
+    assert not any(u.endswith("/folders") for _, u, _ in wired), "folders needs a scope the grant lacks"
 
 
 def test_list_recent_drops_old_mail_and_keeps_the_shape(wired):
@@ -106,6 +104,7 @@ def test_poll_skips_our_own_mail_and_already_seen_messages(wired, monkeypatch):
     assert res["inserted"] == 1 and res["checked"] == 2, "checked counts inbound candidates, not our own mail"
     content_calls = [c for c in wired if "/content" in c[1]]
     assert len(content_calls) == 1, "only genuinely new messages cost a content call"
+    assert "/folders/f-in/messages/m4/content" in content_calls[0][1], "the row's own folderId is used"
 
 
 def test_poll_reports_instead_of_raising_when_the_api_fails(wired, monkeypatch):
