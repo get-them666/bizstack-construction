@@ -88,6 +88,17 @@ def test_geocode_survives_a_broken_upstream(monkeypatch):
     def boom(q):
         raise RuntimeError("provider down")
     monkeypatch.setattr(open_geo, "_nominatim", boom)
+    # The Census/zip_lookup path runs first; stub it so the test actually
+    # reaches Nominatim instead of succeeding on a live upstream call.
+    import sys, types
+    fake_sts = types.ModuleType("skiptrace_service")
+    fake_sts.parse_address = lambda raw: {"ok": False}
+    fake_zip = types.ModuleType("zip_lookup")
+    fake_zip.lookup_zip = lambda *a, **k: {}
+    fake_zip.ZipLookupError = Exception
+    monkeypatch.setitem(sys.modules, "skiptrace_service", fake_sts)
+    monkeypatch.setitem(sys.modules, "zip_lookup", fake_zip)
+    monkeypatch.setattr(open_geo, "_cache_get", lambda k: None, raising=False)
     out = open_geo.geocode("4701 Winthrop Street, Norfolk, VA")
     assert out["ok"] is False and "provider down" in out["error"]
 

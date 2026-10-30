@@ -99,50 +99,88 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAo5_xHUPxAiBTdrj0V1mppqHScHWAw1OI&libraries=places"></script>
 <script>
 (function(){
-    try {
-        var addrInput = document.getElementById('prop-address');
-        if (addrInput && window.google && google.maps && google.maps.places) {
-            new google.maps.places.Autocomplete(addrInput, { types: ['address'], componentRestrictions: { country: 'us' } });
-        }
-    } catch(e){}
+    var addr = document.getElementById('prop-address');
+    if (!addr) return;
+    addr.setAttribute('list', 'prop-address-list');
+
+    // --- address suggestions (server-side, no Google Maps key needed) ---
+    var dl = document.createElement('datalist');
+    dl.id = 'prop-address-list';
+    document.body.appendChild(dl);
+    var timer;
+    addr.addEventListener('input', function(){
+        clearTimeout(timer);
+        var v = addr.value;
+        if (v.length < 4) { dl.innerHTML = ''; return; }
+        timer = setTimeout(function(){
+            fetch('/api/places/autocomplete?input=' + encodeURIComponent(v))
+                .then(function(r){ return r.json(); })
+                .then(function(j){
+                    dl.innerHTML = '';
+                    (j.predictions || []).forEach(function(p){
+                        var o = document.createElement('option');
+                        o.value = p.description || (p.structured_formatting && p.structured_formatting.main_text) || '';
+                        if (o.value) dl.appendChild(o);
+                    });
+                })
+                .catch(function(){});
+        }, 200);
+    });
 })();
 </script>
-{% if api_configured %}
 <script>
 document.addEventListener('DOMContentLoaded', function() {
-    const addr = document.getElementById('prop-address');
-    const row = document.getElementById('prop-detect-row');
-    const msg = document.getElementById('prop-detect');
-    // Look up once the visitor finishes the field, not per keystroke: every
-    // distinct partial address was a billed miss against a 50-call MONTH.
-    // Mirrors property_service.looks_like_full_address so we never even ask
-    // for something the server would refuse.
-    let last = '';
+    var addr = document.getElementById('prop-address');
+    var sqftInput = document.querySelector('input[name="sqft"]');
+    var row = document.getElementById('prop-detect-row');
+    var msg = document.getElementById('prop-detect');
+    if (!addr) return;
+
+    // Mirrors property_service.looks_like_full_address so we never ask the
+    // server for a partial address (every live lookup costs a real call).
     function looksComplete(v) {
         return /^\d/.test(v) && v.split(/\s+/).length >= 3 && (v.indexOf(',') !== -1 || /\b\d{5}\b/.test(v));
     }
+
+    var last = '';
+    var busy = false;
+
     async function detect() {
-        const v = addr.value.trim();
-        if (v === last) return;
+        var v = addr.value.trim();
+        if (!v || v === last || busy) return;
+        if (!looksComplete(v)) { if (row) row.classList.add('hidden'); return; }
         last = v;
-        if (!looksComplete(v)) { row.classList.add('hidden'); return; }
+        busy = true;
+        if (msg) { msg.textContent = 'Looking up the property…'; }
+        if (row) row.classList.remove('hidden');
         try {
-            const res = await fetch('/api/property?address=' + encodeURIComponent(v));
-            const json = await res.json();
-            if (json.sqft) {
-                msg.textContent = '🏠 Found: ' + json.address + ' · ' + (json.sqft ? Math.round(json.sqft).toLocaleString() + ' sq ft · ' : '') + (json.beds ? json.beds + ' bd / ' : '') + (json.baths ? json.baths + ' ba' : '');
-                row.classList.remove('hidden');
+            var res = await fetch('/api/property?address=' + encodeURIComponent(v));
+            var json = await res.json();
+            if (json && json.sqft) {
+                // Auto-fill the square footage box from the detected record.
+                if (sqftInput) sqftInput.value = Math.round(json.sqft);
+                if (msg) {
+                    msg.textContent = '🏠 Found: ' + (json.address || v) + ' · ' +
+                        Math.round(json.sqft).toLocaleString() + ' sq ft' +
+                        (json.beds ? ' · ' + json.beds + ' bd' : '') +
+                        (json.baths ? ' · ' + json.baths + ' ba' : '');
+                }
+                if (row) row.classList.remove('hidden');
             } else {
-                row.classList.add('hidden');
+                if (msg) msg.textContent = 'No public record for this address — enter your square footage below.';
+                if (row) row.classList.remove('hidden');
             }
-        } catch (e) { row.classList.add('hidden'); }
+        } catch (e) {
+            if (row) row.classList.add('hidden');
+        } finally {
+            busy = false;
+        }
     }
+
     addr.addEventListener('change', detect);
     addr.addEventListener('blur', detect);
 });
 </script>
-{% endif %}
 {% endblock %}

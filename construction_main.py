@@ -11143,12 +11143,19 @@ async def copilot_chat(request: Request, message: str = Form(...), db=Depends(ge
 
 @app.get("/api/places/autocomplete")
 async def places_autocomplete_api(request: Request, input: str = "", sessiontoken: str = ""):
-    try:
-        import google_maps
-        preds = google_maps.places_autocomplete(input or "", session_token=sessiontoken or None)
-        return JSONResponse({"predictions": preds})
-    except Exception as e:
-        return JSONResponse({"predictions": [], "error": str(e)}, status_code=200)
+    """Address typeahead. Keyless OSM data -- no Google key involved.
+
+    Named /api/places/autocomplete for the templates that already call it, but
+    `sessiontoken` is accepted and ignored: that is a Google billing concept and
+    there is no billing here.
+    """
+    import open_geo
+
+    result = open_geo.suggest_addresses(input or "")
+    return JSONResponse({
+        "predictions": result.get("suggestions", []),
+        "source": result.get("source", ""),
+    }, headers={"Cache-Control": "public, max-age=300"})
 
 
 @app.get("/api/property/lookup")

@@ -1,0 +1,99 @@
+{#
+  Server-side address autocomplete + property square-footage auto-fill.
+
+  Deliberately does NOT load the Google Maps JS API. That key is referrer
+  restricted for this domain and every load returned a rejected-key response,
+  which leaves the input disabled with class `gm-err-autocomplete` and the
+  placeholder "Oops! Something went wrong." — an address field the visitor
+  cannot type into at all.
+
+  Instead: /api/places/autocomplete (server key) feeds a <datalist>, and
+  /api/property (RentCast → regional county GIS fallback) fills the sq ft box.
+
+  Markup contract:
+    input[data-addr-autocomplete]        -> gets suggestions
+    input[data-addr-sqft]                -> auto-filled from the lookup
+#}
+<script>
+(function () {
+    function looksComplete(v) {
+        return /^\d/.test(v) && v.split(/\s+/).length >= 3 &&
+               (v.indexOf(',') !== -1 || /\b\d{5}\b/.test(v));
+    }
+
+    function wire(addr) {
+        if (!addr || addr.dataset.addrWired === '1') return;
+        addr.dataset.addrWired = '1';
+        addr.setAttribute('autocomplete', 'off');
+
+        var sqftInput = document.querySelector('input[data-addr-sqft]');
+
+        // --- suggestions ---
+        var dlId = (addr.id || 'addr') + '-suggestions';
+        var dl = document.getElementById(dlId);
+        if (!dl) {
+            dl = document.createElement('datalist');
+            dl.id = dlId;
+            document.body.appendChild(dl);
+        }
+        addr.setAttribute('list', dlId);
+
+        var timer;
+        addr.addEventListener('input', function () {
+            clearTimeout(timer);
+            var v = addr.value.trim();
+            if (v.length < 4) { dl.innerHTML = ''; return; }
+            timer = setTimeout(function () {
+                fetch('/api/places/autocomplete?input=' + encodeURIComponent(v))
+                    .then(function (r) { return r.json(); })
+                    .then(function (j) {
+                        dl.innerHTML = '';
+                        (j.predictions || []).forEach(function (p) {
+                            var o = document.createElement('option');
+                            o.value = p.description ||
+                                (p.structured_formatting && p.structured_formatting.main_text) || '';
+                            if (o.value) dl.appendChild(o);
+                        });
+                    })
+                    .catch(function () { dl.innerHTML = ''; });
+            }, 200);
+        });
+
+        // --- property / square footage lookup ---
+        var last = '';
+        var busy = false;
+        function detect() {
+            var v = addr.value.trim();
+            if (!v || v === last || busy) return;
+            if (!looksComplete(v)) return;
+            last = v;
+            busy = true;
+            fetch('/api/property?address=' + encodeURIComponent(v))
+                .then(function (r) { return r.json(); })
+                .then(function (j) {
+                    if (j && j.sqft && sqftInput && !sqftInput.value) {
+                        sqftInput.value = Math.round(j.sqft);
+                    }
+                    addr.dispatchEvent(new CustomEvent('addr-detected', {
+                        bubbles: true, detail: j || {}
+                    }));
+                })
+                .catch(function () {})
+                .finally(function () { busy = false; });
+        }
+        addr.addEventListener('change', detect);
+        addr.addEventListener('blur', detect);
+    }
+
+    function init() {
+        var nodes = document.querySelectorAll('input[data-addr-autocomplete]');
+        for (var i = 0; i < nodes.length; i++) wire(nodes[i]);
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', init);
+    } else {
+        init();
+    }
+})();
+</script>

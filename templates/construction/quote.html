@@ -4,17 +4,6 @@
 {% block meta %}<meta name="description" content="Request a free, no-obligation estimate from {{ co.name }}. Licensed general contractor serving {{ co.service_area }}. Same-week walkthroughs available.">{% endblock %}
 
 {% block content %}
-<script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAo5_xHUPxAiBTdrj0V1mppqHScHWAw1OI&libraries=places"></script>
-<script>
-document.addEventListener('DOMContentLoaded', function(){
-    try {
-        var addrInput = document.getElementById('quote-address');
-        if (addrInput && window.google && google.maps && google.maps.places) {
-            new google.maps.places.Autocomplete(addrInput, { types: ['address'], componentRestrictions: { country: 'us' } });
-        }
-    } catch(e){}
-});
-</script>
 <section class="py-16 bg-gradient-to-br from-slate-900 to-indigo-900 text-white">
     <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
         <p class="text-sm font-bold text-indigo-300 uppercase tracking-widest">Free estimate</p>
@@ -64,7 +53,7 @@ document.addEventListener('DOMContentLoaded', function(){
             </div>
             <div>
                 <label class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Property Address *</label>
-                <input name="address" id="quote-address" required placeholder="123 Main St, Virginia Beach, VA" class="w-full px-4 py-3 rounded-xl bg-white border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                <input name="address" id="quote-address" data-addr-autocomplete required placeholder="123 Main St, Virginia Beach, VA" class="w-full px-4 py-3 rounded-xl bg-white border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
             </div>
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-5">
                 <div>

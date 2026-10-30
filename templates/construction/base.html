@@ -343,6 +343,7 @@
         });
     </script>
     {% block scripts %}{% endblock %}
+    {% include "_addr_autocomplete.html" %}
     {% if not owner_view %}
     {% include "chat_widget.html" %}
     {{ site_theme_state().decor | safe }}

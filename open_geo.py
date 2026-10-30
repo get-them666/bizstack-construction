@@ -42,8 +42,15 @@ TIMEOUT = 12
 USER_AGENT = "bizstack-construction/1.0 (construction lead lookup)"
 
 NOMINATIM = "https://nominatim.openstreetmap.org/search"
+PHOTON = "https://photon.komoot.io/api/"
 OSRM = "https://router.project-osrm.org/route/v1/driving"
 OSM_EMBED = "https://www.openstreetmap.org/export/embed.html"
+
+# Photon has no notion of a service area, so an unbounded query for "123 Main St"
+# returns Sharon MA before Norfolk VA. Bias it to the two states this contractor
+# actually works in (Hampton Roads VA + Currituck/Pasquotank NC) and let Photon
+# rank from there. Not a hard filter: a rare out-of-area address still resolves.
+SERVICE_BIAS = {"lat": 36.95, "lon": -76.25, "zoom": 9}
 
 _CACHE = {}
 _CACHE_TTL = 30 * 24 * 3600  # 30 days, same reasoning as zip_lookup
@@ -160,6 +167,113 @@ def route(origin: dict, destination: dict) -> dict:
             "source": "osrm"}
 
 
+# ── address autocomplete ────────────────────────────────
+#
+# Keyless, and deliberately not Google. The Maps browser key on this account is
+# referrer-restricted and rejected, which does not fail quietly: the Places
+# widget rewrites the input's placeholder to "Oops! Something went wrong.",
+# adds `gm-err-autocomplete`, and disables the field outright. A dead API key
+# must never be able to break a contact form, so the typeahead runs server-side
+# against OSM data and the browser only ever sees plain JSON.
+
+# Two letters is enough to be useful and cheap; one letter matches everything.
+MIN_SUGGEST_CHARS = 3
+
+
+def _photon(query, limit=6):
+    """OSM address suggestions, ranked with a bias toward the service area."""
+    params = {"q": query, "limit": limit, "lang": "en"}
+    params.update(SERVICE_BIAS)
+    body = _get_json(PHOTON, params)
+    out = []
+    for feature in (body.get("features") or [])[:limit]:
+        props = feature.get("properties") or {}
+        house = (props.get("housenumber") or "").strip()
+        street = (props.get("street") or props.get("name") or "").strip()
+        if not street:
+            continue
+        line1 = f"{house} {street}".strip() if house else street
+        city = (props.get("city") or props.get("town") or props.get("village")
+                or props.get("county") or "").strip()
+        state = (props.get("state") or "").strip()
+        postcode = (props.get("postcode") or "").strip()
+        # US only: a street address this business cannot drive to is noise in a
+        # dropdown that has room for six rows.
+        country = (props.get("countrycode") or "").strip().upper()
+        if country and country != "US":
+            continue
+        parts = [p for p in (line1, city, state) if p]
+        label = ", ".join(parts)
+        if postcode:
+            label = f"{label} {postcode}"
+        if not label:
+            continue
+        out.append({
+            "description": label,
+            "main_text": line1,
+            "secondary_text": ", ".join(p for p in (city, state, postcode) if p),
+            "source": "photon",
+        })
+    return out
+
+
+def _nominatim_suggest(query, limit=6):
+    """Fallback. Nominatim's usage policy caps this at ~1 request/second, so it
+    is only reached when Photon is down or returns nothing -- never per keystroke
+    for a normal visitor."""
+    body = _get_json(NOMINATIM, {
+        "q": query, "format": "json", "limit": limit,
+        "addressdetails": 1, "countrycodes": "us",
+    })
+    out = []
+    for hit in body if isinstance(body, list) else []:
+        label = (hit.get("display_name") or "").strip()
+        if not label:
+            continue
+        addr = hit.get("address") or {}
+        line1 = " ".join(p for p in (addr.get("house_number"), addr.get("road")) if p)
+        out.append({
+            "description": label,
+            "main_text": line1 or label.split(",")[0],
+            "secondary_text": ", ".join(
+                p for p in (addr.get("city") or addr.get("town") or addr.get("village"),
+                            addr.get("state"), addr.get("postcode")) if p
+            ),
+            "lat": hit.get("lat"),
+            "lng": hit.get("lon"),
+            "source": "nominatim",
+        })
+    return out
+
+
+def suggest_addresses(query: str, limit: int = 6) -> dict:
+    """Address suggestions for a typeahead box, or an empty list.
+
+    Always returns a dict with "suggestions". Never raises: a dropdown that
+    cannot populate is a normal state, and a 500 in an input's keystroke handler
+    shows up as a console error on a page a customer is filling in.
+    """
+    raw = " ".join(str(query or "").split())
+    if len(raw) < MIN_SUGGEST_CHARS:
+        return {"ok": True, "suggestions": [], "source": "none"}
+
+    key = "suggest:" + raw.lower()
+    cached = _cache_get(key)
+    if cached is not None:
+        return {"ok": True, "suggestions": cached[:limit], "source": "cache"}
+
+    for provider, fn in (("photon", _photon), ("nominatim", _nominatim_suggest)):
+        try:
+            hits = fn(raw, limit)
+        except Exception:
+            continue
+        if hits:
+            _cache_put(key, hits)
+            return {"ok": True, "suggestions": hits[:limit], "source": provider}
+
+    return {"ok": True, "suggestions": [], "source": "none"}
+
+
 # ── URLs ────────────────────────────────────────────────
 
 def apple_link_url(lat: float, lng: float, label: str = "") -> str:
@@ -228,6 +342,7 @@ def status() -> dict:
     return {
         "google_required": False,
         "geocoding": ["census", "arcgis", "nominatim"],
+        "autocomplete": ["photon", "nominatim"],
         "routing": "osrm",
         "links": "apple",
         "embeds": "openstreetmap",
