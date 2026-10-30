@@ -56,42 +56,10 @@
     var addrInput = document.getElementById('addr');
     if (!addrInput) return;
     
-    function setupGoogle() {
-        try {
-            if (window.google && google.maps && google.maps.places) {
-                var ac = new google.maps.places.Autocomplete(addrInput, { 
-                    types: ['address'], 
-                    componentRestrictions: { country: 'us' },
-                    fields: ['formatted_address']
-                });
-                ac.addListener('place_changed', function() {
-                    var place = ac.getPlace();
-                    if (place && place.formatted_address) {
-                        addrInput.value = place.formatted_address;
-                    }
-                });
-                return true;
-            }
-        } catch(e) { console.log('g err', e); }
-        return false;
-    }
-    
-    if (setupGoogle()) return;
-    
-    window.gm_authFailure = function() { setupFallback(); };
-    window.initAddrAutocomplete = setupGoogle;
-    
-    var script = document.createElement('script');
-    script.src = 'https://maps.googleapis.com/maps/api/js?key=AIzaSyAo5_xHUPxAiBTdrj0V1mppqHScHWAw1OI&libraries=places&callback=initAddrAutocomplete&language=en';
-    script.async = true;
-    script.defer = true;
-    script.onerror = setupFallback;
-    document.head.appendChild(script);
-    
-    setTimeout(function(){
-        if (setupGoogle()) return;
-        setupFallback();
-    }, 1500);
+    // Remove any Google Maps error classes
+    addrInput.classList.remove('gm-err-autocomplete');
+    addrInput.style.backgroundImage = '';
+    addrInput.disabled = false;
     
     function setupFallback() {
         var datalistId = 'addr-suggestions-list';
@@ -119,6 +87,8 @@
             }, 200);
         });
     }
+    
+    setupFallback();
 })();
 </script>
 <script>
