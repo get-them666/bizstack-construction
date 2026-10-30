@@ -170,19 +170,24 @@ def places_autocomplete(input_text: str, session_token: Optional[str] = None) ->
     }
     if session_token:
         params["sessiontoken"] = session_token
-    url = PLACES_BASE + "?" + urllib.parse.urlencode(params)
-    with urllib.request.urlopen(url) as resp:
-        data = json.loads(resp.read().decode())
-    if data["status"] != "OK":
+    try:
+        url = PLACES_BASE + "?" + urllib.parse.urlencode(params)
+        with urllib.request.urlopen(url, timeout=10) as resp:
+            data = json.loads(resp.read().decode())
+        if data.get("status") not in ("OK", "ZERO_RESULTS"):
+            return []
+        if data.get("status") == "ZERO_RESULTS":
+            return []
+        return [
+            {
+                "place_id": p["place_id"],
+                "description": p["description"],
+                "structured_formatting": p.get("structured_formatting", {}),
+            }
+            for p in data.get("predictions", [])
+        ]
+    except Exception:
         return []
-    return [
-        {
-            "place_id": p["place_id"],
-            "description": p["description"],
-            "structured_formatting": p.get("structured_formatting", {}),
-        }
-        for p in data["predictions"]
-    ]
 
 
 def place_details(place_id: str, fields: Optional[str] = None) -> Optional[Dict[str, Any]]:
