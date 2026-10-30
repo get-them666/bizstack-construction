@@ -53,6 +53,7 @@ import team_messages
 import settings_status
 import today
 import followups
+import call_list
 import zoho_oauth
 import zoho_campaigns
 import copilot_memory
@@ -2702,6 +2703,91 @@ async def book_walkthrough_submit(token: str, request: Request, slot: str = Form
     except Exception as e:
         print(f"⚠️ booking calendar event failed: {e}", flush=True)
     return RedirectResponse(url=f"/book/{token}?saved=1", status_code=status.HTTP_303_SEE_OTHER)
+
+
+# --- call lists ------------------------------------------------------------------
+# The bot fills the pipeline; a person still has to ring people. These two routes
+# are the only place a crew member touches lead data, and the token is scoped to
+# one crew member and one day (call_list.call_token), so a forwarded link cannot
+# read tomorrow's list or anyone else's.
+
+@app.get("/calllist/{token}", response_class=HTMLResponse)
+async def call_list_page(token: str, request: Request, db=Depends(get_db)):
+    parsed = call_list.verify_call_token(token)
+    if not parsed:
+        return templates.TemplateResponse(request=request, name="calllist.html",
+                                          context={"invalid": True}, status_code=404)
+    crew_id, day = parsed
+    with db.cursor() as cur:
+        cur.execute("SELECT id, name, phone FROM crew WHERE id = %s;", (crew_id,))
+        crew = cur.fetchone()
+    if not crew:
+        return templates.TemplateResponse(request=request, name="calllist.html",
+                                          context={"invalid": True}, status_code=404)
+    return templates.TemplateResponse(request=request, name="calllist.html", context={
+        "token": token,
+        "crew": crew,
+        "day_label": day.strftime("%A %-d %B"),
+        "calls": call_list.list_for(db, crew_id, "construction", day),
+        "progress": call_list.progress(db, crew_id, "construction", day),
+        "saved": request.query_params.get("saved", ""),
+    })
+
+
+@app.post("/calllist/{token}/{assignment_id}")
+async def call_list_mark(token: str, assignment_id: int, request: Request,
+                         state: str = Form(""), note: str = Form(""), db=Depends(get_db)):
+    parsed = call_list.verify_call_token(token)
+    if not parsed:
+        raise HTTPException(status_code=404, detail="That call list link is not valid.")
+    crew_id, day = parsed
+    # The token names the crew member, so the assignment must belong to them:
+    # otherwise a guessed id would let one person write another's call log.
+    with db.cursor() as cur:
+        cur.execute("SELECT crew_id FROM call_assignments WHERE id = %s;", (assignment_id,))
+        row = cur.fetchone()
+    if not row or int(row["crew_id"] if isinstance(row, dict) else row[0]) != int(crew_id):
+        raise HTTPException(status_code=404, detail="That call is not on this list.")
+    call_list.mark(db, assignment_id, state, note)
+    return RedirectResponse(url=f"/calllist/{token}?saved=1", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/api/calllist/assign")
+async def call_list_assign(request: Request, crew_id: str = Form(""), limit: str = Form("25"),
+                           day: str = Form(""), text: str = Form("1"), db=Depends(get_db)):
+    """Build a crew member's list for a day and (by default) text them the link.
+
+    One row per person, and the text is the whole point: a list nobody is told
+    about is a list nobody works.
+    """
+    require_admin(request)
+    try:
+        cid = int(crew_id or 0)
+        cap = max(1, min(int(limit or 25), 60))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="crew_id and limit must be numbers.")
+    target = None
+    if day.strip():
+        try:
+            target = date.fromisoformat(day.strip())
+        except ValueError:
+            raise HTTPException(status_code=400, detail="day must be YYYY-MM-DD.")
+    with db.cursor() as cur:
+        cur.execute("SELECT id, name, phone FROM crew WHERE id = %s AND is_active;", (cid,))
+        crew = cur.fetchone()
+    if not crew:
+        raise HTTPException(status_code=404, detail="No active crew member with that id.")
+    res = call_list.assign(db, cid, "construction", cap, target)
+    sent = False
+    phone = (crew.get("phone") or "").strip()
+    if text.strip() not in ("0", "false", "off") and phone:
+        try:
+            body = call_list.sms_text(crew.get("name") or "", cid, res["total"], target)
+            sent = bool(signalwire.send_sms(phone, body))
+        except Exception as e:
+            print(f"⚠️ call list text failed: {e}", flush=True)
+    return {"ok": True, **res, "crew": crew.get("name"), "texted": sent,
+            "url": call_list.call_url(cid, target)}
 
 
 def _form_error_redirect(path: str, error: str, **fields) -> RedirectResponse:

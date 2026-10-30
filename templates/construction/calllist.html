@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% set co = company() %}
+{% block title %}Call list · {{ day_label }}{% endblock %}
+{% block meta %}<meta name="robots" content="noindex, nofollow">{% endblock %}
+
+{% block content %}
+<section class="py-6 bg-slate-50 min-h-[80vh]">
+    <div class="max-w-2xl mx-auto px-4">
+
+        {% if invalid %}
+        <div class="bg-white rounded-3xl border border-slate-200 p-8 text-center">
+            <p class="text-3xl">🔗</p>
+            <h1 class="mt-3 text-2xl font-black text-slate-900">That link didn't work</h1>
+            <p class="mt-2 text-slate-600">Call the office and we'll send a fresh one.</p>
+            <a href="tel:{{ co.phone_e164 }}" class="mt-6 inline-flex px-6 py-3 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-2xl">Call {{ co.phone }}</a>
+        </div>
+
+        {% else %}
+        <div class="flex items-end justify-between">
+            <div>
+                <p class="text-xs font-bold text-indigo-600 uppercase tracking-widest">{{ co.short_name }}</p>
+                <h1 class="mt-1 text-2xl font-black text-slate-900">{{ crew.name.split(' ')[0] }}'s calls</h1>
+                <p class="text-sm text-slate-500">{{ day_label }}</p>
+            </div>
+            <div class="text-right">
+                <p class="text-2xl font-black text-slate-900">{{ progress.done }}/{{ progress.total }}</p>
+                <p class="text-xs text-slate-500">done{% if progress.booked %} · {{ progress.booked }} booked{% endif %}</p>
+            </div>
+        </div>
+
+        {% if saved %}
+        <div class="mt-4 rounded-2xl bg-emerald-50 border border-emerald-200 px-4 py-3 text-sm font-semibold text-emerald-800">
+            Logged. Next one.
+        </div>
+        {% endif %}
+
+        {% if not calls %}
+        <div class="mt-6 bg-white rounded-3xl border border-slate-200 p-8 text-center">
+            <p class="text-3xl">☕</p>
+            <h2 class="mt-3 text-lg font-black text-slate-900">Nothing left on this list</h2>
+            <p class="mt-2 text-sm text-slate-600">Either it's all done or today's list was never built. Call the office.</p>
+        </div>
+        {% endif %}
+
+        <ol class="mt-5 space-y-3">
+        {% for c in calls %}
+            <li class="bg-white rounded-2xl border {% if c.state == 'assigned' %}border-slate-200{% elif c.state == 'booked' %}border-emerald-300{% else %}border-slate-100{% endif %} p-4 {% if c.state not in ('assigned',) %}opacity-70{% endif %}">
+                <div class="flex items-start justify-between gap-3">
+                    <div class="min-w-0">
+                        <p class="font-bold text-slate-900 truncate">{{ c.name or 'No name on file' }}</p>
+                        <p class="text-xs text-slate-500 truncate">{{ c.address or 'no address' }}</p>
+                        <p class="mt-1 text-xs font-semibold {% if c.reason == 'replied' %}text-emerald-700{% else %}text-indigo-600{% endif %}">{{ c.reason_text or c.source or '' }}</p>
+                    </div>
+                    <span class="shrink-0 text-xs font-bold px-2 py-1 rounded-lg {% if c.state == 'assigned' %}bg-slate-100 text-slate-600{% elif c.state == 'booked' %}bg-emerald-100 text-emerald-800{% else %}bg-slate-100 text-slate-500{% endif %}">
+                        {% if c.state == 'assigned' %}to call{% else %}{{ c.state.replace('_', ' ') }}{% endif %}
+                    </span>
+                </div>
+
+                <div class="mt-3 flex gap-2">
+                    <a href="tel:{{ c.dial }}" class="flex-1 text-center px-4 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-bold">Call {{ c.phone }}</a>
+                    <a href="sms:{{ c.dial }}?&body={{ ('Hi, this is Shaun with ' ~ co.short_name ~ ' - you had a permit filed for ' ~ (c.address or 'your property') ~ '. Free walkthrough if you want one, no pressure.') | urlencode }}"
+                       class="px-4 py-3 rounded-xl border border-slate-300 text-slate-700 text-sm font-bold">Text</a>
+                </div>
+
+                <form method="post" action="/calllist/{{ token }}/{{ c.assignment_id }}" class="mt-2 flex flex-wrap gap-2">
+                    <button name="state" value="called" class="px-3 py-2 rounded-lg bg-slate-900 text-white text-xs font-bold">Spoke</button>
+                    <button name="state" value="booked" class="px-3 py-2 rounded-lg bg-emerald-600 text-white text-xs font-bold">Booked</button>
+                    <button name="state" value="callback" class="px-3 py-2 rounded-lg bg-slate-100 text-slate-700 text-xs font-bold">Call back</button>
+                    <button name="state" value="no_answer" class="px-3 py-2 rounded-lg bg-slate-100 text-slate-700 text-xs font-bold">No answer</button>
+                    <button name="state" value="voicemail" class="px-3 py-2 rounded-lg bg-slate-100 text-slate-700 text-xs font-bold">Voicemail</button>
+                    <button name="state" value="wrong_number" class="px-3 py-2 rounded-lg bg-slate-100 text-slate-700 text-xs font-bold">Wrong #</button>
+                    <button name="state" value="not_interested" class="px-3 py-2 rounded-lg bg-slate-100 text-slate-700 text-xs font-bold">Not interested</button>
+                </form>
+                {% if c.note %}<p class="mt-2 text-xs text-slate-500">Note: {{ c.note }}</p>{% endif %}
+            </li>
+        {% endfor %}
+        </ol>
+
+        <p class="mt-8 text-center text-xs text-slate-400">
+            Call or text {{ co.phone }} if a number is wrong or someone asks to be taken off the list.
+        </p>
+        {% endif %}
+    </div>
+</section>
+{% endblock %}
