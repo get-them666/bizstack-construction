@@ -8150,11 +8150,52 @@ def _zoho_imap_loop():
         time.sleep(backoff)
 
 
+def _call_list_loop():
+    """Once a day, at CALL_LIST_HOUR, build tomorrow's list and text the link.
+
+    Sleeping until the hour rather than every N minutes keeps it to one text a
+    day per person: a loop that re-runs on restart would otherwise text Ryan
+    again every deploy. `assign` is idempotent, so a restart inside the window
+    tops the list up instead of duplicating it.
+    """
+    try:
+        hour = max(0, min(int(os.getenv("CALL_LIST_HOUR", "16") or 16), 23))
+    except (TypeError, ValueError):
+        hour = 16
+    db_url = (os.getenv("DATABASE_URL") or "").strip()
+    while True:
+        try:
+            now = datetime.now()
+            target = now.replace(hour=hour, minute=0, second=0, microsecond=0)
+            if target <= now:
+                target += timedelta(days=1)
+            time.sleep(max(60, (target - now).total_seconds()))
+            if not db_url:
+                continue
+            with psycopg.connect(db_url, row_factory=dict_row) as conn:
+                res = call_list.auto_plan(conn, "construction")
+            print(f"[call-list] {res}", flush=True)
+        except Exception as exc:
+            print(f"[call-list] plan failed: {type(exc).__name__}: {exc}", flush=True)
+            time.sleep(1800)
+
+
 def _start_lead_source_scheduler():
     try:
         interval_h = max(0.5, float(os.getenv("LEAD_SCAN_INTERVAL_HOURS", "6") or 6))
     except (TypeError, ValueError):
         interval_h = 6
+
+    # Tomorrow's call list, built and texted at a fixed hour. Off unless
+    # CALL_LIST_CREW_IDS names someone, because an unrequested daily text is
+    # worse than no text. This is the last manual step in the pipeline: the bot
+    # writes, answers and books, and a person still has to ring people.
+    if call_list.crew_ids_from_env():
+        try:
+            threading.Thread(target=_call_list_loop, daemon=True).start()
+            print(f"[call-list] loop started for crew {call_list.crew_ids_from_env()}", flush=True)
+        except Exception as exc:
+            print(f"[call-list] could not start: {exc}", flush=True)
 
     # Zoho mailbox first: that is where replies actually arrive (MX -> Zoho).
     try:
