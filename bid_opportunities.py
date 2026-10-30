@@ -161,6 +161,8 @@ def _upsert(conn, rows: list[dict], company: str = "construction",
         vals = {k: row.get(k) for k in _WEBHOOK_FIELDS if k in row}
         vals["role"] = str(vals.get("role") or "sub").strip().lower()
         vals["status"] = str(vals.get("status") or "new").strip().lower()
+        if "kind" in row and row.get("kind") in ("solicitation", "permit"):
+            vals["kind"] = row.get("kind")
         if vals["role"] not in ROLES:
             errors.append({"name": vals.get("name"), "error": f"role must be one of {ROLES}"})
             continue
@@ -193,6 +195,9 @@ def _upsert(conn, rows: list[dict], company: str = "construction",
             if _coerce_date(vals.get("due_date")) is not None:
                 updates.append("due_date = EXCLUDED.due_date")
                 params.append(_coerce_date(vals.get("due_date")))
+            if vals.get("kind") in ("solicitation", "permit"):
+                updates.append("kind = EXCLUDED.kind")
+                params.append(vals.get("kind"))
             updates.append("last_seen_at = now()")
             set_clause = ", ".join(updates)
         else:
@@ -215,6 +220,10 @@ def _upsert(conn, rows: list[dict], company: str = "construction",
         colvals["due_date"] = _coerce_date(vals.get("due_date"))
         colvals["bid_amount"] = _coerce_amount(vals.get("bid_amount"))
         colvals["status"] = vals["status"]
+        if vals.get("kind") in ("solicitation", "permit"):
+            colvals["kind"] = vals.get("kind")
+        else:
+            colvals["kind"] = "solicitation" if not apply_status and (row.get("external_url") or vals.get("external_url")) else ("permit" if not apply_status and (str(row.get("reference") or "").strip()[:1] in ("P", "C") and not row.get("external_url")) else "solicitation")
         colvals["company"] = company
         colvals["source"] = "pull" if not apply_status else "local"
         # Stamped on insert. first_seen_at is deliberately absent from every
@@ -406,6 +415,21 @@ def ensure_schema(conn) -> None:
                 updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        cur.execute("ALTER TABLE bid_opportunities ADD COLUMN IF NOT EXISTS kind VARCHAR(20) DEFAULT 'solicitation';")
+        cur.execute("ALTER TABLE bid_opportunities ADD COLUMN IF NOT EXISTS markup_pct NUMERIC(6,2) DEFAULT 0;")
+        cur.execute("""
+            UPDATE bid_opportunities
+               SET kind = 'permit'
+             WHERE kind IS NULL OR kind = ''
+               AND (external_url IS NULL OR external_url = '')
+               AND (reference LIKE 'P%' OR reference LIKE 'CO%')
+               AND (due_date IS NULL)
+        """)
+        cur.execute("""
+            UPDATE bid_opportunities
+               SET kind = 'solicitation'
+             WHERE kind IS NULL OR kind = ''
+        """)
         # ADDs only. Nothing is referenced by a CREATE in this module, so there is
         # no ordering constraint to violate the way the startup block has one.
         cur.execute("ALTER TABLE bid_opportunities ADD COLUMN IF NOT EXISTS owner VARCHAR(255);")
@@ -490,9 +514,11 @@ def _db_url() -> str:
     return os.getenv("DATABASE_URL", "")
 
 
-def list_bids(conn, company: str = "construction", status: str = "") -> list[dict]:
+def list_bids(conn, company: str = "construction", status: str = "", include_permits: bool = False) -> list[dict]:
     sql = ["SELECT * FROM bid_opportunities WHERE company = %s"]
     params: list = [company]
+    if not include_permits:
+        sql.append("AND COALESCE(kind,'solicitation') <> 'permit'")
     if status:
         sql.append("AND status = %s")
         params.append(status)
@@ -585,17 +611,15 @@ def delete_bid(conn, bid_id: int, company: str = "construction") -> bool:
     return ok
 
 
-def stats(conn, company: str = "construction") -> dict:
+def stats(conn, company: str = "construction", include_permits: bool = False) -> dict:
     """Priced value by status. Counts only -- no contact data leaves this module."""
+    sql = ["SELECT status, COUNT(*) AS n, COALESCE(SUM(bid_amount), 0) AS total FROM bid_opportunities WHERE company = %s"]
+    params = [company]
+    if not include_permits:
+        sql.append("AND COALESCE(kind,'solicitation') <> 'permit'")
+    sql.append("GROUP BY status")
     with conn.cursor() as cur:
-        cur.execute("""
-            SELECT status,
-                   COUNT(*)                AS n,
-                   COALESCE(SUM(bid_amount), 0) AS total
-              FROM bid_opportunities
-             WHERE company = %s
-          GROUP BY status
-        """, (company,))
+        cur.execute(" ".join(sql), params)
         rows = cur.fetchall()
     out = {
         "by_status": {r["status"]: {"count": r["n"], "total": float(r["total"])} for r in rows},
@@ -681,5 +705,20 @@ def delete_document(conn, doc_id: int, company: str = "construction") -> bool:
             (doc_id, company),
         )
         ok = cur.fetchone() is not None
+    conn.commit()
+    return ok
+
+def _set_markup(conn, bid_id: int, markup_pct, company: str = "construction") -> bool:
+    try:
+        mp = float(markup_pct or 0)
+    except Exception:
+        mp = 0
+    with conn.cursor() as cur:
+        cur.execute("""
+            UPDATE bid_opportunities
+               SET markup_pct = %s, updated_at = now()
+             WHERE id = %s AND company = %s
+        """, (mp, bid_id, company))
+        ok = cur.rowcount > 0
     conn.commit()
     return ok

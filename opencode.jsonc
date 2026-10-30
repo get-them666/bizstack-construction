@@ -1,0 +1,9 @@
+{
+  "mcp": {
+    "catalyst": {
+      "type": "remote",
+      "url": "https://catalyst.zohomcp.com/mcp/message",
+      "enabled": true
+    }
+  }
+}

@@ -11258,3 +11258,88 @@ async def appearance_save(
         decor=(decor.lower() in ("on", "true", "1", "yes")),
     )
     return RedirectResponse(url="/appearance?saved=1", status_code=status.HTTP_303_SEE_OTHER)
+
+
+# --- Bid Proposal & Submission ---
+@app.post("/api/bids/{bid_id}/price")
+async def bid_set_price(bid_id: int, request: Request, markup_pct: str = Form("0"), bid_amount: str = Form(""), back: str = Form(""), db=Depends(get_db)):
+    require_admin(request)
+    try:
+        mp = float(markup_pct or 0)
+    except Exception:
+        mp = 0
+    try:
+        bid_opportunities._set_markup(db, bid_id, mp, _BID_COMPANY)
+    except Exception:
+        pass
+    if bid_amount.strip():
+        try:
+            ba = float(bid_amount.replace("$", "").replace(",", "").strip())
+            bid_opportunities.set_bid_amount(db, bid_id, ba, _BID_COMPANY)
+        except Exception:
+            pass
+    if back.startswith("/bids/"):
+        return RedirectResponse(url=back, status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(url=f"/bids/{bid_id}", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/api/bids/{bid_id}/submit")
+async def bid_submit(bid_id: int, request: Request, markup_pct: str = Form("0"), to_email: str = Form(""), message: str = Form(""), back: str = Form(""), db=Depends(get_db)):
+    require_admin(request)
+    bid_opportunities.ensure_schema(db)
+    bid = bid_opportunities.get_bid(db, bid_id, _BID_COMPANY)
+    if not bid:
+        raise HTTPException(status_code=404, detail="Bid not found")
+    try:
+        bid_costing.ensure_accounting_schema(db)
+        costs = bid_costing.cost_lines(db, bid_id, _BID_COMPANY)
+        summary = bid_costing.cost_summary(db, bid_id, _BID_COMPANY)
+    except Exception:
+        costs, summary = [], {}
+    try:
+        mp = float(markup_pct or bid.get("markup_pct") or 0)
+    except Exception:
+        mp = 0
+    subtotal = sum(float(c.get("estimated") or 0) for c in costs)
+    total = subtotal + (subtotal * mp / 100.0) if mp else subtotal
+    try:
+        bid_opportunities._set_markup(db, bid_id, mp, _BID_COMPANY)
+    except Exception:
+        pass
+    try:
+        bid_opportunities.set_bid_amount(db, bid_id, total, _BID_COMPANY)
+    except Exception:
+        pass
+    
+    try:
+        import bid_proposal
+        pdf = bid_proposal.generate_proposal_pdf(bid, costs, summary, mp)
+        subject, body = bid_proposal.build_proposal_email(bid, total)
+        if message.strip():
+            body = message + "\n\n" + body
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to generate proposal: {e}")
+    
+    recipient = (to_email or bid.get("contact_email") or "").strip()
+    if not recipient:
+        raise HTTPException(status_code=400, detail="No recipient email - add a contact email to the bid")
+    
+    try:
+        cfg = documents_service.smtp_config_from_env()
+        import asyncio
+        ok = await documents_service.send_email(cfg, recipient, subject, body, attachment=pdf, filename=f"BuildStack_Proposal_{bid_id}.pdf")
+        if not ok:
+            raise HTTPException(status_code=502, detail="Email send failed")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Email send failed: {e}")
+    
+    try:
+        bid_opportunities.set_status(db, bid_id, "sent", _BID_COMPANY)
+    except Exception:
+        pass
+    
+    if back.startswith("/bids/"):
+        return RedirectResponse(url=back + "?sent=1", status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(url=f"/bids/{bid_id}?sent=1", status_code=status.HTTP_303_SEE_OTHER)

@@ -153,6 +153,24 @@
         </form>
       </section>
 
+      <section class="bg-white rounded-2xl border border-emerald-200 p-5">
+        <h2 class="text-sm font-bold uppercase tracking-wide text-emerald-700 mb-2">Bid This Job</h2>
+        <p class="text-xs text-slate-500 mb-3">Price it, apply markup, generate a proposal PDF, and email the GC.</p>
+        <form method="post" action="/api/bids/{{ b.id }}/price" class="grid grid-cols-2 gap-2 mb-3">
+          <input type="hidden" name="back" value="/bids/{{ b.id }}">
+          <input name="markup_pct" value="{{ b.markup_pct or 0 }}" placeholder="Markup %" inputmode="decimal" class="text-sm border border-slate-200 rounded-lg px-3 py-2">
+          <input name="bid_amount" value="{{ b.bid_amount or '' }}" placeholder="Final bid $" inputmode="decimal" class="text-sm border border-slate-200 rounded-lg px-3 py-2">
+          <button class="text-sm font-semibold px-4 py-2 bg-white border border-slate-200 rounded-lg hover:border-emerald-300 col-span-2">Update Price</button>
+        </form>
+        <form method="post" action="/api/bids/{{ b.id }}/submit" class="space-y-2">
+          <input type="hidden" name="back" value="/bids/{{ b.id }}">
+          <input type="hidden" name="markup_pct" value="{{ b.markup_pct or 0 }}">
+          <input name="to_email" value="{{ b.contact_email or '' }}" placeholder="GC email" class="w-full text-sm border border-slate-200 rounded-lg px-3 py-2">
+          <textarea name="message" placeholder="Optional message to GC..." rows="2" class="w-full text-sm border border-slate-200 rounded-lg px-3 py-2"></textarea>
+          <button class="w-full text-sm font-semibold px-4 py-2.5 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700">Generate Proposal & Email GC</button>
+        </form>
+      </section>
+
       <section class="bg-white rounded-2xl border border-slate-200 p-5">
         <h2 class="text-sm font-bold uppercase tracking-wide text-slate-500 mb-3">Documents</h2>
         <p class="text-xs text-slate-500 mb-3">Plans, specs, addenda, bid forms. Downloaded from BuildingConnected (or elsewhere) and uploaded here so they're next to your bid.</p>

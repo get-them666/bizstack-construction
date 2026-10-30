@@ -356,6 +356,7 @@ def fetch_permits(timeout: int = DEFAULT_TIMEOUT) -> list[dict]:
             "bid_amount": r.get("estimated_value"),
             "notes": (r.get("scope_summary") or "").strip() or desc,
             "role": "sub",
+            "kind": "permit",
         })
     return rows
 
@@ -459,6 +460,7 @@ def normalize_bc_opportunity(o: dict) -> dict | None:
         "status": BC_STATE_TO_STATUS.get(state, "new"),
         "role": "sub",
         "external_url": f"https://app.buildingconnected.com/opportunities/{oid}/info" if oid else "",
+        "kind": "solicitation",
     }
 
 
