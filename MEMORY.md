@@ -156,9 +156,12 @@ belonged to clients the owner had deleted/replaced in the vendor consoles.
   (hello@bizstackperks.com), Calendar 200 ("hello"), and a real message sent
   via the Zoho Mail REST API through `documents_service` with
   `EMAIL_TRANSPORT=auto`. Campaigns list key is set (env) to "My Sample List".
-  Still off: reading the Zoho inbox — IMAP answers "You are yet to enable
-  IMAP" (one toggle in Zoho Mail settings), or add a Mail-API reader now that
-  the scope exists. Zoho rate-limits token generation hard: a burst of
+  Reading the inbox: done via the **Mail REST API** (`zoho_mail.poll_inbox`,
+  2026-10-30) — IMAP is still off on the account and is only the fallback.
+  `/folders` needs `ZohoMail.folders.READ`, which the grant lacks; the reader
+  uses `messages/view` without a folderId and each row's own `folderId` for
+  the content call. First boot ingested 28 recent messages (0 lead matches —
+  Thumbtack/AWS notifications), then only new ones each 15-min poll. Zoho rate-limits token generation hard: a burst of
   refresh calls produces `invalid_client` *before* it produces the honest
   "too many requests" — don't diagnose a secret from a single error.
 - **Autodesk/BuildingConnected**: the "bidjobs" APS app is
