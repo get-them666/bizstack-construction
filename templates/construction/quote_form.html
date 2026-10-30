@@ -66,8 +66,19 @@ function initQuoteMaps() {
         }
     } catch(e) {}
 }
+// Also try on load in case callback doesn't fire
+document.addEventListener('DOMContentLoaded', function(){
+    if (!window.google || !window.google.maps) {
+        var s = document.createElement('script');
+        s.src = 'https://maps.googleapis.com/maps/api/js?key=AIzaSyAo5_xHUPxAiBTdrj0V1mppqHScHWAw1OI&libraries=places&callback=initQuoteMaps';
+        s.async = true;
+        s.defer = true;
+        document.body.appendChild(s);
+    } else {
+        initQuoteMaps();
+    }
+});
 </script>
-<script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAo5_xHUPxAiBTdrj0V1mppqHScHWAw1OI&libraries=places&callback=initQuoteMaps" async defer></script>
 <script>
 (function () {
     // Address autocomplete will be initialized by callback
