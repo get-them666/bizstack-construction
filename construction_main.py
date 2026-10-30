@@ -5062,6 +5062,39 @@ async def skiptrace_enrich(request: Request, company: str = Form("construction")
     return JSONResponse(content=summary)
 
 
+def _zoho_mail_status() -> dict:
+    """What is actually delivering mail right now, and what is missing.
+
+    Outbound has three possible paths, in the order documents_service tries
+    them: the Zoho Mail REST API (needs the mail OAuth scope), the Gmail API
+    (works today), then SMTP (unreachable -- Railway blocks 25/465/587).
+    Inbound is separate: replies land in Zoho because that is where MX points,
+    and only IMAP or the Mail API can read them.
+    """
+    transport = (os.getenv("EMAIL_TRANSPORT") or "gmail").strip().lower()
+    api = False
+    try:
+        import zoho_mail
+        api = bool(zoho_mail.available())
+    except Exception:
+        api = False
+    try:
+        import zoho_imap
+        inbox = zoho_imap.status()
+    except Exception as exc:
+        inbox = {"ok": False, "reason": str(exc)[:120], "mailbox": ""}
+    sending = "Zoho Mail API" if api else ("Gmail API" if transport in ("gmail", "auto") else "SMTP")
+    return {
+        "transport": transport,
+        "sending": sending,
+        "api_ready": api,
+        "imap_ok": bool(inbox.get("ok")),
+        "imap_reason": inbox.get("reason") or "",
+        "mailbox": inbox.get("mailbox") or (os.getenv("SMTP_FROM") or ""),
+        "smtp_from": os.getenv("SMTP_FROM") or "",
+    }
+
+
 @app.get("/settings", response_class=HTMLResponse)
 async def settings_page(request: Request, db=Depends(get_db)):
     require_admin(request)
@@ -5098,6 +5131,7 @@ async def settings_page(request: Request, db=Depends(get_db)):
             "otp_env_locked": otp_env in ("0", "false", "no", "off", "1", "true", "yes", "on"),
             "zoho": zoho_oauth.status(),
             "zoho_scope_string": ",".join(zoho_oauth.SCOPES),
+            "zoho_mail_status": _zoho_mail_status(),
             "zoho_lists": await asyncio.to_thread(zoho_campaigns.mailing_lists),
             "zoho_list_key": zoho_campaigns.list_key(),
         },
@@ -7971,15 +8005,59 @@ def _gmail_inbound_loop():
         time.sleep(interval)
 
 
+def _zoho_imap_loop():
+    """Read homeowner replies out of the Zoho mailbox.
+
+    MX for the domain points at Zoho, so replies land there. The Gmail poller
+    reads a different mailbox and therefore cannot see them. IMAP on 993 is
+    reachable from this container and the mailbox password authenticates; the
+    only prerequisite is the IMAP Access toggle in Zoho Mail settings, so when
+    login answers "enable IMAP" this backs off for an hour instead of looping.
+    """
+    interval = max(300, int(os.getenv("ZOHO_IMAP_INTERVAL_SECONDS", "900") or 900))
+    backoff = interval
+    while True:
+        try:
+            import zoho_imap
+            st = zoho_imap.status(force=True)
+            if st.get("ok"):
+                backoff = interval
+                with psycopg.connect(db_url, row_factory=dict_row) as conn:
+                    res = zoho_imap.poll_zoho_inbox(
+                        conn, "construction",
+                        os.getenv("SMTP_FROM", "") or "hello@bizstackperks.com")
+                if res.get("error"):
+                    print(f"[zoho-imap] {res['error']}", flush=True)
+                elif res.get("inserted"):
+                    print(f"[zoho-imap] {res}", flush=True)
+            else:
+                backoff = max(3600, interval)
+                print(f"[zoho-imap] mailbox not readable yet: {st.get('reason')}", flush=True)
+        except Exception as exc:
+            backoff = max(3600, interval)
+            print(f"[zoho-imap] poll failed: {type(exc).__name__}: {exc}", flush=True)
+        time.sleep(backoff)
+
+
 def _start_lead_source_scheduler():
     try:
         interval_h = max(0.5, float(os.getenv("LEAD_SCAN_INTERVAL_HOURS", "6") or 6))
     except (TypeError, ValueError):
         interval_h = 6
 
-    # Only the Gmail path remains. The IMAP poller is gone: mail is on Google,
-    # and the old Zoho account answered "You are yet to enable IMAP" so it
-    # could never run -- INBOUND_POLL was a flag that did nothing.
+    # Zoho mailbox first: that is where replies actually arrive (MX -> Zoho).
+    try:
+        import zoho_imap
+        if zoho_imap.enabled():
+            threading.Thread(target=_zoho_imap_loop, daemon=True).start()
+            print("[zoho-imap] loop started", flush=True)
+        else:
+            print("[zoho-imap] off (no mailbox credentials, or ZOHO_IMAP_INBOUND=off)", flush=True)
+    except Exception as exc:
+        print(f"[zoho-imap] could not start: {exc}", flush=True)
+
+    # The Gmail path stays: it is still the outbound mailbox and it may hold
+    # forwarded mail. It cannot see anything that only reached Zoho.
     gmail_inbound = (os.getenv("GMAIL_INBOUND", "") or "").strip().lower() in ("1", "true", "yes", "on")
     if gmail_inbound:
         threading.Thread(target=_gmail_inbound_loop, daemon=True).start()

@@ -142,6 +142,18 @@
             </div>
             {% endfor %}
         </div>
+        {% if zoho_mail_status %}
+        <div class="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700">
+            <p><span class="font-bold text-slate-900">Sending now:</span> {{ zoho_mail_status.sending }}
+                {% if not zoho_mail_status.api_ready %}<span class="text-slate-500">— until Mail is connected, mail goes out through the Google mailbox as {{ zoho_mail_status.smtp_from }}. It still arrives; it just isn't sent by Zoho.</span>{% endif %}
+            </p>
+            <p class="mt-1"><span class="font-bold text-slate-900">Reading replies:</span>
+                {% if zoho_mail_status.imap_ok %}<span class="text-emerald-700">Zoho inbox connected ({{ zoho_mail_status.mailbox }})</span>
+                {% else %}<span class="text-amber-700">not yet — {{ zoho_mail_status.imap_reason or "IMAP is off" }}</span>
+                <span class="block mt-1 text-slate-500">Your domain's mail is hosted at Zoho, so replies land there. In Zoho Mail: Settings → Mail Accounts → IMAP Access → <strong>Enable IMAP</strong>. The site then reads replies, honours STOP and answers automatically, with no further setup.</span>{% endif %}
+            </p>
+        </div>
+        {% endif %}
         <div class="mt-4 flex flex-wrap items-center gap-3">
             {% if zoho.configured %}
             <a href="/oauth/zoho/start" class="px-4 py-2 text-xs font-bold text-white bg-red-600 hover:bg-red-700 rounded-xl">{{ 'Reconnect Zoho (add Mail + Calendar)' if zoho.connected and not (zoho.mail and zoho.calendar) else ('Reconnect Zoho' if zoho.connected else 'Connect Zoho') }}</a>
