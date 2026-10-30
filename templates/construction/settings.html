@@ -134,6 +134,14 @@
             </div>
             {{ pill(zoho.connected and zoho.mail and zoho.calendar, "Fully connected", ("Partly connected" if zoho.connected else "Not connected")) }}
         </div>
+        {% if zoho.connected and zoho.token_ok is defined and not zoho.token_ok %}
+        <div class="mt-3 rounded-xl bg-red-50 border border-red-200 p-3 text-xs text-red-800">
+            <strong>Zoho is refusing these credentials.</strong> Everything below is disconnected until you reconnect —
+            leads stop syncing to the CRM and nobody is added to Campaigns. This happens when the Client Secret is
+            regenerated in api-console.zoho.com. Paste a fresh grant code below (fastest), or update
+            <code>ZOHO_CLIENT_SECRET</code> in Railway with the current secret.
+        </div>
+        {% endif %}
         <div class="mt-3 grid grid-cols-2 sm:grid-cols-5 gap-2 text-xs">
             {% for label, ok, what in [("CRM", zoho.crm, "leads & status"), ("Campaigns", zoho.campaigns, "mailing list"), ("Books", zoho.books, "accounting"), ("Mail", zoho.mail, "sends email"), ("Calendar", zoho.calendar, "walkthroughs")] %}
             <div class="rounded-xl border {{ 'border-emerald-200 bg-emerald-50' if ok else 'border-slate-200 bg-slate-50' }} px-3 py-2">

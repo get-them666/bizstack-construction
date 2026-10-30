@@ -45,6 +45,7 @@ def test_campaigns_call_is_form_encoded_with_json_contactinfo(monkeypatch):
 
 def test_oauth_scope_status_reads_capabilities(monkeypatch):
     monkeypatch.setattr(zo, "_db", lambda: (_ for _ in ()).throw(RuntimeError("no db")))
+    monkeypatch.setattr(zo, "live_ok", lambda force=False: True)
     monkeypatch.setenv("ZOHO_REFRESH_TOKEN", "x")
     monkeypatch.setenv("ZOHO_TOKEN_SCOPES", "ZohoCRM.modules.ALL ZohoCampaigns.contact.ALL")
     st = zo.status()
@@ -52,3 +53,29 @@ def test_oauth_scope_status_reads_capabilities(monkeypatch):
     assert st["crm"] and st["campaigns"] and not st["mail"] and not st["calendar"]
     assert "ZohoMail.messages.CREATE" in zo.SCOPES and "ZohoCalendar.event.ALL" in zo.SCOPES
     assert zo.redirect_uri().endswith("/oauth/zoho/callback")
+
+
+def test_a_rejected_credential_is_reported_not_hidden(monkeypatch):
+    """A stored refresh token used to read as "connected" even when Zoho
+    rejected every call -- a rotated client secret looks exactly like that."""
+    monkeypatch.setattr(zo, "_db", lambda: (_ for _ in ()).throw(RuntimeError("no db")))
+    monkeypatch.setattr(zo, "live_ok", lambda force=False: False)
+    monkeypatch.setenv("ZOHO_REFRESH_TOKEN", "x")
+    st = zo.status()
+    assert st["connected"] is True, "a token is still stored"
+    assert st["token_ok"] is False, "but Zoho refuses it, and that must show"
+
+
+def test_live_check_is_cached_so_zoho_is_not_hammered(monkeypatch):
+    calls = []
+    monkeypatch.setattr(zo, "_live_cache", {"at": 0.0, "ok": None})
+
+    class FakeClient:
+        @staticmethod
+        def get_access_token(force_refresh=False):
+            calls.append(1)
+            return "tok"
+
+    monkeypatch.setitem(__import__("sys").modules, "zoho_client", FakeClient)
+    assert zo.live_ok() is True and zo.live_ok() is True
+    assert len(calls) == 1

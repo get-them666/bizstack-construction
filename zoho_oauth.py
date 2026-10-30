@@ -158,8 +158,33 @@ def stored_refresh_token() -> str:
     return (os.getenv("ZOHO_REFRESH_TOKEN") or "").strip()
 
 
+_live_cache: dict = {"at": 0.0, "ok": None}
+
+
+def live_ok(force: bool = False) -> bool:
+    """Does Zoho actually accept the stored credentials right now?
+
+    The status string alone lies: a refresh token can be stored, look
+    connected, and be rejected on every call (a rotated client secret does
+    exactly that). One token request answers it. Cached for ten minutes --
+    Zoho rate-limits token generation, and hammering it is how a working
+    client starts answering "too many requests".
+    """
+    now = time.time()
+    if not force and _live_cache["ok"] is not None and now - float(_live_cache["at"]) < 600:
+        return bool(_live_cache["ok"])
+    ok = False
+    try:
+        import zoho_client
+        ok = bool(zoho_client.get_access_token(force_refresh=True))
+    except Exception:
+        ok = False
+    _live_cache.update({"at": now, "ok": ok})
+    return ok
+
+
 def status() -> dict:
-    """What is connected and what each product can do, without a network call."""
+    """What is connected and what each product can do."""
     out = {"configured": configured(), "connected": False, "source": "", "scopes": [], "email": "",
            "crm": False, "campaigns": False, "books": False, "mail": False, "calendar": False,
            "redirect_uri": redirect_uri()}
@@ -176,6 +201,7 @@ def status() -> dict:
     if not out["connected"] and (os.getenv("ZOHO_REFRESH_TOKEN") or "").strip():
         out["connected"], out["source"] = True, "environment"
         scopes = scopes or (os.getenv("ZOHO_TOKEN_SCOPES") or "ZohoCRM.modules.ALL ZohoBooks.fullaccess.all ZohoCampaigns.contact.ALL")
+    out["token_ok"] = live_ok()
     sc = scopes.replace(",", " ").split()
     out["scopes"] = sc
     low = " ".join(sc).lower()
