@@ -152,12 +152,15 @@
       <label class="block text-sm font-semibold text-slate-700">Paste the price sheet
         <textarea name="sheet_text" rows="8" placeholder="Item Number,Description,UOM,Price&#10;2X4-8-SPF,2x4x8 SPF stud,each,4.28&#10;OSB-716,7/16 OSB 4x8,sheet,14.95" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-200 text-sm font-mono font-normal"></textarea>
       </label>
-      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <label class="block text-sm font-semibold text-slate-700">…or upload the file
           <input type="file" name="sheet_file" accept=".csv,.tsv,.txt" class="mt-1 block w-full text-sm font-normal">
         </label>
         <label class="block text-sm font-semibold text-slate-700">…or a feed URL that returns CSV
           <input name="feed_url" type="url" placeholder="https://yard.example.com/pricelist.csv" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-200 text-sm font-normal">
+        </label>
+        <label class="block text-sm font-semibold text-slate-700">…or a Home Depot cart/list URL
+          <input name="cart_url" type="url" placeholder="https://www.homedepot.com/..." class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-200 text-sm font-normal">
         </label>
       </div>
       <details class="text-sm text-slate-600">

@@ -4375,6 +4375,7 @@ async def materials_supplier_add(request: Request, name: str = Form(""),
                                  feed_auth_header: str = Form(""), feed_token: str = Form(""),
                                  sheet_text: str = Form(""),
                                  sheet_file: UploadFile | None = File(None),
+                                 cart_url: str = Form(""),
                                  db=Depends(get_db)):
     """Register a supplier and load its prices in one step.
 
@@ -4403,6 +4404,17 @@ async def materials_supplier_add(request: Request, name: str = Form(""),
         except Exception as e:
             return RedirectResponse(url=f"/materials/suppliers?error=could not read file: {str(e)[:120]}",
                                     status_code=status.HTTP_303_SEE_OTHER)
+    if not text and (cart_url or "").strip():
+        try:
+            import homedepot_scraper
+            scraped = homedepot_scraper.scrape_homedepot_cart_to_csv(cart_url.strip())
+            if scraped.startswith("Error"):
+                return RedirectResponse(url=f"/materials/suppliers?error={scraped[:200]}",
+                                        status_code=status.HTTP_303_SEE_OTHER)
+            text = scraped.strip()
+        except Exception as e:
+            return RedirectResponse(url=f"/materials/suppliers?error={str(e)[:200]}",
+                                    status_code=status.HTTP_303_SEE_OTHER)
     is_public = (public_ok or "").lower() in ("1", "on", "true", "yes")
     try:
         if text:
@@ -4417,7 +4429,7 @@ async def materials_supplier_add(request: Request, name: str = Form(""),
             res = supplier_prices.sync_supplier(db, sid)
         else:
             return RedirectResponse(
-                url="/materials/suppliers?error=paste or upload a price sheet, or give a feed URL",
+                url="/materials/suppliers?error=paste or upload a price sheet, or give a cart URL or feed URL",
                 status_code=status.HTTP_303_SEE_OTHER)
     except Exception as e:
         return RedirectResponse(url=f"/materials/suppliers?error={str(e)[:200]}",

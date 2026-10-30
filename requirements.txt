@@ -47,3 +47,5 @@ peopledatalabs>=6.4.13
 # like a broken Auth0 module rather than a namespace collision.
 PyJWT>=2.15.1
 cryptography>=50.0.2
+requests
+beautifulsoup4
