@@ -5078,17 +5078,27 @@ def _zoho_mail_status() -> dict:
         api = bool(zoho_mail.available())
     except Exception:
         api = False
-    try:
-        import zoho_imap
-        inbox = zoho_imap.status()
-    except Exception as exc:
-        inbox = {"ok": False, "reason": str(exc)[:120], "mailbox": ""}
+    inbox: dict = {"ok": False, "reason": "", "mailbox": ""}
+    if api:
+        try:
+            inbox = zoho_mail.inbox_status()
+        except Exception as exc:
+            inbox = {"ok": False, "reason": str(exc)[:120], "mailbox": ""}
+    if not inbox.get("ok"):
+        try:
+            import zoho_imap
+            imap = zoho_imap.status()
+            if imap.get("ok") or not inbox.get("reason"):
+                inbox = imap
+        except Exception as exc:
+            inbox = {"ok": False, "reason": str(exc)[:120], "mailbox": ""}
     sending = "Zoho Mail API" if api else ("Gmail API" if transport in ("gmail", "auto") else "SMTP")
     return {
         "transport": transport,
         "sending": sending,
         "api_ready": api,
         "imap_ok": bool(inbox.get("ok")),
+        "imap_via": inbox.get("via") or "IMAP",
         "imap_reason": inbox.get("reason") or "",
         "mailbox": inbox.get("mailbox") or (os.getenv("SMTP_FROM") or ""),
         "smtp_from": os.getenv("SMTP_FROM") or "",
@@ -8019,6 +8029,21 @@ def _zoho_imap_loop():
     while True:
         try:
             import zoho_imap
+            import zoho_mail
+            # The Mail REST API needs no IMAP toggle and uses the scope the
+            # connection already carries; IMAP stays as the fallback.
+            if zoho_mail.available() and zoho_mail.inbox_status().get("ok"):
+                backoff = interval
+                with psycopg.connect(db_url, row_factory=dict_row) as conn:
+                    res = zoho_mail.poll_inbox(
+                        conn, "construction",
+                        os.getenv("SMTP_FROM", "") or "hello@bizstackperks.com")
+                if res.get("error"):
+                    print(f"[zoho-mail] {res['error']}", flush=True)
+                elif res.get("inserted"):
+                    print(f"[zoho-mail] {res}", flush=True)
+                time.sleep(backoff)
+                continue
             st = zoho_imap.status(force=True)
             if st.get("ok"):
                 backoff = interval

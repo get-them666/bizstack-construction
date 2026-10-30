@@ -156,7 +156,7 @@
                 {% if not zoho_mail_status.api_ready %}<span class="text-slate-500">— until Mail is connected, mail goes out through the Google mailbox as {{ zoho_mail_status.smtp_from }}. It still arrives; it just isn't sent by Zoho.</span>{% endif %}
             </p>
             <p class="mt-1"><span class="font-bold text-slate-900">Reading replies:</span>
-                {% if zoho_mail_status.imap_ok %}<span class="text-emerald-700">Zoho inbox connected ({{ zoho_mail_status.mailbox }})</span>
+                {% if zoho_mail_status.imap_ok %}<span class="text-emerald-700">Zoho inbox connected via {{ zoho_mail_status.imap_via or "IMAP" }} ({{ zoho_mail_status.mailbox }}) — replies are matched to leads, STOP is honoured, and the reply bot answers.</span>
                 {% else %}<span class="text-amber-700">not yet — {{ zoho_mail_status.imap_reason or "IMAP is off" }}</span>
                 <span class="block mt-1 text-slate-500">Your domain's mail is hosted at Zoho, so replies land there. In Zoho Mail: Settings → Mail Accounts → IMAP Access → <strong>Enable IMAP</strong>. The site then reads replies, honours STOP and answers automatically, with no further setup.</span>{% endif %}
             </p>
