@@ -14,8 +14,9 @@
             <div class="grid gap-4 sm:grid-cols-2">
                 <div class="sm:col-span-2">
                     <label class="block text-xs font-bold text-slate-600 mb-1">Project address</label>
-                    <input id="addr" placeholder="Start typing an address"
+                    <input id="addr" placeholder="Start typing an address" autocomplete="off"
                            class="w-full text-sm border border-slate-300 rounded-lg px-3 py-2.5">
+                    <datalist id="addr-list"></datalist>
                     <p class="text-[11px] text-slate-400 mt-1">
                         We use this to pull square footage. Leave it blank and enter a size yourself.
                     </p>
@@ -55,40 +56,27 @@
 (function(){
     var addrInput = document.getElementById('addr');
     if (!addrInput) return;
-    
-    // Remove any Google Maps error classes
-    addrInput.classList.remove('gm-err-autocomplete');
-    addrInput.style.backgroundImage = '';
-    addrInput.disabled = false;
-    
-    function setupFallback() {
-        var datalistId = 'addr-suggestions-list';
-        if (document.getElementById(datalistId)) return;
-        var dl = document.createElement('datalist');
-        dl.id = datalistId;
-        document.body.appendChild(dl);
-        addrInput.setAttribute('list', datalistId);
-        var timer;
-        addrInput.addEventListener('input', function(){
-            clearTimeout(timer);
-            var v = addrInput.value;
-            if (v.length < 3) { dl.innerHTML = ''; return; }
-            timer = setTimeout(function(){
-                fetch('/api/places/autocomplete?input=' + encodeURIComponent(v))
-                    .then(r => r.json())
-                    .then(j => {
-                        dl.innerHTML = '';
-                        (j.predictions || []).forEach(function(p){
-                            var opt = document.createElement('option');
-                            opt.value = p.description || (p.structured_formatting && p.structured_formatting.main_text);
-                            if (opt.value) dl.appendChild(opt);
-                        });
-                    }).catch(function(){});
-            }, 200);
-        });
-    }
-    
-    setupFallback();
+    addrInput.setAttribute('list', 'addr-list');
+    var dl = document.getElementById('addr-list');
+    var timer;
+    addrInput.addEventListener('input', function(){
+        clearTimeout(timer);
+        var v = addrInput.value;
+        if (v.length < 3) { dl.innerHTML = ''; return; }
+        timer = setTimeout(function(){
+            fetch('/api/places/autocomplete?input=' + encodeURIComponent(v))
+                .then(function(r){ return r.json(); })
+                .then(function(j){
+                    dl.innerHTML = '';
+                    (j.predictions || []).forEach(function(p){
+                        var opt = document.createElement('option');
+                        opt.value = p.description || (p.structured_formatting && p.structured_formatting.main_text) || '';
+                        if (opt.value) dl.appendChild(opt);
+                    });
+                })
+                .catch(function(){ dl.innerHTML = ''; });
+        }, 250);
+    });
 })();
 </script>
 <script>
