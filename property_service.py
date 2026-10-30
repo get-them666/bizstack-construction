@@ -23,6 +23,11 @@ import urllib.error
 import urllib.request
 import urllib.parse
 
+try:
+    from regional_property_lookup import lookup_property_regional
+except Exception:
+    lookup_property_regional = None
+
 RENTCAST_BASE = "https://api.rentcast.io/v1"
 
 # Cache key among owners; also guards against pathological re-quotes.
@@ -342,7 +347,7 @@ def lookup_address(address: str):
     month on an address RentCast will never find.
     """
     addr = (address or "").strip()
-    if not addr or not is_configured():
+    if not addr:
         return None
     if not looks_like_full_address(addr):
         return None
@@ -350,11 +355,35 @@ def lookup_address(address: str):
 
     cached = _cache_get(key)
     if cached is not None:
-        # A cached miss is a real answer, not a failure — report it as absent
-        # rather than paying RentCast to ask the same question again.
         if isinstance(cached, dict) and cached.get("__rentcast_miss__"):
             return None
         return cached
+
+    # Try regional GIS lookup first (Hampton Roads / NC)
+    if lookup_property_regional:
+        try:
+            regional = lookup_property_regional(addr)
+            if regional and regional.get("house_sqft"):
+                result = {
+                    "address": regional.get("address") or addr,
+                    "city": regional.get("city") or "",
+                    "state": "VA" if regional.get("state") != "NC" else "NC",
+                    "zip": "",
+                    "sqft": _num(regional.get("house_sqft")),
+                    "beds": None,
+                    "baths": None,
+                    "year_built": None,
+                    "lot_sqft": _num(regional.get("lot_sqft")),
+                    "source": "regional_gis",
+                    "raw": regional,
+                }
+                _cache_put(key, result)
+                return result
+        except Exception:
+            pass
+
+    if not is_configured():
+        return None
 
     budget_ok = budget_allows(1)
     if not budget_ok:
@@ -364,21 +393,15 @@ def lookup_address(address: str):
     reached_api = False
     try:
         p = _api_call(addr)
-        # Any HTTP answer — including an empty result set — was billed.
         reached_api = True
     except RentCastError as exc:
         reached_api = exc.reached_api
         print(f"❌ RentCast lookup failed for {addr!r}: {exc.message}")
         return None
     except Exception as e:
-        # Unknown failure. Assume it was billed: over-counting one call is
-        # recoverable, under-counting is how the quota silently overruns.
         print(f"❌ RentCast lookup failed for {addr!r}: {type(e).__name__}: {e}")
         return None
     finally:
-        # Reserve the budget BEFORE acting on the result. Previously this only ran
-        # on the happy path, so misses and 4xx/5xx responses were never counted
-        # even though RentCast charged for every one of them.
         if reached_api and budget_ok:
             charge_call(1)
 
