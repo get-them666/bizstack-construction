@@ -30,7 +30,10 @@ from fpdf import FPDF
 from documents_service import _pdf_text
 
 BRAND = {
-    "name": os.getenv("LETTER_BRAND_NAME", "BizStack"),
+    # The wordmark is the short name ("BuildStack Construction"); the legal line
+    # underneath carries the registered entity from brand.py, so the letter and
+    # every other customer-facing surface cannot disagree about who is writing.
+    "name": os.getenv("LETTER_BRAND_NAME", brand.short_name()),
     "legal": os.getenv("LETTER_BRAND_LEGAL", brand.name()),
     # Full contact block on the letter: phone, email, website and return
     # address, which is also what a homeowner needs in order to call back.
@@ -92,8 +95,99 @@ _NAME_SUFFIXES = {
 }
 
 
+# Words that mean the record belongs to a company, trust or government body
+# rather than a person. A letter to "GRANDVIEW VA LP" is a letter to a mailbox
+# nobody reads, so those keep the neutral "Property Owner" greeting.
+_ENTITY_WORDS = {
+    "trust", "llc", "inc", "corp", "corporation", "lp", "llp", "ltd", "co",
+    "company", "holdings", "properties", "investments", "estate", "bank",
+    "association", "assoc", "ministries", "church", "partners", "partnership",
+    "group", "enterprises", "ventures", "realty", "city", "county", "state",
+    "authority", "housing", "school", "university", "foundation", "fund",
+    "revocable", "irrevocable", "living", "limited", "management", "builders",
+    "homes", "construction", "development", "capital", "equities",
+}
+
+_ET_AL = re.compile(r"\s*(,?\s*et\.?\s*al\.?)\s*$", re.I)
+
+
+def _name_tokens(name) -> list:
+    return [t for t in re.split(r"[\s,]+", _clean(name)) if t]
+
+
+def looks_like_entity_name(name) -> bool:
+    """True for LLCs, trusts, churches and city governments -- not a person."""
+    toks = [t.lower().strip(".,") for t in _name_tokens(name)]
+    if not toks:
+        return True
+    if toks[0] in {"city", "county", "state", "town"}:
+        return True
+    return any(t in _ENTITY_WORDS for t in toks[1:])
+
+
+def surname_of(name, known=None) -> str:
+    """Best-effort surname from the four shapes the assessor feeds emit.
+
+    The permit and parcel feeds do not agree on name order, and the difference
+    is not cosmetic: "TANNER LISA J" read as FIRST LAST prints "J. Tanner" on
+    an envelope addressed to Lisa Tanner's house, which is a stranger's name on
+    a piece of mail. The shapes seen in production are
+
+        TANNER LISA J                       LAST FIRST [MIDDLE]   (assessor)
+        Latimer, Benjamin Scott             LAST, FIRST [MIDDLE]  (assessor)
+        Leonard G Barlow                    FIRST [MIDDLE] LAST   (parcel)
+        RYE DEAN NOLAN & RYE JOCELINE ...   two owners, LAST FIRST
+        ORTIZ KENNETH J LIVING TRUST        entity -> None
+
+    `known` is a set of lowercased surnames already established from the
+    unambiguous shapes. It settles the two-token all-caps case, which is a coin
+    flip on its own ("WINSLOW NADINE" vs "JAMES WHITTLE").
+    """
+    known = known or frozenset()
+    n = _clean(_ET_AL.sub("", _clean(name))).strip(" ,.")
+    if not n or looks_like_entity_name(n):
+        return None
+    # "A & B" separates two owners reliably; " and " does not ("MARK AND NICOLE
+    # LITKOWSKI" would reduce to "MARK"), so it is left in place.
+    n = re.split(r"\s*&\s*", n, maxsplit=1)[0].strip()
+    if "," in n:
+        return n.split(",", 1)[0].strip(" ,.") or None
+    toks = [t for t in n.split() if t.lower().rstrip(".") not in
+            {s.rstrip(".") for s in _NAME_SUFFIXES}] or n.split()
+    if len(toks) == 1:
+        return toks[0]
+    if all(t.isupper() for t in toks if len(t) > 1):
+        if len(toks) >= 3:
+            return toks[0]
+        first, last = toks[0].lower(), toks[-1].lower()
+        if first in known and last not in known:
+            return toks[0]
+        if last in known and first not in known:
+            return toks[-1]
+        return toks[0]
+    return toks[-1]
+
+
+def _title_case(word: str) -> str:
+    if word.isupper() and len(word) > 2:
+        return word.capitalize()
+    return word
+
+
+def greeting(name) -> str:
+    """The salutation: "Tanner Family", or "Property Owner" for an entity.
+
+    Direct mail to an owner list greets the household, not a guessed first
+    name. It also means the only thing that has to be right is the surname.
+    """
+    s = surname_of(name)
+    if not s:
+        return "Property Owner"
+    return f"{' '.join(_title_case(w) for w in s.split())} Family"
+
+
 def format_recipient(name) -> str:
-    """'Ada Lovelace' -> 'Ada L.'. No usable name -> 'the homeowner'.
+    """'Ada Lovelace' -> 'A. Lovelace'. No usable name -> 'the homeowner'.
 
     The permit feeds publish no applicant, so most of these leads carry a
     place name in `name` -- "Virginia Beach", "Chesapeake", "Williamsburg".
@@ -102,39 +196,49 @@ def format_recipient(name) -> str:
     not deliverable. A real street address on the envelope is what actually gets
     the letter delivered, so the greeting names the role instead of the city.
     """
-    parts = _clean(name).split()
+    raw = _clean(name)
+    parts = raw.split()
     if not parts:
         return "the homeowner"
     # Compare the whole name first, not word-by-word: "Virginia Beach" is two
     # words, so the abbreviation path below turned it into "V. Beach", and
     # "NATO Business Opportunity: ... (Norfolk VA)" into "N. VA)".
-    if _clean(name).lower() in _PLACE_NAME_RECEIPIENTS:
+    if raw.lower() in _PLACE_NAME_RECEIPIENTS:
         return "the homeowner"
     # A solicitation or job title is not a person either, and abbreviating one
-    # produced "N. VA)" as the greeting. A colon, or more than four words, is
-    # the giveaway: no homeowner is named "Fire Alarm Upgrade Replacement".
-    if ":" in _clean(name) or len(parts) > 4:
+    # produced "N. VA)" as the greeting. A colon is the giveaway: no homeowner
+    # is named "Fire Alarm Upgrade Replacement: Phase 2".
+    if ":" in raw:
         return "the homeowner"
-    if len(parts) == 1:
-        return parts[0]
     first = parts[0]
     if first.lower() in {"mr.", "mr", "mrs.", "mrs", "ms.", "ms", "miss", "dr.", "dr"}:
-        return _clean(name)
+        return raw
 
-    # A generational suffix is not a surname. Taking the last word blindly made
-    # "Leonard G Barlow Jr" address to "L. Jr" and greet "Dear L. Jr" -- on the
-    # envelope, on a letter to a real person. Strip trailing suffixes first, then
-    # keep the last real word as the surname.
-    tail = list(parts)
-    suffixes = []
-    while len(tail) > 2 and tail[-1].lower().rstrip(".") in {s.rstrip(".") for s in _NAME_SUFFIXES}:
-        suffixes.insert(0, tail.pop())
-    # With the suffix gone, a single leftover token is a first name on its own:
-    # "Mary Jane" -> "M. Jane", not "M.".
-    if len(tail) < 2:
-        tail = parts[:2] if len(parts) >= 2 else parts
-    rendered = f"{tail[0][0].upper()}. {tail[-1]}"
-    return f"{rendered} {' '.join(suffixes)}".strip() if suffixes else rendered
+    # Everything below works on ONE owner. Permit and parcel feeds emit two
+    # owners joined by "&" and a trailing "Et Al"; leaving those in place made
+    # an eight-word string that the old length guard rejected as a job title.
+    one = _clean(_ET_AL.sub("", raw)).strip(" ,.")
+    one = re.split(r"\s*&\s*", one, maxsplit=1)[0].strip(" ,.")
+    surname = surname_of(one)
+    if not surname:
+        return "the homeowner"
+    surname = " ".join(_title_case(w) for w in surname.split())
+
+    toks = one.split()
+    if "," in one:
+        after = one.split(",", 1)[1].split()
+        given = after[0] if after else ""
+    elif len(toks) == 1:
+        return surname
+    elif all(t.isupper() for t in toks if len(t) > 1):
+        # LAST FIRST [MIDDLE]: the given name is the second token, unless the
+        # surname was taken from the last token (the two-token case).
+        given = toks[-1] if surname.lower() == toks[-1].lower() else toks[1]
+    else:
+        given = toks[0]
+    if not given:
+        return surname
+    return f"{given[0].upper()}. {surname}"
 
 
 def address_lines(address) -> list:
@@ -241,8 +345,14 @@ def render_letter(lead: dict) -> bytes:
 
     pdf.set_font("helvetica", size=10)
     pdf.set_text_color(31, 41, 55)
-    pdf.cell(0, 6, _pdf_text(format_recipient(lead.get("name"))), align="L")
-    pdf.ln(5)
+    # The addressee line is the owner's abbreviated name ("L. Tanner"). For an
+    # LLC, trust or a permit row with no applicant there is no person to name, so
+    # the block starts at the street -- printing "the homeowner" there read as a
+    # placeholder on a letter that was otherwise personal.
+    addressee = format_recipient(lead.get("name"))
+    if addressee != "the homeowner":
+        pdf.cell(0, 6, _pdf_text(addressee), align="L")
+        pdf.ln(5)
     for line in address_lines(lead.get("address")):
         pdf.cell(0, 6, _pdf_text(line), align="L")
         pdf.ln(5)
@@ -259,9 +369,9 @@ def render_letter(lead: dict) -> bytes:
     ), align="L")
     pdf.ln(12)
 
-    greeting = format_recipient(lead.get("name"))
+    salutation = greeting(lead.get("name"))
     body = [
-        f"Dear {greeting},",
+        f"Dear {salutation},",
         "",
         "We handle construction and renovation work in this area, and I am writing "
         "because your property came up on a recent permit record.",
@@ -424,7 +534,27 @@ def main() -> int:
     ap.add_argument("--trace-names", action="store_true",
                     help="use cached skip-trace owner names so letters read 'Dear L. Barlow' "
                          "instead of 'Dear the homeowner' (reads the cache only, spends nothing)")
+    ap.add_argument("--record", action="store_true",
+                    help="log each rendered letter as a 'letter' touch in comms_logs, so the "
+                         "same door is not mailed twice and the contact policy sees it. "
+                         "Off by default: rendering a PDF is not the same as mailing it.")
+    ap.add_argument("--fix-zips", action="store_true",
+                    help="resolve missing ZIPs (free Census/ArcGIS) before rendering, so "
+                         "Norfolk rows are mailable instead of held back")
     args = ap.parse_args()
+
+    if args.fix_zips:
+        try:
+            import psycopg
+            from psycopg.rows import dict_row
+            import skiptrace_service
+            with psycopg.connect(os.getenv("DATABASE_URL", ""), row_factory=dict_row) as db, db.cursor() as cur:
+                zips = skiptrace_service.backfill_lead_zips(cur, args.company)
+                db.commit()
+            print(f"ZIP backfill: {zips['resolved']}/{zips['examined']} address(es) gained a ZIP "
+                  f"({zips['unresolved']} had no street-level match)\n")
+        except Exception as exc:
+            print(f"  ZIP backfill unavailable ({type(exc).__name__}: {exc})\n", file=sys.stderr)
 
     leads = fetch_leads(args.company, args.id)
 
@@ -500,6 +630,11 @@ def main() -> int:
             continue
         rows.append({
             "id": ld["id"],
+            # The two lines that get read: who it is addressed to, and how it
+            # greets them. Both come from the owner record, so the owner can
+            # scan the manifest and spot a bad name before it is printed.
+            "addressee": format_recipient(ld.get("name")),
+            "greeting": greeting(ld.get("name")),
             "name": _clean(ld.get("name")),
             "address": ", ".join(address_lines(ld.get("address"))),
             "project_type": _clean(ld.get("project_type")),
@@ -516,6 +651,32 @@ def main() -> int:
             w.writeheader()
             w.writerows(rows)
         print(f"\n{len(rows)} letter(s) + manifest: {manifest}")
+
+    if rows and args.record:
+        # Only the rows that actually rendered, and only when asked: a letter is
+        # a touch the moment it is mailed, not the moment its PDF exists. The
+        # channel name is 'letter' so it is distinguishable from email/sms/phone
+        # in comms_logs and counts toward the once-per-lead contact policy.
+        recorded, failed = 0, 0
+        try:
+            import psycopg
+            from psycopg.rows import dict_row
+            import auto_reply
+            with psycopg.connect(os.getenv("DATABASE_URL", ""), row_factory=dict_row) as db:
+                for row in rows:
+                    res = auto_reply.record_manual_touch(
+                        db, int(row["id"]), "letter",
+                        f"Letter mailed to {row['address']} ({row['pdf']})")
+                    if res.get("ok"):
+                        recorded += 1
+                    else:
+                        failed += 1
+                db.commit()
+            print(f"Recorded {recorded} letter touch(es) in comms_logs"
+                  + (f"; {failed} refused by the contact policy" if failed else ""))
+        except Exception as exc:
+            print(f"  recording failed ({type(exc).__name__}: {exc}) -- letters were still "
+                  f"rendered, but nothing was logged", file=sys.stderr)
 
     # Return address only: the license is withheld on purpose, so a blank
     # license is not an incomplete letterhead.
