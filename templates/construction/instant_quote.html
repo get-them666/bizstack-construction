@@ -99,6 +99,17 @@
 {% endblock %}
 
 {% block scripts %}
+<script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAo5_xHUPxAiBTdrj0V1mppqHScHWAw1OI&libraries=places"></script>
+<script>
+(function(){
+    try {
+        var addrInput = document.getElementById('prop-address');
+        if (addrInput && window.google && google.maps && google.maps.places) {
+            new google.maps.places.Autocomplete(addrInput, { types: ['address'], componentRestrictions: { country: 'us' } });
+        }
+    } catch(e){}
+})();
+</script>
 {% if api_configured %}
 <script>
 document.addEventListener('DOMContentLoaded', function() {

@@ -51,8 +51,24 @@
 {% endblock %}
 
 {% block scripts %}
+<script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAo5_xHUPxAiBTdrj0V1mppqHScHWAw1OI&libraries=places&callback=initMaps" async defer></script>
 <script>
+var initMaps = function(){};
 (function () {
+    // Address autocomplete
+    try {
+        var addrInput = document.getElementById('addr');
+        if (addrInput && window.google && google.maps && google.maps.places) {
+            var ac = new google.maps.places.Autocomplete(addrInput, { types: ['address'], componentRestrictions: { country: 'us' } });
+            ac.addListener('place_changed', function() {
+                var place = ac.getPlace();
+                if (place && place.formatted_address) {
+                    addrInput.value = place.formatted_address;
+                }
+            });
+        }
+    } catch(e) {}
+    
     var KEY = 'bs_matlist';
     var list = [];
     try { list = JSON.parse(localStorage.getItem(KEY) || '[]'); } catch (e) { list = []; }
