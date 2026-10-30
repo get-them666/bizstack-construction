@@ -75,7 +75,22 @@
                     });
                 })
                 .catch(function(){ dl.innerHTML = ''; });
-        }, 250);
+        }, 200);
+    });
+    
+    // Auto-fill square footage when address is entered/selected
+    var sqftInput = document.getElementById('sqft');
+    addrInput.addEventListener('change', function(){
+        var addr = addrInput.value;
+        if (!addr || addr.length < 10 || !sqftInput) return;
+        fetch('/api/property/lookup?address=' + encodeURIComponent(addr))
+            .then(function(r){ return r.json(); })
+            .then(function(j){
+                if (j && j.sqft && j.sqft > 0 && !sqftInput.value) {
+                    sqftInput.value = Math.round(j.sqft);
+                }
+            })
+            .catch(function(){});
     });
 })();
 </script>

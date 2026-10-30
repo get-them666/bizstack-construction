@@ -11151,6 +11151,18 @@ async def places_autocomplete_api(request: Request, input: str = "", sessiontoke
         return JSONResponse({"predictions": [], "error": str(e)}, status_code=200)
 
 
+@app.get("/api/property/lookup")
+async def property_lookup_api(request: Request, address: str = ""):
+    try:
+        import property_service
+        result = property_service.lookup_address(address or "")
+        if result:
+            return JSONResponse({"ok": True, "sqft": result.get("sqft"), "beds": result.get("beds"), "baths": result.get("baths"), "address": result.get("address")})
+        return JSONResponse({"ok": False})
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=200)
+
+
 @app.get("/api/copilot/history")
 async def copilot_history(request: Request, db=Depends(get_db)):
     """Replay the stored conversation so a refresh doesn't lose the thread."""
