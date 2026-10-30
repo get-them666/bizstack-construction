@@ -24,49 +24,66 @@ def scrape_homedepot_list(list_url: str) -> str:
     writer = csv.writer(output)
     writer.writerow(["SKU", "Description", "Price", "UOM"])
 
-    # Try to find JSON data in script tags
-    # Look for list items
-    patterns = [
-        r'"itemId"\s*:\s*"([^"]+)"',
-        r'"productId"\s*:\s*"([^"]+)"',
-    ]
-    
     soup = BeautifulSoup(html, 'html.parser')
-    items = []
     
-    # Try different approaches
+    # Look for all script tags with JSON
+    for script in soup.find_all('script', type='application/json'):
+        try:
+            data = json.loads(script.string)
+            # Traverse to find products/items
+            def find_items(obj, path=''):
+                if isinstance(obj, dict):
+                    # Check if this looks like a product
+                    if ('price' in obj or 'currentPrice' in obj or 'unitPrice' in obj) and ('itemId' in obj or 'productId' in obj or 'sku' in obj or 'id' in obj):
+                        items_found.append(obj)
+                    for k, v in obj.items():
+                        find_items(v, path + '.' + k)
+                elif isinstance(obj, list):
+                    for i, item in enumerate(obj):
+                        find_items(item, path + f'[{i}]')
+            items_found = []
+            find_items(data)
+            if items_found:
+                for prod in items_found:
+                    sku = prod.get('itemId') or prod.get('productId') or prod.get('sku') or prod.get('id') or prod.get('modelId') or 'UNKNOWN'
+                    desc = prod.get('productName') or prod.get('name') or prod.get('description') or prod.get('title') or 'Item'
+                    price = None
+                    if isinstance(prod.get('price'), dict):
+                        price = prod['price'].get('value') or prod['price'].get('currentPrice') or prod['price'].get('amount')
+                    elif prod.get('price'):
+                        price = prod.get('price')
+                    elif isinstance(prod.get('currentPrice'), dict):
+                        price = prod['currentPrice'].get('value')
+                    elif prod.get('currentPrice'):
+                        price = prod.get('currentPrice')
+                    elif prod.get('unitPrice'):
+                        price = prod.get('unitPrice')
+                    if price:
+                        try:
+                            # Clean price
+                            price_str = str(price).replace('$', '').replace(',', '')
+                            writer.writerow([f"HD-{sku}" if not str(sku).startswith('HD-') else str(sku), str(desc)[:200], price_str, "Each"])
+                        except:
+                            pass
+                result = output.getvalue()
+                if result.count('\n') > 1:
+                    return result
+        except Exception as e:
+            continue
+    
+    # Also look for embedded JSON in script tags
     for script in soup.find_all('script'):
         content = script.string or ''
-        if 'list' in content.lower() and ('price' in content.lower() or 'item' in content.lower()):
-            # Try to extract JSON objects
-            # Look for arrays of products
-            for m in re.finditer(r'\{[^{}]*"price"[^{}]*\}', content):
-                try:
-                    obj = json.loads(m.group())
-                    if obj.get('price') or obj.get('currentPrice'):
-                        items.append(obj)
-                except:
-                    pass
-    
-    # Also look for product cards
-    for card in soup.find_all(['div', 'li'], class_=re.compile(r'product|item|card', re.I)):
-        text = card.get_text()
-        price_m = re.search(r'\$\s*([0-9,]+\.?[0-9]*)', text)
-        if price_m:
-            # Try to find sku/id
-            sku = card.get('data-itemid') or card.get('data-productid') or 'UNKNOWN'
-            if sku == 'UNKNOWN':
-                sku_m = re.search(r'([0-9]{6,})', str(card))
-                if sku_m:
-                    sku = sku_m.group(1)
-            # Get title/description
-            title = card.find(['h3', 'h4', 'a'], class_=re.compile(r'title|name', re.I))
-            desc = title.get_text(strip=True) if title else text[:100].strip()
-            writer.writerow([f"HD-{sku}", desc, price_m.group(1).replace(',', ''), "Each"])
+        if '"items"' in content or '"listItems"' in content:
+            # Try to extract with regex
+            for m in re.finditer(r'"(?:itemId|productId|sku)"\s*:\s*"([^"]+)".*?"(?:productName|name)"\s*:\s*"([^"]+)".*?"(?:price|currentPrice)"[^0-9]*([0-9,.]+)', content, re.S):
+                writer.writerow([f"HD-{m.group(1)}", m.group(2), m.group(3).replace(',', ''), "Each"])
+            for m in re.finditer(r'\$([0-9]+\.[0-9]{2})', content):
+                pass  # fallback
     
     result = output.getvalue()
     if result.count('\n') <= 1:
-        return "Error: Could not extract items from this list. The page structure may require JavaScript rendering or authentication."
+        return "Error: Could not extract items from this list. Try exporting from Home Depot or use the comprehensive price list instead."
     return result
 
 
