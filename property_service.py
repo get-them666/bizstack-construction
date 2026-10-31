@@ -363,17 +363,20 @@ def lookup_address(address: str):
     if lookup_property_regional:
         try:
             regional = lookup_property_regional(addr)
-            if regional and regional.get("house_sqft"):
+            if regional and regional.get("sqft"):
                 result = {
                     "address": regional.get("address") or addr,
                     "city": regional.get("city") or "",
-                    "state": "VA" if regional.get("state") != "NC" else "NC",
-                    "zip": "",
-                    "sqft": _num(regional.get("house_sqft")),
-                    "beds": None,
-                    "baths": None,
-                    "year_built": None,
+                    "state": regional.get("state") or "VA",
+                    "zip": regional.get("zip") or "",
+                    "sqft": _num(regional.get("sqft")),
+                    "beds": regional.get("beds"),
+                    "baths": regional.get("baths"),
+                    "year_built": regional.get("year_built"),
+                    "stories": regional.get("stories"),
+                    "property_type": regional.get("property_type") or "",
                     "lot_sqft": _num(regional.get("lot_sqft")),
+                    "success": True,
                     "source": "regional_gis",
                     "raw": regional,
                 }

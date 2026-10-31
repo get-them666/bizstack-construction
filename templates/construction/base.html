@@ -43,8 +43,9 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
-    {# tojson, not autoescape: HTML entities are not decoded inside <script>,
-       so the "&" in the service area was reaching crawlers as a literal "&amp;". #}
+    {# tojson, not autoescape: HTML entities are not decoded inside a script
+       tag, so the "&" in the service area was reaching crawlers as a literal
+       "&amp;". #}
     <script type="application/ld+json">
     {
       "@context": "https://schema.org",

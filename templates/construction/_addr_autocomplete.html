@@ -8,7 +8,7 @@
   cannot type into at all.
 
   Instead: /api/places/autocomplete (server key) feeds a <datalist>, and
-  /api/property (RentCast → regional county GIS fallback) fills the sq ft box.
+  /api/property (verified city parcel records → RentCast) fills the sq ft box.
 
   Markup contract:
     input[data-addr-autocomplete]        -> gets suggestions
@@ -60,6 +60,12 @@
         });
 
         // --- property / square footage lookup ---
+        // Only run this where the page actually has a sq ft field. The quote
+        // page uses the same autocomplete but does not ask for square footage,
+        // and a lookup there would be a network call whose result is thrown
+        // away.
+        if (!sqftInput) return;
+
         var last = '';
         var busy = false;
         function detect() {

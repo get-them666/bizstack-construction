@@ -7525,7 +7525,7 @@ async def instant_quote_page(request: Request):
         "error": request.query_params.get("error"),
         "address": request.query_params.get("address", ""),
         "project_type": request.query_params.get("project_type", ""),
-        "quote": None, "prop": None, "api_configured": property_service.is_configured(),
+        "quote": None, "prop": None,
     })
 
 
@@ -7552,7 +7552,7 @@ async def instant_quote_submit(
         "project_types": INSTANT_PROJECT_TYPES,
         "address": address, "project_type": project_type,
         "name": name, "phone": phone, "email": email, "sqft": sqft,
-        "error": None, "quote": None, "prop": None, "api_configured": property_service.is_configured(),
+        "error": None, "quote": None, "prop": None,
     }
     email = (email or "").strip()
     if not email:
