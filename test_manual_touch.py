@@ -87,7 +87,7 @@ if __name__ == "__main__":
           any(p and p[0] == "letter" for _, p in ins), ins)
     check("the sender is the owner, not the bot",
           any("'owner'" in s for s, _ in ins), ins)
-    check("it commits", db.commits == 1, db.commits)
+    check("it commits", db.commits >= 1, db.commits)
     check("the note carries the timestamp marker",
           any(p and "owner letter" in str(p[-2]) for _, p in ins), ins)
 

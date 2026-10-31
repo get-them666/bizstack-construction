@@ -17,6 +17,8 @@ from typing import Dict, Optional, List
 import psycopg
 from psycopg.rows import dict_row
 
+from bizstack_leads import store as lead_store
+
 logger = logging.getLogger("outreach_queue")
 
 
@@ -104,6 +106,10 @@ def queue_sms(db, lead_id: int, body: str) -> Dict:
                     (CHANNEL_SMS, phone, body, lead_id),
                 )
             db.commit()
+            try:
+                lead_store.recompute(db, lead_id)
+            except Exception as exc:
+                logger.warning(f"queue refresh failed for lead {lead_id}: {exc}")
             logger.info(f"✅ SMS queued for lead {lead_id}: {phone}")
             return {"queued": True, "channel": CHANNEL_SMS}
         else:
@@ -141,6 +147,10 @@ def queue_email(db, lead_id: int, subject: str, body: str) -> Dict:
                     (CHANNEL_EMAIL, email, f"{subject}\n\n{body}", lead_id),
                 )
             db.commit()
+            try:
+                lead_store.recompute(db, lead_id)
+            except Exception as exc:
+                logger.warning(f"queue refresh failed for lead {lead_id}: {exc}")
             logger.info(f"✅ Email queued for lead {lead_id}: {email}")
             return {"queued": True, "channel": CHANNEL_EMAIL}
         else:

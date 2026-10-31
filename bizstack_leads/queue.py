@@ -57,6 +57,45 @@ def action_counts(buckets_list) -> dict:
     return {action: present.get(action, 0) for action in lifecycle.ACTION_ORDER}
 
 
+def call_candidates(buckets_list, limit=12, keep=None) -> list:
+    """Pick today's calls: replies first, then new leads and follow-ups alternately.
+
+    Taking one bucket at a time used to starve the others. With a few dozen
+    overdue follow-ups, the first twelve slots were always follow-ups -- people
+    already counted as ``contacted`` -- and the handful of never-contacted leads
+    never appeared. The owner could work the list all day without moving a
+    single lead out of ``new``.
+
+    Replies still come first because a waiting human is the most expensive
+    thing to leave sitting. After that, ``first_touch`` and ``follow_up`` take
+    turns, so a long follow-up list cannot bury new work. ``keep`` drops rows
+    the caller cannot actually call (no real phone or email).
+    """
+    by_action = {b["action"]: list(b.get("leads") or []) for b in buckets_list}
+    take = keep or (lambda lead: True)
+    out = []
+
+    for lead in by_action.get(lifecycle.ACTION_RESPOND) or []:
+        if len(out) >= limit:
+            return out
+        if take(lead):
+            out.append(lead)
+
+    queues = [
+        by_action.get(lifecycle.ACTION_FIRST_TOUCH) or [],
+        by_action.get(lifecycle.ACTION_FOLLOW_UP) or [],
+    ]
+    while len(out) < limit and any(queues):
+        for queue in queues:
+            if len(out) >= limit:
+                break
+            while queue and not take(queue[0]):
+                queue.pop(0)
+            if queue:
+                out.append(queue.pop(0))
+    return out
+
+
 def counts(db, company=None) -> dict:
     """Action -> count, including zeroes for buckets the owner expects to see."""
     raw = store.queue_counts(db, company)

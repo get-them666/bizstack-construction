@@ -4758,7 +4758,6 @@ async def pipeline_page(request: Request, db=Depends(get_db)):
         where_extra=queue_where, extra_params=vis_params,
     )
     buckets = lead_queue.group(rows)
-    by_action = {b["action"]: b for b in buckets}
     action_counts = lead_queue.action_counts(buckets)
 
     def _real_value_cents(lead) -> int:
@@ -4786,38 +4785,36 @@ async def pipeline_page(request: Request, db=Depends(get_db)):
         return cents
 
     # The call list. Phone first because a phone call is the only channel that
-    # reliably closes a remodel; email-only leads follow, marked as such.
+    # reliably closes a remodel; email-only leads follow, marked as such. The
+    # selection alternates first-touch and follow-up leads: a long follow-up
+    # backlog must never hide the people nobody has called yet, because those
+    # are the only calls that move a lead out of "New".
+    def _dialable(lead) -> bool:
+        phone = (lead.get("phone") or "").strip()
+        email = (lead.get("email") or "").strip()
+        if email.lower().endswith("@lead.local"):
+            email = ""
+        return bool(phone or email)
+
     call_list = []
-    seen_ids = set()
-    for action in (lead_lifecycle.ACTION_RESPOND,
-                   lead_lifecycle.ACTION_FOLLOW_UP,
-                   lead_lifecycle.ACTION_FIRST_TOUCH):
-        for lead in (by_action.get(action) or {}).get("leads", []):
-            if lead["id"] in seen_ids:
-                continue
-            phone = (lead.get("phone") or "").strip()
-            email = (lead.get("email") or "").strip()
-            if email.lower().endswith("@lead.local"):
-                email = ""
-            if not phone and not email:
-                continue
-            seen_ids.add(lead["id"])
-            call_list.append({
-                "id": lead["id"],
-                "name": lead.get("name") or "(no name)",
-                "address": lead.get("address") or "",
-                "project_type": lead.get("project_type") or "",
-                "source": lead.get("source") or "",
-                "phone": phone,
-                "email": email,
-                "action": action,
-                "action_label": lead_lifecycle.ACTION_LABELS.get(action, action),
-                "value_cents": _real_value_cents(lead),
-            })
-            if len(call_list) >= 12:
-                break
-        if len(call_list) >= 12:
-            break
+    for lead in lead_queue.call_candidates(buckets, limit=12, keep=_dialable):
+        phone = (lead.get("phone") or "").strip()
+        email = (lead.get("email") or "").strip()
+        if email.lower().endswith("@lead.local"):
+            email = ""
+        action = lead.get("next_action") or lead_lifecycle.ACTION_FIRST_TOUCH
+        call_list.append({
+            "id": lead["id"],
+            "name": lead.get("name") or "(no name)",
+            "address": lead.get("address") or "",
+            "project_type": lead.get("project_type") or "",
+            "source": lead.get("source") or "",
+            "phone": phone,
+            "email": email,
+            "action": action,
+            "action_label": lead_lifecycle.ACTION_LABELS.get(action, action),
+            "value_cents": _real_value_cents(lead),
+        })
 
     # Canonical stage funnel. Raw status values still include the legacy
     # vocabulary (quoted/deposit/in_progress/completed), so translate rather

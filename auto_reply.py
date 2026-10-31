@@ -10,6 +10,8 @@ import documents_service
 import estimating_service
 import stripe_service
 
+from bizstack_leads import store as lead_store
+
 
 def run_coro(coro):
     """Run a coroutine from sync code whether an event loop is running or not."""
@@ -550,6 +552,13 @@ def record_manual_touch(db, lead_id, channel: str, detail: str = "") -> dict:
     except Exception as exc:
         print(f"[auto-reply] could not record manual touch for lead {lead_id}: {exc}", flush=True)
         return {"ok": False, "error": str(exc)[:200]}
+    # The touch is committed; refresh the cached queue columns from it so a
+    # mailed letter or a logged call does not leave the lead stuck in an
+    # already-past bucket. Best-effort: the touch itself must not be lost.
+    try:
+        lead_store.recompute(db, lead_id)
+    except Exception as exc:
+        print(f"[auto-reply] queue refresh failed for lead {lead_id}: {exc}", flush=True)
     print(f"[auto-reply] recorded owner {channel} on lead {lead_id}", flush=True)
     return {"ok": True, "channel": channel, "lead_id": lead_id, "at": stamp}
 
@@ -722,6 +731,17 @@ def _fire_sent_effect(db, lead_id, company_key, channel, recipient, body):
                 (channel, recipient, body[:2000], lead_id),
             )
             db.commit()
+        # The send itself is the touch, so the queue columns have to be
+        # re-derived from comms_logs now. Without this the lead was marked
+        # contacted but kept its old last_outbound_at and a follow-up date that
+        # was already in the past, so the Today call list kept showing the same
+        # leads as overdue no matter how many emails the bot sent.
+        try:
+            lead_store.recompute(db, lead_id)
+        except Exception as exc:
+            # The message is already out. A queue refresh failure must not turn
+            # a delivered send into a "staged draft" that goes out twice.
+            print(f"[auto-reply {company_key}] queue refresh failed for lead {lead_id}: {exc}", flush=True)
         print(f"[auto-reply {company_key}] sent {channel} to {recipient} (lead #{lead_id})", flush=True)
         return True
     except Exception as exc:

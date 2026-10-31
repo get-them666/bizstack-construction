@@ -35,6 +35,8 @@ from zoneinfo import ZoneInfo
 
 import brand
 
+from bizstack_leads import store as lead_store
+
 LOCAL_TZ = ZoneInfo(os.getenv("BUSINESS_TZ", "America/New_York"))
 
 # Sources that mean "this person contacted us". Anything machine-sourced
@@ -316,6 +318,15 @@ def _record(conn, lead_id: int, step: int, channel: str, recipient: str, body: s
         )
         cur.execute("UPDATE leads SET status = 'contacted' WHERE id = %s AND COALESCE(status, 'new') = 'new';", (lead_id,))
     conn.commit()
+    # Keep the shared queue columns in step with the touch we just logged.
+    # A send that only advanced comms_logs left next_action_at in the past, so
+    # the lead stayed on the owner's overdue call list forever. Best-effort:
+    # the message is already delivered, and a refresh failure must not abort
+    # the rest of the follow-up sequence.
+    try:
+        lead_store.recompute(conn, lead_id)
+    except Exception as exc:
+        print(f"[followups] queue refresh failed for lead {lead_id}: {exc}", flush=True)
 
 
 def send_followup(conn, lead: dict, step: int, *, send_email, send_sms, channel_allowed) -> dict:

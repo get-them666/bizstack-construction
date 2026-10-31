@@ -14,6 +14,8 @@ from datetime import datetime, timedelta, timezone
 import psycopg
 from psycopg.rows import dict_row
 
+import auto_reply
+import followups
 from bizstack_leads import intake, lifecycle, outreach, queue, schema, store
 
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://localhost/bz_leads_test")
@@ -257,6 +259,55 @@ class RecomputeTests(PipelineTestCase):
         store.set_do_not_contact(self.db, lead_id, True)
         lead = store.recompute(self.db, lead_id)
         self.assertEqual(lead["next_action"], lifecycle.ACTION_CLOSED)
+
+
+class AutomatedSendRefreshTests(PipelineTestCase):
+    """A delivered message must move the queue, not just the comms log.
+
+    The bot used to write ``comms_logs`` and set ``status='contacted'`` without
+    recomputing. The lead's ``last_outbound_at`` and follow-up date stayed in
+    the past, so the Today call list kept showing the same people as overdue
+    however many emails went out. The owner saw "Contacted 97" day after day.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        followups.ensure_schema(cls.db, force=True)
+
+    def test_a_bot_send_refreshes_last_touch_and_next_action(self):
+        lead_id = self.intake(name="Bot Send", email="bot@example.com")["lead_id"]
+        self.assertTrue(auto_reply._fire_sent_effect(
+            self.db, lead_id, "broom", "email", "bot@example.com", "hello",
+        ))
+        lead = store.get_lead(self.db, lead_id)
+        self.assertEqual(lead["status"], lifecycle.CONTACTED)
+        self.assertEqual(lead["touch_count"], 1)
+        self.assertIsNotNone(lead["last_outbound_at"])
+        self.assertEqual(lead["next_action"], lifecycle.ACTION_WAITING)
+
+    def test_a_followup_send_leaves_the_overdue_bucket(self):
+        lead_id = self.intake(name="Follow", email="follow@example.com")["lead_id"]
+        followups._record(self.db, lead_id, 0, "email", "follow@example.com", "hello")
+        lead = store.get_lead(self.db, lead_id)
+        self.assertEqual(lead["status"], lifecycle.CONTACTED)
+        self.assertEqual(lead["touch_count"], 1)
+        self.assertEqual(lead["next_action"], lifecycle.ACTION_WAITING)
+
+    def test_an_owner_touch_moves_a_new_lead_out_of_first_touch(self):
+        lead_id = self.intake(name="Called", phone="7575550188")["lead_id"]
+        self.assertEqual(
+            store.get_lead(self.db, lead_id)["next_action"],
+            lifecycle.ACTION_FIRST_TOUCH,
+        )
+        store.record_touch(self.db, lead_id, "phone", "called from Today")
+        lead = store.get_lead(self.db, lead_id)
+        self.assertEqual(lead["status"], lifecycle.CONTACTED)
+        self.assertEqual(lead["touch_count"], 1)
+        self.assertEqual(lead["next_action"], lifecycle.ACTION_WAITING)
+        self.assertEqual(store.list_leads(
+            self.db, "broom", action=lifecycle.ACTION_FIRST_TOUCH,
+        ), [])
 
 
 if __name__ == "__main__":
