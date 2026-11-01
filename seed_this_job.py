@@ -109,10 +109,6 @@ LINES = [
 NOTES = """\
 Hallway (8' x 4') and runner (8' x 4') plus bathroom. Interior finish work only.
 
-CONDITION OF AWARD: no finish work - drywall, flooring, molding, paint, plumbing
-- begins until the sewage-affected areas are fully cleaned, disinfected and dry.
-This price assumes that condition is met.
-
 Bathroom dimensions and subfloor condition are not confirmed. If demolition
 exposes rot or a failed subfloor beyond the two sheets listed, that is a written
 change order before work continues.
@@ -122,6 +118,22 @@ estimates to be reconciled against receipts. Trim prices are taken from the
 supplier sheet as per linear foot.
 
 Pricing: supplier CSV material costs plus labour at $50/hr, times a 25% margin.
+"""
+
+# One task per line, in the order the work happens. This is what prints under
+# SCOPE OF WORK on the bid package -- the cost lines below are priced per unit
+# and would read like a shopping list.
+SCOPE = """\
+Remove and haul away sewage-contaminated material; clean, disinfect and dry the affected areas.
+Demolish the bathroom floor and prepare the subfloor; replace up to two sheets of 3/4 in. OSB.
+Toilet plumbing: remove and reset the toilet, connect supply and drain, replace flange and wax ring.
+Hang, tape, mud, sand and prime drywall: six 1/2 in. sheets plus two moisture-resistant sheets in the bathroom.
+Install primed MDF baseboard, approximately 44 linear feet, and casing on two interior doors.
+Install laminate flooring in the runner area, approximately 40 square feet, including transitions.
+Install waterproof luxury vinyl plank flooring in the bathroom, approximately 40 square feet.
+Paint hallway and bathroom walls, two finish coats over primed surfaces.
+Paint two interior doors and the new trim, two coats.
+Remove job debris, dispose of it, and leave the work areas broom clean.
 """
 
 
@@ -221,6 +233,15 @@ def main() -> None:
         if existing:
             print(f"\nBid card already exists: #{existing['id']} "
                   f"({existing['status']}) - not creating a duplicate.")
+            if "--refresh" in sys.argv:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE bid_opportunities SET scope = %s, notes = %s, "
+                        "updated_at = now() WHERE id = %s AND company = %s",
+                        (SCOPE.strip(), NOTES.strip(), existing["id"], COMPANY),
+                    )
+                conn.commit()
+                print("Refreshed scope and notes on the existing card.")
             print(f"Open it: /bids/{existing['id']}")
             print(f"Package: /bids/{existing['id']}/package.pdf")
             return
@@ -236,7 +257,8 @@ def main() -> None:
             due_date=due,
             bid_amount=None,
             status="drafting",
-            notes=NOTES,
+            notes=NOTES.strip(),
+            scope=SCOPE.strip(),
         )
         print(f"\nCreated bid #{bid_id}")
 

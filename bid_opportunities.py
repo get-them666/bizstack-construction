@@ -417,6 +417,10 @@ def ensure_schema(conn) -> None:
         """)
         cur.execute("ALTER TABLE bid_opportunities ADD COLUMN IF NOT EXISTS kind VARCHAR(20) DEFAULT 'solicitation';")
         cur.execute("ALTER TABLE bid_opportunities ADD COLUMN IF NOT EXISTS markup_pct NUMERIC(6,2) DEFAULT 0;")
+        # The scope narrative that goes on the client's bid package. Not derived
+        # from bid_costs: cost lines are priced per material unit, while scope is
+        # written in the order the work happens, one line per trade task.
+        cur.execute("ALTER TABLE bid_opportunities ADD COLUMN IF NOT EXISTS scope TEXT;")
         cur.execute("""
             UPDATE bid_opportunities
                SET kind = 'permit'
@@ -541,7 +545,7 @@ def create_bid(conn, company: str = "construction", **f) -> int:
     cols = [
         "name", "owner", "contact_name", "contact_email", "contact_phone",
         "reference", "role", "trade", "location", "due_date", "bid_amount",
-        "status", "notes",
+        "status", "notes", "scope",
     ]
     use = [_safe(c) for c in cols if c in f]
     if not use:

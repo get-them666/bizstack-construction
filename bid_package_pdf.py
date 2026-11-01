@@ -126,27 +126,40 @@ def _bullets(pdf: BidPackagePDF, items: list[str]) -> None:
         pdf.ln(0.6)
 
 
+CATEGORY_LABELS = {
+    "material": "Materials",
+    "labor": "Labor",
+    "sub": "Subcontract",
+    "equipment": "Equipment",
+    "other": "General",
+}
+
+
+def _scope_items(bid: dict, costs: list[dict]) -> list[str]:
+    """The scope narrative, in the order the work happens.
+
+    Prefers ``bid["scope"]`` -- one task per line, written by whoever priced the
+    job. Falls back to the cost lines' work items (labor, subcontract, general)
+    when a bid has no scope text, which is better than printing nothing.
+    """
+    raw = (bid.get("scope") or "").strip()
+    if raw:
+        return [ln.strip(" -•\t") for ln in raw.splitlines() if ln.strip(" -•\t")]
+    out = []
+    for c in sorted(costs, key=lambda x: x.get("id") or 0):
+        if (c.get("category") or "") == "material":
+            continue
+        desc = (c.get("description") or "").strip()
+        if desc:
+            out.append(desc)
+    return out
+
+
 def _labelled(pdf: BidPackagePDF, label: str, value: str) -> None:
     pdf.set_font("Helvetica", "B", 9)
     pdf.cell(32, 5.2, label)
     pdf.set_font("Helvetica", "", 9)
     pdf.cell(0, 5.2, _txt(value), new_x="LMARGIN", new_y="NEXT")
-
-
-def _scope_lines(costs: list[dict]) -> list[tuple[str, float, str, str]]:
-    """Cost lines as scope rows: (description, qty, unit, category)."""
-    out = []
-    for c in costs:
-        desc = (c.get("description") or "").strip()
-        if not desc:
-            continue
-        qty = c.get("qty")
-        unit = ""
-        # bid_costs has no unit column; the unit is embedded in the description
-        # by convention ("Baseboard molding (~40 LF)"). Leave it blank rather
-        # than guess, and let the description carry the quantity.
-        out.append((desc, float(qty or 0), unit, (c.get("category") or "").strip()))
-    return out
 
 
 def generate_bid_package_pdf(bid: dict, costs: list[dict], markup_pct: float = 0,
@@ -194,10 +207,10 @@ def generate_bid_package_pdf(bid: dict, costs: list[dict], markup_pct: float = 0
 
     # ---- scope -----------------------------------------------------------
     _heading(pdf, "Scope of work")
-    scope = _scope_lines(costs)
+    scope = _scope_items(bid, costs)
     if scope:
         pdf.set_font("Helvetica", "", 9)
-        for i, (desc, qty, _unit, cat) in enumerate(scope, start=1):
+        for i, desc in enumerate(scope, start=1):
             pdf.set_x(pdf.l_margin + 1)
             pdf.multi_cell(pdf.epw - 1, 4.8, f"{i}. {_txt(desc)}")
             pdf.ln(0.6)
@@ -213,16 +226,18 @@ def generate_bid_package_pdf(bid: dict, costs: list[dict], markup_pct: float = 0
     _heading(pdf, "Pricing")
     pdf.set_font("Helvetica", "B", 8.5)
     pdf.set_fill_color(245, 245, 245)
-    pdf.cell(18, 7, "Category", border=1, fill=True)
-    pdf.cell(120, 7, "Description", border=1, fill=True)
+    pdf.cell(22, 7, "Category", border=1, fill=True)
+    pdf.cell(116, 7, "Description", border=1, fill=True)
     pdf.cell(32, 7, "Amount", border=1, fill=True, align="R",
              new_x="LMARGIN", new_y="NEXT")
     pdf.set_font("Helvetica", "", 8.5)
-    for c in costs:
-        cat = _txt((c.get("category") or "").title())[:14]
-        desc = _txt((c.get("description") or "")[:78])
-        pdf.cell(18, 6, cat, border=1)
-        pdf.cell(120, 6, desc, border=1)
+    # Entry order, not category order: the lines were priced in job sequence, so
+    # the client reads sewage cleanup first and final cleanup last.
+    for c in sorted(costs, key=lambda x: x.get("id") or 0):
+        cat = CATEGORY_LABELS.get((c.get("category") or "").strip(), "General")
+        desc = _txt((c.get("description") or "")[:74])
+        pdf.cell(22, 6, cat, border=1)
+        pdf.cell(116, 6, desc, border=1)
         pdf.cell(32, 6, _money(c.get("estimated")), border=1, align="R",
                  new_x="LMARGIN", new_y="NEXT")
 
