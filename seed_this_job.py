@@ -41,12 +41,16 @@ from psycopg.rows import dict_row
 COMPANY = "construction"
 REFERENCE = "hall-runner-bath-2026-10"
 
-# Client price per line. Labor is billed above the owner's $50/hr cost -- that
+# Client price per line. Labor is billed above the crew's $40/hr cost -- that
 # gap is where the money is on a small job, not in a 25% markup on a $15 sheet
 # of drywall. Materials and allowances carry 50%, which is normal for retail
 # residential work.
-LABOR_COST_RATE = 50.0
-LABOR_BILLED_RATE = 85.0
+#
+# The crew rate was carried at $50/hr until 2026-10-31; $40/hr is the actual
+# agreed wage. The billed rate did not move with it, so the difference lands in
+# margin rather than in the client's price.
+LABOR_COST_RATE = 40.0
+LABOR_BILLED_RATE = 72.0
 MATERIAL_MARKUP = 1.50
 SUB_MARKUP = 1.50
 OTHER_MARKUP = 1.50
@@ -121,10 +125,11 @@ exposes rot or a failed subfloor beyond the two sheets listed, that is a written
 change order before work continues.
 
 Allowance lines (disinfectant/PPE, dump fees, toilet plumbing materials) are
-estimates to be reconciled against receipts. Trim prices are taken from the
-supplier sheet as per linear foot.
+estimates to be reconciled against receipts at final billing. Trim is priced per
+linear foot from the supplier sheet.
 
-Pricing: supplier CSV material costs plus labour at $50/hr, times a 25% margin.
+The contingency line covers concealed conditions found after demolition. Any
+unused balance is credited at final billing.
 """
 
 # One task per line, in the order the work happens. This is what prints under
@@ -165,16 +170,32 @@ def _catalog_prices(conn, names: list[str]) -> dict[str, int]:
         return {r["name"]: int(r["price_cents"] or 0) for r in cur.fetchall()}
 
 
+def _set_unit(conn, line_id: int, unit: str) -> None:
+    """Write the unit separately.
+
+    bid_costing.add_cost_line gained a `unit` argument at the same time the
+    column was added, but a container still running the previous deploy does not
+    have it. Writing it directly keeps this script runnable against either.
+    """
+    if not unit:
+        return
+    with conn.cursor() as cur:
+        cur.execute("UPDATE bid_costs SET unit = %s WHERE id = %s", (unit, line_id))
+    conn.commit()
+
+
 def build_rows(catalog: dict[str, int]) -> list[dict]:
     rows = []
     for desc, cat, qty, unit, hours, catalog_name in LINES:
         if catalog_name is None:                       # labour
-            qty_eff = 1.0
+            qty_eff = float(hours)
+            unit = "hr"
+            unit_cost = LABOR_COST_RATE
             cost = float(hours) * LABOR_COST_RATE
             price = float(hours) * LABOR_BILLED_RATE
-            unit_cost = LABOR_COST_RATE * float(hours)
         elif catalog_name == "":                       # allowance
             qty_eff = 1.0
+            unit = "allowance"
             unit_cost = float(hours)
             cost = unit_cost * float(qty)
             price = cost * OTHER_MARKUP
@@ -223,6 +244,8 @@ def main() -> None:
         with conn.cursor() as cur:
             cur.execute("ALTER TABLE bid_opportunities "
                         "ADD COLUMN IF NOT EXISTS scope TEXT;")
+            cur.execute("ALTER TABLE bid_costs "
+                        "ADD COLUMN IF NOT EXISTS unit VARCHAR(12);")
         conn.commit()
 
         names = [l[5] for l in LINES if l[5]]
@@ -273,12 +296,13 @@ def main() -> None:
                     )
                 conn.commit()
                 for r in rows:
-                    bc.add_cost_line(
+                    lid = bc.add_cost_line(
                         conn, existing["id"],
                         category=r["category"], description=r["description"],
                         vendor="", qty=r["qty"], unit_cost=r["unit_cost"],
                         estimated=r["price"], company=COMPANY,
                     )
+                    _set_unit(conn, lid, r["unit"])
                 bo.set_bid_amount(conn, existing["id"], round(total_price, 2), COMPANY)
                 print(f"Repriced: {len(rows)} lines, bid now ${total_price:,.2f}")
             if "--refresh" in sys.argv:
@@ -311,7 +335,7 @@ def main() -> None:
         print(f"\nCreated bid #{bid_id}")
 
         for r in rows:
-            bc.add_cost_line(
+            lid = bc.add_cost_line(
                 conn, bid_id,
                 category=r["category"],
                 description=r["description"],
@@ -321,6 +345,7 @@ def main() -> None:
                 estimated=r["price"],
                 company=COMPANY,
             )
+            _set_unit(conn, lid, r["unit"])
         bo.set_bid_amount(conn, bid_id, round(total_price, 2), COMPANY)
         print(f"Wrote {len(rows)} cost lines and set the bid to ${total_price:,.2f}")
         print(f"Open the card: /bids/{bid_id}")

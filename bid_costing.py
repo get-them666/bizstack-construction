@@ -97,6 +97,9 @@ def ensure_accounting_schema(conn) -> None:
         """)
         cur.execute("ALTER TABLE bid_costs ADD COLUMN IF NOT EXISTS vendor VARCHAR(255);")
         cur.execute("ALTER TABLE bid_costs ADD COLUMN IF NOT EXISTS qty NUMERIC(12,2);")
+        # Unit of measure ("hr", "sheet", "lf", "sqft", "allowance"). Without it
+        # an itemised bid can print a quantity with no way to read it.
+        cur.execute("ALTER TABLE bid_costs ADD COLUMN IF NOT EXISTS unit VARCHAR(12);")
         cur.execute("ALTER TABLE bid_costs ADD COLUMN IF NOT EXISTS unit_cost NUMERIC(14,2);")
         cur.execute("ALTER TABLE bid_costs ADD COLUMN IF NOT EXISTS estimated NUMERIC(14,2);")
         cur.execute("ALTER TABLE bid_costs ADD COLUMN IF NOT EXISTS actual NUMERIC(14,2);")
@@ -198,17 +201,18 @@ def cost_lines(conn, bid_id: int, company: str = "construction") -> list[dict]:
 
 def add_cost_line(conn, bid_id: int, category: str = "material", description: str = "",
                   vendor: str = "", qty=None, unit_cost=None, estimated=None,
-                  actual=None, company: str = "construction") -> int:
+                  actual=None, unit: str = "", company: str = "construction") -> int:
     if category not in COST_CATEGORIES:
         raise ValueError(f"category must be one of {COST_CATEGORIES}")
     with conn.cursor() as cur:
         cur.execute(
             "INSERT INTO bid_costs (bid_id, category, description, vendor, qty, "
-            "unit_cost, estimated, actual, company) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+            "unit_cost, estimated, actual, unit, company) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
             "RETURNING id",
             (bid_id, category, description.strip() if description else None,
              vendor.strip() if vendor else None, qty, unit_cost,
-             _money(estimated), _money(actual), company))
+             _money(estimated), _money(actual), (unit or None), company))
         lid = cur.fetchone()["id"]
     conn.commit()
     return lid
