@@ -182,8 +182,17 @@ def generate_bid_package_pdf(bid: dict, costs: list[dict], markup_pct: float = 0
         markup_pct = 0
 
     subtotal = sum(float(c.get("estimated") or 0) for c in costs)
-    markup = subtotal * (markup_pct / 100.0)
-    total = subtotal + markup
+    if subtotal <= 0:
+        # No itemised lines: price from the bid amount already on the card.
+        try:
+            total = float((bid or {}).get("bid_amount") or 0)
+        except (TypeError, ValueError):
+            total = 0.0
+        markup = 0.0
+        markup_pct = 0
+    else:
+        markup = subtotal * (markup_pct / 100.0)
+        total = subtotal + markup
 
     pdf = BidPackagePDF(format="letter")
     pdf.set_auto_page_break(auto=True, margin=18)

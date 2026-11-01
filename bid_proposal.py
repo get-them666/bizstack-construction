@@ -71,24 +71,36 @@ def generate_proposal_pdf(bid: dict, costs: list, summary: dict, markup_pct: flo
         desc = (c.get('description') or '')[:40]
         pdf.cell(80, 7, desc, border=1)
         pdf.cell(50, 7, f'${est:,.2f}', border=1, ln=True, align='R')
-    
+
+    # No itemised lines (or a zero sum): price from the bid amount already on
+    # the card rather than printing $0.00.
+    if subtotal <= 0:
+        try:
+            total = float((bid or {}).get('bid_amount') or 0)
+        except (TypeError, ValueError):
+            total = 0.0
+        markup_pct = 0
+    else:
+        if markup_pct and markup_pct > 0:
+            markup = subtotal * (markup_pct / 100.0)
+            total = subtotal + markup
+        else:
+            markup = 0.0
+            total = subtotal
+
     pdf.ln(2)
     pdf.set_font('Helvetica', 'B', 10)
     pdf.cell(140, 8, 'Subtotal:', border=0)
     pdf.cell(50, 8, f'${subtotal:,.2f}', border=0, ln=True, align='R')
-    
-    if markup_pct and markup_pct > 0:
+
+    if markup_pct and markup_pct > 0 and subtotal > 0:
         markup = subtotal * (markup_pct / 100.0)
         pdf.cell(140, 8, f'Markup ({markup_pct}%):', border=0)
         pdf.cell(50, 8, f'${markup:,.2f}', border=0, ln=True, align='R')
-        total = subtotal + markup
-        pdf.set_font('Helvetica', 'B', 12)
-        pdf.cell(140, 10, 'TOTAL BID PRICE:', border=0)
-        pdf.cell(50, 10, f'${total:,.2f}', border=0, ln=True, align='R')
-    else:
-        pdf.set_font('Helvetica', 'B', 12)
-        pdf.cell(140, 10, 'TOTAL BID PRICE:', border=0)
-        pdf.cell(50, 10, f'${subtotal:,.2f}', border=0, ln=True, align='R')
+
+    pdf.set_font('Helvetica', 'B', 12)
+    pdf.cell(140, 10, 'TOTAL BID PRICE:', border=0)
+    pdf.cell(50, 10, f'${total:,.2f}', border=0, ln=True, align='R')
     
     pdf.ln(10)
     

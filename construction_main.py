@@ -11587,15 +11587,27 @@ async def bid_submit(bid_id: int, request: Request, markup_pct: str = Form("0"),
     except Exception:
         mp = 0
     subtotal = sum(float(c.get("estimated") or 0) for c in costs)
-    total = subtotal + (subtotal * mp / 100.0) if mp else subtotal
+    if costs and subtotal > 0:
+        total = subtotal + (subtotal * mp / 100.0) if mp else subtotal
+    else:
+        # No itemised cost lines (e.g. a pulled solicitation priced as a
+        # single number): fall back to the bid amount already on the card
+        # instead of silently pricing the job at $0.00.
+        try:
+            total = float(bid.get("bid_amount") or 0)
+        except (TypeError, ValueError):
+            total = 0.0
     try:
         bid_opportunities._set_markup(db, bid_id, mp, _BID_COMPANY)
     except Exception:
         pass
-    try:
-        bid_opportunities.set_bid_amount(db, bid_id, total, _BID_COMPANY)
-    except Exception:
-        pass
+    # Never overwrite a real price with zero just because this submit had no
+    # cost lines to sum.
+    if total and total > 0:
+        try:
+            bid_opportunities.set_bid_amount(db, bid_id, total, _BID_COMPANY)
+        except Exception:
+            pass
     
     try:
         import bid_proposal
