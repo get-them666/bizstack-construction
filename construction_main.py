@@ -623,6 +623,7 @@ async def lifecycle(app: FastAPI):
                     uploaded_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
                 );
                 """)
+                cur.execute("ALTER TABLE job_photos ADD COLUMN IF NOT EXISTS uploaded_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP;")
                 cur.execute("""
                 CREATE TABLE IF NOT EXISTS job_leads (
                     id SERIAL PRIMARY KEY,
@@ -10092,7 +10093,7 @@ async def crew_direct_deposit(request: Request, db=Depends(get_db)):
         with db.cursor() as cur:
             cur.execute("UPDATE crew SET stripe_account_id = %s WHERE id = %s;", (account_id, crew_row["id"]))
             db.commit()
-    url = stripe_svc.account_link(account_id, str(request.base_url))
+    url = stripe_svc.account_link(account_id, "https://" + company()["domain"])
     if not url:
         return RedirectResponse(url="/crew/pay?error=Unable+to+open+onboarding",
                                 status_code=status.HTTP_303_SEE_OTHER)
