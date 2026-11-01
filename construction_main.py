@@ -11430,7 +11430,15 @@ async def bid_package_pdf_route(bid_id: int, request: Request, db=Depends(get_db
     return Response(
         content=pdf,
         media_type="application/pdf",
-        headers={"Content-Disposition": f'inline; filename="{name}"'},
+        headers={
+            "Content-Disposition": f'inline; filename="{name}"',
+            # Dynamic, per-bid, per-request document: must never be cached by
+            # the CDN or the browser, or a stale copy (wrong address, no
+            # signature) keeps being served after a deploy or a re-price.
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
     )
 
 
