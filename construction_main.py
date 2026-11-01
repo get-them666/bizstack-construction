@@ -1398,7 +1398,10 @@ CREW_PERMS_KEY = "perms_crew"
 
 
 def _crew_features(db) -> dict:
-    return auth_service.features_for("worker", _get_setting(db, CREW_PERMS_KEY, ""))
+    feats = auth_service.features_for("worker", _get_setting(db, CREW_PERMS_KEY, ""))
+    # Realtime in-app messaging with the office is always available.
+    feats["messages"] = True
+    return feats
 
 
 def _require_crew_feature(db, feature: str):
