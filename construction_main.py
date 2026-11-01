@@ -66,6 +66,7 @@ import permit_enricher
 import permit_stats
 import email_fetcher
 import bid_costing
+import bid_package_pdf
 import auth0_service
 import auth0_login
 import material_picker
@@ -11319,6 +11320,36 @@ async def bid_set_price(bid_id: int, request: Request, markup_pct: str = Form("0
     if back.startswith("/bids/"):
         return RedirectResponse(url=back, status_code=status.HTTP_303_SEE_OTHER)
     return RedirectResponse(url=f"/bids/{bid_id}", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.get("/bids/{bid_id}/package.pdf")
+async def bid_package_pdf_route(bid_id: int, request: Request, db=Depends(get_db)):
+    """The full bid package: scope, assumptions, itemised price, terms, signature.
+
+    Generated from the card's own rows on every request, so it can never drift
+    from what /bids/{id} shows and nothing has to be stored on ephemeral disk.
+    The short email attachment in bid_proposal stays separate.
+    """
+    require_admin(request)
+    bid = bid_opportunities.get_bid(db, bid_id, _BID_COMPANY)
+    if not bid:
+        raise HTTPException(status_code=404, detail="Bid not found")
+    try:
+        bid_costing.ensure_accounting_schema(db)
+        costs = bid_costing.cost_lines(db, bid_id, _BID_COMPANY)
+    except Exception:
+        costs = []
+    try:
+        markup = float(bid.get("markup_pct") or 0)
+    except Exception:
+        markup = 0
+    pdf = bid_package_pdf.generate_bid_package_pdf(dict(bid), costs, markup)
+    name = bid_package_pdf.package_filename(dict(bid))
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{name}"'},
+    )
 
 
 @app.post("/api/bids/{bid_id}/submit")
