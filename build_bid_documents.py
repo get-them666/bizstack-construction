@@ -32,7 +32,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 from fpdf import FPDF
@@ -750,6 +750,12 @@ def main() -> int:
                     help="JSON snapshot with keys 'bid' and 'costs'")
     ap.add_argument("--photos", default="", help="folder of cleaned JPEGs")
     ap.add_argument("--out", default="", help="output folder")
+    ap.add_argument("--signature", default="",
+                    help="PNG of the owner's drawn signature to stamp on the contract")
+    ap.add_argument("--signer-name", default="Shaun David OLeary",
+                    help="printed name beside the signature")
+    ap.add_argument("--signature-date", default="",
+                    help="date string under the signature (default: today)")
     ap.add_argument("--dump-sql", action="store_true",
                     help="print the snapshot script and exit")
     args = ap.parse_args()
@@ -766,6 +772,13 @@ def main() -> int:
 
     photos = _find_photos(Path(os.path.expanduser(args.photos))) if args.photos else []
 
+    signature = None
+    if args.signature:
+        png = Path(os.path.expanduser(args.signature)).read_bytes()
+        when = args.signature_date or datetime.now().strftime("%B %d, %Y")
+        signature = {"png": png, "name": args.signer_name,
+                     "date": when, "company": "BuildStack Construction LLC"}
+
     out = Path(os.path.expanduser(
         args.out or f"~/Desktop/BuildStack-Bid-{bid.get('id', '')}"))
     out.mkdir(parents=True, exist_ok=True)
@@ -773,7 +786,7 @@ def main() -> int:
     docs = [
         ("01-Scope-of-Work.pdf", build_scope_of_work(bid, costs, photos)),
         ("02-Itemized-Pricing.pdf", build_itemized_pricing(bid, costs)),
-        ("03-Contract.pdf", build_contract(bid, costs, photos)),
+        ("03-Contract.pdf", build_contract(bid, costs, photos, signature=signature)),
     ]
 
     total = sum(float(c.get("estimated") or 0) for c in costs)
