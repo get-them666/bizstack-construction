@@ -4986,19 +4986,54 @@ async def api_skiptrace(request: Request, street: str = Form(""), city: str = Fo
                        db=Depends(get_db)):
     """Look up the owner of record for an address. Admin-only, cache-first.
 
-    Cache-first is not an optimisation here, it is the whole design: RentCast's
-    free plan allows 50 calls per MONTH, so every repeat lookup -- including a
-    repeat miss -- has to come out of the database rather than the provider.
-
     POST rather than GET so the address never lands in access logs, browser
     history, or a Referer header. It is homeowner PII either way.
     """
     require_admin(request)
     _, user_email = require_auth(request)
+    return await _skiptrace_result(db, street, city, state, zip_code, user_email)
 
-    # trace_address blocks on urllib for up to 20s. In an async route that stalls
-    # the whole event loop, so it goes to a worker thread. The DB work stays on
-    # this thread: psycopg connections are not safe to share across threads.
+
+@app.post("/api/bids/{bid_id}/owner")
+async def api_bid_owner(bid_id: int, request: Request, db=Depends(get_db)):
+    """Owner of record for the property on a bid card.
+
+    Same waterfall, same cache and same audit as /api/skiptrace -- the address
+    just comes off the bid instead of a form. A bid arriving from a property
+    manager names the manager, not the owner, and "who actually owns this" is
+    the first question worth answering before the price goes out.
+
+    This deliberately does NOT create a lead. Lead sourcing is business contacts
+    only (copilot_ops._BLOCKED_CONTACT_DOMAINS); putting a homeowner in the call
+    queue because we priced their kitchen would breach that, and the answer here
+    is diligence on a bid, not a new prospect.
+    """
+    require_admin(request)
+    _, user_email = require_auth(request)
+
+    bid = bid_opportunities.get_bid(db, bid_id)
+    if not bid:
+        raise HTTPException(status_code=404, detail="Bid not found")
+
+    parsed = skiptrace_service.parse_address(bid.get("location") or "")
+    if not parsed.get("ok"):
+        return JSONResponse(status_code=400, content={
+            "ok": False, "error": "no_address",
+            "detail": "This bid has no street address on it yet. Add one under Location.",
+        })
+
+    return await _skiptrace_result(db, parsed["street"], parsed["city"],
+                                   parsed["state"], parsed["zipcode"], user_email)
+
+
+async def _skiptrace_result(db, street: str, city: str, state: str,
+                            zip_code: str, user_email: str) -> JSONResponse:
+    """Cache-first owner lookup, shared by the address form and the bid card.
+
+    Cache-first is not an optimisation here, it is the whole design: RentCast's
+    free plan allows 50 calls per MONTH, so every repeat lookup -- including a
+    repeat miss -- has to come out of the database rather than the provider.
+    """
     key = skiptrace_service.normalize_address(street, city, state, zip_code)
     if not key:
         raise HTTPException(status_code=400, detail="street and city are required")

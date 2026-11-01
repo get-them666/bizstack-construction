@@ -153,6 +153,107 @@
         </form>
       </section>
 
+      <section class="bg-white rounded-2xl border border-slate-200 p-5">
+        <h2 class="text-sm font-bold uppercase tracking-wide text-slate-500 mb-2">Owner of record</h2>
+        {% if b.location %}
+        <p class="text-xs text-slate-500 mb-3">{{ b.location }}</p>
+        <button type="button" id="owner-lookup"
+                class="w-full text-sm font-semibold px-4 py-2 bg-white border border-slate-200 rounded-lg hover:border-indigo-300">
+          Look up owner
+        </button>
+        <div id="owner-result" class="mt-3 text-sm hidden"></div>
+        <p class="text-[11px] text-slate-400 mt-2">Assessor's public parcel record. Cached per address, and every lookup is logged.</p>
+        {% else %}
+        <p class="text-sm text-slate-500">Add a property address under <span class="font-semibold">Location</span> to look up the owner.</p>
+        {% endif %}
+      </section>
+
+      <script>
+      (function () {
+        var btn = document.getElementById('owner-lookup');
+        var box = document.getElementById('owner-result');
+        if (!btn || !box) return;
+
+        function line(label, value) {
+          if (!value) return null;
+          var wrap = document.createElement('div');
+          wrap.className = 'flex gap-2 py-0.5';
+          var l = document.createElement('span');
+          l.className = 'text-slate-500 shrink-0 w-24';
+          l.textContent = label;
+          var v = document.createElement('span');
+          v.className = 'font-semibold text-slate-800';
+          v.textContent = value;
+          wrap.appendChild(l); wrap.appendChild(v);
+          return wrap;
+        }
+        function money(v) {
+          var n = Number(v);
+          return isFinite(n) && n > 0 ? '$' + n.toLocaleString('en-US') : '';
+        }
+        function show(children, note, tone) {
+          box.textContent = '';
+          box.className = 'mt-3 text-sm';
+          children.forEach(function (c) { if (c) box.appendChild(c); });
+          if (note) {
+            var p = document.createElement('p');
+            p.className = 'mt-2 text-xs ' + (tone || 'text-slate-500');
+            p.textContent = note;
+            box.appendChild(p);
+          }
+          box.classList.remove('hidden');
+        }
+
+        btn.addEventListener('click', function () {
+          btn.disabled = true;
+          var was = btn.textContent;
+          btn.textContent = 'Looking up\u2026';
+          box.className = 'mt-3 text-sm text-slate-500';
+          box.textContent = 'Checking the parcel record.';
+          box.classList.remove('hidden');
+
+          fetch('/api/bids/{{ b.id }}/owner', { method: 'POST', credentials: 'same-origin' })
+            .then(function (r) {
+              return r.json().then(function (j) { return { status: r.status, j: j }; });
+            })
+            .then(function (res) {
+              var j = res.j || {};
+              if (res.status === 400) {
+                show([], j.detail || 'No address on this bid.', 'text-amber-700');
+                return;
+              }
+              if (res.status !== 200) {
+                show([], j.detail || 'The parcel service did not answer. Try again later.', 'text-red-600');
+                return;
+              }
+              if (!j.found) {
+                show([], 'No owner found in the parcel data for this address.', 'text-slate-500');
+                return;
+              }
+              var p = j.property || {};
+              show([
+                line('Owner', j.owner_of_record),
+                line('Type', j.owner_is_entity ? 'Entity' : 'Individual'),
+                line('Agent', j.registered_agent),
+                line('Parcel', p.parcel),
+                line('Assessed', money(p.assessed_value)),
+                line('Built', p.year_built),
+                line('County', p.county)
+              ], 'Source: ' + ((p.provider || j.provider || 'parcel record')) +
+                 ' \u00b7 checked ' + (j.checked_at || ''),
+                 'text-slate-400');
+            })
+            .catch(function () {
+              show([], 'Lookup failed. Check the connection and try again.', 'text-red-600');
+            })
+            .then(function () {
+              btn.disabled = false;
+              btn.textContent = was;
+            });
+        });
+      })();
+      </script>
+
       <section class="bg-white rounded-2xl border border-emerald-200 p-5">
         <h2 class="text-sm font-bold uppercase tracking-wide text-emerald-700 mb-2">Bid This Job</h2>
         <p class="text-xs text-slate-500 mb-3">Price it, apply markup, generate a proposal PDF, and email the GC.</p>
