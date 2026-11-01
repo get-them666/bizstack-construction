@@ -41,12 +41,19 @@ from psycopg.rows import dict_row
 COMPANY = "construction"
 REFERENCE = "hall-runner-bath-2026-10"
 
-# Client price = cost x this. Applied per line so the card shows a normal
-# itemised bid rather than cost-plus. Change it here and re-run.
-PRICE_MULTIPLIER = 1.25
+# Client price per line. Labor is billed above the owner's $50/hr cost -- that
+# gap is where the money is on a small job, not in a 25% markup on a $15 sheet
+# of drywall. Materials and allowances carry 50%, which is normal for retail
+# residential work.
+LABOR_COST_RATE = 50.0
+LABOR_BILLED_RATE = 85.0
+MATERIAL_MARKUP = 1.50
+SUB_MARKUP = 1.50
+OTHER_MARKUP = 1.50
 
-# The labour rate the owner works at. Every labour line is hours x this.
-LABOR_RATE = 50.0
+# Concealed conditions are the whole risk on this job: nobody knows what the
+# sewage did to the subfloor until it comes up. Priced as a line, not absorbed.
+CONTINGENCY_PCT = 10.0
 
 # ── the job ────────────────────────────────────────────────────────────────
 # (description, category, qty, unit, hours, catalog_name)
@@ -162,19 +169,23 @@ def build_rows(catalog: dict[str, int]) -> list[dict]:
     rows = []
     for desc, cat, qty, unit, hours, catalog_name in LINES:
         if catalog_name is None:                       # labour
-            unit_cost = float(hours) * LABOR_RATE
             qty_eff = 1.0
-            cost = unit_cost
+            cost = float(hours) * LABOR_COST_RATE
+            price = float(hours) * LABOR_BILLED_RATE
+            unit_cost = LABOR_COST_RATE * float(hours)
         elif catalog_name == "":                       # allowance
-            unit_cost = float(hours)
             qty_eff = 1.0
+            unit_cost = float(hours)
             cost = unit_cost * float(qty)
+            price = cost * OTHER_MARKUP
         else:                                          # material
             if catalog_name not in catalog:
                 raise SystemExit(f"missing catalogue item: {catalog_name!r}")
             unit_cost = catalog[catalog_name] / 100.0
             qty_eff = float(qty)
             cost = unit_cost * qty_eff
+            markup = SUB_MARKUP if cat == "sub" else MATERIAL_MARKUP
+            price = cost * markup
         rows.append({
             "description": desc,
             "category": cat,
@@ -182,7 +193,21 @@ def build_rows(catalog: dict[str, int]) -> list[dict]:
             "unit": unit,
             "unit_cost": round(unit_cost, 2),
             "cost": round(cost, 2),
-            "price": round(cost * PRICE_MULTIPLIER, 2),
+            "price": round(price, 2),
+        })
+
+    # Contingency is priced off everything else and carries no cost, so it lands
+    # in the margin where it belongs until it is either used or released.
+    base = sum(r["price"] for r in rows)
+    if CONTINGENCY_PCT:
+        rows.append({
+            "description": "Contingency - concealed conditions after demolition",
+            "category": "other",
+            "qty": 1.0,
+            "unit": "allowance",
+            "unit_cost": 0.0,
+            "cost": 0.0,
+            "price": round(base * CONTINGENCY_PCT / 100.0, 2),
         })
     return rows
 
@@ -193,6 +218,12 @@ def main() -> None:
     try:
         bo.ensure_schema(conn)
         bc.ensure_accounting_schema(conn)
+        # ensure_schema on a container that predates this change will not know
+        # the column yet, and create_bid would silently drop the scope kwarg.
+        with conn.cursor() as cur:
+            cur.execute("ALTER TABLE bid_opportunities "
+                        "ADD COLUMN IF NOT EXISTS scope TEXT;")
+        conn.commit()
 
         names = [l[5] for l in LINES if l[5]]
         catalog = _catalog_prices(conn, names)
@@ -215,9 +246,10 @@ def main() -> None:
                   f"{r['cost']:>10,.2f} {r['price']:>10,.2f}")
         print("-" * 96)
         print(f"{'':9} {'TOTAL':62} {subtotal_cost:>10,.2f} {total_price:>10,.2f}")
-        print(f"\nLabour hours: {labor_hours} @ ${LABOR_RATE:,.2f}/hr")
-        print(f"Margin built in: {PRICE_MULTIPLIER - 1:.0%} "
-              f"(${total_price - subtotal_cost:,.2f})")
+        print(f"\nLabour: {labor_hours} hrs, ${LABOR_COST_RATE:,.0f}/hr cost, "
+              f"billed at ${LABOR_BILLED_RATE:,.0f}/hr")
+        print(f"Margin built in: ${total_price - subtotal_cost:,.2f} "
+              f"({(total_price - subtotal_cost) / total_price:.0%} of price)")
 
         if dry_run:
             print("\nDRY RUN - nothing written.")
@@ -233,6 +265,22 @@ def main() -> None:
         if existing:
             print(f"\nBid card already exists: #{existing['id']} "
                   f"({existing['status']}) - not creating a duplicate.")
+            if "--reprice" in sys.argv:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "DELETE FROM bid_costs WHERE bid_id = %s AND company = %s",
+                        (existing["id"], COMPANY),
+                    )
+                conn.commit()
+                for r in rows:
+                    bc.add_cost_line(
+                        conn, existing["id"],
+                        category=r["category"], description=r["description"],
+                        vendor="", qty=r["qty"], unit_cost=r["unit_cost"],
+                        estimated=r["price"], company=COMPANY,
+                    )
+                bo.set_bid_amount(conn, existing["id"], round(total_price, 2), COMPANY)
+                print(f"Repriced: {len(rows)} lines, bid now ${total_price:,.2f}")
             if "--refresh" in sys.argv:
                 with conn.cursor() as cur:
                     cur.execute(
