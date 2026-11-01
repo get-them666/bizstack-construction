@@ -123,7 +123,13 @@ def ensure_accounting_schema(conn) -> None:
             )
         """)
         cur.execute("ALTER TABLE bid_invoices ADD COLUMN IF NOT EXISTS collected NUMERIC(14,2) DEFAULT 0;")
+        # What an invoice is FOR. A deposit request and a progress bill are the
+        # same row shape but different documents, and without this the bid card
+        # cannot tell whether it has already asked the client for the deposit --
+        # so pressing the button twice would raise a second one.
+        cur.execute("ALTER TABLE bid_invoices ADD COLUMN IF NOT EXISTS kind VARCHAR(20) DEFAULT 'invoice';")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_bid_invoices_bid ON bid_invoices(bid_id);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_bid_invoices_kind ON bid_invoices(bid_id, kind);")
         # One invoice number per company. NULL numbers are allowed to repeat,
         # which is why this is a partial index rather than a plain UNIQUE.
         cur.execute("""
@@ -373,8 +379,14 @@ def convert_bid_to_project(conn, bid_id: int, company: str = "construction",
         has_company = cur.fetchone() is not None
         name = (bid.get("name") or "Job")[:255]
         addr = (bid.get("location") or "")[:255]
-        cols = ["name", "address", "status", "start_date"]
-        vals = [name, addr or None, "active", _date_or_none(start_date) or bid.get("start_date")]
+        # bid_id is the whole point of the row. open_job_for_bid and
+        # labor_actual both join on it, so a project written without it looks
+        # created but collects no hours: the bid then reports zero labour cost
+        # and a 100% margin, which is the most dangerous number this module can
+        # print.
+        cols = ["bid_id", "name", "address", "status", "start_date"]
+        vals = [bid_id, name, addr or None, "active",
+                _date_or_none(start_date) or bid.get("start_date")]
         if has_company:
             cols.append("company")
             vals.append(company)
@@ -506,7 +518,8 @@ def next_invoice_number(conn, company: str = "construction") -> str:
 
 def create_invoice(conn, bid_id: int, amount, company: str = "construction",
                    description: str = "", issued_date: str = "", due_date: str = "",
-                   invoice_number: str = "", status: str = "draft") -> dict:
+                   invoice_number: str = "", status: str = "draft",
+                   kind: str = "invoice") -> dict:
     if status not in INVOICE_STATUSES:
         raise ValueError(f"status must be one of {INVOICE_STATUSES}")
     amt = _money(amount)
@@ -518,10 +531,10 @@ def create_invoice(conn, bid_id: int, amount, company: str = "construction",
     with conn.cursor() as cur:
         cur.execute("""
             INSERT INTO bid_invoices (bid_id, invoice_number, issued_date, due_date,
-                                     status, amount, description, company)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id
+                                     status, amount, description, company, kind)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id
         """, (bid_id, num, issued, due, status, amt,
-              description.strip() or None, company))
+              description.strip() or None, company, (kind or "invoice").strip()[:20]))
         iid = cur.fetchone()["id"]
     conn.commit()
     return {"id": iid, "invoice_number": num}

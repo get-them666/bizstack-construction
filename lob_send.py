@@ -5,7 +5,6 @@ USPS has no print-and-mail API. It sells postage; the printing, the envelope,
 the window addressing and the induction into the mail stream are what you pay
 someone else for. Lob is the one with an API for it, and its letter format is
 8.5x11 -- which is exactly what mail_letters.py already renders, so the PDFs
-import brand
 from that script go in as-is.
 
 Two things this refuses to do, both of which cost money:
@@ -41,6 +40,8 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+
+import brand
 
 LOB_LETTERS = "https://api.lob.com/v1/letters"
 

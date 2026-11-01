@@ -26,7 +26,10 @@ from datetime import date, datetime
 from fpdf import FPDF
 
 COMPANY = "BuildStack Construction LLC"
-ADDRESS = "Chesapeake, VA"
+# Full street address, not just the city. A contract that names no address for
+# the contractor is weaker than one that does, and MEMORY.md records this as the
+# owner-confirmed return address that already prints on the letterhead.
+ADDRESS = "701 Dana Dr, Chesapeake, VA 23321"
 PHONE = "757-908-7121"
 EMAIL = "hello@bizstackperks.com"
 
@@ -163,8 +166,14 @@ def _labelled(pdf: BidPackagePDF, label: str, value: str) -> None:
 
 
 def generate_bid_package_pdf(bid: dict, costs: list[dict], markup_pct: float = 0,
-                             summary: dict | None = None) -> bytes:
-    """Render the full package. Regenerated per request, never stored."""
+                             summary: dict | None = None,
+                             signature: dict | None = None) -> bytes:
+    """Render the full package. Regenerated per request, never stored.
+
+    ``signature`` is ``{"png": bytes, "name": str, "date": str}`` or None. It is
+    applied here rather than to a stored PDF so a re-priced bid can never go out
+    carrying a signature that was put to the old numbers.
+    """
     bid = dict(bid or {})
     costs = list(costs or [])
     try:
@@ -288,8 +297,25 @@ def generate_bid_package_pdf(bid: dict, costs: list[dict], markup_pct: float = 0
     pdf.cell(85, 5, f"For {COMPANY}")
     pdf.cell(85, 5, "Date", new_x="LMARGIN", new_y="NEXT")
     pdf.ln(2)
-    pdf.line(pdf.l_margin, pdf.get_y(), pdf.l_margin + 80, pdf.get_y())
-    pdf.line(pdf.l_margin + 88, pdf.get_y(), pdf.l_margin + 168, pdf.get_y())
+    line_y = pdf.get_y()
+    if signature:
+        # Above the rule, not on it: the strokes sit on the line the way a pen
+        # would, and the printed name and date go under the rule.
+        pdf.image(signature["png"], x=pdf.l_margin + 2, y=line_y - 13,
+                  w=62, h=12, keep_aspect_ratio=True)
+        pdf.set_font("Helvetica", "", 8)
+        pdf.set_text_color(90, 90, 90)
+        pdf.text(pdf.l_margin + 88, line_y - 1.5, _txt(signature.get("date") or ""))
+        pdf.set_text_color(0, 0, 0)
+        pdf.set_font("Helvetica", "", 9)
+    pdf.line(pdf.l_margin, line_y, pdf.l_margin + 80, line_y)
+    pdf.line(pdf.l_margin + 88, line_y, pdf.l_margin + 168, line_y)
+    if signature:
+        pdf.ln(4)
+        pdf.set_font("Helvetica", "I", 7.5)
+        pdf.set_text_color(110, 110, 110)
+        pdf.cell(85, 4, _txt(f"Signed electronically by {signature.get('name') or ''}"))
+        pdf.set_text_color(0, 0, 0)
 
     return bytes(pdf.output())
 

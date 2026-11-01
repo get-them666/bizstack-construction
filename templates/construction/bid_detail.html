@@ -154,6 +154,69 @@
       </section>
 
       <section class="bg-white rounded-2xl border border-slate-200 p-5">
+        <h2 class="text-sm font-bold uppercase tracking-wide text-slate-500 mb-3">Deposit &amp; job</h2>
+
+        {% if deposit_amount and deposit_amount > 0 %}
+        <div class="flex items-start justify-between gap-3 mb-3">
+          <div>
+            <div class="text-xs text-slate-500">{{ deposit_pct }}% deposit</div>
+            <div class="text-2xl font-bold text-slate-900">{{ "${:,.2f}".format(deposit_amount) }}</div>
+          </div>
+          {% if deposit_invoice %}
+          <span class="text-[11px] font-semibold px-2 py-1 rounded-lg bg-slate-100 text-slate-600 whitespace-nowrap">
+            {{ deposit_invoice.status }} · {{ deposit_invoice.invoice_number or 'no number' }}
+          </span>
+          {% endif %}
+        </div>
+
+        {% if deposit_invoice %}
+        <p class="text-xs text-slate-500 mb-3">
+          Asked for {{ deposit_invoice.issued_date or '—' }} · due {{ deposit_invoice.due_date or '—' }}
+        </p>
+        {% endif %}
+
+        {% if b.contact_email %}
+        <form method="post" action="/api/bids/{{ b.id }}/deposit">
+          <input type="hidden" name="to_email" value="{{ b.contact_email }}">
+          <button class="w-full text-sm font-semibold px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700">
+            {{ 'Resend deposit request' if deposit_invoice else 'Email deposit request' }}
+          </button>
+        </form>
+        <p class="text-[11px] text-slate-400 mt-2">Goes to {{ b.contact_email }} with the deposit PDF attached and the invoice posted to the books.</p>
+        {% else %}
+        <p class="text-sm text-slate-500">Add a <span class="font-semibold">contact email</span> above to send the deposit request.</p>
+        {% endif %}
+        {% else %}
+        <p class="text-sm text-slate-500">Set a bid amount under Pipeline and the {{ deposit_pct }}% deposit appears here.</p>
+        {% endif %}
+
+        <div class="mt-4 pt-4 border-t border-slate-100">
+          {% if project %}
+          <div class="text-xs text-slate-500">Job</div>
+          <div class="font-semibold text-slate-800">Project #{{ project.id }} · {{ project.name }}</div>
+          {% if cost_summary and cost_summary.get('labor') %}
+          <div class="text-xs text-slate-500 mt-1">
+            {{ "%.1f"|format(cost_summary['labor'].get('hours', 0)) }} h logged
+            · {{ cost_summary['labor'].get('timesheets', 0) }} timesheet(s)
+          </div>
+          {% endif %}
+          <div class="flex gap-3 mt-2 text-xs">
+            <a href="/projects" class="text-indigo-600 hover:underline">Projects</a>
+            <a href="/payroll" class="text-indigo-600 hover:underline">Payroll</a>
+            <a href="/books" class="text-indigo-600 hover:underline">Books</a>
+          </div>
+          {% else %}
+          <form method="post" action="/api/bids/{{ b.id }}/project">
+            <button class="w-full text-sm font-semibold px-4 py-2 bg-white border border-slate-200 rounded-lg hover:border-indigo-300">
+              Start project
+            </button>
+          </form>
+          <p class="text-[11px] text-slate-400 mt-2">Crew hours logged against the project flow into payroll and the ledger, so the job's margin is real rather than estimated.</p>
+          {% endif %}
+        </div>
+      </section>
+
+      <section class="bg-white rounded-2xl border border-slate-200 p-5">
         <h2 class="text-sm font-bold uppercase tracking-wide text-slate-500 mb-2">Owner of record</h2>
         {% if b.location %}
         <p class="text-xs text-slate-500 mb-3">{{ b.location }}</p>
@@ -250,6 +313,103 @@
               btn.disabled = false;
               btn.textContent = was;
             });
+        });
+      })();
+      </script>
+
+      <section class="bg-white rounded-2xl border border-slate-200 p-5">
+        <h2 class="text-sm font-bold uppercase tracking-wide text-slate-500 mb-2">Signature</h2>
+        {% if signature.signed %}
+        <div class="text-sm mb-3">
+          <div class="font-semibold text-slate-800">{{ signature.name }}</div>
+          <div class="text-xs text-slate-500">{{ signature.signed_at }}{% if signature.email %} · {{ signature.email }}{% endif %}</div>
+          <div class="text-[11px] text-slate-400 mt-1 font-mono">doc {{ signature.document_sha256 }}…</div>
+        </div>
+        {% endif %}
+        <p class="text-xs text-slate-500 mb-2">Draw it once. It is stamped on the proposal, the package and the contract.</p>
+        <form method="post" action="/api/bids/{{ b.id }}/signature" id="sign-form">
+          <canvas id="sig-pad" height="140"
+                  class="w-full border border-slate-200 rounded-lg bg-white touch-none cursor-crosshair"></canvas>
+          <input name="signer_name" value="{{ signature.name or 'Shaun David OLeary' }}" placeholder="Printed name"
+                 class="mt-2 w-full text-sm border border-slate-200 rounded-lg px-3 py-2">
+          <input type="hidden" name="signature" id="sig-data">
+          <input type="hidden" name="back" value="/bids/{{ b.id }}">
+          <div class="flex gap-2 mt-2">
+            <button type="button" id="sig-clear"
+                    class="text-sm font-semibold px-4 py-2 bg-white border border-slate-200 rounded-lg hover:border-indigo-300">Clear</button>
+            <button class="flex-1 text-sm font-semibold px-4 py-2 bg-slate-900 text-white rounded-lg hover:bg-slate-700">
+              {{ 'Replace signature' if signature.signed else 'Save signature' }}
+            </button>
+          </div>
+        </form>
+        <p class="text-[11px] text-slate-400 mt-2">Stored with the time, the address it was signed from and a hash of the document as signed.</p>
+      </section>
+
+      <script>
+      (function () {
+        var pad = document.getElementById('sig-pad');
+        var form = document.getElementById('sign-form');
+        if (!pad || !form) return;
+        var ctx = pad.getContext('2d');
+        var drawing = false, dirty = false;
+
+        function size() {
+          var ratio = window.devicePixelRatio || 1;
+          var w = pad.clientWidth || 320, h = 140;
+          pad.width = Math.round(w * ratio);
+          pad.height = Math.round(h * ratio);
+          pad.style.height = h + 'px';
+          ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+          ctx.lineWidth = 2;
+          ctx.lineCap = 'round';
+          ctx.lineJoin = 'round';
+          ctx.strokeStyle = '#0f172a';
+        }
+        size();
+
+        function pos(e) {
+          var r = pad.getBoundingClientRect();
+          var p = e.touches ? e.touches[0] : e;
+          return { x: p.clientX - r.left, y: p.clientY - r.top };
+        }
+        function start(e) {
+          e.preventDefault();
+          drawing = true;
+          var p = pos(e);
+          ctx.beginPath();
+          ctx.moveTo(p.x, p.y);
+        }
+        function move(e) {
+          if (!drawing) return;
+          e.preventDefault();
+          var p = pos(e);
+          ctx.lineTo(p.x, p.y);
+          ctx.stroke();
+          dirty = true;
+        }
+        function end() { drawing = false; }
+
+        pad.addEventListener('mousedown', start);
+        pad.addEventListener('mousemove', move);
+        window.addEventListener('mouseup', end);
+        pad.addEventListener('touchstart', start, { passive: false });
+        pad.addEventListener('touchmove', move, { passive: false });
+        pad.addEventListener('touchend', end);
+
+        var clear = document.getElementById('sig-clear');
+        if (clear) {
+          clear.addEventListener('click', function () {
+            ctx.clearRect(0, 0, pad.width, pad.height);
+            dirty = false;
+          });
+        }
+
+        form.addEventListener('submit', function (e) {
+          if (!dirty) {
+            e.preventDefault();
+            return;
+          }
+          document.getElementById('sig-data').value = pad.toDataURL('image/png');
         });
       })();
       </script>

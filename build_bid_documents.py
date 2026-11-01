@@ -594,7 +594,8 @@ def build_itemized_pricing(bid: dict, costs: list[dict]) -> bytes:
 # 03 - contract
 # --------------------------------------------------------------------------
 
-def build_contract(bid: dict, costs: list[dict], photos: list[Path]) -> bytes:
+def build_contract(bid: dict, costs: list[dict], photos: list[Path],
+                   signature: dict | None = None) -> bytes:
     pdf = _new_pdf("Renovation agreement")
     total = sum(float(c.get("estimated") or 0) for c in costs)
     dep_amt = round(total * DEPOSIT_PCT / 100.0, 2)
@@ -675,6 +676,15 @@ def build_contract(bid: dict, costs: list[dict], photos: list[Path]) -> bytes:
         pdf.cell(90, 5, "Date", new_x="LMARGIN", new_y="NEXT")
         pdf.ln(9)
         y = pdf.get_y()
+        if signature and label.startswith("For "):
+            # Strokes sit above the rule, printed name and date below it.
+            pdf.image(signature["png"], x=pdf.l_margin + 2, y=y - 13,
+                      w=62, h=12, keep_aspect_ratio=True)
+            pdf.set_font("Helvetica", "", 8)
+            pdf.set_text_color(90, 90, 90)
+            pdf.text(pdf.l_margin + 92, y - 1.5, _txt(signature.get("date") or ""))
+            pdf.set_text_color(0, 0, 0)
+            pdf.set_font("Helvetica", "B", 9)
         pdf.set_draw_color(0, 0, 0)
         pdf.line(pdf.l_margin, y, pdf.l_margin + 82, y)
         pdf.line(pdf.l_margin + 92, y, pdf.l_margin + 174, y)
@@ -682,9 +692,21 @@ def build_contract(bid: dict, costs: list[dict], photos: list[Path]) -> bytes:
         pdf.set_font("Helvetica", "", 7.5)
         pdf.set_text_color(110, 110, 110)
         pdf.cell(90, 4, "Signature")
-        pdf.cell(90, 4, "Printed name and date", new_x="LMARGIN", new_y="NEXT")
+        if signature and label.startswith("For "):
+            pdf.cell(90, 4, _txt(f"{signature.get('name') or ''} (electronic)"))
+        else:
+            pdf.cell(90, 4, "Printed name and date")
         pdf.set_text_color(0, 0, 0)
         pdf.ln(10)
+
+    if signature:
+        pdf.set_font("Helvetica", "I", 7.5)
+        pdf.set_text_color(110, 110, 110)
+        _mc(pdf, 0, 4, _txt(
+            "Signed electronically on the date shown. The signature image is held "
+            "with an audit record of the time, the address it was made from, and "
+            "a hash of the document as signed."))
+        pdf.set_text_color(0, 0, 0)
 
     return bytes(pdf.output())
 

@@ -15,7 +15,8 @@ class ProposalPDF(FPDF):
         self.set_font('Helvetica', 'B', 16)
         self.cell(0, 10, 'BuildStack Construction LLC', ln=True, align='L')
         self.set_font('Helvetica', '', 9)
-        self.cell(0, 5, 'Chesapeake, VA | 757-908-7121', ln=True, align='L')
+        self.cell(0, 5, '701 Dana Dr, Chesapeake, VA 23321 | 757-908-7121',
+                  ln=True, align='L')
         self.ln(5)
         self.set_draw_color(200, 200, 200)
         self.line(10, self.get_y(), 200, self.get_y())
@@ -28,7 +29,8 @@ class ProposalPDF(FPDF):
         self.cell(0, 10, 'BuildStack Construction LLC - Thank you for the opportunity', align='C')
 
 
-def generate_proposal_pdf(bid: dict, costs: list, summary: dict, markup_pct: float = 0) -> bytes:
+def generate_proposal_pdf(bid: dict, costs: list, summary: dict, markup_pct: float = 0,
+                          signature: dict | None = None) -> bytes:
     pdf = ProposalPDF()
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
@@ -100,7 +102,23 @@ def generate_proposal_pdf(bid: dict, costs: list, summary: dict, markup_pct: flo
     pdf.set_font('Helvetica', '', 10)
     pdf.cell(0, 6, 'We appreciate the opportunity to bid on this project.', ln=True)
     pdf.cell(0, 6, 'We look forward to hearing from you.', ln=True)
-    
+
+    if signature:
+        # Signed by the contractor, so the proposal arrives ready to accept
+        # rather than as a number to argue with.
+        pdf.ln(8)
+        y = pdf.get_y()
+        pdf.image(signature["png"], x=pdf.l_margin + 1, y=y, w=58, h=13,
+                  keep_aspect_ratio=True)
+        pdf.line(pdf.l_margin, y + 14, pdf.l_margin + 70, y + 14)
+        pdf.set_font('Helvetica', '', 8)
+        pdf.set_text_color(90, 90, 90)
+        pdf.cell(0, 4, f'Signed electronically by {signature.get("name") or ""}'
+                       f' on {signature.get("date") or ""}', ln=True)
+        pdf.set_font('Helvetica', '', 9)
+        pdf.cell(0, 4, f'For {signature.get("company") or "BuildStack Construction LLC"}', ln=True)
+        pdf.set_text_color(0, 0, 0)
+
     return bytes(pdf.output())
 
 

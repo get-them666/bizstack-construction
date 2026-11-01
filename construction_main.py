@@ -66,6 +66,8 @@ import permit_enricher
 import permit_stats
 import email_fetcher
 import bid_costing
+import bid_deposit
+import bid_signing
 import bid_package_pdf
 import auth0_service
 import auth0_login
@@ -8975,15 +8977,26 @@ async def bid_detail_page(bid_id: int, request: Request, db=Depends(get_db)):
     invoices: list = []
     inv_summary: dict = {}
     docs: list = []
+    deposit_invoice = None
+    project = None
+    signature: dict = {"signed": False}
     try:
         bid_costing.ensure_accounting_schema(db)
         costs = bid_costing.cost_lines(db, bid_id, _BID_COMPANY)
         summary = bid_costing.cost_summary(db, bid_id, _BID_COMPANY)
         invoices = bid_costing.list_invoices(db, bid_id, _BID_COMPANY)
         inv_summary = bid_costing.invoice_summary(db, bid_id, _BID_COMPANY)
+        deposit_invoice = bid_deposit.find_deposit_invoice(db, bid_id, _BID_COMPANY)
+        project = bid_costing.open_job_for_bid(db, bid_id, _BID_COMPANY)
     except Exception as exc:
         # A missing accounting table must not cost the owner the whole page.
         print(f"[bids] accounting unavailable for bid {bid_id}: {exc}", flush=True)
+    try:
+        bid_signing.ensure_schema(db)
+        signature = bid_signing.describe(
+            bid_signing.latest(db, bid_id, _BID_COMPANY))
+    except Exception as exc:
+        print(f"[bids] signature unavailable for bid {bid_id}: {exc}", flush=True)
     try:
         bid_opportunities.ensure_schema(db)
         docs = bid_opportunities.list_documents(db, bid_id, _BID_COMPANY)
@@ -8996,6 +9009,11 @@ async def bid_detail_page(bid_id: int, request: Request, db=Depends(get_db)):
             "b": bid, "costs": costs, "cost_summary": summary,
             "invoices": invoices, "inv_summary": inv_summary,
             "docs": docs,
+            "deposit_invoice": deposit_invoice,
+            "deposit_amount": bid_deposit.deposit_amount(dict(bid)),
+            "deposit_pct": bid_package_pdf.DEPOSIT_PCT,
+            "project": project,
+            "signature": signature,
             "statuses": ["new", "drafting", "sent", "shortlist",
                          "won", "lost", "withdrawn"],
             "cost_categories": ["material", "labor", "sub", "equipment", "other"],
@@ -11357,6 +11375,34 @@ async def bid_set_price(bid_id: int, request: Request, markup_pct: str = Form("0
     return RedirectResponse(url=f"/bids/{bid_id}", status_code=status.HTTP_303_SEE_OTHER)
 
 
+def _package_signature(db, bid_id: int) -> dict | None:
+    """The stored signature in the shape the PDF builders want, or None.
+
+    Every send path asks for this rather than reading the table itself, so the
+    proposal, the package and the contract cannot disagree about whether the
+    document is signed.
+    """
+    try:
+        bid_signing.ensure_schema(db)
+        row = bid_signing.latest(db, bid_id, _BID_COMPANY)
+        if not row:
+            return None
+        png = bid_signing.image_png(db, row["id"])
+        if not png:
+            return None
+        when = row.get("signed_at")
+        return {
+            "png": png,
+            "name": row.get("signer_name") or "",
+            "date": when.strftime("%B %d, %Y") if hasattr(when, "strftime") else "",
+            "company": bid_package_pdf.COMPANY,
+        }
+    except Exception as exc:
+        # A missing signature table must not cost the owner the document.
+        print(f"[bids] signature unavailable for bid {bid_id}: {exc}", flush=True)
+        return None
+
+
 @app.get("/bids/{bid_id}/package.pdf")
 async def bid_package_pdf_route(bid_id: int, request: Request, db=Depends(get_db)):
     """The full bid package: scope, assumptions, itemised price, terms, signature.
@@ -11378,13 +11424,141 @@ async def bid_package_pdf_route(bid_id: int, request: Request, db=Depends(get_db
         markup = float(bid.get("markup_pct") or 0)
     except Exception:
         markup = 0
-    pdf = bid_package_pdf.generate_bid_package_pdf(dict(bid), costs, markup)
+    pdf = bid_package_pdf.generate_bid_package_pdf(
+        dict(bid), costs, markup, signature=_package_signature(db, bid_id))
     name = bid_package_pdf.package_filename(dict(bid))
     return Response(
         content=pdf,
         media_type="application/pdf",
         headers={"Content-Disposition": f'inline; filename="{name}"'},
     )
+
+
+@app.post("/api/bids/{bid_id}/signature")
+async def bid_signature_save(bid_id: int, request: Request,
+                             signature: str = Form(""), signer_name: str = Form(""),
+                             back: str = Form(""), db=Depends(get_db)):
+    """Store the owner's drawn signature, with an audit record.
+
+    The hash stored alongside it is of the package PDF as it stands right now,
+    so the record answers "what exactly did he sign" and not just "he signed".
+    """
+    require_admin(request)
+    _, user_email = require_auth(request)
+    bid = bid_opportunities.get_bid(db, bid_id, _BID_COMPANY)
+    if not bid:
+        raise HTTPException(status_code=404, detail="Bid not found")
+
+    digest = ""
+    try:
+        bid_costing.ensure_accounting_schema(db)
+        costs = bid_costing.cost_lines(db, bid_id, _BID_COMPANY)
+        try:
+            markup = float(bid.get("markup_pct") or 0)
+        except Exception:
+            markup = 0
+        unsigned = bid_package_pdf.generate_bid_package_pdf(dict(bid), costs, markup)
+        digest = bid_signing.sha256_of(unsigned)
+    except Exception as exc:
+        print(f"[bids] could not hash package for bid {bid_id}: {exc}", flush=True)
+
+    try:
+        bid_signing.save(
+            db, bid_id,
+            signature_data=signature,
+            signer_name=signer_name or "Shaun David OLeary",
+            signer_email=user_email or "",
+            document_sha256=digest,
+            ip=(request.client.host if request.client else ""),
+            user_agent=request.headers.get("user-agent", ""),
+            company=_BID_COMPANY,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if back.startswith("/bids/"):
+        return RedirectResponse(url=back, status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(url=f"/bids/{bid_id}?signed=1",
+                            status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/api/bids/{bid_id}/deposit")
+async def bid_deposit_request(bid_id: int, request: Request, to_email: str = Form(""),
+                              db=Depends(get_db)):
+    """Ask the client for the 30% deposit, as an invoice and an email.
+
+    The invoice is raised as a draft and only marked sent once the email has
+    actually gone. A failed send must not leave a receivable on the books for a
+    request the client never received.
+    """
+    require_admin(request)
+    bid = bid_opportunities.get_bid(db, bid_id, _BID_COMPANY)
+    if not bid:
+        raise HTTPException(status_code=404, detail="Bid not found")
+    recipient = (to_email or bid.get("contact_email") or "").strip()
+    if not recipient:
+        raise HTTPException(
+            status_code=400,
+            detail="No contact email on this bid. Add one under Contact first.")
+
+    try:
+        bid_costing.ensure_accounting_schema(db)
+        invoice = bid_deposit.ensure_deposit_invoice(db, dict(bid), _BID_COMPANY)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not invoice:
+        raise HTTPException(status_code=500, detail="Could not raise the deposit invoice")
+
+    try:
+        pdf = bid_deposit.build_deposit_pdf(dict(bid), dict(invoice))
+        subject, body = bid_deposit.build_deposit_email(dict(bid), dict(invoice))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to build the deposit request: {e}")
+
+    number = (invoice.get("invoice_number") or str(bid_id))
+    try:
+        cfg = documents_service.smtp_config_from_env()
+        ok = await documents_service.send_email(
+            cfg, recipient, subject, body, attachment=pdf,
+            filename=f"Deposit-Request-{number}.pdf")
+        if not ok:
+            raise HTTPException(status_code=502, detail="Email send failed")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Email send failed: {e}")
+
+    bid_costing.set_invoice_status(db, invoice["id"], "sent", _BID_COMPANY)
+    try:
+        ledger_sync.ensure_schema(db)
+        ledger_sync.sync_invoice(db, invoice["id"], _BID_COMPANY)
+    except Exception as e:
+        logger.warning("ledger not updated for deposit invoice %s: %s", invoice["id"], e)
+
+    return RedirectResponse(url=f"/bids/{bid_id}?deposit={number}",
+                            status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/api/bids/{bid_id}/project")
+async def bid_start_project(bid_id: int, request: Request, db=Depends(get_db)):
+    """Turn a bid into a project so crew hours land against it.
+
+    Idempotent on projects.bid_id: pressing it twice must not create a second
+    project and split the hours, which would understate the job's labour cost
+    while the timesheet still looks complete.
+    """
+    require_admin(request)
+    bid = bid_opportunities.get_bid(db, bid_id, _BID_COMPANY)
+    if not bid:
+        raise HTTPException(status_code=404, detail="Bid not found")
+    try:
+        bid_costing.ensure_accounting_schema(db)
+        project_id = bid_costing.convert_bid_to_project(db, bid_id, _BID_COMPANY)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Bid not found")
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return RedirectResponse(url=f"/bids/{bid_id}?project={project_id}",
+                            status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.post("/api/bids/{bid_id}/submit")
@@ -11417,7 +11591,8 @@ async def bid_submit(bid_id: int, request: Request, markup_pct: str = Form("0"),
     
     try:
         import bid_proposal
-        pdf = bid_proposal.generate_proposal_pdf(bid, costs, summary, mp)
+        pdf = bid_proposal.generate_proposal_pdf(
+            bid, costs, summary, mp, signature=_package_signature(db, bid_id))
         subject, body = bid_proposal.build_proposal_email(bid, total)
         if message.strip():
             body = message + "\n\n" + body
