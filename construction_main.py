@@ -857,6 +857,16 @@ async def lifecycle(app: FastAPI):
     except Exception as exc:
         print(f"[lead-enrich] could not start autopilot: {exc}", flush=True)
 
+    # Bid autopilot: every hour, fill in name/email/phone for any active
+    # owner-entered bid that is missing one, and build the SOW/itemized/contract
+    # set for any bid that has cost lines but no documents. The owner should
+    # never have to ask for these. DISABLE_BID_AUTOPILOT=1 turns it off.
+    try:
+        import bid_autopilot
+        bid_autopilot.start()
+    except Exception as exc:
+        print(f"[bid-autopilot] could not start: {exc}", flush=True)
+
     try:
         yield
     finally:

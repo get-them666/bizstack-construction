@@ -215,8 +215,11 @@ engages only on Zen, never on auth errors, and rots — re-check `/zen/v1/models
 
 Hand-rolled `threading.Thread(daemon=True)` loops started from `lifecycle()`: permit importer,
 lead-source scheduler, Gmail inbound poll, acquisition radar, bid-inquiry firing,
-`loan_outreach`. Kill switches `DISABLE_PERMIT_IMPORT`, `DISABLE_LEAD_SCAN`,
-`DISABLE_LOAN_OUTREACH`. Railway stores unset flags as the **string `"false"`**, which is
+`loan_outreach`, `lead_enrich_loop`, and `bid_autopilot` (hourly: fills contact
+name/email/phone on owner-entered bids via skip trace, builds SOW/itemized/contract once a
+bid has cost lines; `source='manual'` only, 7-day retry log in `bid_autopilot_log`,
+`BID_AUTOPILOT_MAX` traces per pass). Kill switches `DISABLE_PERMIT_IMPORT`,
+`DISABLE_LEAD_SCAN`, `DISABLE_LOAN_OUTREACH`, `DISABLE_LEAD_ENRICH`, `DISABLE_BID_AUTOPILOT`. Railway stores unset flags as the **string `"false"`**, which is
 truthy — parse explicitly, never bare `os.getenv(...)` truthiness.
 
 ### Outbound messaging
