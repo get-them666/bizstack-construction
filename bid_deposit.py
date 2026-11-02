@@ -164,8 +164,14 @@ def _party(pdf: DepositRequestPDF, bid: dict) -> None:
         _labelled(pdf, "Contact", contact)
 
 
-def build_deposit_pdf(bid: dict, invoice: dict) -> bytes:
-    """Render the deposit request. Regenerated per send, never stored."""
+def build_deposit_pdf(bid: dict, invoice: dict, pay_lines: list[str] | None = None) -> bytes:
+    """Render the deposit request. Regenerated per send, never stored.
+
+    ``pay_lines`` is ``deposit_instructions.payment_lines()``: the Zelle handle
+    and the ACH routing/account the client should pay into. With none supplied
+    the generic "reply and we will send details" paragraph is printed, because
+    a PDF quoting bank details nobody configured would be wrong on paper.
+    """
     bid = dict(bid or {})
     invoice = dict(invoice or {})
     amount = float(invoice.get("amount") or deposit_amount(bid) or 0)
@@ -227,9 +233,11 @@ def build_deposit_pdf(bid: dict, invoice: dict) -> bytes:
 
     _heading(pdf, "Payment")
     pdf.set_font("Helvetica", "", 9)
-    _mc(pdf, 0, 4.8,
-        "Payment by check, ACH or Zelle. Reply to this email or call "
-        f"{PHONE} to arrange it, and quote the invoice number above.")
+    lines = list(pay_lines or [
+        f"Payment by check, ACH or Zelle. Reply to this email or call {PHONE} "
+        "to arrange it, and quote the invoice number above."])
+    for line in lines:
+        _mc(pdf, 0, 4.8, line)
     pdf.ln(1.5)
     _mc(pdf, 0, 4.8,
         "Work is scheduled and materials are ordered on receipt of this deposit. "
@@ -254,7 +262,7 @@ def build_deposit_pdf(bid: dict, invoice: dict) -> bytes:
     return bytes(pdf.output())
 
 
-def build_deposit_email(bid: dict, invoice: dict) -> tuple[str, str]:
+def build_deposit_email(bid: dict, invoice: dict, pay_lines: list[str] | None = None) -> tuple[str, str]:
     """Plain-text covering email. The PDF carries the detail."""
     amount = float((invoice or {}).get("amount") or deposit_amount(bid) or 0)
     number = (invoice or {}).get("invoice_number") or ""
@@ -262,6 +270,11 @@ def build_deposit_email(bid: dict, invoice: dict) -> tuple[str, str]:
     subject = f"Deposit request - {bid.get('name') or 'your project'}"
     if number:
         subject += f" ({number})"
+    if pay_lines:
+        payment = " ".join(pay_lines)
+    else:
+        payment = ("Payment can be made by check, ACH or Zelle. Reply to this email or "
+                   f"call {PHONE} and we will send the details.")
     body = (
         f"Hello,\n\n"
         f"Thank you for awarding us {bid.get('name') or 'this project'}"
@@ -270,8 +283,7 @@ def build_deposit_email(bid: dict, invoice: dict) -> tuple[str, str]:
         f" ({DEPOSIT_PCT}% of the contract), due {due}.\n"
         f"The deposit request is attached as a PDF"
         f"{' and is invoice ' + number if number else ''}.\n\n"
-        f"Payment can be made by check, ACH or Zelle. Reply to this email or "
-        f"call {PHONE} and we will send the details.\n\n"
+        f"{payment}\n\n"
         f"Once the deposit is in, we will confirm the start date.\n\n"
         f"Thank you,\n"
         f"{COMPANY}\n"

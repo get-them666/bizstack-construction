@@ -117,7 +117,7 @@
                                 <div class="text-sm font-bold text-slate-900">${{ '{:,.2f}'.format((pl.gross_cents or 0)/100) }}</div>
                                 {% set bank = bank_by_crew.get(pl.crew_id) %}
                                 <span class="px-2 py-0.5 text-[10px] font-bold rounded-full {% if bank %}bg-emerald-50 text-emerald-700 border border-emerald-200{% elif pl.bank_status == 'connected' %}bg-amber-50 text-amber-700 border border-amber-200{% else %}bg-red-50 text-red-700 border border-red-200{% endif %}">
-                                  {% if bank %}{{ bank.account_type|capitalize }} ····{{ bank.account_last4 }}{% elif pl.bank_status == 'connected' %}Stripe only{% else %}No bank on file{% endif %}
+                                  {% if bank %}{{ bank.account_type|capitalize }} ····{{ bank.account_last4 }}{% elif pl.bank_status == 'connected' %}Old details only{% else %}No bank on file{% endif %}
                                 </span>
                             </div>
                             <div class="flex items-center gap-2 text-[10px] text-slate-400">

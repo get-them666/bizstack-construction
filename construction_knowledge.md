@@ -25,9 +25,12 @@ payroll data, or business numbers — use the tools, the knowledge file, and the
 - **Phone (calls/texts):** +1 (757) 908-7121 · **Email:** hello@bizstackperks.com
 - **Owner ID:** admin login → `/dashboard`, `/leads`, `/projects`, `/crew/admin`,
   `/payroll`, `/payments`, `/copilot`.
-- **Payments:** Stripe deposit links & project deposits; credit/debit via card.
+- **Payments:** a deposit link opens a page with the business **Zelle** handle and,
+  underneath it, the PNC business checking routing + account number for a client whose
+  bank caps Zelle. Clients pay directly — no card processor in this path. Card payments
+  through older Stripe links still work.
 - **Workers:** see §Payroll below — crew portal at `/crew/login`, PIN-based clock-in,
-  timesheets, direct deposit via Stripe transfers.
+  timesheets, direct deposit from the business checking account (NACHA to PNC).
 
 ### Broom Service (sister company — bizstackperks.com)
 - **What we do:** Professional short-term-rental **turnover cleaning**, laundry, deep
@@ -117,16 +120,17 @@ booking, `/hosts` onboarding. Owner: `/dashboard`, bookings/leads, rentals/analy
 - **Clock-in/out:** crew logs hours via the crew portal; timesheets store
   date + hours + work_type + status.
 - **Payroll runs:** owner opens a pay period, approves timesheets, generates payroll →
-  each worker line has gross/hours. Payments are sent via **Stripe direct deposit**
-  (transfer to the worker's connected Stripe account) and recorded in `payments`
-  (amount_cents, status).
-- **Direct deposit:** each worker's `stripe_account_id` is set up through Stripe Connect;
-  `bank_status` tracks onboarding. Owner sees bank status and can re-send the onboarding
-  link. Scheduled weekly payroll.
+  each worker line has gross/hours. Lines are recorded in `payments` (amount_cents, status).
+  Crew who saved a bank account in the phone app are paid from the company's PNC business
+  checking account: the owner downloads the run's NACHA file and uploads it to PNC's ACH
+  origination (PINACLE). A connected Stripe account, where one exists, can still be paid by
+  transfer — that is the legacy path, not the default.
+- **Direct deposit:** crew enter routing + account in the phone app (`/crew/pay`), stored
+  encrypted; `bank_status` tracks it. Owner sees status per worker. Scheduled weekly payroll.
 - **Employees vs 1099:** be honest — owner decides classification; never promise benefits.
-- **Checks / direct deposit to workers:** if a worker hasn't completed Stripe onboarding,
-  payroll defaults to manual check (recorded; owner follows up). Always confirm amounts and
-  recipients before confirming anything to the owner.
+- **No bank on file:** the worker is left out of the ACH file and flagged by name; payroll
+  defaults to a manual check. Always confirm amounts and recipients before telling the owner
+  a run is paid.
 - **Accounting summary** (`get_accounting_summary`): shows gross collections (deposits +
   job payments), plus open/unpaid lead value, for the period.
 
@@ -135,7 +139,7 @@ booking, `/hosts` onboarding. Owner: `/dashboard`, bookings/leads, rentals/analy
 ## 6. Accounting & business numbers
 
 - Money is stored in **cents** (`*_cents`). Gross = sum of `payments.amount_cents`;
-  leads' deposits via Stripe.
+  deposits are recorded when the Zelle, ACH, check or cash payment arrives.
 - Don't report net income from memory; use `get_business_summary` /
   `get_accounting_summary` tools for real numbers.
 - Concepts: ballpark vs fixed bid, deposit collects before scheduling, cost of materials

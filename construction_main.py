@@ -61,12 +61,13 @@ import lead_pipeline
 import outreach_queue
 import copilot_tasks
 import copilot_ops
-from stripe_service import StripeService, default_deposit_cents
+from stripe_service import StripeService
 import permit_enricher
 import permit_stats
 import email_fetcher
 import bid_costing
 import direct_deposit
+import deposit_instructions
 import login_throttle
 import bid_deposit
 import bid_signing
@@ -1550,6 +1551,32 @@ def lead_deposit_cents(db, lead: dict) -> int:
     return 0
 
 
+def _deposit_link_url(db, lead_id: int, amount_cents: int = 0) -> dict:
+    """Mark the lead pending and hand back a signed Zelle/ACH deposit link.
+
+    Nothing is sent to the customer here; the owner delivers the URL. Refusing
+    when /settings has no payment details is deliberate -- a link that opens an
+    empty page is worse than the error, because the customer has already been
+    asked for money.
+    """
+    pay = deposit_instructions.details(lambda k: _get_setting(db, k))
+    if not pay["ready"]:
+        return {"ok": False,
+                "error": ("No payment details are saved yet. Add your Zelle handle or the ACH "
+                          "routing + account number on /settings, then create the link.")}
+    with db.cursor() as cur:
+        cur.execute(
+            "UPDATE leads SET deposit_status = 'pending', "
+            "deposit_cents = COALESCE(NULLIF(%s, 0), deposit_cents) WHERE id = %s;",
+            (int(amount_cents or 0), int(lead_id)),
+        )
+    db.commit()
+    return {"ok": True,
+            "url": f"https://{company()['domain']}{deposit_instructions.link(lead_id)}",
+            "reference": deposit_instructions.reference(lead_id),
+            "amount_cents": int(amount_cents or 0)}
+
+
 def build_tool_handlers(db, stripe_svc):
     """DB/Stripe tool handlers that let the AI agent capture and manage leads."""
 
@@ -1698,28 +1725,19 @@ f"The mail transport did not accept the message. This usually means the "
         amount_cents = lead_deposit_cents(db, lead)
         if amount_cents <= 0:
             return {"ok": False, "error": "This lead has no quote price yet. Quote the job first; the deposit is 30% of that."}
-        try:
-            url = stripe_svc.create_deposit_session(
-                lead_id=lead["id"],
-                customer_name=lead["name"],
-                customer_email=lead.get("email") or "",
-                project_type=lead.get("project_type") or "",
-                amount_cents=amount_cents,
-                base_url=f"https://{company()['domain']}",
-            )
-            return {"ok": True, "url": url, "amount": amount_cents / 100}
-        except Exception as e:
-            return {"ok": False, "error": str(e)}
+        res = _deposit_link_url(db, lead["id"], amount_cents)
+        if not res.get("ok"):
+            return res
+        return {"ok": True, "url": res["url"], "amount": amount_cents / 100,
+                "reference": res["reference"]}
 
     def create_deposit_links(limit: int = 10):
-        """Batch: Stripe deposit checkout links for quoted leads awaiting one.
+        """Batch: signed Zelle/ACH deposit links for quoted leads awaiting one.
 
         One call replaces a create_deposit_link-per-lead loop (which the
-        per-request tool budget would cut in half). Creates checkout sessions
-        and marks them 'pending' -- the same order the UI route uses: session
-        FIRST, then the UPDATE, because persisting 'pending' before Stripe
-        answered once left 24 rows that could never complete. A failure leaves
-        the lead untouched.
+        per-request tool budget would cut in half). Each lead is marked
+        'pending' only after the link exists, so a lead never shows as awaiting
+        a payment that has no page behind it.
 
         It does NOT send anything to customers; the owner delivers each URL
         from the leads page. Leads already pending or paid are skipped, so
@@ -1748,23 +1766,14 @@ f"The mail transport did not accept the message. This usually means the "
                 failed.append({"lead_id": lead["id"], "error": "no quote price yet (deposit is 30% of the quote)"})
                 continue
             try:
-                checkout = stripe_svc.create_deposit_checkout(
-                    lead_id=lead["id"],
-                    customer_name=lead["name"],
-                    customer_email=lead.get("email") or "",
-                    project_type=lead.get("project_type") or "",
-                    amount_cents=amount_cents,
-                    base_url=f"https://{company()['domain']}",
-                )
-                with db.cursor() as cur:
-                    cur.execute(
-                        "UPDATE leads SET deposit_status = 'pending', deposit_cents = %s, "
-                        "stripe_session_id = %s WHERE id = %s;",
-                        (amount_cents, checkout["session_id"], lead["id"]),
-                    )
-                db.commit()
+                res = _deposit_link_url(db, lead["id"], amount_cents)
+                if not res.get("ok"):
+                    failed.append({"lead_id": lead["id"], "name": lead["name"],
+                                   "error": res.get("error")})
+                    continue
                 created.append({"lead_id": lead["id"], "name": lead["name"],
-                                "url": checkout["url"], "amount_cents": amount_cents})
+                                "url": res["url"], "reference": res["reference"],
+                                "amount_cents": amount_cents})
             except Exception as e:
                 try:
                     db.rollback()
@@ -5819,12 +5828,17 @@ async def settings_page(request: Request, db=Depends(get_db)):
     )
     is_authed, user_email = require_auth(request)
     otp_env = (os.getenv("OTP_ENABLED") or "").strip().lower()
+    banking = settings_status.banking_status(
+        direct_deposit.missing(), direct_deposit.enabled(),
+        deposit_instructions.details(lambda k: _get_setting(db, k)),
+    )
     return templates.TemplateResponse(
         request=request,
         name="settings.html",
         context={
             "user": {"email": user_email},
             "saved": request.query_params.get("saved", ""),
+            "error": request.query_params.get("error", ""),
             "skip_sherpa_configured": skip_sherpa_service.configured(),
             "resimply_configured": configured,
             "resimply_status": resimply_status,
@@ -5832,7 +5846,7 @@ async def settings_page(request: Request, db=Depends(get_db)):
             "openai": openai_health,
             "email": settings_status.email_status(mail),
             "phone": settings_status.phone_status(vapi.is_configured(), signalwire.is_configured()),
-            "payments": settings_status.payments_status(stripe_svc.is_configured(), default_deposit_cents()),
+            "banking": banking,
             "jobs": settings_status.background_jobs(),
             "guardrails": settings_status.outbound_guardrails(),
             "otp_on": _otp_enabled(db),
@@ -5888,6 +5902,55 @@ async def save_resimply_settings(request: Request, db=Depends(get_db)):
                         (list(fields.values()),))
             db.commit()
     return RedirectResponse(url="/settings", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/api/settings/banking")
+async def save_banking_settings(request: Request, pnc_account_last4: str = Form(""),
+                                pnc_routing_number: str = Form(""),
+                                zelle_handle: str = Form(""), pnc_account_number: str = Form(""),
+                                db=Depends(get_db)):
+    """Store what clients are told to pay, and the account payroll leaves from.
+
+    Zelle handle first, ACH second: both land in the same PNC business checking
+    account, so a client whose bank caps Zelle can still pay. The routing number
+    goes through the same ABA checksum as crew accounts, and the account number
+    is stored Fernet-encrypted under BANK_ENCRYPTION_KEY. The owner UI only ever
+    shows the last four digits; the full number appears on the client's deposit
+    page, which is the whole reason it is stored.
+    """
+    require_admin(request)
+    digits = lambda raw: "".join(ch for ch in (raw or "") if ch.isdigit())
+    last4 = digits(pnc_account_last4)[-4:]
+    routing = digits(pnc_routing_number)
+    account = digits(pnc_account_number)
+    zelle = (zelle_handle or "").strip()
+    if last4 and len(last4) != 4:
+        return RedirectResponse(url="/settings?error=Last+four+must+be+4+digits#banking",
+                                status_code=status.HTTP_303_SEE_OTHER)
+    if routing and not direct_deposit.valid_routing(routing):
+        return RedirectResponse(
+            url="/settings?error=That+routing+number+isn%27t+valid.+It%27s+the+9-digit+number+on+the+bottom-left+of+a+check.#banking",
+            status_code=status.HTTP_303_SEE_OTHER)
+    if zelle and not deposit_instructions.normalize_zelle(zelle):
+        return RedirectResponse(
+            url="/settings?error=Zelle+handle+must+be+a+phone+number+or+an+email+address#banking",
+            status_code=status.HTTP_303_SEE_OTHER)
+    if account and not (4 <= len(account) <= 17):
+        return RedirectResponse(
+            url="/settings?error=Account+number+should+be+4+to+17+digits#banking",
+            status_code=status.HTTP_303_SEE_OTHER)
+    if account and not routing:
+        return RedirectResponse(
+            url="/settings?error=Add+the+routing+number+with+the+account+number#banking",
+            status_code=status.HTTP_303_SEE_OTHER)
+    try:
+        deposit_instructions.save(lambda k, v: _set_setting(db, k, v), zelle, routing, account)
+    except deposit_instructions.NotConfigured as e:
+        return RedirectResponse(url=f"/settings?error={urllib.parse.quote(str(e))}#banking",
+                                status_code=status.HTTP_303_SEE_OTHER)
+    if last4:
+        _set_setting(db, "pnc_account_last4", last4)
+    return RedirectResponse(url="/settings?saved=banking#banking", status_code=status.HTTP_303_SEE_OTHER)
 
 
 def _actor_label(request: Request) -> str:
@@ -6556,6 +6619,37 @@ async def delete_lead(lead_id: int, request: Request, db=Depends(get_db)):
     return RedirectResponse(url=request.headers.get("referer") or "/leads", status_code=status.HTTP_303_SEE_OTHER)
 
 
+@app.get("/pay/deposit/{token}", response_class=HTMLResponse)
+async def deposit_pay_page(token: str, request: Request, db=Depends(get_db)):
+    """Public, no login: what is due and how to pay it.
+
+    The token is signed and expires, so a forwarded link stops quoting an old
+    price instead of working forever. Client details other than the project
+    type are deliberately not rendered.
+    """
+    lead_id = deposit_instructions.lead_from_token(token)
+    lead = None
+    if lead_id:
+        with db.cursor() as cur:
+            cur.execute(
+                "SELECT id, name, project_type, deposit_cents, deposit_status "
+                "FROM leads WHERE id = %s;", (lead_id,))
+            lead = cur.fetchone()
+    pay = {"zelle": "", "zelle_display": "", "account": "", "ach_ready": False, "ready": False}
+    if lead:
+        try:
+            pay = deposit_instructions.ach_details(lambda k: _get_setting(db, k))
+        except deposit_instructions.NotConfigured as e:
+            logger.warning("[deposit] payment details unavailable for lead=%s: %s", lead_id, e)
+    return templates.TemplateResponse(
+        request=request, name="deposit_pay.html",
+        context={"lead": lead, "pay": pay,
+                 "reference": deposit_instructions.reference(lead_id or 0),
+                 "expired": lead is None},
+        headers={"Cache-Control": "no-store", "X-Robots-Tag": "noindex, nofollow"},
+    )
+
+
 @app.get("/api/leads/{lead_id}/deposit-link")
 async def create_deposit_link_route(lead_id: int, request: Request, amount: str = "", db=Depends(get_db)):
     require_admin(request)
@@ -6577,49 +6671,17 @@ async def create_deposit_link_route(lead_id: int, request: Request, amount: str 
         return JSONResponse(content={"error": "No quote price on this lead yet. The deposit is 30% of the quote — "
                                               "quote the job or type the deposit amount."}, status_code=400)
 
-    # Create the Stripe session FIRST, then persist 'pending'.
-    #
-    # This used to UPDATE + commit 'pending' before calling Stripe. When Stripe
-    # failed, the row stayed 'pending' with an empty stripe_session_id forever:
-    # the board showed money coming in that no checkout session could ever
-    # complete, and the deposit link was a dead 500. 24 rows were in that state.
-    # The webhook that flips 'pending' -> 'paid' only fires for a session that
-    # exists, so a failure here has to leave the lead untouched.
-    try:
-        checkout = stripe_svc.create_deposit_checkout(
-            lead_id=lead["id"],
-            customer_name=lead["name"],
-            customer_email=lead.get("email") or "",
-            project_type=lead.get("project_type") or "",
-            amount_cents=amount_cents,
-            base_url=f"https://{company()['domain']}",
-        )
-    except Exception as e:
-        logger.warning("[deposit] session creation failed for lead=%s: %s", lead_id, e)
-        db.rollback()
-        return JSONResponse(
-            content={
-                "error": str(e),
-                "detail": (
-                    "Stripe did not create a checkout session, so the deposit was "
-                    "not started and this lead was left unchanged. Nothing is owed."
-                ),
-                "credit_spent": False,
-            },
-            status_code=502,
-        )
-
-    with db.cursor() as cur:
-        cur.execute(
-            "UPDATE leads SET deposit_status = 'pending', deposit_cents = %s, "
-            "stripe_session_id = %s WHERE id = %s;",
-            (amount_cents, checkout["session_id"], lead_id),
-        )
-        db.commit()
+    # Zelle first, ACH as the fallback, both into the business checking account.
+    # Nothing is charged here and no processor is called, so the only failure
+    # mode is that /settings has no payment details -- in which case the lead is
+    # left untouched rather than marked as awaiting a payment nobody can make.
+    res = _deposit_link_url(db, lead_id, amount_cents)
+    if not res.get("ok"):
+        return JSONResponse(content={"error": res.get("error")}, status_code=400)
     return JSONResponse(content={
-        "url": checkout["url"],
+        "url": res["url"],
         "amount_cents": amount_cents,
-        "session_id": checkout["session_id"],
+        "reference": res["reference"],
     })
 
 
@@ -7251,7 +7313,7 @@ def _build_voice_swml(prompt: str, ai_params_extra: dict | None = None) -> dict:
                                 },
                                 {
                                     "function": "create_deposit_link",
-                                    "description": "Create a Stripe deposit-checkout link for a saved lead so they can reserve the project. Use AFTER register_lead returns the lead id, then text the link with send_sms_message.",
+                                    "description": "Create a deposit link for a saved lead: a page showing the business Zelle handle and, below it, the ACH routing and account number, so the caller can pay the deposit directly. Use AFTER register_lead returns the lead id, then text the link with send_sms_message.",
                                     "parameters": _swaig_parameters(
                                         {"lead_id": {"type": "integer", "description": "The lead id returned by register_lead."}},
                                         ["lead_id"],
@@ -10581,7 +10643,6 @@ async def crew_hours_page(request: Request, db=Depends(get_db)):
         "worker": crew_row, "jobs": jobs, "sheets": sheets,
     })
 
-
 @app.get("/crew/pay", response_class=HTMLResponse)
 async def crew_pay_page(request: Request, db=Depends(get_db)):
     worker = require_worker(request)
@@ -10595,8 +10656,17 @@ async def crew_pay_page(request: Request, db=Depends(get_db)):
             WHERE pl.crew_id = %s ORDER BY pr.period_start DESC;
         """, (worker.get("id"),))
         pay_history = cur.fetchall()
+    # Bank details come from the phone app form (crew_bank_accounts), not Stripe.
+    # A failure here must not take the pay page down: it only changes a status line.
+    bank = {"on_file": False}
+    if direct_deposit.enabled():
+        try:
+            direct_deposit.ensure_schema(db)
+            bank = direct_deposit.masked(db, crew_row["id"])
+        except Exception as e:
+            logger.warning("crew pay page: bank lookup failed for crew %s: %s", worker.get("id"), e)
     return templates.TemplateResponse(request=request, name="crew_pay.html", context={
-        "worker": crew_row, "pay_history": pay_history,
+        "worker": crew_row, "pay_history": pay_history, "bank": bank,
     })
 
 
@@ -12214,12 +12284,15 @@ async def bid_deposit_request(bid_id: int, request: Request, to_email: str = For
         raise HTTPException(status_code=500, detail="Could not raise the deposit invoice")
 
     try:
-        pdf = bid_deposit.build_deposit_pdf(dict(bid), dict(invoice))
-        subject, body = bid_deposit.build_deposit_email(dict(bid), dict(invoice))
+        number = (invoice.get("invoice_number") or str(bid_id))
+        pay_lines = deposit_instructions.payment_lines(
+            company()["name"], lambda k: _get_setting(db, k),
+            phone=company()["phone"], reference=f"invoice {number}")
+        pdf = bid_deposit.build_deposit_pdf(dict(bid), dict(invoice), pay_lines=pay_lines)
+        subject, body = bid_deposit.build_deposit_email(dict(bid), dict(invoice), pay_lines=pay_lines)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to build the deposit request: {e}")
 
-    number = (invoice.get("invoice_number") or str(bid_id))
     try:
         cfg = documents_service.smtp_config_from_env()
         ok = await documents_service.send_email(

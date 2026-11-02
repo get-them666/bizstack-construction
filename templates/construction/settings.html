@@ -30,6 +30,9 @@
         </div>
         {% if saved %}<span class="text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-full px-3 py-1">Saved ✓</span>{% endif %}
     </div>
+    {% if error %}
+    <div class="mt-4 rounded-xl bg-red-50 border border-red-200 p-3 text-xs text-red-800">{{ error }}</div>
+    {% endif %}
 
     <!-- Account -->
     <div class="mt-6 bg-white rounded-2xl border border-slate-200 p-5">
@@ -108,20 +111,76 @@
         {% endif %}
     </div>
 
-    <!-- Payments -->
-    <div class="mt-4 bg-white rounded-2xl border border-slate-200 p-5">
+    <!-- Business banking -->
+    <div id="banking" class="mt-4 bg-white rounded-2xl border border-slate-200 p-5">
         <div class="flex items-center gap-3">
-            <div class="w-10 h-10 rounded-xl bg-violet-50 flex items-center justify-center text-violet-600 font-bold">💳</div>
+            <div class="w-10 h-10 rounded-xl bg-violet-50 flex items-center justify-center text-violet-600 font-bold">🏦</div>
             <div>
-                <p class="text-base font-bold text-slate-900">Payments (Stripe)</p>
-                <p class="text-xs text-slate-500">Deposit links from the lead board; {{ payments.mode }} mode · default deposit {{ payments.deposit_default }}</p>
+                <p class="text-base font-bold text-slate-900">Business banking ({{ banking.bank }})</p>
+                <p class="text-xs text-slate-500">{{ co.name }} {{ banking.account_type }} — job payments in, payroll out</p>
             </div>
-            {{ pill(payments.ok and payments.webhook_ok, "Connected", "Check") }}
+            {{ pill(banking.on_file, "On file", "Add details") }}
         </div>
+        <dl class="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2 text-xs">
+            <div class="flex justify-between border-b border-slate-100 py-1"><dt class="text-slate-500">Account</dt>
+                <dd class="font-semibold text-right">{% if banking.on_file %}····{{ banking.last4 }}{% if banking.routing %} · routing {{ banking.routing }}{% endif %}{% else %}not saved yet{% endif %}</dd></div>
+            <div class="flex justify-between border-b border-slate-100 py-1"><dt class="text-slate-500">Zelle (deposit link)</dt><dd class="font-semibold">{{ banking.zelle or 'not saved yet' }}</dd></div>
+            <div class="flex justify-between border-b border-slate-100 py-1"><dt class="text-slate-500">ACH fallback for clients</dt><dd class="font-semibold">{{ 'ready' if banking.ach_payment_ready else 'not saved yet' }}</dd></div>
+            <div class="flex justify-between border-b border-slate-100 py-1"><dt class="text-slate-500">Bid payment schedule</dt><dd class="font-semibold">30% deposit · 40% midpoint · 30% final</dd></div>
+            <div class="flex justify-between border-b border-slate-100 py-1"><dt class="text-slate-500">Payroll ACH origination</dt><dd class="font-semibold">{{ 'ready' if banking.payroll_ach_ready else ('not set · ' ~ (banking.ach_missing | length) ~ ' to go') }}</dd></div>
+            <div class="flex justify-between border-b border-slate-100 py-1"><dt class="text-slate-500">Crew bank details (app)</dt><dd class="font-semibold">{{ 'on' if banking.dd_enabled else 'off' }}</dd></div>
+        </dl>
         <p class="mt-3 text-xs text-slate-600">
-            {% if not payments.ok %}<code>STRIPE_SECRET_KEY</code> is not set.{% elif not payments.webhook_ok %}The webhook secret is missing or malformed (<code>whsec_…</code>), so paid deposits will not mark the lead paid.{% else %}Webhook verified. Paid deposits flip the lead to <em>paid</em> automatically.{% endif %}
-            Remember to change the Stripe business type to <strong>LLC</strong> in the Dashboard now that the entity has changed.
+            Money in: the deposit link texts or emails clients a page with your <strong>Zelle</strong> handle, and the ACH routing and account number
+            underneath for a client whose bank caps Zelle. Both land in this account. Record the payment on
+            <a href="/pipeline" class="underline">the pipeline</a> (cash, check, Zelle, Venmo, ACH or card) so it reaches the books.
+            Money out: finalize a pay run at <a href="/payroll" class="underline">/payroll</a>, download the NACHA file, and upload it to
+            PNC's ACH origination (PINACLE). PNC pays the crew from this account; the site never moves money itself.
         </p>
+        {% if banking.ach_missing %}
+        <div class="mt-3 rounded-xl bg-amber-50 border border-amber-200 p-3 text-xs text-amber-800">
+            Payroll files still build, but PNC needs these before it will originate them:
+            <span class="font-mono">{{ banking.ach_missing | join(', ') }}</span>. Ask PNC for the values when ACH origination is enabled.
+        </div>
+        {% endif %}
+        {% if not banking.dd_enabled %}
+        <div class="mt-3 rounded-xl bg-amber-50 border border-amber-200 p-3 text-xs text-amber-800">
+            <code class="bg-amber-100 px-1 rounded">BANK_ENCRYPTION_KEY</code> is not set, so crew cannot save bank details in the phone app and direct deposit stays off.
+            Generate one with <code class="bg-amber-100 px-1 rounded">python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"</code>
+            and set it in Railway.
+        </div>
+        {% endif %}
+        {% if not banking.pay_ready %}
+        <div class="mt-3 rounded-xl bg-amber-50 border border-amber-200 p-3 text-xs text-amber-800">
+            The deposit link has nothing to show clients until a <strong>Zelle handle</strong> or the <strong>ACH routing + account number</strong> is saved below.
+            "Send deposit link" on the lead board refuses while this is empty, rather than texting a client a page with no payment details.
+        </div>
+        {% endif %}
+        <form method="post" action="/api/settings/banking" class="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <label class="block text-xs font-semibold text-slate-700">Zelle handle
+                <input name="zelle_handle" autocomplete="off"
+                       placeholder="{% if banking.zelle %}{{ banking.zelle }} (saved){% else %}phone or email{% endif %}"
+                       class="mt-1 block w-full px-3 py-2 rounded-xl border border-slate-200 text-sm font-normal">
+                <span class="mt-1 block text-[11px] font-normal text-slate-400">The phone or email enrolled in PNC's Zelle. Clients send the deposit here first.</span>
+            </label>
+            <label class="block text-xs font-semibold text-slate-700">Routing number
+                <input name="pnc_routing_number" inputmode="numeric" maxlength="9" autocomplete="off"
+                       placeholder="{% if banking.routing %}{{ banking.routing }} (saved){% else %}9 digits{% endif %}"
+                       class="mt-1 block w-full px-3 py-2 rounded-xl border border-slate-200 text-sm font-normal font-mono">
+                <span class="mt-1 block text-[11px] font-normal text-slate-400">Bottom-left of a PNC check.</span>
+            </label>
+            <label class="block text-xs font-semibold text-slate-700">Account number
+                <input name="pnc_account_number" inputmode="numeric" maxlength="17" autocomplete="off" type="password"
+                       placeholder="{% if banking.on_file %}····{{ banking.last4 }} (saved — leave blank to keep){% else %}PNC business checking{% endif %}"
+                       class="mt-1 block w-full px-3 py-2 rounded-xl border border-slate-200 text-sm font-normal font-mono">
+                <span class="mt-1 block text-[11px] font-normal text-slate-400">Stored encrypted. Shown only on the client's deposit page, never in this portal.</span>
+            </label>
+            <div class="flex items-end gap-3">
+                <button class="px-4 py-2 text-xs font-bold text-white bg-violet-600 hover:bg-violet-700 rounded-xl">Save</button>
+                <span class="text-xs text-slate-400">Leave a field blank to keep what is saved.</span>
+            </div>
+        </form>
+        <p class="mt-2 text-[11px] text-slate-400">New deposit links open this Zelle/ACH page. Links already sent through Stripe before this change still open, and nothing on this page depends on Stripe. When a Zelle or ACH payment arrives, record it on the pipeline so the lead closes itself.</p>
     </div>
 
     <!-- Zoho -->

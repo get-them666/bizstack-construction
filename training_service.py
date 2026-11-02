@@ -202,7 +202,7 @@ def _slides_content(kind: str) -> list[tuple[str, list[str]]]:
             ("Your Pay App — Login & Direct Deposit", [
                 "Crew portal at your site login; use your phone + PIN",
                 "Punch in/out on every job — that's what pays you",
-                "Set up direct deposit (Stripe) so checks land automatically",
+                "Set up direct deposit in the app so pay lands automatically",
                 "See hours, timesheets, and pay history under 'Pay'",
             ]),
             ("Clock In / Clock Out", [
@@ -475,7 +475,7 @@ def _slides_content(kind: str) -> list[tuple[str, list[str]]]:
                 "Check your timesheet at end of week before payday",
             ]),
             ("Pay & Direct Deposit", [
-                "Set up direct deposit (Stripe) so checks land automatically",
+                "Set up direct deposit in the app so pay lands automatically",
                 "You get paid per job at your rate on your paycheck",
                 "Pay stubs, hours, and history live under 'Pay'",
                 "Pay questions go to the office — never the client",

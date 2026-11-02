@@ -23,20 +23,18 @@
                 <div>
                     <p class="text-sm font-bold text-slate-900">Direct deposit</p>
                     <p class="text-sm text-slate-500 mt-0.5">
-                        {% if worker.bank_status == 'connected' %}
-                        ✅ Connected — {{ worker.stripe_account_id }}
-                        {% elif worker.bank_status == 'pending' %}
-                        ℹ️ Onboarding in progress
+                        {% if bank.on_file %}
+                        ✅ Connected — {{ bank.account_type|capitalize }} ····{{ bank.account_last4 }}
+                        {% elif worker.bank_status == 'connected' %}
+                        ℹ️ Details on file from an older setup — confirm them in the crew app
                         {% else %}
-                        Not set up yet. Banking is handled securely through Stripe — we never see your account number.
+                        Not set up yet. Add it in the crew app: open <a href="/app" class="underline font-semibold">/app</a> on your phone and enter your routing and account numbers. They are encrypted and only the last four are ever shown again.
                         {% endif %}
                     </p>
                 </div>
-                <form method="POST" action="/api/crew/direct-deposit">
-                    <button type="submit" class="px-5 py-2.5 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition-colors">
-                        {% if worker.bank_status %}{% if worker.bank_status == 'none' %}Set up direct deposit{% else %}Update banking{% endif %}{% else %}Set up direct deposit{% endif %}
-                    </button>
-                </form>
+                <a href="/app" class="px-5 py-2.5 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition-colors">
+                    {% if bank.on_file %}Change in the app{% else %}Set up in the app{% endif %}
+                </a>
             </div>
         </div>
 
@@ -60,7 +58,7 @@
         {% endif %}
 
         <p class="mt-6 text-xs text-slate-400 leading-relaxed">
-            Payment method: <strong>Direct deposit via Stripe Connect</strong>. Your bank details are encrypted by Stripe and never stored on our systems. Pay runs are cut by the office on their pay schedule.
+            Payment method: <strong>Direct deposit from the company's business checking account</strong>. Your routing and account numbers are encrypted, stored only as a last-four reference for you, and used solely to pay you. Pay runs are cut by the office on their pay schedule.
         </p>
     </div>
 </section>

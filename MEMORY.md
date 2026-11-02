@@ -28,7 +28,10 @@ greetings and subject lines; the legal page and footer carry `entity_line()`.
 - **Stripe** account `acct_1UAeKoJ6MbAT3Jcc` is registered as an individual /
   "BuildStack Construction". Business type must be changed to LLC in the
   Dashboard (Settings → Business details) and will re-verify with the LLC's
-  EIN; payouts can pause during review.
+  EIN; payouts can pause during review. **No longer the payment path as of
+  2026-11-02** — deposits and payroll go through PNC business checking (see
+  "Deposits and payroll now run through PNC business checking"). The Stripe
+  account still needs the LLC change while any legacy deposit link is open.
 - **10DLC brand** `460486de-…` was registered with TCR as "Buildstack
   Construction Co.", PRIVATE_PROFIT, EIN 20-1755044. If the LLC has a new EIN
   the brand must be updated or re-registered, or the pending campaign will
@@ -611,6 +614,44 @@ where the EIN letter substitutes for the 3-year return history a new business
 doesn't have. The PNC $22,500 deposit is the only real bank trail; the $9,400
 cash remainder is undocumented. Getting deposits to actually flow through Stripe
 is what makes the *next* loan easier, not this one.
+
+## Deposits and payroll now run through PNC business checking, not Stripe
+
+Owner decision, 2026-11-02: money in and money out both go through the PNC
+business checking account. Stripe is no longer the intake path, and `/settings`
+shows the bank account instead of a Stripe status card.
+
+- **Deposit links are Zelle-first, ACH second** (`deposit_instructions.py`).
+  "Send deposit link" on the lead board (and the Copilot tools of the same name)
+  now returns `/pay/deposit/{signed token}` — a public, no-login page showing the
+  amount, a `DEP-00042` reference, the business **Zelle** handle, and underneath
+  it the PNC routing + account number for a client whose bank caps Zelle. Links
+  expire after 60 days and are signed with `auth_service.sign_token`. **The link
+  refuses to be created while `/settings` has no payment details**, because a
+  page with no way to pay is worse than an error after the client was asked.
+- **Payments are recorded, not detected.** There is no webhook in this path:
+  when the Zelle/ACH money lands, the owner records it on `/pipeline`
+  (`today.record_payment`, kinds `deposit/progress/final`). A `deposit` payment
+  sets `leads.deposit_status='paid'` and moves the lead to `won`, so the board
+  still closes itself.
+- **What clients are told lives on `/settings`** (`POST /api/settings/banking`):
+  `pay_zelle_handle`, `pay_ach_routing`, `pay_ach_account_enc`,
+  `pay_ach_account_last4` in `app_settings`. The account number is
+  Fernet-encrypted with `BANK_ENCRYPTION_KEY` (the same key as crew bank
+  details) and is **only** rendered on the client deposit page — the owner
+  portal shows the last four. The bid deposit email/PDF print the same Zelle
+  and ACH lines via `deposit_instructions.payment_lines()`.
+- **Money out** is `direct_deposit.py`: crew save routing/account in the phone
+  app (Fernet-encrypted), the owner finalizes a pay run and downloads a NACHA
+  PPD file at `/api/payroll/runs/{id}/nacha`, then uploads it to PNC's ACH
+  origination (PINACLE). The site never originates the transfer.
+- **Payroll ACH origination is not configured yet** — `ACH_IMMEDIATE_DEST`,
+  `ACH_IMMEDIATE_ORIGIN`, `ACH_COMPANY_ID`, `ACH_ODFI_ROUTING` are all unset in
+  Railway. The files build; PNC will not originate them until it issues those
+  identifiers. The Settings card names the missing ones.
+- Stripe deposit-link code, webhooks and the `stripe_income_report.py` history
+  are deliberately left intact — links already sent still open — but nothing in
+  the deposit path calls Stripe, and the crew training text no longer names it.
 
 ## Open threads
 

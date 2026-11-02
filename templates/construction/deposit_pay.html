@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+
+{# Client-facing deposit page reached from the link the owner texts.
+
+   No processor: the client pays by Zelle, or by ACH into the business
+   checking account when their bank caps Zelle. Both land in the same account.
+   Only the amount and the reference are needed to match the payment, so the
+   page prints no client contact details beyond the project name. #}
+
+{% set co = company() %}
+{% block title %}Pay your deposit | {{ co.name }}{% endblock %}
+{% block meta %}<meta name="robots" content="noindex, nofollow">{% endblock %}
+
+{% block content %}
+<section class="min-h-[70vh] flex items-center py-16 bg-slate-50">
+    <div class="max-w-lg w-full mx-auto px-4 sm:px-6">
+        {% if expired or not lead %}
+        <div class="bg-white rounded-3xl border border-slate-200 p-6 text-center">
+            <div class="w-16 h-16 mx-auto rounded-full bg-amber-100 flex items-center justify-center text-3xl">⏳</div>
+            <h1 class="mt-5 text-2xl font-black tracking-tight text-slate-900">This deposit link has expired</h1>
+            <p class="mt-3 text-sm text-slate-600">Nothing is owed from this page. Call {{ co.phone }} and we will send a fresh one.</p>
+            <a href="tel:{{ co.phone_e164 }}" class="mt-6 inline-block px-6 py-3 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-2xl">Call {{ co.phone }}</a>
+        </div>
+        {% else %}
+        <div class="text-center">
+            <p class="text-sm font-bold text-indigo-600 uppercase tracking-widest">{{ co.short_name }}</p>
+            <h1 class="mt-2 text-3xl font-black tracking-tight text-slate-900">Pay your deposit</h1>
+            {% if lead.project_type %}<p class="mt-2 text-slate-600">{{ lead.project_type }}</p>{% endif %}
+        </div>
+
+        <div class="mt-6 bg-white rounded-3xl border border-slate-200 p-6">
+            <div class="flex items-center justify-between">
+                <span class="text-sm text-slate-500">Amount due</span>
+                <span class="text-2xl font-black text-slate-900">{{ (lead.deposit_cents or 0) | money }}</span>
+            </div>
+            <div class="mt-2 flex items-center justify-between text-xs">
+                <span class="text-slate-500">Reference for your memo</span>
+                <code class="px-2 py-0.5 rounded bg-slate-100 text-slate-800 font-mono select-all">{{ reference }}</code>
+            </div>
+            <p class="mt-3 text-xs text-slate-500">Put that reference in the memo so the payment matches your job. Work is scheduled and materials are ordered once the deposit lands.</p>
+        </div>
+
+        {% if pay.zelle %}
+        <div class="mt-4 bg-white rounded-3xl border border-emerald-200 p-6">
+            <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-xl bg-emerald-50 flex items-center justify-center text-emerald-600 font-bold">⚡</div>
+                <div>
+                    <p class="text-base font-bold text-slate-900">Zelle (fastest)</p>
+                    <p class="text-xs text-slate-500">Usually arrives in minutes · no fee</p>
+                </div>
+            </div>
+            <p class="mt-3 text-sm text-slate-700">Send {{ (lead.deposit_cents or 0) | money }} by Zelle to:</p>
+            <code class="mt-1 block px-3 py-2 rounded-xl bg-emerald-50 border border-emerald-200 text-sm font-mono text-slate-900 select-all">{{ pay.zelle_display }}</code>
+            <p class="mt-2 text-xs text-slate-500">The account name shows as {{ co.name }}. Put <span class="font-semibold">{{ reference }}</span> in the memo.</p>
+        </div>
+        {% endif %}
+
+        {% if pay.ach_ready %}
+        <div class="mt-4 bg-white rounded-3xl border border-slate-200 p-6">
+            <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center text-slate-700 font-bold">🏦</div>
+                <div>
+                    <p class="text-base font-bold text-slate-900">{{ 'No Zelle? Use ACH' if pay.zelle else 'Pay by ACH transfer' }}</p>
+                    <p class="text-xs text-slate-500">Ask your bank to send an ACH credit · 1–3 business days</p>
+                </div>
+            </div>
+            <dl class="mt-3 divide-y divide-slate-100 text-sm">
+                <div class="flex justify-between py-2"><dt class="text-slate-500">Bank</dt><dd class="font-semibold text-slate-800">PNC Bank</dd></div>
+                <div class="flex justify-between py-2"><dt class="text-slate-500">Account name</dt><dd class="font-semibold text-slate-800 text-right">{{ co.name }}</dd></div>
+                <div class="flex justify-between py-2"><dt class="text-slate-500">Routing number</dt><dd class="font-semibold text-slate-800 font-mono select-all">{{ pay.routing }}</dd></div>
+                <div class="flex justify-between py-2"><dt class="text-slate-500">Account number</dt><dd class="font-semibold text-slate-800 font-mono select-all">{{ pay.account }}</dd></div>
+                <div class="flex justify-between py-2"><dt class="text-slate-500">Memo / reference</dt><dd class="font-semibold text-slate-800 font-mono select-all">{{ reference }}</dd></div>
+            </dl>
+            <p class="mt-2 text-xs text-slate-500">This is a receiving account only. We will never ask you to send money anywhere else or to share a password or code.</p>
+        </div>
+        {% endif %}
+
+        {% if not pay.ready %}
+        <div class="mt-4 rounded-3xl bg-amber-50 border border-amber-200 p-6 text-sm text-amber-900">
+            We have not published the payment details on this page yet. Call or text {{ co.phone }} and we will send them for {{ reference }}.
+        </div>
+        {% endif %}
+
+        <div class="mt-6 text-center">
+            <p class="text-xs text-slate-500">Already sent the deposit? Reply to the text or email you received and we will confirm it.</p>
+            <a href="tel:{{ co.phone_e164 }}" class="mt-3 inline-block px-6 py-3 text-sm font-bold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 rounded-2xl">Questions? Call {{ co.phone }}</a>
+        </div>
+        {% endif %}
+
+        <p class="mt-8 text-center text-[11px] text-slate-400">{{ co.entity_line }}</p>
+    </div>
+</section>
+{% endblock %}

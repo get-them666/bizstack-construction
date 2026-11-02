@@ -78,3 +78,32 @@ def test_email_status_flags_the_legacy_transport(monkeypatch):
     assert ss.email_status(None)["legacy_warning"] is True
     monkeypatch.setenv("EMAIL_TRANSPORT", "gmail")
     assert ss.email_status({"ok": True, "detail": "x", "checked_at": ""})["ok"] is True
+
+
+def test_banking_keeps_only_the_last_four(monkeypatch):
+    monkeypatch.delenv("PNC_ACCOUNT_LAST4", raising=False)
+    monkeypatch.delenv("PNC_ROUTING_NUMBER", raising=False)
+    b = ss.banking_status([], True, {"account_last4": "000004821", "routing": "051-000-017",
+                                     "zelle_display": "(757) 908-7121", "ach_ready": True,
+                                     "ready": True})
+    assert b["on_file"] is True and b["last4"] == "4821"
+    assert b["routing"] == "051000017"
+    assert b["payroll_ach_ready"] is True and b["dd_enabled"] is True
+    assert b["pay_ready"] is True and b["zelle"] == "(757) 908-7121"
+
+
+def test_banking_with_no_account_asks_for_one(monkeypatch):
+    """No fake digits: an unset account must read as unset, not as a made-up number."""
+    monkeypatch.delenv("PNC_ACCOUNT_LAST4", raising=False)
+    monkeypatch.delenv("PNC_ROUTING_NUMBER", raising=False)
+    b = ss.banking_status(["ACH_COMPANY_ID"], False)
+    assert b["on_file"] is False and b["last4"] == "" and b["routing"] == ""
+    assert b["payroll_ach_ready"] is False and b["ach_missing"] == ["ACH_COMPANY_ID"]
+    assert b["pay_ready"] is False and b["zelle"] == ""
+
+
+def test_banking_settings_win_over_the_environment(monkeypatch):
+    monkeypatch.setenv("PNC_ACCOUNT_LAST4", "1111")
+    monkeypatch.setenv("PNC_ROUTING_NUMBER", "043000096")
+    b = ss.banking_status([], True, {"account_last4": "4821", "routing": "051000017"})
+    assert (b["last4"], b["routing"]) == ("4821", "051000017")

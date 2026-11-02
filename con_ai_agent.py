@@ -613,7 +613,7 @@ OPERATING MANUAL:
                 "type": "function",
                 "function": {
                     "name": "create_deposit_link",
-                    "description": "Create a Stripe deposit checkout link for a lead (reserves the project).",
+                    "description": "Create a deposit link for a lead: a page showing the Zelle handle and the ACH routing/account so the client can pay the deposit directly (reserves the project).",
                     "parameters": self._props(
                         {"lead_id": "integer"}, ["lead_id"], "Existing lead id."
                     ),
@@ -624,7 +624,7 @@ OPERATING MANUAL:
                 "function": {
                     "name": "create_deposit_links",
                     "description": (
-                        "Batch: create Stripe deposit checkout links for up to `limit` "
+                        "Batch: create Zelle/ACH deposit links for up to `limit` "
                         "QUOTED leads that do not have one yet, in one call instead of "
                         "looping create_deposit_link. Marks each lead 'pending' (so "
                         "re-running creates no duplicates) and returns every URL. "

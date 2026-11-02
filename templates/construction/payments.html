@@ -36,7 +36,7 @@
                             <th class="px-6 py-3">Project</th>
                             <th class="px-6 py-3">Amount</th>
                             <th class="px-6 py-3">Status</th>
-                            <th class="px-6 py-3">Session</th>
+                            <th class="px-6 py-3">Method</th>
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-slate-100">
@@ -49,7 +49,7 @@
                             <td class="px-6 py-3.5">
                                 <span class="inline-block px-2.5 py-1 text-xs font-bold rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">PAID</span>
                             </td>
-                            <td class="px-6 py-3.5 text-xs text-slate-400 font-mono">{{ (p.stripe_payment_intent_id or p.stripe_session_id or '') | truncate(22) }}</td>
+                            <td class="px-6 py-3.5 text-xs text-slate-400">{% if p.method %}{{ p.method|capitalize }}{% if p.kind %} · {{ p.kind }}{% endif %}{% else %}<span class="font-mono">{{ (p.stripe_payment_intent_id or p.stripe_session_id or '—') | truncate(22) }}</span>{% endif %}</td>
                         </tr>
                         {% endfor %}
                     </tbody>
@@ -60,7 +60,7 @@
         <div class="bg-white rounded-3xl border border-slate-200 px-6 py-16 text-center">
             <p class="text-4xl mb-3">💳</p>
             <p class="font-semibold text-slate-700">No payments yet</p>
-            <p class="text-sm text-slate-500 mt-1">Deposits paid via Stripe show up here automatically.</p>
+            <p class="text-sm text-slate-500 mt-1">Deposits recorded from the pipeline (Zelle, ACH, check, cash) show up here.</p>
         </div>
         {% endif %}
     </div>

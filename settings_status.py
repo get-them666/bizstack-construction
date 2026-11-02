@@ -135,11 +135,36 @@ def phone_status(vapi_configured: bool, signalwire_configured: bool) -> dict:
     }
 
 
-def payments_status(stripe_configured: bool, deposit_cents: int) -> dict:
-    key = env("STRIPE_SECRET_KEY")
+def banking_status(ach_missing: list[str], dd_enabled: bool, pay: dict | None = None) -> dict:
+    """The PNC business checking account, as the owner should read it.
+
+    Job payments arrive by Zelle, or by ACH from a client who does not use it,
+    and are recorded on /pipeline. Payroll leaves the same account: the owner
+    downloads a NACHA file from a finalized run and uploads it to PNC's ACH
+    origination. Stripe is not in either path, so nothing here depends on it.
+
+    ``pay`` is ``deposit_instructions.details()``: what clients are told to pay.
+    Only the last four digits and the routing number are shown in the owner UI;
+    the full account number lives encrypted and appears only on the client's
+    deposit page. Values saved on Settings win over the environment.
+    """
+    pay = pay or {}
+
+    def digits(raw):
+        return "".join(ch for ch in (raw or "") if ch.isdigit())
+
+    last4 = digits(pay.get("account_last4") or env("PNC_ACCOUNT_LAST4"))[-4:]
+    routing = digits(pay.get("routing") or env("PNC_ROUTING_NUMBER"))[:9]
     return {
-        "ok": stripe_configured,
-        "mode": "live" if key.startswith("sk_live_") else ("test" if key.startswith("sk_test_") else "unknown"),
-        "deposit_default": f"${deposit_cents / 100:,.0f}",
-        "webhook_ok": bool(env("STRIPE_WEBHOOK_SECRET").startswith("whsec_")),
+        "bank": env("PNC_BANK_NAME", "PNC Bank"),
+        "account_type": env("PNC_ACCOUNT_TYPE") or "business checking",
+        "last4": last4,
+        "routing": routing,
+        "on_file": bool(last4),
+        "zelle": pay.get("zelle_display") or "",
+        "ach_payment_ready": bool(pay.get("ach_ready")),
+        "pay_ready": bool(pay.get("ready")),
+        "payroll_ach_ready": not ach_missing,
+        "ach_missing": list(ach_missing),
+        "dd_enabled": dd_enabled,
     }
