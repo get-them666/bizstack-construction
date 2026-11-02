@@ -1,12 +1,12 @@
-const CACHE = "buildstack-crew-v2";
+const CACHE = "buildstack-crew-v3";
 const SHELL = [
   "/app",
   "/manifest.webmanifest",
+  "/static/css/tailwind.css",
   "/static/icons/icon-192.png",
   "/static/icons/icon-512.png",
   "/static/icons/icon-maskable-512.png",
   "/static/icons/apple-touch-icon.png",
-  "https://cdn.tailwindcss.com",
   "https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"
 ];
 
@@ -42,7 +42,8 @@ self.addEventListener("fetch", (event) => {
   }
 
   // App shell: network-first (fresh always wins) with cached fallback for offline.
-  if (url.origin === location.origin) {
+  // self.location (not bare `location`, which is undefined in a service worker).
+  if (url.origin === self.location.origin) {
     event.respondWith(
       fetch(request).then((res) => {
         if (res && res.ok && res.type === "basic") {
@@ -55,7 +56,7 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // CDN assets (Tailwind, fonts): stale-while-revalidate.
+  // CDN assets (fonts): stale-while-revalidate.
   event.respondWith(
     caches.match(request).then((cached) => {
       const network = fetch(request).then((res) => {
