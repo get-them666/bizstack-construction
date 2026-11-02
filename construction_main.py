@@ -1514,6 +1514,30 @@ def _mask_email(email: str) -> str:
 
 
 # --- AI tool handlers -------------------------------------------------------
+def lead_deposit_cents(db, lead: dict) -> int:
+    """Deposit for a lead: 30% of the quoted job price, never a flat default.
+
+    Order: an explicit deposit_cents on the lead (already 30% when it came from
+    a quote), else 30% of the latest non-declined quote's job price, else 0 so
+    the owner has to set a price before a link can be made.
+    """
+    try:
+        if int(lead.get("deposit_cents") or 0) > 0:
+            return int(lead["deposit_cents"])
+    except (TypeError, ValueError):
+        pass
+    try:
+        for q in quoting.quotes_for_lead(db, lead["id"]):
+            if q.get("status") == "declined":
+                continue
+            price = int(q.get("job_price_cents") or 0)
+            if price > 0:
+                return quoting.deposit_for(price)
+    except Exception:
+        pass
+    return 0
+
+
 def build_tool_handlers(db, stripe_svc):
     """DB/Stripe tool handlers that let the AI agent capture and manage leads."""
 
@@ -1659,16 +1683,19 @@ f"The mail transport did not accept the message. This usually means the "
             lead = cur.fetchone()
         if not lead:
             return {"ok": False, "error": "Lead not found."}
+        amount_cents = lead_deposit_cents(db, lead)
+        if amount_cents <= 0:
+            return {"ok": False, "error": "This lead has no quote price yet. Quote the job first; the deposit is 30% of that."}
         try:
             url = stripe_svc.create_deposit_session(
                 lead_id=lead["id"],
                 customer_name=lead["name"],
                 customer_email=lead.get("email") or "",
                 project_type=lead.get("project_type") or "",
-                amount_cents=lead.get("deposit_cents") or 0,
+                amount_cents=amount_cents,
                 base_url=f"https://{company()['domain']}",
             )
-            return {"ok": True, "url": url}
+            return {"ok": True, "url": url, "amount": amount_cents / 100}
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
@@ -1704,7 +1731,10 @@ f"The mail transport did not accept the message. This usually means the "
                     "note": "No quoted leads are waiting on a deposit link."}
         created, failed = [], []
         for lead in rows:
-            amount_cents = int(lead.get("deposit_cents") or default_deposit_cents())
+            amount_cents = lead_deposit_cents(db, lead)
+            if amount_cents <= 0:
+                failed.append({"lead_id": lead["id"], "error": "no quote price yet (deposit is 30% of the quote)"})
+                continue
             try:
                 checkout = stripe_svc.create_deposit_checkout(
                     lead_id=lead["id"],
@@ -3628,6 +3658,24 @@ async def leads_page(request: Request,
         stage=(status_filter or None),
         where_extra=vis_where, extra_params=tuple(vis_params),
     )
+    # Deposit shown on each card is 30% of the lead's latest quote, not a flat
+    # default. One query for the whole board rather than one per lead.
+    try:
+        ids = [r["id"] for r in rows if not r.get("deposit_cents")]
+        if ids:
+            with db.cursor() as cur:
+                cur.execute("""
+                    SELECT DISTINCT ON (lead_id) lead_id, job_price_cents
+                      FROM quotes WHERE lead_id = ANY(%s) AND status <> 'declined' AND job_price_cents > 0
+                     ORDER BY lead_id, created_at DESC;
+                """, (ids,))
+                by_lead = {r["lead_id"]: quoting.deposit_for(int(r["job_price_cents"])) for r in cur.fetchall()}
+            for r in rows:
+                if not r.get("deposit_cents") and r["id"] in by_lead:
+                    r["deposit_cents"] = by_lead[r["id"]]
+    except Exception as exc:
+        db.rollback()
+        print(f"[leads] quote deposits unavailable: {exc}", flush=True)
     all_buckets = lead_queue.group(rows)
     action_counts = lead_queue.action_counts(all_buckets)
     buckets = ([b for b in all_buckets if b["action"] == action]
@@ -3693,7 +3741,7 @@ async def leads_page(request: Request,
         "active_status": status_filter,
         "q": q,
         "draft_count": draft_count,
-        "default_deposit": default_deposit_cents() / 100,
+        "default_deposit": 0,
         "permits": permits,
         "permit_owners": permit_owners,
         "permit_contacts": permit_contacts,
@@ -3789,7 +3837,7 @@ async def lead_workspace_page(lead_id: int, request: Request, db=Depends(get_db)
             "statuses": LEAD_STATUSES,
             "status_labels": STATUS_LABELS,
             "progress_statuses": [stage for stage in LEAD_STATUSES if stage != "lost"],
-            "default_deposit": default_deposit_cents() / 100,
+            "default_deposit": lead_deposit_cents(db, lead) / 100,
         },
     )
 
@@ -6507,12 +6555,15 @@ async def create_deposit_link_route(lead_id: int, request: Request, amount: str 
     if lead["deposit_status"] == "paid":
         return JSONResponse(content={"error": "Deposit already paid"}, status_code=400)
 
-    amount_cents = lead.get("deposit_cents") or default_deposit_cents()
+    amount_cents = lead_deposit_cents(db, lead)
     if amount.strip():
         try:
             amount_cents = int(float(amount) * 100)
         except ValueError:
             return JSONResponse(content={"error": "Invalid amount"}, status_code=400)
+    if amount_cents <= 0:
+        return JSONResponse(content={"error": "No quote price on this lead yet. The deposit is 30% of the quote — "
+                                              "quote the job or type the deposit amount."}, status_code=400)
 
     # Create the Stripe session FIRST, then persist 'pending'.
     #

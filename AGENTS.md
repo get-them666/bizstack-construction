@@ -25,8 +25,9 @@ not a shared package, not two services over one database.
 | Repo | `get-them666/bizstack-construction` | `get-them666/bizstack-hosts` |
 
 - **Never add a dependency on another repository.** `requirements.txt` must not name a git
-  URL. `bizstack_leads/` is a vendored, **dead** package — nothing consumes it. Do not
-  reintroduce it or import from `../bizstack-hosts`.
+  URL. `bizstack_leads/` is a vendored copy of the old shared lead package and **is live** —
+  13 modules import it (`from bizstack_leads import store as lead_store` is the leads board).
+  Edit it here; never re-point it at a git URL or at `../bizstack-hosts`.
 - **Never point this app at the hosts database, or vice versa.**
 - **Never assume a file exists in both repos because it used to.** They diverge on purpose.
 - **`railway up` from this directory deploys to BuildStack Construction.** Confirm with
