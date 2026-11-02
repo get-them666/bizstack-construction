@@ -154,7 +154,8 @@
       </section>
 
       {# ── Payment schedule: 30% deposit / 40% progress / 30% final ───────── #}
-      {% set contract = b.contract_value or b.bid_amount or 0 %}
+      {# bid_amount comes back from Postgres as Decimal; Decimal * 0.30 raises TypeError #}
+      {% set contract = (b.contract_value or b.bid_amount or 0) | float %}
       {% set dep_amt = (contract * 0.30) | round(2) if contract else 0 %}
       {% set prog_amt = (contract * 0.40) | round(2) if contract else 0 %}
       {% set final_amt = (contract - dep_amt - prog_amt) | round(2) if contract else 0 %}
