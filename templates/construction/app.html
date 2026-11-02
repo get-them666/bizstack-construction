@@ -98,23 +98,20 @@
                 </div>
             </header>
 
-            <!-- Install prompt: shown by default so crew can add the app to their home screen -->
-            <div id="install-banner" class="px-5 py-4 bg-indigo-600 border-b border-indigo-400 text-white text-sm font-medium flex items-center justify-between gap-3 shadow-md shadow-indigo-200">
-                <div class="flex items-center gap-3">
-                    <span class="text-indigo-100">📱</span>
-                    <span>Install BuildStack Crew on this phone</span>
+            <!-- Install prompt: always-visible manual instructions. PWAs don't auto-download like app-store apps — you add them to your home screen. -->
+            <div id="install-banner" class="px-5 py-4 bg-indigo-600 border-b border-indigo-400 text-white text-sm font-medium flex flex-col md:flex-row items-center justify-between gap-3 shadow-md shadow-indigo-200">
+                <div class="flex items-center gap-3 flex-1 min-w-0">
+                    <span class="text-indigo-100 shrink-0">📱</span>
+                    <div class="flex-1 min-w-0">
+                        <div class="font-semibold">Install BuildStack Crew on this phone</div>
+                        <div class="text-xs text-indigo-100/90 mt-0.5">Adds a home-screen icon — works offline</div>
+                    </div>
                 </div>
-                <button id="install-btn" class="px-3 py-1.5 text-xs font-bold text-indigo-600 bg-white hover:bg-indigo-50 rounded-xl">Install</button>
-            </div>
-
-            <!-- iOS install instructions (Apple doesn't fire beforeinstallprompt) -->
-            <div id="ios-install" class="hidden px-5 py-3 bg-amber-50 border-b border-amber-200 text-amber-800 text-xs font-medium flex items-center gap-3">
-                <span class="text-amber-600">🍎</span>
-                <div class="flex-1">
-                    <div class="font-semibold">Safari: Share → Add to Home Screen</div>
-                    <div class="text-amber-600">Tap the share button (□↑), then “Add to Home Screen.”</div>
+                <div class="text-left md:text-right hidden md:block space-y-0.5">
+                    <div class="text-xs text-indigo-100/90 font-medium">Chrome: menu (three dots) → Add to Home Screen</div>
+                    <div class="text-xs text-indigo-100/90">Safari: Share button → Add to Home Screen</div>
                 </div>
-                <button id="ios-install-close" class="text-amber-600 hover:text-amber-800 text-xs font-bold">×</button>
+                <button id="install-close" class="px-2 py-1 text-xs font-bold text-indigo-100 hover:text-white bg-indigo-500/30 hover:bg-indigo-500/50 rounded-lg shrink-0">✕</button>
             </div>
 
             <div id="offline-banner" class="hidden bg-amber-500 text-white text-center text-xs font-bold px-4 py-2">OFFLINE — data may be stale</div>
@@ -1059,59 +1056,20 @@
                 }).catch(() => {});
             }
 
-            /* ---------- Install prompt (Add to Home Screen) ---------- */
-            let installDeferred = null;
+            /* ---------- Install prompt ---------- */
             const installBanner = $('install-banner');
-            const installBtn = $('install-btn');
-            const iosInstall = $('ios-install');
-            const iosClose = $('ios-install-close');
-            const isIOS = /iPad|iPhone|iPod/.test(navigator.platform) ||
-                          (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+            const installClose = $('install-close');
             const isStandalone = window.matchMedia('(display-mode: standalone)').matches ||
                                  navigator.standalone === true;
 
-            // Already installed as an app: hide install UI.
-            if (isStandalone) {
+            // Already installed as a standalone app: hide install UI.
+            if (isStandalone && installBanner) {
                 installBanner.classList.add('hidden');
-                iosInstall.classList.add('hidden');
-            } else if (isIOS) {
-                // iOS doesn't fire beforeinstallprompt — show Safari instructions instead.
-                installBanner.classList.add('hidden');
-                iosInstall.classList.remove('hidden');
-                iosClose?.addEventListener('click', () => { iosInstall.classList.add('hidden'); });
-            } else {
-                // Android/Chrome: show the Install button. Capture beforeinstallprompt
-                // so clicking actually installs; if it never fires, fall back to the
-                // browser menu instructions.
-                window.addEventListener('beforeinstallprompt', (e) => {
-                    e.preventDefault();
-                    installDeferred = e;
-                });
-                installBtn.addEventListener('click', async () => {
-                    if (installDeferred) {
-                        installDeferred.prompt();
-                        const { outcome } = await installDeferred.userChoice;
-                        installDeferred = null;
-                        if (outcome === 'accepted') {
-                            installBanner.classList.add('hidden');
-                        }
-                        return;
-                    }
-                    // No install prompt available yet: tell them how to do it manually.
-                    installBtn.textContent = 'Use Chrome menu → Add to Home Screen';
-                    installBtn.classList.add('bg-indigo-50', 'text-indigo-800');
-                    installBtn.classList.remove('bg-white', 'text-indigo-600');
-                    setTimeout(() => {
-                        installBtn.textContent = 'Install';
-                        installBtn.classList.remove('bg-indigo-50', 'text-indigo-800');
-                        installBtn.classList.add('bg-white', 'text-indigo-600');
-                    }, 3000);
-                });
-                window.addEventListener('appinstalled', () => {
-                    installDeferred = null;
-                    installBanner.classList.add('hidden');
-                });
             }
+
+            installClose?.addEventListener('click', () => {
+                installBanner.classList.add('hidden');
+            });
 
             const phoneEl = $('login-phone');
             if (phoneEl) phoneEl.addEventListener('input', () => { phoneEl.value = fmtPhone(phoneEl.value); });
