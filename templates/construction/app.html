@@ -99,19 +99,17 @@
             </header>
 
             <!-- Install prompt: always-visible manual instructions. PWAs don't auto-download like app-store apps — you add them to your home screen. -->
-            <div id="install-banner" class="px-5 py-4 bg-indigo-600 border-b border-indigo-400 text-white text-sm font-medium flex flex-col md:flex-row items-center justify-between gap-3 shadow-md shadow-indigo-200">
-                <div class="flex items-center gap-3 flex-1 min-w-0">
-                    <span class="text-indigo-100 shrink-0">📱</span>
+            <div id="install-banner" class="px-5 py-4 bg-indigo-600 border-b border-indigo-400 text-white text-sm shadow-md shadow-indigo-200">
+                <div class="flex items-start gap-3">
+                    <span class="text-xl leading-none shrink-0">📱</span>
                     <div class="flex-1 min-w-0">
-                        <div class="font-semibold">Install BuildStack Crew on this phone</div>
-                        <div class="text-xs text-indigo-100/90 mt-0.5">Adds a home-screen icon — works offline</div>
+                        <div class="font-bold">Install BuildStack Crew on this phone</div>
+                        <div id="install-steps" class="mt-1 text-sm text-indigo-50 font-medium leading-snug">
+                            Open your browser menu and tap <b>Add to Home Screen</b> or <b>Install</b>.
+                        </div>
                     </div>
+                    <button id="install-close" type="button" class="px-2 py-1 text-xs font-bold text-indigo-100 hover:text-white bg-indigo-500/30 hover:bg-indigo-500/50 rounded-lg shrink-0">✕</button>
                 </div>
-                <div class="text-left md:text-right hidden md:block space-y-0.5">
-                    <div class="text-xs text-indigo-100/90 font-medium">Chrome: menu (three dots) → Add to Home Screen</div>
-                    <div class="text-xs text-indigo-100/90">Safari: Share button → Add to Home Screen</div>
-                </div>
-                <button id="install-close" class="px-2 py-1 text-xs font-bold text-indigo-100 hover:text-white bg-indigo-500/30 hover:bg-indigo-500/50 rounded-lg shrink-0">✕</button>
             </div>
 
             <div id="offline-banner" class="hidden bg-amber-500 text-white text-center text-xs font-bold px-4 py-2">OFFLINE — data may be stale</div>
@@ -1065,6 +1063,30 @@
             // Already installed as a standalone app: hide install UI.
             if (isStandalone && installBanner) {
                 installBanner.classList.add('hidden');
+            }
+
+            // Browser-specific install steps. Nothing here intercepts
+            // beforeinstallprompt -- that would suppress Chrome's own install UI.
+            const installSteps = $('install-steps');
+            if (installSteps) {
+                const ua = navigator.userAgent;
+                const isIOS = /iPad|iPhone|iPod/.test(ua) ||
+                              (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+                let steps;
+                if (isIOS) {
+                    steps = 'Safari: tap <b>Share</b> (the box with an arrow) → <b>Add to Home Screen</b>.';
+                } else if (/Firefox|FxiOS/i.test(ua)) {
+                    steps = 'Firefox: tap the <b>⋮ menu</b> (bottom right) → <b>Install</b>. If you don\'t see Install, tap <b>Add to Home screen</b>.';
+                } else if (/SamsungBrowser/i.test(ua)) {
+                    steps = 'Samsung Internet: tap the <b>≡ menu</b> → <b>Add page to</b> → <b>Home screen</b>.';
+                } else if (/EdgA/i.test(ua)) {
+                    steps = 'Edge: tap the <b>… menu</b> → <b>Add to phone</b>.';
+                } else if (/Android/i.test(ua)) {
+                    steps = 'Chrome: tap the <b>⋮ menu</b> (top right) → <b>Install app</b> or <b>Add to Home screen</b>.';
+                } else {
+                    steps = 'Click the <b>install icon</b> at the right end of the address bar, or browser menu → <b>Install BuildStack Crew</b>.';
+                }
+                installSteps.innerHTML = steps;
             }
 
             installClose?.addEventListener('click', () => {

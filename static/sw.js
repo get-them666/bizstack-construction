@@ -1,4 +1,4 @@
-const CACHE = "buildstack-crew-v8";
+const CACHE = "buildstack-crew-v9";
 const SHELL = [
   "/app",
   "/manifest.webmanifest",
@@ -53,7 +53,7 @@ self.addEventListener("fetch", (event) => {
   // self.location (not bare `location`, which is undefined in a service worker).
   if (url.origin === self.location.origin) {
     event.respondWith(
-      fetch(request).then((res) => {
+      fetch(request, { cache: "no-cache" }).then((res) => {
         if (res && res.ok && res.type === "basic") {
           const copy = res.clone();
           caches.open(CACHE).then((cache) => cache.put(request, copy));
