@@ -67,6 +67,7 @@ import permit_stats
 import email_fetcher
 import bid_costing
 import direct_deposit
+import login_throttle
 import bid_deposit
 import bid_signing
 import bid_package_pdf
@@ -723,6 +724,7 @@ async def lifecycle(app: FastAPI):
         with psycopg.connect(db_url, row_factory=dict_row) as conn:
             bid_opportunities.ensure_schema(conn)
             direct_deposit.ensure_schema(conn)
+            login_throttle.ensure_schema(conn)
             # Order matters and is not arbitrary: costing extends
             # bid_opportunities with outcome columns and a projects FK, so it
             # runs after. takeoff and supplier_prices are independent of each
@@ -919,6 +921,10 @@ async def security_headers(request: Request, call_next):
         response.headers.setdefault("Content-Security-Policy", "frame-ancestors 'self'")
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    if request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https":
+        response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+    if path.startswith("/api/payroll/run/") or path.startswith("/api/crew/app/bank"):
+        response.headers["Cache-Control"] = "no-store"
     return response
 
 
@@ -1374,6 +1380,12 @@ def admin_emails() -> set:
 
 def is_admin_email(email: str) -> bool:
     return bool(email) and email.strip().lower() in admin_emails()
+
+
+def _client_ip(request: Request) -> str:
+    fwd = request.headers.get("cf-connecting-ip") or request.headers.get("x-forwarded-for") or ""
+    ip = fwd.split(",")[0].strip() if fwd else (request.client.host if request.client else "")
+    return ip[:64]
 
 
 def _secure_cookies() -> bool:
@@ -10353,14 +10365,20 @@ async def crew_portal_index(request: Request):
 
 
 @app.post("/api/crew/login")
-async def crew_login(phone: str = Form(...), pin: str = Form(...), db=Depends(get_db)):
+async def crew_login(request: Request, phone: str = Form(...), pin: str = Form(...), db=Depends(get_db)):
     digits = "".join(c for c in (phone or "") if c.isdigit())
+    keys = (f"phone:{digits}", f"ip:{_client_ip(request)}")
+    login_throttle.ensure_schema(db)
+    if login_throttle.locked(db, *keys):
+        return RedirectResponse(url="/crew?error=Too+many+attempts.+Try+again+later.", status_code=status.HTTP_303_SEE_OTHER)
     with db.cursor() as cur:
         cur.execute("SELECT * FROM crew WHERE REGEXP_REPLACE(phone, '[^0-9]', '', 'g') = %s AND is_active = TRUE;",
                     (digits,))
         row = cur.fetchone()
     if not row or not _verify_pin((pin or "").strip(), row["pin_hash"]):
+        login_throttle.fail(db, *keys)
         return RedirectResponse(url="/crew?error=Invalid+phone+or+PIN", status_code=status.HTTP_303_SEE_OTHER)
+    login_throttle.clear(db, keys[0])
     return _worker_login_response(row)
 
 
@@ -10628,11 +10646,38 @@ async def worker_app_bank_save(request: Request, db=Depends(get_db)):
     body = await request.json()
     if (body.get("account_number") or "") != (body.get("account_number_confirm") or ""):
         return JSONResponse(status_code=400, content={"status": "error", "message": "Account numbers don't match."})
+    # A stolen session must not be enough to redirect someone's pay: re-check
+    # the PIN, with the same lockout as login.
+    login_throttle.ensure_schema(db)
+    keys = (f"bank:{worker['id']}", f"ip:{_client_ip(request)}")
+    if login_throttle.locked(db, *keys):
+        return JSONResponse(status_code=429, content={"status": "error", "message": "Too many attempts. Try again later."})
+    with db.cursor() as cur:
+        cur.execute("SELECT id, name, pin_hash FROM crew WHERE id = %s AND is_active = TRUE;", (worker["id"],))
+        crew_row = cur.fetchone()
+    if not crew_row or not _verify_pin((body.get("pin") or "").strip(), crew_row["pin_hash"]):
+        login_throttle.fail(db, *keys)
+        return JSONResponse(status_code=403, content={"status": "error", "message": "Wrong PIN. Enter your sign-in PIN to confirm."})
+    login_throttle.clear(db, keys[0])
     direct_deposit.ensure_schema(db)
+    previous = direct_deposit.masked(db, worker["id"])
     res = direct_deposit.save(db, worker["id"], body.get("account_holder", ""), body.get("routing_number", ""),
                               body.get("account_number", ""), body.get("account_type", "checking"))
     if not res.get("ok"):
         return JSONResponse(status_code=400, content={"status": "error", "message": res.get("error")})
+    # Tell the owner every time, so a diverted paycheck is caught before payroll.
+    try:
+        was = f"was ····{previous['account_last4']}" if previous.get("on_file") else "first time"
+        note = (f"🏦 {crew_row['name']} {'changed' if previous.get('on_file') else 'added'} their direct deposit "
+                f"account: {res['account_type']} ····{res['account_last4']} ({was}) from IP {_client_ip(request)}. "
+                "If they didn't do this, lock their account in Crew admin before the next pay run.")
+        team_messages.send(db, {"role": "worker", "id": int(crew_row["id"]), "name": crew_row["name"]}, note)
+        with db.cursor() as cur:
+            cur.execute("INSERT INTO bid_autopilot_log (bid_id, kind, ok, note) VALUES (%s, 'bank_change', TRUE, %s);",
+                        (0, f"crew={crew_row['id']} last4={res['account_last4']} ip={_client_ip(request)} {was}"))
+        db.commit()
+    except Exception as e:
+        logger.warning("bank change alert failed for crew %s: %s", worker["id"], e)
     return JSONResponse(content={"status": "ok", **res})
 
 
@@ -10681,14 +10726,24 @@ async def service_worker():
 
 
 @app.post("/api/crew/app/login")
-async def worker_app_login(phone: str = Form(...), pin: str = Form(...), db=Depends(get_db)):
+async def worker_app_login(request: Request, phone: str = Form(...), pin: str = Form(...), db=Depends(get_db)):
     digits = "".join(c for c in (phone or "") if c.isdigit())
+    keys = (f"phone:{digits}", f"ip:{_client_ip(request)}")
+    login_throttle.ensure_schema(db)
+    wait = login_throttle.locked(db, *keys)
+    if wait:
+        return JSONResponse(status_code=429, content={"status": "error",
+                            "message": f"Too many attempts. Try again in {login_throttle.human(wait)}."})
     with db.cursor() as cur:
         cur.execute("SELECT * FROM crew WHERE REGEXP_REPLACE(phone, '[^0-9]', '', 'g') = %s AND is_active = TRUE;",
                     (digits,))
         row = cur.fetchone()
     if not row or not _verify_pin((pin or "").strip(), row["pin_hash"]):
-        return JSONResponse(status_code=401, content={"status": "error", "message": "Invalid phone or PIN"})
+        engaged = login_throttle.fail(db, *keys)
+        msg = (f"Too many attempts. Locked for {login_throttle.human(engaged)}." if engaged
+               else "Invalid phone or PIN")
+        return JSONResponse(status_code=429 if engaged else 401, content={"status": "error", "message": msg})
+    login_throttle.clear(db, keys[0])
     token = auth_service.issue_session("worker", row.get("id"), row.get("email") or "", row.get("name") or "")
     resp = JSONResponse(content={"status": "ok", "name": row["name"]})
     resp.set_cookie(key=WORKER_COOKIE, value=token, httponly=True, samesite="lax", secure=_secure_cookies())

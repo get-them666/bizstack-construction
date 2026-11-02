@@ -202,8 +202,10 @@
                                 <option value="checking">Checking</option>
                                 <option value="savings">Savings</option>
                             </select>
+                            <input id="dd-pin" type="password" inputmode="numeric" maxlength="6" autocomplete="current-password" placeholder="Your sign-in PIN (to confirm it's you)" required class="w-full px-3 py-2.5 rounded-xl bg-amber-50 border border-amber-200 text-sm">
                             <p id="dd-status" class="hidden text-center text-sm font-bold"></p>
                             <button type="submit" class="w-full py-3 text-sm font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl">Save bank account</button>
+                            <p class="text-[11px] text-slate-400 text-center">Encrypted. Only the last 4 digits are ever shown again. The office is notified of every change.</p>
                         </form>
                         <button id="dd-edit" type="button" class="hidden mt-3 w-full py-2.5 text-sm font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl">Change bank account</button>
                     </div>
@@ -1237,12 +1239,12 @@
                     body: JSON.stringify({
                         account_holder: $('dd-holder').value, routing_number: $('dd-routing').value,
                         account_number: $('dd-account').value, account_number_confirm: $('dd-account2').value,
-                        account_type: $('dd-type').value
+                        account_type: $('dd-type').value, pin: $('dd-pin').value
                     })
                 });
                 st.textContent = res.ok ? '✅ Saved. Your pay will go to this account.' : (data.message || 'Could not save.');
                 st.style.color = res.ok ? '' : 'red'; st.classList.remove('hidden');
-                if (res.ok) { $('dd-account').value = ''; $('dd-account2').value = ''; await loadBank(); }
+                if (res.ok) { $('dd-account').value = ''; $('dd-account2').value = ''; $('dd-pin').value = ''; await loadBank(); }
             });
 
             async function deleteHours(id) {
