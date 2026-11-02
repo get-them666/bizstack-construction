@@ -150,6 +150,13 @@ def ensure_accounting_schema(conn) -> None:
         # labor actual. This is the join that makes A work without anyone
         # retyping hours.
         if _table_exists(conn, "projects"):
+            # cost_summary and open_job_for_bid filter on p.company, but the
+            # projects CREATE in the startup block has no company column (older
+            # databases got one by hand). Without this ALTER a fresh database
+            # raises "column p.company does not exist" inside the bid page's
+            # accounting block, which swallows the error and shows an empty
+            # invoice panel -- no invoices, no totals, nothing to explain it.
+            cur.execute("ALTER TABLE projects ADD COLUMN IF NOT EXISTS company VARCHAR(40) DEFAULT 'construction';")
             cur.execute("ALTER TABLE projects ADD COLUMN IF NOT EXISTS bid_id INTEGER;")
             cur.execute("""
                 CREATE UNIQUE INDEX IF NOT EXISTS uq_projects_bid_id
@@ -586,14 +593,24 @@ def delete_invoice(conn, invoice_id: int, company: str = "construction") -> bool
 
 
 def invoice_summary(conn, bid_id: int, company: str = "construction") -> dict:
+    """Billed / collected / outstanding for the bid.
+
+    A **draft** is excluded from billed and outstanding: it has never been sent,
+    so nobody has been asked for that money and the ledger has no entry for it.
+    Counting drafts made a duplicated custom invoice look like a real receivable
+    (billed $11,511 on a $5,005 contract) that could never be collected.
+    Void invoices are excluded for the same reason: they were withdrawn.
+    """
     rows = list_invoices(conn, bid_id, company)
     live = [r for r in rows if r["status"] != "void"]
-    billed = sum(float(r["amount"] or 0) for r in live)
-    collected = sum(float(r["collected"] or 0) for r in live)
+    billed_rows = [r for r in live if r["status"] != "draft"]
+    drafts = [r for r in live if r["status"] == "draft"]
+    billed = sum(float(r["amount"] or 0) for r in billed_rows)
+    collected = sum(float(r["collected"] or 0) for r in billed_rows)
     outstanding = billed - collected
     # Days overdue, from the oldest unpaid invoice, not from today alone.
     today = date.today()
-    overdue = [r for r in live if r["due_date"] and r["due_date"] < today
+    overdue = [r for r in billed_rows if r["due_date"] and r["due_date"] < today
                and float(r["collected"] or 0) < float(r["amount"] or 0)]
     oldest = min((r["due_date"] for r in overdue), default=None)
     return {
@@ -602,6 +619,8 @@ def invoice_summary(conn, bid_id: int, company: str = "construction") -> dict:
         "billed": round(billed, 2),
         "collected": round(collected, 2),
         "outstanding": round(outstanding, 2),
+        "draft_count": len(drafts),
+        "draft_total": round(sum(float(r["amount"] or 0) for r in drafts), 2),
         "overdue_count": len(overdue),
         "days_overdue": (today - oldest).days if oldest else 0,
     }

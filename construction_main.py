@@ -4114,6 +4114,29 @@ async def bid_invoice_create(bid_id: int, request: Request, amount: str = Form(.
     """Raise an invoice. Posting to the ledger happens after the write and is
     queued rather than allowed to block the owner from billing a job."""
     require_admin(request)
+    desc = (description or "").strip()
+    target = back if back.startswith("/bids/") else f"/bids/{bid_id}"
+    # A second click on "Raise custom invoice" used to create a second draft for
+    # the same money, which then showed up in Billed forever. Refuse an exact
+    # repeat (same amount, same description) while it is still live; void it
+    # first or change the description if it really is a separate bill.
+    if desc:
+        try:
+            wanted = float(str(amount).replace("$", "").replace(",", "").strip())
+        except (TypeError, ValueError):
+            wanted = None
+        if wanted:
+            for inv in bid_costing.list_invoices(db, bid_id, _BID_COMPANY):
+                if inv.get("status") == "void":
+                    continue
+                same_amount = abs(float(inv.get("amount") or 0) - wanted) < 0.01
+                same_desc = (inv.get("description") or "").strip().lower() == desc.lower()
+                if same_amount and same_desc:
+                    msg = (f"{inv.get('invoice_number') or 'An invoice'} already bills "
+                           f"${wanted:,.2f} for \u201c{desc}\u201d. Void that one first if it "
+                           "is wrong, or give this invoice a different description.")
+                    return RedirectResponse(url=f"{target}?error={urllib.parse.quote(msg)}",
+                                            status_code=status.HTTP_303_SEE_OTHER)
     try:
         inv = bid_costing.create_invoice(db, bid_id, amount, _BID_COMPANY, description,
                                          due_date=due_date)
@@ -4131,14 +4154,20 @@ async def bid_invoice_create(bid_id: int, request: Request, amount: str = Form(.
 
 @app.post("/api/bids/{bid_id}/invoices/{invoice_id}/status")
 async def bid_invoice_status(bid_id: int, invoice_id: int, request: Request,
-                             status: str = Form(...), collected: str = Form(""),
-                             db=Depends(get_db)):
+                             new_status: str = Form(..., alias="status"),
+                             collected: str = Form(""),
+                             back: str = Form(""), db=Depends(get_db)):
+    # The form field is ``status``, but the parameter cannot be called that:
+    # a parameter named ``status`` shadows fastapi.status and the redirect below
+    # raised "'str' object has no attribute 'HTTP_303_SEE_OTHER'".
     require_admin(request)
-    if not bid_costing.set_invoice_status(db, invoice_id, status, _BID_COMPANY,
+    if not bid_costing.set_invoice_status(db, invoice_id, new_status, _BID_COMPANY,
                                           collected or None):
         raise HTTPException(status_code=404, detail="Invoice not found")
     ledger_sync.ensure_schema(db)
     ledger_sync.sync_invoice_status(db, invoice_id, _BID_COMPANY)
+    if back.startswith("/bids/"):
+        return RedirectResponse(url=back, status_code=status.HTTP_303_SEE_OTHER)
     return RedirectResponse(url="/books", status_code=status.HTTP_303_SEE_OTHER)
 
 
@@ -9567,6 +9596,7 @@ async def bid_detail_page(bid_id: int, request: Request, db=Depends(get_db)):
         context={
             "b": bid, "costs": costs, "cost_summary": summary,
             "invoices": invoices, "inv_summary": inv_summary,
+            "error": request.query_params.get("error", ""),
             "docs": docs,
             "deposit_invoice": deposit_invoice,
             "deposit_amount": bid_deposit.deposit_amount(dict(bid)),

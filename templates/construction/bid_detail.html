@@ -680,12 +680,22 @@
 
       <section class="bg-white rounded-2xl border border-slate-200 p-5">
         <h2 class="text-sm font-bold uppercase tracking-wide text-slate-500 mb-3">Invoices</h2>
+        {% if error %}
+        <div class="mb-3 rounded-xl bg-red-50 border border-red-200 p-3 text-xs text-red-800">{{ error }}</div>
+        {% endif %}
         {% if inv_summary %}
         <div class="grid grid-cols-3 gap-3 mb-4 text-sm">
           <div><div class="text-slate-500">Billed</div><div class="font-bold text-slate-800">{{ "${:,.0f}".format(inv_summary.get('billed', 0)) }}</div></div>
           <div><div class="text-slate-500">Collected</div><div class="font-bold text-emerald-700">{{ "${:,.0f}".format(inv_summary.get('collected', 0)) }}</div></div>
           <div><div class="text-slate-500">Outstanding</div><div class="font-bold text-slate-600">{{ "${:,.0f}".format(inv_summary.get('outstanding', 0)) }}</div></div>
         </div>
+        {% if inv_summary.get('draft_count') %}
+        <p class="mb-3 text-xs text-slate-500">
+          {{ inv_summary.get('draft_count') }} draft invoice{{ '' if inv_summary.get('draft_count') == 1 else 's' }}
+          ({{ "${:,.2f}".format(inv_summary.get('draft_total', 0)) }}) not counted above — a draft has not been sent, so nothing is owed on it yet.
+          Void a duplicate to take it off this bid.
+        </p>
+        {% endif %}
         {% endif %}
 
         {% if invoices %}
@@ -695,21 +705,28 @@
             <div class="min-w-0">
               <div class="font-semibold text-slate-800 truncate">{{ inv.description or inv.invoice_number or 'Invoice' }}</div>
               <div class="text-xs text-slate-400">
-                {{ inv.kind|upper }}{% if inv.status != 'deposit' %} · {{ inv.status }}{% endif %}
+                {{ inv.kind|upper }} · {% if inv.status == 'draft' %}<span class="text-amber-600 font-semibold">draft — not sent, not billed</span>{% else %}{{ inv.status }}{% endif %}
                 {% if inv.due_date %} · due {{ inv.due_date }}{% endif %}
               </div>
             </div>
             <div class="flex items-center gap-2 shrink-0">
               <div class="font-bold text-slate-800 shrink-0">{{ "${:,.0f}".format(inv.amount or 0) }}</div>
-              {% if inv.status != 'paid' and inv.status != 'void' %}
+              {% if inv.status not in ('paid', 'void') %}
               <form method="post" action="/api/bids/{{ b.id }}/invoices/{{ inv.id }}/pay" class="inline">
                 <input name="amount" value="{{ inv.amount }}" style="display:none">
-                <button class="text-xs font-bold text-indigo-600 hover:text-indigo-700 px-1.5">✓ Paid</button>
+                <button class="text-xs font-bold text-indigo-600 hover:text-indigo-700 px-1.5">Mark paid</button>
               </form>
               {% elif inv.status == 'paid' %}
               <span class="text-[10px] text-emerald-600 font-bold">Paid</span>
               {% endif %}
-              {% if inv.status == 'void' %}
+              {% if inv.status != 'void' %}
+              <form method="post" action="/api/bids/{{ b.id }}/invoices/{{ inv.id }}/status" class="inline"
+                    onsubmit="return confirm('Void {{ inv.invoice_number or 'this invoice' }}? It stops counting toward billed and outstanding, and its ledger entry is reversed.')">
+                <input type="hidden" name="status" value="void">
+                <input type="hidden" name="back" value="/bids/{{ b.id }}">
+                <button class="text-xs font-semibold text-slate-400 hover:text-red-600 px-1.5">Void</button>
+              </form>
+              {% else %}
               <span class="text-[10px] text-slate-400">Voided</span>
               {% endif %}
             </div>

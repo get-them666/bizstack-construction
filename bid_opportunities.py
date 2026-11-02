@@ -421,10 +421,15 @@ def ensure_schema(conn) -> None:
         # from bid_costs: cost lines are priced per material unit, while scope is
         # written in the order the work happens, one line per trade task.
         cur.execute("ALTER TABLE bid_opportunities ADD COLUMN IF NOT EXISTS scope TEXT;")
+        # external_url must exist before the backfill below references it. It used
+        # to be added at the bottom of this function, so on a fresh database the
+        # UPDATE raised "column external_url does not exist" and every later
+        # ALTER in this module was skipped -- the whole bid feature was half-built.
+        cur.execute("ALTER TABLE bid_opportunities ADD COLUMN IF NOT EXISTS external_url TEXT;")
         cur.execute("""
             UPDATE bid_opportunities
                SET kind = 'permit'
-             WHERE kind IS NULL OR kind = ''
+             WHERE (kind IS NULL OR kind = '')
                AND (external_url IS NULL OR external_url = '')
                AND (reference LIKE 'P%' OR reference LIKE 'CO%')
                AND (due_date IS NULL)
@@ -456,7 +461,7 @@ def ensure_schema(conn) -> None:
         # with {id} being the `id` from GET opportunities. Without a column for
         # it there was nowhere to put that URL, so every bid on the board was a
         # dead card -- you could read it but not open it anywhere.
-        cur.execute("ALTER TABLE bid_opportunities ADD COLUMN IF NOT EXISTS external_url TEXT;")
+        # (Added above the kind backfill, which reads it.)
         # first_seen_at never moves; last_seen_at moves on every pull. Comparing
         # them is how the board knows a solicitation is one it has never seen
         # before, which is the whole point of pulling on a button rather than
