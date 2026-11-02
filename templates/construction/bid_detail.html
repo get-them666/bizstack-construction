@@ -287,10 +287,14 @@
         <h2 class="text-sm font-bold uppercase tracking-wide text-emerald-700 mb-2">Contract package</h2>
         <p class="text-xs text-slate-500 mb-3">Scope of Work with walkthrough photos, itemized pricing, and the renovation agreement with legal terms. Uploaded documents (above) take priority; otherwise auto-generated from the cost lines on this card.</p>
         <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-4">
-          {% set sow_doc = upl_by_type.get('sow', []) | first if upl_by_type.get('sow') else none %}
-          {% set quote_doc = upl_by_type.get('quote', []) | first if upl_by_type.get('quote') else none %}
-          {% set item_doc = upl_by_type.get('itemized', []) | first if upl_by_type.get('itemized') else none %}
-          {% set contract_doc = upl_by_type.get('contract', []) | first if upl_by_type.get('contract') else none %}
+          {% set sow_list = upl_by_type.get('sow', []) %}
+          {% set quote_list = upl_by_type.get('quote', []) %}
+          {% set item_list = upl_by_type.get('itemized', []) %}
+          {% set contract_list = upl_by_type.get('contract', []) %}
+          {% set sow_doc = sow_list[0] if sow_list else none %}
+          {% set quote_doc = quote_list[0] if quote_list else none %}
+          {% set item_doc = item_list[0] if item_list else none %}
+          {% set contract_doc = contract_list[0] if contract_list else none %}
           {% if sow_doc %}
           <a href="{{ sow_doc.url or ('/media/' ~ sow_doc.key) }}" target="_blank" rel="noopener"
              class="block text-center text-xs font-semibold px-3 py-2.5 bg-emerald-900 text-emerald-200 rounded-lg hover:bg-emerald-800 border border-emerald-700">
