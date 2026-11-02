@@ -1,4 +1,4 @@
-const CACHE = "buildstack-crew-v9";
+const CACHE = "buildstack-crew-v10";
 const SHELL = [
   "/app",
   "/manifest.webmanifest",

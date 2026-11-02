@@ -105,7 +105,7 @@
                 {# ── Pay crew via direct deposit ─────────────────────────── #}
                 {% if pay_lines %}
                 <div class="mt-6 bg-white rounded-3xl border border-slate-200 p-5">
-                    <p class="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">Pay crew · direct deposit (Stripe Connect)</p>
+                    <p class="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">Pay crew · direct deposit from PNC</p>
                     <div class="space-y-2">
                         {% for pl in pay_lines %}
                         <div class="flex items-center justify-between gap-3 p-3 bg-slate-50 rounded-xl border border-slate-100">
@@ -115,21 +115,13 @@
                             </div>
                             <div class="text-right">
                                 <div class="text-sm font-bold text-slate-900">${{ '{:,.2f}'.format((pl.gross_cents or 0)/100) }}</div>
-                                <span class="px-2 py-0.5 text-[10px] font-bold rounded-full {% if pl.bank_status == 'connected' %}bg-emerald-50 text-emerald-700 border border-emerald-200{% elif pl.bank_status == 'pending' %}bg-amber-50 text-amber-700 border border-amber-200{% else %}bg-slate-100 text-slate-600{% endif %}">
-                                  {% if pl.bank_status == 'connected' %}Bank connected{% elif pl.bank_status == 'pending' %}Setup pending{% else %}No bank on file{% endif %}
+                                {% set bank = bank_by_crew.get(pl.crew_id) %}
+                                <span class="px-2 py-0.5 text-[10px] font-bold rounded-full {% if bank %}bg-emerald-50 text-emerald-700 border border-emerald-200{% elif pl.bank_status == 'connected' %}bg-amber-50 text-amber-700 border border-amber-200{% else %}bg-red-50 text-red-700 border border-red-200{% endif %}">
+                                  {% if bank %}{{ bank.account_type|capitalize }} ····{{ bank.account_last4 }}{% elif pl.bank_status == 'connected' %}Stripe only{% else %}No bank on file{% endif %}
                                 </span>
                             </div>
-                            <div class="flex items-center gap-2">
-                                {% if pl.run_status == 'closed' and pl.bank_status == 'connected' %}
-                                <form method="POST" action="/api/payroll/run/{{ pl.run_id }}/pay/{{ pl.crew_id }}" class="inline"
-                                      onsubmit="return confirm('Pay {{ pl.crew_name }} ${{ "{:,.2f}".format((pl.gross_cents or 0)/100) }} by direct deposit?')">
-                                    <button class="text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 px-2 py-1.5 rounded-lg">Pay now</button>
-                                </form>
-                                {% elif pl.run_status != 'closed' %}
-                                <span class="text-[10px] text-slate-400">Run open</span>
-                                {% else %}
-                                <span class="text-[10px] text-slate-400">Add bank in crew portal</span>
-                                {% endif %}
+                            <div class="flex items-center gap-2 text-[10px] text-slate-400">
+                                {% if pl.run_status == 'open' %}Run open{% elif pl.run_status == 'paid' %}<span class="text-emerald-600 font-bold">Paid</span>{% elif bank %}In PNC file{% else %}Needs bank in app{% endif %}
                             </div>
                         </div>
                         {% endfor %}
@@ -137,7 +129,7 @@
                 </div>
                 {% elif runs and runs|selectattr('status', 'equalto', 'open')|list %}
                 <div class="mt-6 bg-white rounded-3xl border border-slate-200 p-5 text-center">
-                    <p class="text-xs text-slate-500">No payroll lines yet for this period. Create a pay run above, then pay each crew member by direct deposit.</p>
+                    <p class="text-xs text-slate-500">No payroll lines yet for this period. Create a pay run above, finalize it, then download the PNC file.</p>
                 </div>
                 {% endif %}
             </div>
@@ -150,9 +142,15 @@
                         <p class="text-sm font-bold text-slate-900">{{ r.period_start }} → {{ r.period_end }}</p>
                         <p class="text-xs text-slate-500 mt-0.5">${{ '{:,.2f}'.format((r.gross or 0)/100) }} gross · {{ r.status }}</p>
                         <div class="mt-3 flex flex-wrap gap-2">
-                            <a href="/api/payroll/run/{{ r.id }}/csv" class="px-3 py-1.5 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg">⬇ CSV</a>
+                            <a href="/api/payroll/run/{{ r.id }}/csv" class="px-3 py-1.5 text-xs font-bold text-slate-700 bg-white border border-slate-200 rounded-lg">⬇ Stub CSV</a>
                             {% if r.status == 'open' %}
-                            <form method="POST" action="/api/payroll/run/{{ r.id }}/finalize"><button class="px-3 py-1.5 text-xs font-bold text-slate-700 bg-white border border-slate-200 rounded-lg">Finalize</button></form>
+                            <form method="POST" action="/api/payroll/run/{{ r.id }}/finalize"><button class="px-3 py-1.5 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg">Finalize</button></form>
+                            {% elif dd_enabled %}
+                            <a href="/api/payroll/run/{{ r.id }}/nacha" class="px-3 py-1.5 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg">⬇ PNC ACH file</a>
+                            <a href="/api/payroll/run/{{ r.id }}/ach.csv" class="px-3 py-1.5 text-xs font-bold text-slate-700 bg-white border border-slate-200 rounded-lg">⬇ ACH CSV</a>
+                            {% if r.status != 'paid' %}
+                            <form method="POST" action="/api/payroll/run/{{ r.id }}/ach-sent" onsubmit="return confirm('Mark this run as sent to PNC? This posts the payout to the books.')"><button class="px-3 py-1.5 text-xs font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg">✓ Uploaded to PNC</button></form>
+                            {% endif %}
                             {% endif %}
                         </div>
                     </div>
@@ -161,8 +159,40 @@
                 </div>
 
                 <div class="mt-5 bg-white rounded-3xl border border-slate-200 p-5">
-                    <p class="text-sm font-bold text-slate-900 mb-2">Worker direct deposit</p>
-                    <p class="text-xs text-slate-500 leading-relaxed">Crew members set up banking themselves from their portal (Stripe Connect). Once connected, their 💳 status shows in <a href="/crew/admin" class="text-indigo-600 font-semibold">Crew</a> and you can pay them with a transfer.</p>
+                    <p class="text-sm font-bold text-slate-900 mb-2">Add hours for a crew member</p>
+                    <p class="text-xs text-slate-500 mb-3">Crew can only clock in and out. Missed punch? Add the time here — it lands approved.</p>
+                    <form method="POST" action="/api/payroll/timesheets/add" class="space-y-2">
+                        <select name="crew_id" required class="w-full text-sm border border-slate-200 rounded-lg px-3 py-2">
+                            <option value="">Crew member…</option>
+                            {% for c in crew_list %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}
+                        </select>
+                        <select name="project_id" class="w-full text-sm border border-slate-200 rounded-lg px-3 py-2">
+                            <option value="0">Job (optional)</option>
+                            {% for pj in project_list %}<option value="{{ pj.id }}">{{ pj.name }}</option>{% endfor %}
+                        </select>
+                        <div class="grid grid-cols-3 gap-2">
+                            <input type="date" name="work_date" value="{{ period_end }}" required class="col-span-1 text-sm border border-slate-200 rounded-lg px-2 py-2">
+                            <input type="number" name="hours" step="0.25" min="0.25" max="24" placeholder="Hours" required class="text-sm border border-slate-200 rounded-lg px-3 py-2">
+                            <select name="work_type" class="text-sm border border-slate-200 rounded-lg px-2 py-2"><option value="regular">Regular</option><option value="overtime">Overtime</option></select>
+                        </div>
+                        <button class="w-full py-2 text-xs font-bold text-white bg-slate-900 hover:bg-slate-800 rounded-lg">Add hours</button>
+                    </form>
+                </div>
+
+                <div class="mt-5 bg-white rounded-3xl border border-slate-200 p-5">
+                    <p class="text-sm font-bold text-slate-900 mb-2">Direct deposit from PNC</p>
+                    {% if not dd_enabled %}
+                    <p class="text-xs text-red-600 font-semibold">Not enabled: BANK_ENCRYPTION_KEY is not set on the server.</p>
+                    {% else %}
+                    <ol class="text-xs text-slate-500 space-y-1.5 list-decimal pl-4">
+                        <li>Crew add their bank in the phone app → <b>Pay</b> tab → <b>Direct deposit</b>.</li>
+                        <li>Finalize the pay run, then <b>⬇ PNC ACH file</b>.</li>
+                        <li>Upload it in PNC's ACH / payroll origination, approve, then click <b>✓ Uploaded to PNC</b> so the books record it.</li>
+                    </ol>
+                    {% if ach_missing %}
+                    <p class="mt-3 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">PNC hasn't given us the file-header IDs yet. Ask your PNC banker for ACH origination; then set <code>{{ ach_missing|join(', ') }}</code> on Railway. The file downloads either way but PNC will reject it until these are filled.</p>
+                    {% endif %}
+                    {% endif %}
                 </div>
 
                 <div class="mt-5 bg-white rounded-3xl border border-slate-200 p-5">

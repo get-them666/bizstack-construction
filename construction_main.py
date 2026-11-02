@@ -66,6 +66,7 @@ import permit_enricher
 import permit_stats
 import email_fetcher
 import bid_costing
+import direct_deposit
 import bid_deposit
 import bid_signing
 import bid_package_pdf
@@ -721,6 +722,7 @@ async def lifecycle(app: FastAPI):
     try:
         with psycopg.connect(db_url, row_factory=dict_row) as conn:
             bid_opportunities.ensure_schema(conn)
+            direct_deposit.ensure_schema(conn)
             # Order matters and is not arbitrary: costing extends
             # bid_opportunities with outcome columns and a projects FK, so it
             # runs after. takeoff and supplier_prices are independent of each
@@ -10236,15 +10238,25 @@ async def crew_create(request: Request, name: str = Form(...), phone: str = Form
 @app.post("/api/crew/{crew_id}/update")
 async def crew_update(crew_id: int, request: Request, db=Depends(get_db),
                       role: str = Form("laborer"), pay_type: str = Form("hourly"), pay_rate: str = Form("0"),
-                      is_active: str = Form("")):
+                      is_active: str = Form(""), name: str = Form(""), phone: str = Form("")):
     require_admin(request)
+    name = (name or "").strip()
+    phone = (phone or "").strip()
     with db.cursor() as cur:
+        if phone:
+            digits = "".join(ch for ch in phone if ch.isdigit())
+            cur.execute("SELECT id FROM crew WHERE REGEXP_REPLACE(phone, '[^0-9]', '', 'g') = %s AND id <> %s AND is_active = TRUE;",
+                        (digits, crew_id))
+            if cur.fetchone():
+                return RedirectResponse(url="/crew/admin?error=That+phone+number+is+already+on+another+active+crew+member",
+                                        status_code=status.HTTP_303_SEE_OTHER)
         cur.execute(
-            "UPDATE crew SET role=%s, pay_type=%s, pay_rate=%s, is_active=%s WHERE id=%s;",
-            (role, pay_type, pay_rate or 0, is_active.lower() in ("on", "true", "1", "yes"), crew_id),
+            "UPDATE crew SET role=%s, pay_type=%s, pay_rate=%s, is_active=%s, "
+            "name = COALESCE(NULLIF(%s, ''), name), phone = COALESCE(NULLIF(%s, ''), phone) WHERE id=%s;",
+            (role, pay_type, pay_rate or 0, is_active.lower() in ("on", "true", "1", "yes"), name, phone, crew_id),
         )
         db.commit()
-    return RedirectResponse(url="/crew/admin", status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(url="/crew/admin?ok=saved", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.post("/api/crew/{crew_id}/pin")
@@ -10261,10 +10273,22 @@ async def crew_pin(crew_id: int, request: Request, pin: str = Form(""), db=Depen
 @app.post("/api/crew/{crew_id}/delete")
 async def crew_delete(crew_id: int, request: Request, db=Depends(get_db)):
     require_admin(request)
+    # Timesheets, payroll lines and clock events reference crew with no cascade,
+    # so a member with any history cannot be hard-deleted. Fall back to
+    # deactivating and freeing the phone number so it can be re-added.
+    try:
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM crew_bank_accounts WHERE crew_id = %s;", (crew_id,))
+            cur.execute("DELETE FROM crew WHERE id=%s;", (crew_id,))
+            db.commit()
+        return RedirectResponse(url="/crew/admin?ok=deleted", status_code=status.HTTP_303_SEE_OTHER)
+    except Exception:
+        db.rollback()
     with db.cursor() as cur:
-        cur.execute("DELETE FROM crew WHERE id=%s;", (crew_id,))
+        cur.execute("UPDATE crew SET is_active = FALSE, phone = phone || '-removed-' || id::text, "
+                    "bank_status = 'none', bank_method = NULL WHERE id = %s;", (crew_id,))
         db.commit()
-    return RedirectResponse(url="/crew/admin?ok=deleted", status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(url="/crew/admin?ok=removed+(kept+for+payroll+history)", status_code=status.HTTP_303_SEE_OTHER)
 
 
 # --- Worker portal ----------------------------------------------------------
@@ -10406,6 +10430,9 @@ async def crew_clock_out(request: Request, clock_id: int = Form(0), lat: str = F
 async def crew_add_hours(request: Request, project_id: int = Form(0), work_date: str = Form(""), hours: str = Form(""),
                          work_type: str = Form("regular"), notes: str = Form(""), db=Depends(get_db)):
     worker = require_worker(request)
+    # Crew hours come from clocking in and out. Only the owner adds time, from /payroll.
+    return RedirectResponse(url="/crew/hours?error=Hours+come+from+clocking+in+and+out.+Ask+the+office+to+add+missed+time.",
+                            status_code=status.HTTP_303_SEE_OTHER)
     with db.cursor() as cur:
         cur.execute("SELECT * FROM crew WHERE id = %s;", (worker.get("id"),))
         crew_row = cur.fetchone()
@@ -10530,6 +10557,40 @@ async def crew_direct_deposit(request: Request, db=Depends(get_db)):
         return RedirectResponse(url="/crew/pay?error=Unable+to+open+onboarding",
                                 status_code=status.HTTP_303_SEE_OTHER)
     return RedirectResponse(url=url)
+
+
+# --- Direct deposit (ACH from the company bank account, no Stripe) -----------
+@app.get("/api/crew/app/bank")
+async def worker_app_bank_get(request: Request, db=Depends(get_db)):
+    worker = require_worker(request)
+    if not direct_deposit.enabled():
+        return JSONResponse(content={"status": "ok", "enabled": False, "on_file": False})
+    direct_deposit.ensure_schema(db)
+    return JSONResponse(content={"status": "ok", "enabled": True, **direct_deposit.masked(db, worker["id"])})
+
+
+@app.post("/api/crew/app/bank")
+async def worker_app_bank_save(request: Request, db=Depends(get_db)):
+    worker = require_worker(request)
+    if not direct_deposit.enabled():
+        return JSONResponse(status_code=503, content={"status": "error", "message": "Direct deposit isn't turned on yet. Ask the office."})
+    body = await request.json()
+    if (body.get("account_number") or "") != (body.get("account_number_confirm") or ""):
+        return JSONResponse(status_code=400, content={"status": "error", "message": "Account numbers don't match."})
+    direct_deposit.ensure_schema(db)
+    res = direct_deposit.save(db, worker["id"], body.get("account_holder", ""), body.get("routing_number", ""),
+                              body.get("account_number", ""), body.get("account_type", "checking"))
+    if not res.get("ok"):
+        return JSONResponse(status_code=400, content={"status": "error", "message": res.get("error")})
+    return JSONResponse(content={"status": "ok", **res})
+
+
+@app.post("/api/crew/app/bank/remove")
+async def worker_app_bank_remove(request: Request, db=Depends(get_db)):
+    worker = require_worker(request)
+    direct_deposit.ensure_schema(db)
+    direct_deposit.remove(db, worker["id"])
+    return JSONResponse(content={"status": "ok", "on_file": False})
 
 
 # --- Phone app (installable PWA at /app) ------------------------------------------
@@ -10719,7 +10780,10 @@ async def worker_app_clock(request: Request, project_id: int = Form(0), action: 
 @app.post("/api/crew/app/hours")
 async def worker_app_hours(request: Request, project_id: int = Form(0), work_date: str = Form(""),
                            hours: str = Form(""), work_type: str = Form("regular"), db=Depends(get_db)):
-    worker = require_worker(request)
+    require_worker(request)
+    # Crew hours come from clocking in and out. Only the owner adds time, from /payroll.
+    return JSONResponse(status_code=403, content={"status": "error",
+                        "message": "Hours come from clocking in and out. Missed time? Message the office and they'll add it."})
     _require_crew_feature(db, "hours")
     try:
         hrs = float(hours)
@@ -11182,7 +11246,7 @@ async def payroll_page(request: Request, period_start: str = "", period_end: str
         # owner can see who is owed and pay them by direct deposit.
         cur.execute("""
             SELECT pl.id, pl.run_id, pl.crew_id, pl.hours, pl.overtime_hours, pl.gross_cents,
-                   c.name AS crew_name, c.phone, c.email, c.stripe_account_id, c.bank_status,
+                   c.name AS crew_name, c.phone, c.email, c.stripe_account_id, c.bank_status, c.bank_method,
                    pr.period_start, pr.period_end, pr.status AS run_status
             FROM payroll_lines pl
             JOIN crew c ON c.id = pl.crew_id
@@ -11191,7 +11255,19 @@ async def payroll_page(request: Request, period_start: str = "", period_end: str
             ORDER BY c.name;
         """, (ps, pe))
         pay_lines = cur.fetchall()
+        cur.execute("SELECT id, name FROM crew WHERE is_active IS NOT FALSE ORDER BY name;")
+        crew_list = cur.fetchall()
+        cur.execute("SELECT id, name FROM projects WHERE status NOT IN ('done','completed','closed','cancelled') ORDER BY name;")
+        project_list = cur.fetchall()
+    direct_deposit.ensure_schema(db)
+    bank_by_crew = {}
+    if direct_deposit.enabled():
+        with db.cursor() as cur:
+            cur.execute("SELECT crew_id, account_last4, account_type FROM crew_bank_accounts;")
+            bank_by_crew = {r["crew_id"]: r for r in cur.fetchall()}
     return templates.TemplateResponse(request=request, name="payroll.html", context={
+        "crew_list": crew_list, "project_list": project_list, "bank_by_crew": bank_by_crew,
+        "dd_enabled": direct_deposit.enabled(), "ach_missing": direct_deposit.missing(),
         "user": {"email": require_auth(request)[1]},
         "period_start": ps.isoformat(), "period_end": pe.isoformat(),
         "crew_totals": crew_totals, "sheets": sheets, "runs": runs,
@@ -11519,6 +11595,84 @@ async def payroll_run_csv(run_id: int, request: Request, db=Depends(get_db)):
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="payroll-{run["period_start"]}-to-{run["period_end"]}.csv"'},
     )
+
+
+@app.post("/api/payroll/timesheets/add")
+async def payroll_add_hours(request: Request, crew_id: int = Form(...), project_id: int = Form(0),
+                            work_date: str = Form(""), hours: str = Form(""), work_type: str = Form("regular"),
+                            db=Depends(get_db)):
+    """Owner adds time for a crew member (missed punch, etc). Crew cannot add hours themselves."""
+    require_admin(request)
+    try:
+        hrs = float(hours)
+    except (TypeError, ValueError):
+        hrs = 0
+    if hrs <= 0 or hrs > 24:
+        return RedirectResponse(url="/payroll?error=Hours+must+be+between+0+and+24", status_code=status.HTTP_303_SEE_OTHER)
+    wd = work_date or date.today().isoformat()
+    with db.cursor() as cur:
+        cur.execute(
+            "INSERT INTO timesheets (crew_id, project_id, work_date, hours, work_type, source, status) "
+            "VALUES (%s,%s,%s,%s,%s,'owner','approved');",
+            (crew_id, project_id or None, wd, hrs, work_type),
+        )
+        db.commit()
+    return RedirectResponse(url=f"/payroll?period_start={wd}&ok=hours+added", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.get("/api/payroll/run/{run_id}/nacha")
+async def payroll_run_nacha(run_id: int, request: Request, db=Depends(get_db)):
+    """NACHA PPD credit file for this run -- upload to PNC ACH origination to pay crew."""
+    require_admin(request)
+    with db.cursor() as cur:
+        cur.execute("SELECT * FROM payroll_runs WHERE id = %s;", (run_id,))
+        run = cur.fetchone()
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    direct_deposit.ensure_schema(db)
+    try:
+        lines = direct_deposit.run_lines(db, run_id)
+        text, _ = direct_deposit.nacha(lines, company_name=company().get("short_name") or brand.name())
+    except direct_deposit.NotConfigured as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    return Response(content=text, media_type="text/plain",
+                    headers={"Content-Disposition": f'attachment; filename="pnc-ach-{run["period_start"]}-to-{run["period_end"]}.ach"'})
+
+
+@app.get("/api/payroll/run/{run_id}/ach.csv")
+async def payroll_run_ach_csv(run_id: int, request: Request, db=Depends(get_db)):
+    """Same payments as CSV (name, routing, account, amount) for a bank portal that imports CSV."""
+    require_admin(request)
+    with db.cursor() as cur:
+        cur.execute("SELECT * FROM payroll_runs WHERE id = %s;", (run_id,))
+        run = cur.fetchone()
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    direct_deposit.ensure_schema(db)
+    try:
+        text = direct_deposit.ach_csv(direct_deposit.run_lines(db, run_id))
+    except direct_deposit.NotConfigured as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    return Response(content=text, media_type="text/csv",
+                    headers={"Content-Disposition": f'attachment; filename="pnc-ach-{run["period_start"]}-to-{run["period_end"]}.csv"'})
+
+
+@app.post("/api/payroll/run/{run_id}/ach-sent")
+async def payroll_run_ach_sent(run_id: int, request: Request, db=Depends(get_db)):
+    """Owner confirms the ACH file was uploaded to PNC: mark the run paid and post it to the books."""
+    require_admin(request)
+    direct_deposit.ensure_schema(db)
+    with db.cursor() as cur:
+        cur.execute("UPDATE payroll_runs SET status = 'paid', ach_sent_at = now() WHERE id = %s RETURNING id;", (run_id,))
+        if not cur.fetchone():
+            raise HTTPException(status_code=404, detail="Run not found")
+        db.commit()
+    try:
+        ledger_sync.ensure_schema(db)
+        ledger_sync.sync_payroll_paid(db, run_id, company=_BID_COMPANY)
+    except Exception as e:
+        logger.warning("ledger not updated for ACH payroll run %s: %s", run_id, e)
+    return RedirectResponse(url="/payroll?ok=payroll+sent+to+PNC", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.post("/api/payroll/run/{run_id}/pay/{crew_id}")

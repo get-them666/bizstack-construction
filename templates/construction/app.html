@@ -176,37 +176,37 @@
                 </section>
 
                 <section id="tab-hours" class="hidden">
-                    <form id="hours-form" class="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 mb-5 space-y-3">
-                        <p class="text-sm font-bold text-slate-900">Log Hours</p>
-                        <div>
-                            <label class="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1">Job</label>
-                            <select id="hours-project" required class="w-full px-3 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"></select>
-                        </div>
-                        <div class="grid grid-cols-2 gap-3">
-                            <div>
-                                <label class="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1">Date</label>
-                                <input id="hours-date" type="date" required class="w-full px-3 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-                            </div>
-                            <div>
-                                <label class="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1">Hours</label>
-                                <input id="hours-count" type="number" min="0.25" max="24" step="0.25" required placeholder="8" class="w-full px-3 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-                            </div>
-                        </div>
-                        <div>
-                            <label class="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1">Type</label>
-                            <select id="hours-type" class="w-full px-3 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-                                <option value="regular">Regular</option>
-                                <option value="overtime">Overtime</option>
-                            </select>
-                        </div>
-                        <p id="hours-status" class="hidden text-center text-sm font-bold text-emerald-600"></p>
-                        <button type="submit" class="w-full py-3 text-sm font-bold text-white bg-blue-700 hover:bg-blue-800 rounded-xl">Add Hours</button>
-                    </form>
+                    <div class="bg-blue-50 border border-blue-200 rounded-2xl p-4 mb-5 text-sm text-blue-800">
+                        <p class="font-bold">Hours come from clocking in and out.</p>
+                        <p class="text-xs mt-1 text-blue-700">Missed a punch? Message the office from the 💬 Office tab and they'll add the time.</p>
+                    </div>
+                    <form id="hours-form" class="hidden"><select id="hours-project"></select><input id="hours-date"><input id="hours-count"><select id="hours-type"></select><p id="hours-status"></p></form>
                     <p class="text-sm font-bold text-slate-900 mb-3">Recent Timesheets</p>
                     <div id="hours-list" class="space-y-3"></div>
                 </section>
 
                 <section id="tab-pay" class="hidden">
+                    <div id="dd-card" class="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 mb-5">
+                        <div class="flex items-center justify-between">
+                            <p class="text-sm font-bold text-slate-900">🏦 Direct deposit</p>
+                            <span id="dd-badge" class="px-2 py-0.5 text-[10px] font-bold rounded-full bg-slate-100 text-slate-600">Not set up</span>
+                        </div>
+                        <p id="dd-summary" class="hidden mt-2 text-sm text-slate-700"></p>
+                        <p class="mt-1 text-xs text-slate-500">Your pay goes straight to this account from the company's bank. Use the routing and account numbers from the bottom of a check or your banking app.</p>
+                        <form id="dd-form" class="mt-3 space-y-2">
+                            <input id="dd-holder" type="text" autocomplete="name" placeholder="Name on the account" required class="w-full px-3 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm">
+                            <input id="dd-routing" type="text" inputmode="numeric" pattern="[0-9]{9}" maxlength="9" placeholder="Routing number (9 digits)" required class="w-full px-3 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm">
+                            <input id="dd-account" type="password" inputmode="numeric" maxlength="17" placeholder="Account number" required class="w-full px-3 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm">
+                            <input id="dd-account2" type="password" inputmode="numeric" maxlength="17" placeholder="Account number again" required class="w-full px-3 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm">
+                            <select id="dd-type" class="w-full px-3 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm">
+                                <option value="checking">Checking</option>
+                                <option value="savings">Savings</option>
+                            </select>
+                            <p id="dd-status" class="hidden text-center text-sm font-bold"></p>
+                            <button type="submit" class="w-full py-3 text-sm font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl">Save bank account</button>
+                        </form>
+                        <button id="dd-edit" type="button" class="hidden mt-3 w-full py-2.5 text-sm font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl">Change bank account</button>
+                    </div>
                     <p id="pay-title" class="text-sm font-bold text-slate-900 mb-3">Pay History</p>
                     <div id="pay-list" class="space-y-3"></div>
                 </section>
@@ -447,7 +447,25 @@
             });
         }
 
+        async function loadBank() {
+            const card = $('dd-card');
+            if (!card) return;
+            const { res, data } = await api('/api/crew/app/bank');
+            if (!res.ok || data.enabled === false) { card.classList.add('hidden'); return; }
+            card.classList.remove('hidden');
+            const form = $('dd-form'), badge = $('dd-badge'), summary = $('dd-summary'), edit = $('dd-edit');
+            if (data.on_file) {
+                badge.textContent = '✓ Set up'; badge.className = 'px-2 py-0.5 text-[10px] font-bold rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200';
+                summary.textContent = `${data.account_holder} · ${data.account_type} ····${data.account_last4} · routing ${data.routing_number}`;
+                summary.classList.remove('hidden'); form.classList.add('hidden'); edit.classList.remove('hidden');
+            } else {
+                badge.textContent = 'Not set up'; badge.className = 'px-2 py-0.5 text-[10px] font-bold rounded-full bg-amber-50 text-amber-700 border border-amber-200';
+                summary.classList.add('hidden'); form.classList.remove('hidden'); edit.classList.add('hidden');
+            }
+        }
+
         function renderPay() {
+            loadBank();
             const list = $('pay-list');
             list.innerHTML = '';
             if (!state.pay.length) {
@@ -1208,6 +1226,23 @@
                 else { status.textContent = '✅ Hours logged'; }
                 status.classList.remove('hidden');
                 await loadMe();
+            });
+
+            $('dd-edit')?.addEventListener('click', () => { $('dd-form').classList.remove('hidden'); $('dd-edit').classList.add('hidden'); });
+            $('dd-form')?.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const st = $('dd-status'); st.classList.add('hidden');
+                const { res, data } = await api('/api/crew/app/bank', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        account_holder: $('dd-holder').value, routing_number: $('dd-routing').value,
+                        account_number: $('dd-account').value, account_number_confirm: $('dd-account2').value,
+                        account_type: $('dd-type').value
+                    })
+                });
+                st.textContent = res.ok ? '✅ Saved. Your pay will go to this account.' : (data.message || 'Could not save.');
+                st.style.color = res.ok ? '' : 'red'; st.classList.remove('hidden');
+                if (res.ok) { $('dd-account').value = ''; $('dd-account2').value = ''; await loadBank(); }
             });
 
             async function deleteHours(id) {
