@@ -1,4 +1,4 @@
-const CACHE = "buildstack-crew-v3";
+const CACHE = "buildstack-crew-v4";
 const SHELL = [
   "/app",
   "/manifest.webmanifest",
@@ -10,10 +10,18 @@ const SHELL = [
   "https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"
 ];
 
+// Crew pages cached for offline use (app shell).
+const CREW_PAGES = [
+  "/crew/dashboard",
+  "/crew/hours",
+  "/crew/pay",
+  "/crew"
+];
+
 self.addEventListener("install", (event) => {
   event.waitUntil(
     caches.open(CACHE).then((cache) => {
-      return Promise.allSettled(SHELL.map((url) => cache.add(url)));
+      return Promise.allSettled([...SHELL, ...CREW_PAGES].map((url) => cache.add(url)));
     }).then(() => self.skipWaiting())
   );
 });
