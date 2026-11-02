@@ -2356,8 +2356,189 @@ def build_copilot_handlers(db, owner_email: str):
     handlers.update(copilot_ops.build_task_tools(db, owner_email))
     handlers.update(copilot_ops.build_web_search_tools())
     handlers.update(copilot_ops.build_contact_tools(db, owner_email))
+    handlers.update(_bid_document_tools(db, owner_email))
     handlers["calculate"] = copilot_ops.calculate
     return handlers
+
+
+# --- Copilot tools: bid documents + contact research --------------------------
+def _bid_document_tools(db, owner_email: str):
+    """Copilot-only tools that let the bot research a bid's contact info and
+    generate/store SOW, quote, and itemized documents for the job."""
+
+    def research_bid_contact(bid_id: int = 0) -> dict:
+        """Look up the owner of record and contact info for a bid's property
+        address, then save name/email/phone onto the bid record.
+
+        Runs: skip_trace_owner (name) -> contact_lookup (email/phone) -> save
+        to bid_opportunities.contact_name / contact_email / contact_phone.
+        Everything is cached per address so re-running is free. Writes only --
+        nothing is sent to the customer.
+        """
+        import skiptrace_service as sts
+
+        try:
+            bid_id = int(bid_id)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": f"Invalid bid id: {bid_id!r}"}
+
+        with db.cursor() as cur:
+            cur.execute(
+                "SELECT location, contact_name, contact_email, contact_phone FROM bid_opportunities "
+                "WHERE id = %s AND company = %s", (bid_id, _BID_COMPANY))
+            bid = cur.fetchone()
+        if not bid:
+            return {"ok": False, "error": f"Bid #{bid_id} not found."}
+
+        address = bid.get("location") or ""
+        if not address:
+            return {"ok": False, "error": f"Bid #{bid_id} has no property address."}
+
+        parsed = sts.parse_address(address)
+        if not parsed["ok"]:
+            return {"ok": False, "error": f"Could not read address: {parsed['why']}"}
+
+        key = sts.normalize_address(parsed["street"], parsed["city"], parsed["state"], parsed["zipcode"])
+
+        # 1. Skip trace for owner name
+        with db.cursor() as cur:
+            sts.ensure_schema(cur)
+            cached = sts.cache_get(cur, key)
+        owner_name = None
+        if cached is not None:
+            owner_name = (cached.get("owner_of_record") or "").strip() or None
+        else:
+            try:
+                result = sts.trace_address(parsed["street"], parsed["city"], parsed["state"], parsed["zipcode"])
+                with db.cursor() as cur:
+                    sts.cache_put(cur, key, result)
+                    sts.audit(cur, owner_email, key, result, cached=False)
+                db.commit()
+                owner_name = (result.get("owner_of_record") or "").strip() or None
+            except sts.ProviderError as e:
+                db.rollback()
+                return {"ok": False, "error": f"Skip trace failed: {e.message}"}
+
+        # 2. Skip Sherpa trace for email/phone (one credit per address)
+        email = None
+        phone = None
+        try:
+            trace = skip_sherpa_service.trace(parsed["street"], parsed["city"],
+                                              parsed["state"], parsed["zipcode"])
+            if trace.get("ok") and trace.get("found"):
+                emails = trace.get("emails") or []
+                phones = trace.get("phones") or []
+                email = emails[0] if emails else None
+                usable = [p for p in phones if p.get("usable")]
+                phone = (usable[0]["e164"] if usable else
+                         (trace.get("raw_phone") or "").strip() or None)
+        except skip_sherpa_service.ProviderError as e:
+            # Not a hard failure -- the name may still be useful.
+            pass
+
+        # 3. Save to bid record
+        with db.cursor() as cur:
+            cur.execute("""
+                UPDATE bid_opportunities
+                   SET contact_name = COALESCE(%s, contact_name),
+                       contact_email = COALESCE(NULLIF(%s, ''), contact_email),
+                       contact_phone = COALESCE(NULLIF(%s, ''), contact_phone),
+                       updated_at = now()
+                 WHERE id = %s AND company = %s
+            """, (owner_name, email or "", phone or "", bid_id, _BID_COMPANY))
+        db.commit()
+
+        return {
+            "ok": True,
+            "bid_id": bid_id,
+            "address": address,
+            "owner_name": owner_name,
+            "email": email,
+            "phone": phone,
+            "note": "Contact info saved to the bid record. Nothing was sent to the customer.",
+        }
+
+    def generate_bid_documents(bid_id: int = 0) -> dict:
+        """Generate SOW, itemized pricing, and contract PDFs for a bid and
+        store them as job documents so they can be downloaded from the bid card.
+
+        Reads the bid's cost lines and builds the three documents from them,
+        then stores each as a bid_document with type sow / itemized / contract.
+        Idempotent: regenerates and replaces existing documents of the same type.
+        """
+        try:
+            bid_id = int(bid_id)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": f"Invalid bid id: {bid_id!r}"}
+
+        try:
+            bid_costing.ensure_accounting_schema(db)
+            costs = bid_costing.cost_lines(db, bid_id, _BID_COMPANY)
+        except Exception as e:
+            return {"ok": False, "error": f"Could not read cost lines: {e}"}
+
+        bid = bid_opportunities.get_bid(db, bid_id, _BID_COMPANY)
+        if not bid:
+            return {"ok": False, "error": f"Bid #{bid_id} not found."}
+
+        bid_dict = dict(bid)
+        created = []
+
+        # Scope of Work
+        try:
+            pdf = build_bid_documents.build_scope_of_work(bid_dict, costs, [])
+            stored = photo_store.save(pdf, f"sow-{uuid.uuid4().hex[:8]}.pdf",
+                                      key_prefix=f"bids/{bid_id}")
+            bid_opportunities.add_document(db, bid_id, _BID_COMPANY,
+                                           filename="Scope of Work.pdf",
+                                           key=stored["key"], url=stored["url"],
+                                           content_type="application/pdf",
+                                           bytes_count=len(pdf),
+                                           uploaded_by=owner_email,
+                                           document_type="sow")
+            created.append("sow")
+        except Exception as e:
+            return {"ok": False, "error": f"SOW generation failed: {e}"}
+
+        # Itemized Pricing
+        try:
+            pdf = build_bid_documents.build_itemized_pricing(bid_dict, costs)
+            stored = photo_store.save(pdf, f"itemized-{uuid.uuid4().hex[:8]}.pdf", key_prefix=f"bids/{bid_id}")
+            bid_opportunities.add_document(db, bid_id, _BID_COMPANY,
+                                           filename="Itemized Pricing.pdf",
+                                           key=stored["key"], url=stored["url"],
+                                           content_type="application/pdf",
+                                           bytes_count=len(pdf),
+                                           uploaded_by=owner_email,
+                                           document_type="itemized")
+            created.append("itemized")
+        except Exception as e:
+            return {"ok": False, "error": f"Itemized pricing generation failed: {e}"}
+
+        # Contract
+        try:
+            pdf = build_bid_documents.build_contract(bid_dict, costs, [], signature=None)
+            stored = photo_store.save(pdf, f"contract-{uuid.uuid4().hex[:8]}.pdf", key_prefix=f"bids/{bid_id}")
+            bid_opportunities.add_document(db, bid_id, _BID_COMPANY,
+                                           filename="Contract.pdf",
+                                           key=stored["key"], url=stored["url"],
+                                           content_type="application/pdf",
+                                           bytes_count=len(pdf),
+                                           uploaded_by=owner_email,
+                                           document_type="contract")
+            created.append("contract")
+        except Exception as e:
+            return {"ok": False, "error": f"Contract generation failed: {e}"}
+
+        return {
+            "ok": True,
+            "bid_id": bid_id,
+            "documents": created,
+            "note": "SOW, itemized pricing, and contract generated and stored on the bid.",
+        }
+
+    return {"research_bid_contact": research_bid_contact,
+            "generate_bid_documents": generate_bid_documents}
 
 
 # --- Public marketing pages -------------------------------------------------
@@ -9374,7 +9555,7 @@ async def bid_delete(bid_id: int, request: Request, db=Depends(get_db)):
 
 @app.post("/api/bids/{bid_id}/documents")
 async def bid_document_upload(bid_id: int, request: Request, doc: UploadFile = Form(...),
-                              db=Depends(get_db)):
+                              doc_type: str = Form("other"), db=Depends(get_db)):
     require_admin(request)
     bid_opportunities.ensure_schema(db)
     bid = bid_opportunities.get_bid(db, bid_id, _BID_COMPANY)
@@ -9394,7 +9575,8 @@ async def bid_document_upload(bid_id: int, request: Request, doc: UploadFile = F
                                    key=stored["key"], url=stored["url"],
                                    content_type=doc.content_type,
                                    bytes_count=len(raw),
-                                   uploaded_by=_owner_email())
+                                   uploaded_by=_owner_email(),
+                                   document_type=doc_type)
     back = request.headers.get("referer") or f"/bids/{bid_id}"
     return RedirectResponse(url=back, status_code=status.HTTP_303_SEE_OTHER)
 

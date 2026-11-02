@@ -278,25 +278,54 @@
         {% endif %}
       </section>
 
-      {# ── Contract package: SOW, itemized pricing, contract ────────────── #}
+      {# ── Contract package: uploaded docs first, auto-generated fallback ──── #}
+      {% set upl_by_type = {} %}
+      {% for d in docs %}
+      {% set _ = upl_by_type.setdefault(d.document_type or 'other', []) %}
+      {% endfor %}
       <section class="bg-white rounded-2xl border border-emerald-200 p-5">
         <h2 class="text-sm font-bold uppercase tracking-wide text-emerald-700 mb-2">Contract package</h2>
-        <p class="text-xs text-slate-500 mb-3">Scope of Work with walkthrough photos, itemized pricing, and the renovation agreement with legal terms.</p>
+        <p class="text-xs text-slate-500 mb-3">Scope of Work with walkthrough photos, itemized pricing, and the renovation agreement with legal terms. Uploaded documents (above) take priority; otherwise auto-generated from the cost lines on this card.</p>
         <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-4">
+          {% set sow_doc = upl_by_type.get('sow', []) | first if upl_by_type.get('sow') else none %}
+          {% set quote_doc = upl_by_type.get('quote', []) | first if upl_by_type.get('quote') else none %}
+          {% set item_doc = upl_by_type.get('itemized', []) | first if upl_by_type.get('itemized') else none %}
+          {% set contract_doc = upl_by_type.get('contract', []) | first if upl_by_type.get('contract') else none %}
+          {% if sow_doc %}
+          <a href="{{ sow_doc.url or ('/media/' ~ sow_doc.key) }}" target="_blank" rel="noopener"
+             class="block text-center text-xs font-semibold px-3 py-2.5 bg-emerald-900 text-emerald-200 rounded-lg hover:bg-emerald-800 border border-emerald-700">
+            📄 Scope of Work
+          </a>
+          {% else %}
           <a href="/bids/{{ b.id }}/sow.pdf" target="_blank" rel="noopener"
              class="block text-center text-xs font-semibold px-3 py-2.5 bg-slate-900 text-white rounded-lg hover:bg-slate-700">
             📄 Scope of Work
           </a>
+          {% endif %}
+          {% if quote_doc %}
+          <a href="{{ quote_doc.url or ('/media/' ~ quote_doc.key) }}" target="_blank" rel="noopener"
+             class="block text-center text-xs font-semibold px-3 py-2.5 bg-emerald-900 text-emerald-200 rounded-lg hover:bg-emerald-800 border border-emerald-700">
+            💰 Quote
+          </a>
+          {% else %}
           <a href="/bids/{{ b.id }}/itemized.pdf" target="_blank" rel="noopener"
              class="block text-center text-xs font-semibold px-3 py-2.5 bg-slate-900 text-white rounded-lg hover:bg-slate-700">
             💰 Itemized Pricing
           </a>
+          {% endif %}
+          {% if contract_doc %}
+          <a href="{{ contract_doc.url or ('/media/' ~ contract_doc.key) }}" target="_blank" rel="noopener"
+             class="block text-center text-xs font-semibold px-3 py-2.5 bg-emerald-900 text-emerald-200 rounded-lg hover:bg-emerald-800 border border-emerald-700">
+            ✍️ Contract
+          </a>
+          {% else %}
           <a href="/bids/{{ b.id }}/contract.pdf" target="_blank" rel="noopener"
              class="block text-center text-xs font-semibold px-3 py-2.5 bg-slate-900 text-white rounded-lg hover:bg-slate-700">
             ✍️ Contract
           </a>
+          {% endif %}
         </div>
-        <p class="text-[11px] text-slate-400">Photos taken at the walkthrough are embedded in the Scope of Work and Contract. Crew upload them from the 📷 tab in the crew app.</p>
+        <p class="text-[11px] text-slate-400">Photos taken at the walkthrough are embedded in the auto-generated Scope of Work and Contract. Upload your own documents above to replace the templates for any job.</p>
       </section>
 
 
@@ -603,27 +632,45 @@
       </section>
 
       <section class="bg-white rounded-2xl border border-slate-200 p-5">
-        <h2 class="text-sm font-bold uppercase tracking-wide text-slate-500 mb-3">Documents</h2>
-        <p class="text-xs text-slate-500 mb-3">Plans, specs, addenda, bid forms. Downloaded from BuildingConnected (or elsewhere) and uploaded here so they're next to your bid.</p>
-        {% if docs %}
-        <ul class="space-y-2 text-sm mb-4">
-          {% for d in docs %}
-          <li class="flex items-center justify-between gap-2 py-1.5 border-b border-slate-50">
-            <a href="{{ d.url or ('/media/' ~ d.key) }}" target="_blank" rel="noopener" class="min-w-0 truncate font-semibold text-indigo-700 hover:underline">{{ d.filename }}</a>
-            <form method="post" action="/api/bids/documents/{{ d.id }}/delete" onsubmit="return confirm('Remove this document?')">
-              <button class="text-xs text-red-600 hover:underline">Remove</button>
-            </form>
-          </li>
-          {% endfor %}
-        </ul>
-        {% else %}
-        <p class="text-sm text-slate-500 mb-4">No documents yet.</p>
-        {% endif %}
-
-        <form method="post" action="/api/bids/{{ b.id }}/documents" enctype="multipart/form-data" class="grid grid-cols-1 gap-2 pt-4 border-t border-slate-100">
-          <input type="file" name="doc" accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.webp,.tif,.tiff,.dwg,.dxf,.zip" class="text-sm text-slate-600">
-          <button class="text-sm font-semibold px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700">Upload document</button>
+        <h2 class="text-sm font-bold uppercase tracking-wide text-slate-500 mb-3">Job documents</h2>
+        <p class="text-xs text-slate-500 mb-3">Upload the SOW, quote, itemized pricing, plans, and contract for this job. Uploaded documents are linked here and used in place of the auto-generated templates.</p>
+        {% set docs_by_type = {} %}
+        {% for d in docs %}
+        {% set _ = docs_by_type.setdefault(d.document_type or 'other', []).append(d) %}
+        {% endfor %}
+        {% set doc_types = [('sow', 'Scope of Work'), ('quote', 'Quote'), ('itemized', 'Itemized Pricing'), ('contract', 'Contract'), ('plans', 'Plans & Specs'), ('other', 'Other')] %}
+        <form method="post" action="/api/bids/{{ b.id }}/documents" enctype="multipart/form-data" class="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-4 border-t border-slate-100 mb-6">
+          <input type="file" name="doc" accept=".pdf,.doc,.docx,.jpg,.jpeg,.png" class="text-sm text-slate-600 sm:col-span-2">
+          <select name="doc_type" class="text-sm border border-slate-200 rounded-lg px-3 py-2 bg-white">
+            {% for dt, label in doc_types %}
+            <option value="{{ dt }}">{{ label }}</option>
+            {% endfor %}
+          </select>
+          <button class="text-sm font-semibold px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 sm:col-span-2">Upload document</button>
         </form>
+        {% for dt, label in doc_types %}
+        {% set tdocs = docs_by_type.get(dt, []) %}
+        {% if tdocs %}
+        <div class="mb-4">
+          <p class="text-xs font-bold text-slate-500 uppercase tracking-wide mb-2">{{ label }}</p>
+          <ul class="space-y-1 text-sm">
+            {% for d in tdocs %}
+            <li class="flex items-center justify-between gap-2 py-1.5 border-b border-slate-50">
+              <a href="{{ d.url or ('/media/' ~ d.key) }}" target="_blank" rel="noopener" class="min-w-0 truncate font-semibold text-indigo-700 hover:underline">{{ d.filename }}</a>
+              <div class="flex items-center gap-2">
+                <form method="post" action="/api/bids/documents/{{ d.id }}/delete" onsubmit="return confirm('Remove this document?')">
+                  <button class="text-xs text-red-600 hover:underline">Remove</button>
+                </form>
+              </div>
+            </li>
+            {% endfor %}
+          </ul>
+        </div>
+        {% endif %}
+        {% endfor %}
+        {% if not docs %}
+        <p class="text-sm text-slate-500">No documents uploaded yet. Add the SOW, quote, and itemized pricing for this job.</p>
+        {% endif %}
       </section>
 
       <section class="bg-white rounded-2xl border border-slate-200 p-5">

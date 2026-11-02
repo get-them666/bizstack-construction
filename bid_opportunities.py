@@ -506,11 +506,14 @@ def ensure_schema(conn) -> None:
                 url TEXT,
                 content_type VARCHAR(120),
                 bytes INTEGER,
+                document_type VARCHAR(40) DEFAULT 'other',
                 uploaded_by VARCHAR(255),
                 uploaded_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        cur.execute("ALTER TABLE bid_documents ADD COLUMN IF NOT EXISTS document_type VARCHAR(40) DEFAULT 'other';")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_bid_documents_bid ON bid_documents(bid_id);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_bid_documents_type ON bid_documents(bid_id, document_type);")
     conn.commit()
 
 
@@ -666,7 +669,8 @@ def deduplicate_bids(conn, company: str = "construction") -> dict:
 
 def add_document(conn, bid_id: int, company: str, filename: str, key: str,
                   url: str | None = None, content_type: str | None = None,
-                  bytes_count: int | None = None, uploaded_by: str = "") -> int:
+                  bytes_count: int | None = None, uploaded_by: str = "",
+                  document_type: str = "other") -> int:
     # Don't duplicate the same file on the same bid
     with conn.cursor() as cur:
         cur.execute("""
@@ -682,10 +686,10 @@ def add_document(conn, bid_id: int, company: str, filename: str, key: str,
             row = cur.fetchone()
             return row["id"] if row else 0
         cur.execute("""
-            INSERT INTO bid_documents (bid_id, company, filename, key, url, content_type, bytes, uploaded_by)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+            INSERT INTO bid_documents (bid_id, company, filename, key, url, content_type, bytes, document_type, uploaded_by)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
             RETURNING id
-        """, (bid_id, company, filename, key, url, content_type, bytes_count, uploaded_by))
+        """, (bid_id, company, filename, key, url, content_type, bytes_count, document_type, uploaded_by))
         row = cur.fetchone()
     conn.commit()
     return row["id"]
