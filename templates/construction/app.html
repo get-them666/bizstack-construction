@@ -98,8 +98,8 @@
                 </div>
             </header>
 
-            <!-- Install prompt: prominent banner so crew can add the app to their home screen -->
-            <div id="install-banner" class="px-5 py-4 bg-indigo-600 border-b border-indigo-400 text-white text-sm font-medium flex items-center justify-between gap-3 shadow-md shadow-indigo-200">
+            <!-- Install prompt: shown only when the browser can install the PWA -->
+            <div id="install-banner" class="hidden px-5 py-4 bg-indigo-600 border-b border-indigo-400 text-white text-sm font-medium flex items-center justify-between gap-3 shadow-md shadow-indigo-200">
                 <div class="flex items-center gap-3">
                     <span class="text-indigo-100">📱</span>
                     <span>Install BuildStack Crew on this phone</span>
@@ -1067,11 +1067,15 @@
             const iosClose = $('ios-install-close');
             const isIOS = /iPad|iPhone|iPod/.test(navigator.platform) ||
                           (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+            const isStandalone = window.matchMedia('(display-mode: standalone)').matches ||
+                                 navigator.standalone === true;
 
-            if (installBanner && installBtn) {
+            // Already installed as an app: nothing to show.
+            if (isStandalone && installBanner) {
+                installBanner.classList.add('hidden');
+            } else if (installBanner && installBtn) {
                 if (isIOS) {
                     // iOS doesn't fire beforeinstallprompt — show Share → Add to Home Screen.
-                    installBanner.classList.add('hidden');
                     iosInstall.classList.remove('hidden');
                     iosClose?.addEventListener('click', () => { iosInstall.classList.add('hidden'); });
                 } else {
