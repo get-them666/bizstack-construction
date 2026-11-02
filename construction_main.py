@@ -69,6 +69,7 @@ import bid_costing
 import bid_deposit
 import bid_signing
 import bid_package_pdf
+import build_bid_documents
 import auth0_service
 import auth0_login
 import material_picker
@@ -3877,6 +3878,216 @@ async def bid_invoice_status(bid_id: int, invoice_id: int, request: Request,
     ledger_sync.ensure_schema(db)
     ledger_sync.sync_invoice_status(db, invoice_id, _BID_COMPANY)
     return RedirectResponse(url="/books", status_code=status.HTTP_303_SEE_OTHER)
+
+
+# --- Bid invoicing: the 30 / 40 / 30 payment schedule ------------------------
+# Deposit (30%) is handled by bid_deposit. These two raise the progress (40%)
+# and final (30%) invoices, and the pay endpoint records money collected against
+# any invoice. Each is idempotent: a kind that already has a live invoice is a
+# no-op redirect rather than a duplicate bill.
+
+
+def _contract_amount(bid: dict) -> float:
+    try:
+        return float(bid.get("contract_value") or bid.get("bid_amount") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _billed_excluding_void(conn, bid_id: int) -> float:
+    total = 0.0
+    for inv in bid_costing.list_invoices(conn, bid_id, _BID_COMPANY):
+        if inv.get("status") != "void":
+            total += float(inv.get("amount") or 0)
+    return total
+
+
+@app.post("/api/bids/{bid_id}/invoices/progress")
+async def bid_invoice_progress(bid_id: int, request: Request, db=Depends(get_db)):
+    """Raise the 40% progress invoice (rough-in, drywall, substrate complete)."""
+    require_admin(request)
+    bid = bid_opportunities.get_bid(db, bid_id, _BID_COMPANY)
+    if not bid:
+        raise HTTPException(status_code=404, detail="Bid not found")
+    contract = _contract_amount(bid)
+    if contract <= 0:
+        raise HTTPException(status_code=400, detail="Set the bid amount before billing progress.")
+    for inv in bid_costing.list_invoices(db, bid_id, _BID_COMPANY):
+        if inv.get("kind") == "progress" and inv.get("status") != "void":
+            return RedirectResponse(url=f"/bids/{bid_id}", status_code=status.HTTP_303_SEE_OTHER)
+    amount = round(contract * bid_package_pdf.PROGRESS_PCT / 100.0, 2)
+    inv = bid_costing.create_invoice(
+        db, bid_id, amount, _BID_COMPANY,
+        description=(f"{bid_package_pdf.PROGRESS_PCT}% progress invoice — "
+                     "rough-in, drywall and substrate complete"),
+        kind="progress",
+    )
+    bid_costing.set_invoice_status(db, inv["id"], "sent", _BID_COMPANY)
+    ledger_sync.ensure_schema(db)
+    ledger_sync.sync_invoice(db, inv["id"], _BID_COMPANY)
+    return RedirectResponse(url=f"/bids/{bid_id}", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/api/bids/{bid_id}/invoices/final")
+async def bid_invoice_final(bid_id: int, request: Request, db=Depends(get_db)):
+    """Raise the 30% final invoice (due on final walkthrough and acceptance)."""
+    require_admin(request)
+    bid = bid_opportunities.get_bid(db, bid_id, _BID_COMPANY)
+    if not bid:
+        raise HTTPException(status_code=404, detail="Bid not found")
+    contract = _contract_amount(bid)
+    if contract <= 0:
+        raise HTTPException(status_code=400, detail="Set the bid amount before billing final.")
+    remaining = round(max(0.0, contract - _billed_excluding_void(db, bid_id)), 2)
+    if remaining <= 0:
+        raise HTTPException(status_code=400, detail="Everything on this bid is already billed.")
+    for inv in bid_costing.list_invoices(db, bid_id, _BID_COMPANY):
+        if inv.get("kind") == "final" and inv.get("status") != "void":
+            return RedirectResponse(url=f"/bids/{bid_id}", status_code=status.HTTP_303_SEE_OTHER)
+    inv = bid_costing.create_invoice(
+        db, bid_id, remaining, _BID_COMPANY,
+        description=(f"{bid_package_pdf.FINAL_PCT}% final invoice — "
+                     "due on final walkthrough and acceptance"),
+        kind="final",
+    )
+    bid_costing.set_invoice_status(db, inv["id"], "sent", _BID_COMPANY)
+    ledger_sync.ensure_schema(db)
+    ledger_sync.sync_invoice(db, inv["id"], _BID_COMPANY)
+    return RedirectResponse(url=f"/bids/{bid_id}", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/api/bids/{bid_id}/invoices/{invoice_id}/pay")
+async def bid_invoice_pay(bid_id: int, invoice_id: int, request: Request,
+                          amount: str = Form(""), method: str = Form("ach"),
+                          db=Depends(get_db)):
+    """Record money collected against an invoice and post it to the books."""
+    require_admin(request)
+    inv = None
+    for i in bid_costing.list_invoices(db, bid_id, _BID_COMPANY):
+        if i["id"] == invoice_id:
+            inv = i
+            break
+    if not inv:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    inv_amt = float(inv.get("amount") or 0)
+    try:
+        pay = max(0.0, min(float(amount or inv_amt), inv_amt))
+    except (TypeError, ValueError):
+        pay = inv_amt
+    if pay <= 0:
+        pay = inv_amt
+    new_status = "paid" if pay >= inv_amt else "partial"
+    bid_costing.set_invoice_status(db, invoice_id, new_status, _BID_COMPANY, pay)
+    ledger_sync.ensure_schema(db)
+    ledger_sync.sync_invoice_status(db, invoice_id, _BID_COMPANY)
+    return RedirectResponse(url=f"/bids/{bid_id}", status_code=status.HTTP_303_SEE_OTHER)
+
+
+# --- Bid documents: SOW / itemized / contract as web PDFs ---------------------
+# The CLI script in build_bid_documents.py builds all three. These routes expose
+# the same documents so the owner can download them from the bid card, with
+# walkthrough photos embedded in the SOW and contract.
+
+
+def _project_photo_paths(db, bid_id: int) -> list:
+    """Local temp file paths for the walkthrough photos on this bid's project."""
+    import tempfile
+    project = bid_costing.open_job_for_bid(db, bid_id, _BID_COMPANY)
+    if not project:
+        return []
+    with db.cursor() as cur:
+        cur.execute("SELECT filename, caption FROM job_photos WHERE project_id = %s "
+                    "ORDER BY created_at DESC", (project["id"],))
+        rows = cur.fetchall()
+    paths = []
+    tmpdir = tempfile.mkdtemp(prefix=f"buildstack-bid-{bid_id}-")
+    for i, r in enumerate(rows):
+        try:
+            body, content_type = photo_store.read(r["filename"])
+        except (FileNotFoundError, Exception):
+            continue
+        ext = os.path.splitext(r["filename"] or "")[1] or ".jpg"
+        path = os.path.join(tmpdir, f"photo-{i:03d}{ext}")
+        with open(path, "wb") as fh:
+            fh.write(body)
+        paths.append((path, r["caption"] or f"Walkthrough photo {i + 1}"))
+    return paths
+
+
+@app.get("/bids/{bid_id}/sow.pdf")
+async def bid_sow_pdf(bid_id: int, request: Request, db=Depends(get_db)):
+    """Scope of Work PDF, with walkthrough photos embedded."""
+    require_admin(request)
+    bid = bid_opportunities.get_bid(db, bid_id, _BID_COMPANY)
+    if not bid:
+        raise HTTPException(status_code=404, detail="Bid not found")
+    try:
+        bid_costing.ensure_accounting_schema(db)
+        costs = bid_costing.cost_lines(db, bid_id, _BID_COMPANY)
+    except Exception:
+        costs = []
+    photos = _project_photo_paths(db, bid_id)
+    pdf = build_bid_documents.build_scope_of_work(dict(bid), costs, [p for p, _ in photos])
+    name = f"BuildStack-SOW-Bid-{bid_id}.pdf"
+    return Response(content=pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f'inline; filename="{name}"',
+                             "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"})
+
+
+@app.get("/bids/{bid_id}/itemized.pdf")
+async def bid_itemized_pdf(bid_id: int, request: Request, db=Depends(get_db)):
+    """Itemized Pricing PDF: every line in job order with quantities and rates."""
+    require_admin(request)
+    bid = bid_opportunities.get_bid(db, bid_id, _BID_COMPANY)
+    if not bid:
+        raise HTTPException(status_code=404, detail="Bid not found")
+    try:
+        bid_costing.ensure_accounting_schema(db)
+        costs = bid_costing.cost_lines(db, bid_id, _BID_COMPANY)
+    except Exception:
+        costs = []
+    pdf = build_bid_documents.build_itemized_pricing(dict(bid), costs)
+    name = f"BuildStack-Itemized-Bid-{bid_id}.pdf"
+    return Response(content=pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f'inline; filename="{name}"',
+                             "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"})
+
+
+@app.get("/bids/{bid_id}/contract.pdf")
+async def bid_contract_pdf(bid_id: int, request: Request, db=Depends(get_db)):
+    """Renovation Agreement PDF: full legal terms, payment schedule, signature."""
+    require_admin(request)
+    bid = bid_opportunities.get_bid(db, bid_id, _BID_COMPANY)
+    if not bid:
+        raise HTTPException(status_code=404, detail="Bid not found")
+    try:
+        bid_costing.ensure_accounting_schema(db)
+        costs = bid_costing.cost_lines(db, bid_id, _BID_COMPANY)
+    except Exception:
+        costs = []
+    photos = _project_photo_paths(db, bid_id)
+    try:
+        bid_signing.ensure_schema(db)
+        signature = bid_signing.describe(
+            bid_signing.latest(db, bid_id, _BID_COMPANY))
+    except Exception:
+        signature = {"signed": False}
+    sig_png = None
+    if signature.get("signed"):
+        try:
+            sig_row = bid_signing.latest(db, bid_id, _BID_COMPANY)
+            sig_png = bid_signing.image_png(db, int(sig_row["id"]))
+        except Exception:
+            sig_png = None
+    sig = {"png": sig_png, "name": signature.get("name") or "",
+           "date": signature.get("signed_at") or ""} if sig_png else None
+    pdf = build_bid_documents.build_contract(dict(bid), costs,
+                                             [p for p, _ in photos],
+                                             signature=sig)
+    name = f"BuildStack-Contract-Bid-{bid_id}.pdf"
+    return Response(content=pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f'inline; filename="{name}"',
+                             "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"})
 
 
 @app.post("/api/bids/{bid_id}/costs")
@@ -10749,10 +10960,24 @@ async def payroll_page(request: Request, period_start: str = "", period_end: str
             GROUP BY pr.id ORDER BY pr.period_start DESC LIMIT 12;
         """)
         runs = cur.fetchall()
+        # Payroll lines for the selected period, with crew and run info, so the
+        # owner can see who is owed and pay them by direct deposit.
+        cur.execute("""
+            SELECT pl.id, pl.run_id, pl.crew_id, pl.hours, pl.overtime_hours, pl.gross_cents,
+                   c.name AS crew_name, c.phone, c.email, c.stripe_account_id, c.bank_status,
+                   pr.period_start, pr.period_end, pr.status AS run_status
+            FROM payroll_lines pl
+            JOIN crew c ON c.id = pl.crew_id
+            JOIN payroll_runs pr ON pr.id = pl.run_id
+            WHERE pr.period_start = %s AND pr.period_end = %s
+            ORDER BY c.name;
+        """, (ps, pe))
+        pay_lines = cur.fetchall()
     return templates.TemplateResponse(request=request, name="payroll.html", context={
         "user": {"email": require_auth(request)[1]},
         "period_start": ps.isoformat(), "period_end": pe.isoformat(),
         "crew_totals": crew_totals, "sheets": sheets, "runs": runs,
+        "pay_lines": pay_lines,
     })
 
 
@@ -11099,6 +11324,12 @@ async def payroll_pay_worker(run_id: int, crew_id: int, request: Request, db=Dep
             (f"payroll-run-{run_id}-crew-{crew_id}", line["gross_cents"]),
         )
         db.commit()
+    # Post the payout to the books: relieves payroll payable, credits cash.
+    try:
+        ledger_sync.ensure_schema(db)
+        ledger_sync.sync_payroll_paid(db, run_id, company=_BID_COMPANY)
+    except Exception as e:
+        logger.warning("ledger not updated for payroll payout run %s crew %s: %s", run_id, crew_id, e)
     return RedirectResponse(url=request.headers.get("referer") or "/payroll?ok=paid+%23" + str(crew_id),
                             status_code=status.HTTP_303_SEE_OTHER)
 

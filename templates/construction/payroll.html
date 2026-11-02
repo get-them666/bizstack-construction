@@ -101,6 +101,45 @@
                     <p class="text-sm text-slate-500 mt-1">Crew clock-ins and manual hours land here.</p>
                 </div>
                 {% endif %}
+
+                {# ── Pay crew via direct deposit ─────────────────────────── #}
+                {% if pay_lines %}
+                <div class="mt-6 bg-white rounded-3xl border border-slate-200 p-5">
+                    <p class="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">Pay crew · direct deposit (Stripe Connect)</p>
+                    <div class="space-y-2">
+                        {% for pl in pay_lines %}
+                        <div class="flex items-center justify-between gap-3 p-3 bg-slate-50 rounded-xl border border-slate-100">
+                            <div>
+                                <div class="text-sm font-semibold text-slate-900">{{ pl.crew_name }}</div>
+                                <div class="text-xs text-slate-500">{{ pl.period_start }} → {{ pl.period_end }} · {{ '{:,.1f}'.format(pl.hours or 0) }} h {% if pl.overtime_hours %}({% {':,.1f}'.format(pl.overtime_hours) %}h OT){% endif %}</div>
+                            </div>
+                            <div class="text-right">
+                                <div class="text-sm font-bold text-slate-900">${{ '{:,.2f}'.format((pl.gross_cents or 0)/100) }}</div>
+                                <span class="px-2 py-0.5 text-[10px] font-bold rounded-full {% if pl.bank_status == 'connected' %}bg-emerald-50 text-emerald-700 border border-emerald-200{% elif pl.bank_status == 'pending' %}bg-amber-50 text-amber-700 border border-amber-200{% else %}bg-slate-100 text-slate-600{% endif %}">
+                                  {% if pl.bank_status == 'connected' %}Bank connected{% elif pl.bank_status == 'pending' %}Setup pending{% else %}No bank on file{% endif %}
+                                </span>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                {% if pl.run_status == 'closed' and pl.bank_status == 'connected' %}
+                                <form method="POST" action="/api/payroll/run/{{ pl.run_id }}/pay/{{ pl.crew_id }}" class="inline"
+                                      onsubmit="return confirm('Pay {{ pl.crew_name }} ${{ "{:,.2f}".format((pl.gross_cents or 0)/100) }} by direct deposit?')">
+                                    <button class="text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 px-2 py-1.5 rounded-lg">Pay now</button>
+                                </form>
+                                {% elif pl.run_status != 'closed' %}
+                                <span class="text-[10px] text-slate-400">Run open</span>
+                                {% else %}
+                                <span class="text-[10px] text-slate-400">Add bank in crew portal</span>
+                                {% endif %}
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+                {% elif runs and runs|selectattr('status', 'equalto', 'open')|list %}
+                <div class="mt-6 bg-white rounded-3xl border border-slate-200 p-5 text-center">
+                    <p class="text-xs text-slate-500">No payroll lines yet for this period. Create a pay run above, then pay each crew member by direct deposit.</p>
+                </div>
+                {% endif %}
             </div>
 
             <div>
