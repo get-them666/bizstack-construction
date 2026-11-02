@@ -10784,22 +10784,6 @@ async def worker_app_hours(request: Request, project_id: int = Form(0), work_dat
     # Crew hours come from clocking in and out. Only the owner adds time, from /payroll.
     return JSONResponse(status_code=403, content={"status": "error",
                         "message": "Hours come from clocking in and out. Missed time? Message the office and they'll add it."})
-    _require_crew_feature(db, "hours")
-    try:
-        hrs = float(hours)
-    except (TypeError, ValueError):
-        return JSONResponse(status_code=400, content={"status": "error", "message": "Invalid hours"})
-    if hrs <= 0 or hrs > 24:
-        return JSONResponse(status_code=400, content={"status": "error", "message": "Hours must be 0-24"})
-    wd = work_date or date.today().isoformat()
-    with db.cursor() as cur:
-        cur.execute(
-            "INSERT INTO timesheets (crew_id, project_id, work_date, hours, work_type, source, status) "
-            "VALUES (%s,%s,%s,%s,%s,'manual','submitted');",
-            (worker.get("id"), project_id or None, wd, hrs, work_type),
-        )
-        db.commit()
-    return JSONResponse(content={"status": "ok"})
 
 
 @app.post("/api/crew/app/hours/{sheet_id}/delete")
