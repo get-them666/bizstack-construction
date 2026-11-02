@@ -5243,6 +5243,32 @@ async def api_bid_owner(bid_id: int, request: Request, db=Depends(get_db)):
                                    parsed["state"], parsed["zipcode"], user_email)
 
 
+@app.post("/api/bids/{bid_id}/owner/save")
+async def api_bid_owner_save(bid_id: int, request: Request,
+                             contact_name: str = Form(...),
+                             db=Depends(get_db)):
+    """Save the looked-up owner of record onto the bid so it shows on the card.
+
+    Writes to the bid's ``owner`` field, which the details card renders as
+    "GC / owner". Idempotent: re-saving just overwrites with the latest lookup.
+    """
+    require_admin(request)
+    name = (contact_name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="owner name is required")
+    with db.cursor() as cur:
+        cur.execute("""
+            UPDATE bid_opportunities
+               SET owner = %s, updated_at = now()
+             WHERE id = %s AND company = %s
+        """, (name, bid_id, _BID_COMPANY))
+        ok = cur.rowcount > 0
+    db.commit()
+    if not ok:
+        raise HTTPException(status_code=404, detail="Bid not found")
+    return JSONResponse(content={"ok": True})
+
+
 async def _skiptrace_result(db, street: str, city: str, state: str,
                             zip_code: str, user_email: str) -> JSONResponse:
     """Cache-first owner lookup, shared by the address form and the bid card.

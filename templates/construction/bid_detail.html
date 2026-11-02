@@ -452,6 +452,24 @@
               ], 'Source: ' + ((p.provider || j.provider || 'parcel record')) +
                  ' \u00b7 checked ' + (j.checked_at || ''),
                  'text-slate-400');
+
+              // Persist the looked-up owner onto the bid so it appears on the
+              // details card as "GC / owner", then refresh the card.
+              if (j.owner_of_record) {
+                fetch('/api/bids/{{ b.id }}/owner/save', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                  body: new URLSearchParams({ contact_name: j.owner_of_record })
+                }).then(function (r) {
+                  if (r.ok) {
+                    var note = document.createElement('p');
+                    note.className = 'mt-2 text-xs text-emerald-600 font-semibold';
+                    note.textContent = 'Saved "' + j.owner_of_record + '" to this bid.';
+                    box.appendChild(note);
+                    setTimeout(function () { location.reload(); }, 900);
+                  }
+                }).catch(function () {});
+              }
             })
             .catch(function () {
               show([], 'Lookup failed. Check the connection and try again.', 'text-red-600');
