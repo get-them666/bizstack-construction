@@ -363,6 +363,11 @@ records.
   `generate_training_deck`, `run_site_health_check`
 - **Permits & property:** `lookup_permits`, `enrich_permit_lead`, `lookup_property`,
   `quote_project`, `lookup_zip`
+- **Bids:** `research_bid_contact` (fills in the bid's name/email/phone from the property
+  address and saves them — run it on any bid missing one), `generate_bid_documents` (builds
+  the SOW, itemized pricing and contract/quote PDFs from the bid's cost lines and attaches
+  them to the bid card; 30/40/30 payment schedule is baked into the contract). Every bid
+  should end up with all three contact fields and all three documents.
 - **Office:** `add_task`, `list_tasks`, `complete_task`, `search_comms`, `calculate`,
   `web_search`, `schedule_event`, `cancel_event`, `list_calendar_events`,
   `maps_geocode`, `maps_directions`

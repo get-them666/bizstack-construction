@@ -798,6 +798,45 @@ OPERATING MANUAL:
             {
                 "type": "function",
                 "function": {
+                    "name": "research_bid_contact",
+                    "description": (
+                        "For a bid on the bid board: look up the OWNER OF RECORD for the bid's "
+                        "property address, then find their email and phone, and SAVE all three "
+                        "onto the bid record (contact_name / contact_email / contact_phone). "
+                        "Use this whenever a bid is missing a name, email or phone -- every bid "
+                        "needs all three before we can send a quote. Cached per address, so a "
+                        "repeat call is free. Writes only; nothing is sent to the customer."
+                    ),
+                    "parameters": self._props(
+                        {"bid_id": "integer"}, ["bid_id"],
+                        "The bid's numeric id from the bid board (e.g. 18350).",
+                    ),
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "generate_bid_documents",
+                    "description": (
+                        "Generate the Scope of Work, Itemized Pricing and Contract/Quote PDFs "
+                        "for a bid from its cost lines and attach them to the bid as job "
+                        "documents (types sow / itemized / contract) so the owner can download "
+                        "them from the bid card. The contract carries the 30% deposit / 40% at "
+                        "midpoint / 30% at final walkthrough payment schedule and the legal "
+                        "terms. Regenerating replaces the previous auto-generated set; "
+                        "documents the owner uploaded by hand are kept and take priority. "
+                        "Add cost lines first if the bid has none -- the documents are built "
+                        "from them."
+                    ),
+                    "parameters": self._props(
+                        {"bid_id": "integer"}, ["bid_id"],
+                        "The bid's numeric id from the bid board (e.g. 18350).",
+                    ),
+                },
+            },
+            {
+                "type": "function",
+                "function": {
                     "name": "lookup_zip",
                     "description": (
                         "Resolve the ZIP code for a street address. Free geocoder, no key, no "
