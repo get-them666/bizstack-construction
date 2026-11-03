@@ -203,6 +203,26 @@ def _build_message(company_key, co_name, quote=None, **ctx):
         ]
         return " ".join(lines) + footer
 
+    # Roofing gets its own first touch. The generic reply asks for nothing, so a
+    # "please inspect and quote" inquiry bounced back and forth for a week before
+    # anyone had the address. Asking for the address and two photos up front is
+    # what turns the inquiry into a scheduled inspection; the scope list is also
+    # the only thing that stops "how much to reroof?" being answered with a number
+    # nobody has seen the roof for.
+    if "roof" in service.lower():
+        lines = [
+            greeting,
+            f"Thanks for reaching out to {co_name} about a roofing project"
+            + (f" at {address}" if address else "") + ".",
+            "We handle roof inspections and full reroofs -- decking, flashing, "
+            "penetrations, ventilation and gutters -- and you get a written condition "
+            "report with the roofing options and a firm price, free and no obligation."
+            + quote_line,
+            "Send the property address and a couple of photos of the roof and we'll "
+            "confirm an inspection, usually within two to three business days.",
+        ]
+        return " ".join(lines) + footer
+
     # generic inbound (get-started funnel, website form, contact)
     lines = [
         greeting,
