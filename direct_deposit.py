@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import os
 from datetime import date, datetime, timedelta
-
 from cryptography.fernet import Fernet, InvalidToken
 
 ACH_ENV = ("ACH_IMMEDIATE_DEST", "ACH_IMMEDIATE_ORIGIN", "ACH_COMPANY_ID", "ACH_ODFI_ROUTING")
@@ -141,7 +140,6 @@ def run_lines(conn, run_id: int) -> list[dict]:
         r["account_number"] = _decrypt(r.pop("account_enc")) if r["has_bank"] else ""
     return rows
 
-
 def _next_business_day(d: date) -> date:
     d = d + timedelta(days=1)
     while d.weekday() >= 5:
@@ -171,15 +169,22 @@ def nacha(lines: list[dict], *, company_name: str, effective: date | None = None
     skipped = [l["name"] for l in lines if not l.get("has_bank")]
 
     rec = []
-    rec.append("1" + "01" + _f(dest.rjust(10), 10) + _f(origin.rjust(10), 10)
+    
+    # 1 Record: File Header Record (Fixed: Explicit right-justification for routing parameters)
+    rec.append("1" + "01" + _f(dest, 10, left=False) + _f(origin, 10, left=False)
                + created.strftime("%y%m%d") + created.strftime("%H%M") + "A" + "094" + "10" + "1"
                + _f(dest_name, 23) + _f(cname, 23) + _f("", 8))
+               
     batch_no = 1
+    # 5 Record: Batch Header Record
     rec.append("5" + "220" + _f(cname, 16) + _f("", 20) + _f(company_id, 10) + "PPD"
                + _f(description, 10) + _f(effective.strftime("%b%d").upper(), 6) + effective.strftime("%y%m%d")
                + _f("", 3) + "1" + _f(odfi, 8) + _f(str(batch_no), 7, left=False))
+               
     entry_hash = 0
     total = 0
+    
+    # 6 Record: Entry Detail Record Processing Loop
     for i, l in enumerate(paid, start=1):
         rdfi, chk = l["routing_number"][:8], l["routing_number"][8]
         entry_hash += int(rdfi)
@@ -189,15 +194,28 @@ def nacha(lines: list[dict], *, company_name: str, effective: date | None = None
         rec.append("6" + tc + rdfi + chk + _f(l["account_number"], 17) + _f(str(amt), 10, left=False)
                    + _f(str(l["crew_id"]), 15) + _f(l.get("account_holder") or l["name"], 22) + _f("", 2) + "0"
                    + _f(odfi, 8) + _f(str(i), 7, left=False))
+                   
     eh = _f(str(entry_hash)[-10:], 10, left=False)
     n = len(paid)
+    
+    # 8 Record: Batch Control Record
     rec.append("8" + "220" + _f(str(n), 6, left=False) + eh + _f("0", 12, left=False) + _f(str(total), 12, left=False)
                + _f(company_id, 10) + _f("", 19) + _f("", 6) + _f(odfi, 8) + _f(str(batch_no), 7, left=False))
-    blocks = (len(rec) + 1 + 9) // 10
-    rec.append("9" + _f("1", 6, left=False) + _f(str(blocks), 6, left=False) + _f(str(n), 8, left=False) + eh
-               + _f("0", 12, left=False) + _f(str(total), 12, left=False) + _f("", 39))
+               
+    # 9 Record: Core Structural Placeholder Insertion
+    rec.append("PLACEHOLDER_FOR_RECORD_9")
+    
+    # Structural Loop Block Padding (Fixed: standard "9" followed by 93 structural spaces)
     while len(rec) % 10:
-        rec.append("9" * 94)
+        rec.append("9" + _f("", 93))
+        
+    # Calculate structural blocks precisely (1 block = 10 full lines)
+    blocks = len(rec) // 10
+    
+    # Overwrite the structural metadata row placeholder with calculated file variables
+    rec[n + 3] = ("9" + _f("1", 6, left=False) + _f(str(blocks), 6, left=False) + _f(str(n), 8, left=False) + eh
+                  + _f("0", 12, left=False) + _f(str(total), 12, left=False) + _f("", 39))
+                  
     assert all(len(r) == 94 for r in rec), [len(r) for r in rec]
     text = "\r\n".join(rec) + "\r\n"
     return text, {"entries": n, "total_cents": total, "skipped": skipped, "effective": effective.isoformat(),

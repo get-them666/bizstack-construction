@@ -13,51 +13,73 @@
 
         <h1 class="text-2xl font-black tracking-tight text-slate-900 mb-6">Pay</h1>
 
+        {# ── Base Worker Compensation Display ────────────────────── #}
         <div class="bg-white rounded-2xl border border-slate-200 p-5 mb-6">
             <p class="text-sm font-bold text-slate-900 mb-1">Rate</p>
-            <p class="text-2xl font-black text-slate-900">${{ '{:,.2f}'.format(worker.pay_rate or 0) }}{% if worker.pay_type == 'hourly' %} <span class="text-sm font-semibold text-slate-400">/ hour</span>{% elif worker.pay_type == 'salary' %}<span class="text-sm font-semibold text-slate-400"> / period</span>{% else %}<span class="text-sm font-semibold text-slate-400"> ({{ worker.pay_type or 'contract' }})</span>{% endif %}</p>
+            <p class="text-2xl font-black text-slate-900">
+                ${{ '{:,.2f}'.format(worker.pay_rate or 0) }}
+                {% if worker.pay_type == 'hourly' %} 
+                    <span class="text-sm font-semibold text-slate-400">/ hour</span>
+                {% elif worker.pay_type == 'salary' %}
+                    <span class="text-sm font-semibold text-slate-400">/ period</span>
+                {% else %}
+                    <span class="text-sm font-semibold text-slate-400"> ({{ worker.pay_type or 'contract' }})</span>
+                {% endif %}
+            </p>
         </div>
 
+        {# ── Direct Deposit Setup Connection Status ───────────────── #}
         <div class="bg-white rounded-2xl border border-slate-200 p-5 mb-8">
             <div class="flex items-center justify-between gap-3 flex-wrap">
-                <div>
+                <div class="flex-1 min-w-[250px]">
                     <p class="text-sm font-bold text-slate-900">Direct deposit</p>
                     <p class="text-sm text-slate-500 mt-0.5">
                         {% if bank.on_file %}
-                        ✅ Connected — {{ bank.account_type|capitalize }} ····{{ bank.account_last4 }}
+                            ✅ Connected — {{ bank.account_type|capitalize }} ····{{ bank.account_last4 }}
                         {% elif worker.bank_status == 'connected' %}
-                        ℹ️ Details on file from an older setup — confirm them in the crew app
+                            ℹ️ Details on file from an older setup — confirm them in the crew app
                         {% else %}
-                        Not set up yet. Add it in the crew app: open <a href="/app" class="underline font-semibold">/app</a> on your phone and enter your routing and account numbers. They are encrypted and only the last four are ever shown again.
+                            Not set up yet. Add it in the crew app: open <a href="/app" class="underline font-semibold text-indigo-600 hover:text-indigo-700">/app</a> on your phone and enter your routing and account numbers. They are encrypted and only the last four are ever shown again.
                         {% endif %}
                     </p>
                 </div>
-                <a href="/app" class="px-5 py-2.5 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition-colors">
-                    {% if bank.on_file %}Change in the app{% else %}Set up in the app{% endif %}
-                </a>
+                <div>
+                    <a href="/app" class="inline-block px-5 py-2.5 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition-colors shadow-sm text-center">
+                        {% if bank.on_file %}Change in the app{% else %}Set up in the app{% endif %}
+                    </a>
+                </div>
             </div>
         </div>
 
+        {# ── Crew Personal Earning Ledger History ─────────────────── #}
         <p class="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Pay history</p>
         {% if pay_history %}
         <div class="space-y-2">
             {% for p in pay_history %}
-            <div class="bg-white rounded-xl border border-slate-200 px-4 py-3 flex items-center gap-x-4 gap-y-1 flex-wrap text-sm">
+            <div class="bg-white rounded-xl border border-slate-200 px-4 py-3 flex items-center gap-x-4 gap-y-1 flex-wrap text-sm shadow-sm">
                 <span class="font-bold text-slate-800">{{ p.period_start }} → {{ p.period_end }}</span>
-                <span class="px-2 py-0.5 text-xs font-bold rounded-full {% if p.run_status == 'closed' %}bg-emerald-50 text-emerald-700 border border-emerald-200{% else %}bg-amber-50 text-amber-700 border border-amber-200{% endif %}">{{ p.run_status }}</span>
+                <span class="px-2 py-0.5 text-xs font-bold rounded-full {% if p.run_status == 'closed' %}bg-emerald-50 text-emerald-700 border border-emerald-200{% else %}bg-amber-50 text-amber-700 border border-amber-200{% endif %}">
+                    {{ p.run_status }}
+                </span>
                 <span class="flex-1"></span>
-                <span class="text-slate-500">{{ '{:,.1f}'.format(p.hours or 0) }}h{% if p.overtime_hours %}<span class="text-amber-600"> +{{ '{:,.1f}'.format(p.overtime_hours or 0) }} OT</span>{% endif %}</span>
+                <span class="text-slate-500">
+                    {{ '{:,.1f}'.format(p.hours or 0) }}h
+                    {% if p.overtime_hours %}
+                        <span class="text-amber-600 font-semibold"> +{{ '{:,.1f}'.format(p.overtime_hours or 0) }} OT</span>
+                    {% endif %}
+                </span>
                 <span class="text-lg font-black text-slate-900">${{ '{:,.2f}'.format((p.gross_cents or 0)/100) }}</span>
             </div>
             {% endfor %}
         </div>
         {% else %}
-        <div class="bg-white rounded-2xl border border-slate-200 px-6 py-10 text-center">
+        <div class="bg-white rounded-2xl border border-slate-200 px-6 py-10 text-center shadow-inner">
             <p class="text-slate-400 text-sm">No pay runs yet. They show up here after the office runs payroll.</p>
         </div>
         {% endif %}
 
-        <p class="mt-6 text-xs text-slate-400 leading-relaxed">
+        {# ── Structural Security Compliance Message Footnote ─────── #}
+        <p class="mt-6 text-xs text-slate-400 leading-relaxed bg-white/60 p-4 border border-slate-200/50 rounded-xl">
             Payment method: <strong>Direct deposit from the company's business checking account</strong>. Your routing and account numbers are encrypted, stored only as a last-four reference for you, and used solely to pay you. Pay runs are cut by the office on their pay schedule.
         </p>
     </div>
