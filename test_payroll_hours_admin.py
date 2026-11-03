@@ -177,6 +177,12 @@ def test_payroll_page_exposes_the_office_entry_controls():
         assert action in html, action
     assert "Open clock-ins" in html
     assert "What each job made" in html
+    # Payroll file links must use the singular route the app actually serves.
+    assert "/api/payroll/run/{{ run_id }}/nacha" in html
+    assert "/api/payroll/run/{{ run_id }}/csv" in html
+    assert "/api/payroll/run/{{ run_id }}/finalize" in html
+    assert "/api/payroll/run/{{ run_id }}/ach-sent" in html
+    assert "/api/payroll/runs/" not in html
 
 
 def test_the_bid_number_is_the_job_number_everywhere_the_crew_look():

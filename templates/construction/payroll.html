@@ -267,16 +267,40 @@
                         {% endfor %}
                     </div>
 
+                    {% set run_status = pay_lines[0].run_status %}
+                    {% set bank_ns = namespace(unbanked=0) %}
+                    {% for pl in pay_lines %}{% if not pl.has_bank %}{% set bank_ns.unbanked = bank_ns.unbanked + 1 %}{% endif %}{% endfor %}
+
+                    {% if bank_ns.unbanked %}
+                    <p class="mt-3 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
+                        {{ bank_ns.unbanked }} worker{{ '' if bank_ns.unbanked == 1 else 's' }} still have no bank details, so PNC cannot be given a file that pays everyone. They add it in the phone app → Pay → Direct deposit, or pay them by manual check. Nothing is silently left out.
+                    </p>
+                    {% endif %}
+
                     {# ── Action Buttons for File Generation ─────────────────── #}
-                    <div class="mt-5 pt-4 border-t border-slate-100 flex flex-wrap gap-3">
-                        <a href="/api/payroll/runs/{{ run_id }}/nacha" 
+                    <div class="mt-5 pt-4 border-t border-slate-100 flex flex-wrap items-center gap-3">
+                        {% if run_status == 'paid' %}
+                        <span class="px-3 py-2 text-xs font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-xl">✓ Paid — settled through PNC</span>
+                        {% elif run_status == 'closed' %}
+                        <a href="/api/payroll/run/{{ run_id }}/nacha"
                            class="inline-flex items-center px-4 py-2.5 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition-colors shadow-sm">
                             📥 Download PNC NACHA File
                         </a>
-                        <a href="/api/payroll/runs/{{ run_id }}/csv" 
+                        <a href="/api/payroll/run/{{ run_id }}/csv"
                            class="inline-flex items-center px-4 py-2.5 text-sm font-semibold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 rounded-xl transition-colors">
                             📊 Download Backup CSV
                         </a>
+                        <form method="POST" action="/api/payroll/run/{{ run_id }}/ach-sent"
+                              onsubmit="return confirm('Confirm this run was uploaded to PNC and PNC accepted it? This marks the crew paid and posts the money to the books.');">
+                            <button class="px-4 py-2.5 text-sm font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl transition-colors">✓ Uploaded to PNC</button>
+                        </form>
+                        {% else %}
+                        <form method="POST" action="/api/payroll/run/{{ run_id }}/finalize"
+                              onsubmit="return confirm('Finalize this run? It closes the hours and posts the payroll accrual. It does not move money.');">
+                            <button class="px-4 py-2.5 text-sm font-bold text-white bg-slate-900 hover:bg-slate-700 rounded-xl transition-colors">Finalize run</button>
+                        </form>
+                        <span class="text-xs text-slate-500">Finalize first — the NACHA file only exists for a closed run. Finalizing does not move money.</span>
+                        {% endif %}
                     </div>
                 </div>
                 {% endif %}
