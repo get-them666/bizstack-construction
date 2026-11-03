@@ -35,6 +35,7 @@
             <a href="/crew/jobs/{{ j.id }}" class="block bg-white rounded-2xl border border-slate-200 p-4 hover:border-indigo-300 transition-colors">
                 <div class="flex items-center justify-between gap-3">
                     <div class="min-w-0">
+                        <p class="text-xs font-bold text-indigo-600">{% if j.bid_id %}Bid #{{ j.bid_id }}{% else %}Job #{{ j.id }}{% endif %}</p>
                         <p class="font-bold text-slate-900 truncate">{{ j.name }}</p>
                         <p class="text-sm text-slate-500 truncate">{{ j.address or 'Address TBD' }}</p>
                     </div>
@@ -58,7 +59,7 @@
                     <p class="text-sm font-semibold text-slate-700">Start work on <span class="font-bold text-slate-900">{{ jobs[0].name }}</span>?</p>
                     {% elif jobs|length > 1 %}
                     <select name="project_id" class="flex-1 min-w-[180px] px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500">
-                        {% for j in jobs %}<option value="{{ j.id }}">{{ j.name }}</option>{% endfor %}
+                        {% for j in jobs %}<option value="{{ j.id }}">{% if j.bid_id %}Bid #{{ j.bid_id }} · {% else %}Job #{{ j.id }} · {% endif %}{{ j.name }}</option>{% endfor %}
                     </select>
                     {% else %}
                     <input type="hidden" name="project_id" value="0">

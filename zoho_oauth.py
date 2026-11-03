@@ -58,8 +58,15 @@ def redirect_uri() -> str:
     explicit = (os.getenv("ZOHO_REDIRECT_URI") or "").strip()
     if explicit:
         return explicit
-    domain = (os.getenv("COMPANY_DOMAIN") or "construction.bizstackperks.com").strip()
-    return f"https://{domain}/oauth/zoho/callback"
+    # Prefer the deployed base URL: it is the host Zoho actually sees, and a
+    # COMPANY_DOMAIN with a scheme or trailing slash used to produce
+    # "https://https://…" or a double slash, which Zoho rejects as a mismatch.
+    base = (os.getenv("APP_BASE_URL") or "").strip()
+    if not base:
+        domain = (os.getenv("COMPANY_DOMAIN") or "construction.bizstackperks.com").strip()
+        domain = domain.replace("https://", "").replace("http://", "").strip("/")
+        base = f"https://{domain}"
+    return f"{base.rstrip('/')}/oauth/zoho/callback"
 
 
 def configured() -> bool:
@@ -186,8 +193,8 @@ def live_ok(force: bool = False) -> bool:
 def status() -> dict:
     """What is connected and what each product can do."""
     out = {"configured": configured(), "connected": False, "source": "", "scopes": [], "email": "",
-           "crm": False, "campaigns": False, "books": False, "mail": False, "calendar": False,
-           "redirect_uri": redirect_uri()}
+           "client_id": client()[0], "crm": False, "campaigns": False, "books": False,
+           "mail": False, "calendar": False, "redirect_uri": redirect_uri()}
     scopes = ""
     try:
         with _db() as conn:

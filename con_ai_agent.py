@@ -572,6 +572,14 @@ OPERATING MANUAL:
 
     def _full_tools(self) -> list:
         tools = self._safe_tools()
+        # The public widget can create a quote for a new caller, but only the
+        # owner's Copilot may stamp that estimate onto an existing lead.
+        for tool in tools:
+            if tool.get("function", {}).get("name") == "quote_project":
+                tool["function"]["parameters"]["properties"]["lead_id"] = {"type": "integer"}
+                tool["function"]["parameters"]["description"] += (
+                    " Copilot only: pass lead_id to save the estimate on that existing lead."
+                )
         tools += [
             {
                 "type": "function",
@@ -586,12 +594,24 @@ OPERATING MANUAL:
             {
                 "type": "function",
                 "function": {
+                    "name": "find_people",
+                    "description": "Search crew, customers and leads by name, phone or email.",
+                    "parameters": self._props(
+                        {"query": "string"}, ["query"],
+                        "A name, phone number or email to find.",
+                    ),
+                },
+            },
+            {
+                "type": "function",
+                "function": {
                     "name": "update_lead_status",
-                    "description": "Change a lead's pipeline status.",
+                    "description": "Change a lead's pipeline status and refresh its next-action queue.",
                     "parameters": self._props(
                         {"lead_id": "integer", "status": "string"},
                         ["lead_id", "status"],
-                        "status: new, contacted, quoted, deposit, in_progress, completed, lost.",
+                        "Canonical stages: new, contacted, engaged, quoted, won, lost. "
+                        "Legacy stages deposit, in_progress and completed are also accepted.",
                     ),
                 },
             },
@@ -672,7 +692,7 @@ OPERATING MANUAL:
                 "type": "function",
                 "function": {
                     "name": "get_payroll_summary",
-                    "description": "Payroll summary for the current open run: crew, hours/overtime, gross, and paid-vs-pending status (direct deposit via Stripe Connect).",
+                    "description": "Payroll summary for the latest unpaid open/finalized run: crew, hours/overtime, gross and PNC bank readiness.",
                     "parameters": self._props({}, [], ""),
                 },
             },
@@ -680,7 +700,7 @@ OPERATING MANUAL:
                 "type": "function",
                 "function": {
                     "name": "run_payroll",
-                    "description": "Run payroll now: finalize the open run and pay all approved lines via Stripe direct deposit.",
+                    "description": "Finalize the open payroll run for PNC ACH. Does not send money: the owner downloads the ACH file, uploads it to PNC, then confirms settlement.",
                     "parameters": self._props({}, [], ""),
                 },
             },
@@ -929,8 +949,10 @@ OPERATING MANUAL:
                         "skip_trace_owner/contact_lookup/save_contact/draft_lead_email "
                         "yourself, which the per-request tool budget will cut in half. "
                         "Costs up to ONE Skip Sherpa credit per lead examined (hits and "
-                        "misses alike); the summary reports credits spent and drafts "
-                        "staged. Nothing is sent -- drafts wait on the leads page."
+                        "misses alike); the summary reports credits spent, drafts staged "
+                        "and any sends. In review mode drafts wait on the leads page. With "
+                        "LEAD_AUTO_SEND enabled, eligible drafts are sent through the guarded "
+                        "fire_lead_draft path with caps, cooldowns and suppression checks."
                     ),
                     "parameters": self._props(
                         {"limit": "integer"},

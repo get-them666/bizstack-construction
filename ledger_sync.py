@@ -188,7 +188,7 @@ def sync_cost_line(conn, cost_line_id: int, company: str = "construction") -> Sy
     with conn.cursor() as cur:
         cur.execute("SELECT c.*, b.id AS bid_id, b.name AS bid_name "
                     "FROM bid_costs c JOIN bid_opportunities b ON b.id = c.bid_id "
-                    "WHERE c.id = %s AND c.company = %s", (cost_line_id, company))
+                    "WHERE c.id = %s AND c.company = %s AND c.removed_at IS NULL", (cost_line_id, company))
         cl = cur.fetchone()
     if not cl:
         s.skipped += 1
@@ -270,16 +270,55 @@ def _payroll_accrual_lines(conn, run: dict, company: str) -> list[dict]:
     with conn.cursor() as cur:
         cur.execute("""
             SELECT pl.crew_id, c.name, c.pay_rate,
-                   COALESCE(SUM(pl.hours), 0) + COALESCE(SUM(pl.overtime_hours), 0) AS hours
+                   COALESCE(SUM(pl.hours), 0) + COALESCE(SUM(pl.overtime_hours), 0) AS hours,
+                   COALESCE(SUM(pl.gross_cents), 0)::BIGINT AS gross_cents
             FROM payroll_lines pl JOIN crew c ON c.id = pl.crew_id
             WHERE pl.run_id = %s GROUP BY pl.crew_id, c.name, c.pay_rate
         """, (run.get("id"),))
-        for r in cur.fetchall():
-            hours = float(r["hours"] or 0)
-            if hours <= 0:
+        rows = cur.fetchall()
+        has_projects = (ledger._table_exists(conn, "timesheets")
+                        and ledger._table_exists(conn, "projects"))
+        for r in rows:
+            gross_cents = int(r["gross_cents"] or 0)
+            if gross_cents <= 0:
                 continue
-            out.append({"crew": r["name"], "hours": hours,
-                        "rate": float(r["pay_rate"] or 0)})
+            # gross_cents is the immutable payroll calculation: it already
+            # includes overtime and salary. Recomputing from hours and the
+            # crew's current rate under-accrued OT, skipped salary and changed
+            # historical pay if the rate was edited after the run.
+            base = {"crew": r["name"], "hours": float(r["hours"] or 0),
+                    "rate": float(r["pay_rate"] or 0), "gross_cents": gross_cents}
+            hours = base["hours"]
+            if has_projects and hours > 0:
+                # New runs lock their sheets with payroll_run_id. Allocate the
+                # stored gross (OT included) across those sheets' bid ids by
+                # hours; rounding drift goes to the largest line, so the parts
+                # still equal the payroll run exactly.
+                cur.execute("""
+                    SELECT p.bid_id, COALESCE(SUM(t.hours), 0) AS hours
+                    FROM timesheets t LEFT JOIN projects p ON p.id = t.project_id
+                    WHERE t.payroll_run_id = %s AND t.crew_id = %s
+                    GROUP BY p.bid_id
+                """, (run.get("id"), r["crew_id"]))
+                project_rows = cur.fetchall()
+                total_hours = sum(float(pr["hours"] or 0) for pr in project_rows)
+                if total_hours > 0:
+                    allocated = []
+                    for pr in project_rows:
+                        pr_hours = float(pr["hours"] or 0)
+                        share = int(gross_cents * pr_hours / total_hours)
+                        allocated.append({**base, "hours": pr_hours,
+                                          "gross_cents": share, "bid_id": pr.get("bid_id")})
+                    drift = gross_cents - sum(a["gross_cents"] for a in allocated)
+                    largest = max(range(len(allocated)),
+                                  key=lambda i: allocated[i]["gross_cents"])
+                    allocated[largest]["gross_cents"] += drift
+                    out.extend(a for a in allocated if a["gross_cents"] > 0)
+                    continue
+            # Salary has no hourly job-allocation basis, and legacy runs have
+            # no payroll_run_id on their sheets. Keep their gross unallocated
+            # rather than inventing a job or dropping the expense altogether.
+            out.append(base)
     return out
 
 

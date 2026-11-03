@@ -57,7 +57,9 @@ def test_slots_are_weekday_windows_starting_tomorrow():
     dates = sorted({x["date"] for x in s})
     assert dates == ["2026-11-02", "2026-11-03", "2026-11-04"], "skips the weekend"
     assert {x["window"] for x in s} == {"morning", "midday", "afternoon"}
-    assert fu.parse_slot(s[0]["iso"]) is not None
+    assert dt.datetime.fromisoformat(s[0]["iso"]).hour == 8
+    # Future/past rejection is covered below with deliberately distant dates;
+    # parsing this historical fixture would make the test fail as time passes.
 
 
 def test_only_offered_windows_parse():

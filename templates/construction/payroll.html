@@ -30,6 +30,69 @@
                     <button formaction="/api/payroll/run" formmethod="POST" class="px-5 py-2.5 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition-colors">▶ Create pay run for this period</button>
                 </form>
 
+                {% if ok %}<div class="mb-4 rounded-xl bg-emerald-50 border border-emerald-200 px-4 py-3 text-sm text-emerald-800">{{ ok }}</div>{% endif %}
+                {% if error %}<div class="mb-4 rounded-xl bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">{{ error }}</div>{% endif %}
+
+                {# ── Add hours the clock missed ─────────────────────────── #}
+                <div class="bg-white rounded-3xl border border-slate-200 p-5 mb-4">
+                    <p class="text-sm font-bold text-slate-900">Add hours</p>
+                    <p class="text-xs text-slate-500 mt-0.5">Forgot to clock in, phone died, or no phone at all — enter what they actually worked. It is approved immediately and goes into the next pay run on the job you pick here.</p>
+                    <form method="POST" action="/api/payroll/timesheets/add" class="mt-3 grid grid-cols-2 gap-3">
+                        <input type="hidden" name="period_start" value="{{ period_start }}">
+                        <input type="hidden" name="period_end" value="{{ period_end }}">
+                        <label class="block text-xs font-semibold text-slate-700">Crew
+                            <select name="crew_id" required class="mt-1 block w-full px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm font-normal focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                                <option value="">Choose…</option>
+                                {% for c in crew_list %}<option value="{{ c.id }}">{{ c.name }}{% if not c.is_active %} (inactive){% endif %}</option>{% endfor %}
+                            </select>
+                        </label>
+                        <label class="block text-xs font-semibold text-slate-700">Job
+                            <select name="project_id" class="mt-1 block w-full px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm font-normal focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                                <option value="0">General / no job</option>
+                                {% for p in project_list %}<option value="{{ p.id }}">{% if p.bid_id %}Bid #{{ p.bid_id }}{% else %}Job #{{ p.id }}{% endif %} · {{ p.name }}</option>{% endfor %}
+                            </select>
+                        </label>
+                        <label class="block text-xs font-semibold text-slate-700">Date
+                            <input type="date" name="work_date" value="{{ today }}" max="{{ today }}" required class="mt-1 block w-full px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm font-normal focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                        </label>
+                        <label class="block text-xs font-semibold text-slate-700">Hours
+                            <input type="number" name="hours" min="0.25" max="24" step="0.25" required placeholder="8" class="mt-1 block w-full px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm font-normal focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                        </label>
+                        <label class="block text-xs font-semibold text-slate-700">Type
+                            <select name="work_type" class="mt-1 block w-full px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm font-normal">
+                                {% for wt in work_types %}<option value="{{ wt }}">{{ wt|title }}</option>{% endfor %}
+                            </select>
+                        </label>
+                        <label class="block text-xs font-semibold text-slate-700">Note
+                            <input type="text" name="notes" placeholder="Forgot to clock out" class="mt-1 block w-full px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-sm font-normal">
+                        </label>
+                        <button type="submit" class="col-span-2 py-3 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition-colors">+ Add hours</button>
+                    </form>
+                </div>
+
+                {% if open_punches %}
+                <div class="bg-amber-50 rounded-3xl border border-amber-200 p-5 mb-4">
+                    <p class="text-sm font-bold text-amber-900">Open clock-ins — no clock-out</p>
+                    <p class="text-xs text-amber-800 mt-0.5">These keep the crew member stuck on “already clocked in”. Clear a stale punch, then add the hours they actually worked above. Do not clear one if they are on site right now.</p>
+                    <div class="mt-3 space-y-2">
+                        {% for p in open_punches %}
+                        <div class="flex flex-wrap items-center justify-between gap-2 bg-white rounded-xl border border-amber-200 px-3 py-2">
+                            <div class="text-sm">
+                                <span class="font-semibold text-slate-900">{{ p.crew_name }}</span>
+                                <span class="text-slate-500">· since {{ p.punch_in_at.strftime('%b %d, %Y') if p.punch_in_at else '—' }}</span>
+                                <span class="text-slate-500">· {{ p.project_name or 'General' }}</span>
+                            </div>
+                            <form method="POST" action="/api/payroll/clock/{{ p.id }}/discard" onsubmit="return confirm('Clear this open clock-in? No hours are created — add them with the form above.');">
+                                <input type="hidden" name="period_start" value="{{ period_start }}">
+                                <input type="hidden" name="period_end" value="{{ period_end }}">
+                                <button class="text-xs font-bold text-amber-800 hover:text-red-600 px-2 py-1">Clear punch</button>
+                            </form>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+                {% endif %}
+
                 {% if crew_totals %}
                 <div class="bg-white rounded-3xl border border-slate-200 overflow-hidden mb-4">
                     <table class="w-full text-sm">
@@ -56,7 +119,7 @@
                 {% endif %}
 
                 {% if sheets %}
-                <p class="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Submitted timesheets · {{ sheets|length }}</p>
+                <p class="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Hours in this period · {{ sheets|length }}</p>
                 <div class="bg-white rounded-3xl border border-slate-200 overflow-hidden">
                     <table class="w-full text-sm">
                         <thead>
@@ -72,21 +135,57 @@
                         </thead>
                         <tbody>
                             {% for t in sheets %}
-                            <tr class="border-b border-slate-100 last:border-0">
+                            <tr class="border-b border-slate-100 last:border-0 align-top">
                                 <td class="px-4 py-2.5 text-slate-600">{{ t.work_date }}</td>
                                 <td class="px-4 py-2.5 font-semibold text-slate-900">{{ t.crew_name }}</td>
-                                <td class="px-4 py-2.5 text-slate-500">{{ t.project_name or '—' }}</td>
-                                <td class="px-4 py-2.5 text-right font-bold text-slate-800">{{ '{:,.1f}'.format(t.hours or 0) }}</td>
+                                <td class="px-4 py-2.5 text-slate-500">
+                                    {% if t.project_name %}{% if t.project_bid_id %}<span class="text-xs font-bold text-slate-400">Bid #{{ t.project_bid_id }}</span> · {% endif %}{{ t.project_name }}{% else %}—{% endif %}
+                                    {% if t.source == 'owner' %}<span class="block text-xs text-indigo-500">entered by office</span>{% endif %}
+                                    {% if t.notes %}<span class="block text-xs text-slate-400">{{ t.notes }}</span>{% endif %}
+                                </td>
+                                <td class="px-4 py-2.5 text-right font-bold text-slate-800">{{ '{:,.2f}'.format(t.hours or 0) }}</td>
                                 <td class="px-4 py-2.5 text-slate-500">{{ t.work_type }}</td>
                                 <td class="px-4 py-2.5">
                                     <span class="px-2 py-0.5 text-xs font-bold rounded-full {% if t.status == 'approved' %}bg-emerald-50 text-emerald-700 border border-emerald-200{% elif t.status == 'rejected' %}bg-red-50 text-red-600 border border-red-200{% else %}bg-slate-100 text-slate-600{% endif %}">{{ t.status }}</span>
                                 </td>
                                 <td class="px-4 py-2.5">
-                                    {% if t.status in ('submitted', 'rejected') %}
-                                    <form method="POST" action="/api/payroll/timesheets/{{ t.id }}/approve" class="inline"><button class="text-xs font-bold text-emerald-600 hover:text-emerald-700 px-1.5">✓ Approve</button></form>
-                                    {% endif %}
-                                    {% if t.status in ('submitted', 'approved') %}
-                                    <form method="POST" action="/api/payroll/timesheets/{{ t.id }}/reject" class="inline"><button class="text-xs font-bold text-red-500 hover:text-red-600 px-1.5">✕ Reject</button></form>
+                                    {% if t.payroll_run_id %}
+                                    <span class="text-xs text-slate-400">🔒 in pay run</span>
+                                    {% else %}
+                                    <div class="flex flex-wrap items-center gap-1">
+                                        {% if t.status in ('submitted', 'rejected') %}
+                                        <form method="POST" action="/api/payroll/timesheets/{{ t.id }}/approve" class="inline"><button class="text-xs font-bold text-emerald-600 hover:text-emerald-700 px-1.5">✓ Approve</button></form>
+                                        {% endif %}
+                                        {% if t.status in ('submitted', 'approved') %}
+                                        <form method="POST" action="/api/payroll/timesheets/{{ t.id }}/reject" class="inline"><button class="text-xs font-bold text-red-500 hover:text-red-600 px-1.5">✕ Reject</button></form>
+                                        {% endif %}
+                                        <form method="POST" action="/api/payroll/timesheets/{{ t.id }}/delete" onsubmit="return confirm('Delete this hours entry?');" class="inline">
+                                            <input type="hidden" name="period_start" value="{{ period_start }}">
+                                            <input type="hidden" name="period_end" value="{{ period_end }}">
+                                            <button class="text-xs font-bold text-slate-500 hover:text-red-600 px-1.5">🗑 Delete</button>
+                                        </form>
+                                    </div>
+                                    <details class="mt-1">
+                                        <summary class="text-xs font-bold text-indigo-600 cursor-pointer">Edit hours</summary>
+                                        <form method="POST" action="/api/payroll/timesheets/{{ t.id }}/edit" class="mt-2 space-y-1.5 w-44">
+                                            <input type="hidden" name="period_start" value="{{ period_start }}">
+                                            <input type="hidden" name="period_end" value="{{ period_end }}">
+                                            <select name="crew_id" class="block w-full px-2 py-1.5 rounded-lg bg-slate-50 border border-slate-200 text-xs">
+                                                {% for c in crew_list %}<option value="{{ c.id }}" {% if c.id == t.crew_id %}selected{% endif %}>{{ c.name }}</option>{% endfor %}
+                                            </select>
+                                            <input type="date" name="work_date" value="{{ t.work_date }}" max="{{ today }}" required class="block w-full px-2 py-1.5 rounded-lg bg-slate-50 border border-slate-200 text-xs">
+                                            <input type="number" name="hours" value="{{ t.hours }}" min="0.25" max="24" step="0.25" required class="block w-full px-2 py-1.5 rounded-lg bg-slate-50 border border-slate-200 text-xs">
+                                            <select name="work_type" class="block w-full px-2 py-1.5 rounded-lg bg-slate-50 border border-slate-200 text-xs">
+                                                {% for wt in work_types %}<option value="{{ wt }}" {% if wt == t.work_type %}selected{% endif %}>{{ wt|title }}</option>{% endfor %}
+                                            </select>
+                                            <select name="project_id" class="block w-full px-2 py-1.5 rounded-lg bg-slate-50 border border-slate-200 text-xs">
+                                                <option value="0">General / no job</option>
+                                                {% for p in project_list %}<option value="{{ p.id }}" {% if p.id == t.project_id %}selected{% endif %}>{% if p.bid_id %}Bid #{{ p.bid_id }}{% else %}Job #{{ p.id }}{% endif %} · {{ p.name }}</option>{% endfor %}
+                                            </select>
+                                            <input type="text" name="notes" value="{{ t.notes or '' }}" placeholder="Note" class="block w-full px-2 py-1.5 rounded-lg bg-slate-50 border border-slate-200 text-xs">
+                                            <button class="w-full py-1.5 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors">Save</button>
+                                        </form>
+                                    </details>
                                     {% endif %}
                                 </td>
                             </tr>
@@ -98,9 +197,52 @@
                 <div class="bg-white rounded-3xl border border-slate-200 px-6 py-12 text-center">
                     <p class="text-4xl mb-3">🧾</p>
                     <p class="font-semibold text-slate-700">No timesheets in this period</p>
-                    <p class="text-sm text-slate-500 mt-1">Crew clock-ins and manual hours land here.</p>
+                    <p class="text-sm text-slate-500 mt-1">Crew clock-ins and office-entered hours land here.</p>
                 </div>
                 {% endif %}
+                {# ── What each job made ─────────────────────────────────── #}
+                {% if job_profit %}
+                <div class="mt-6 bg-white rounded-3xl border border-slate-200 p-5">
+                    <p class="text-xs font-bold text-slate-500 uppercase tracking-wider">What each job made</p>
+                    <p class="text-xs text-slate-400 mt-0.5">One bid number, one job — from bid to finished. Labor is every hour logged against it; margin appears only when there is real cost behind the number.</p>
+                    <table class="w-full text-sm mt-3">
+                        <thead>
+                            <tr class="text-left text-xs uppercase tracking-wider text-slate-500 border-b border-slate-200">
+                                <th class="py-2">Job</th>
+                                <th class="py-2 text-right">Hours (all time)</th>
+                                <th class="py-2 text-right">Revenue</th>
+                                <th class="py-2 text-right">Cost</th>
+                                <th class="py-2 text-right">Profit</th>
+                                <th class="py-2 text-right">Margin</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for j in job_profit %}
+                            <tr class="border-b border-slate-100 last:border-0">
+                                <td class="py-2.5">
+                                    <span class="font-bold text-slate-900">Bid #{{ j.bid_id }}</span>
+                                    <span class="block text-xs text-slate-500">{{ j.name }} · {{ '{:,.1f}'.format(j.period_hours or 0) }} h this period</span>
+                                </td>
+                                <td class="py-2.5 text-right text-slate-600">{{ '{:,.1f}'.format(j.hours or 0) }}</td>
+                                <td class="py-2.5 text-right text-slate-600">{% if j.revenue is not none %}${{ '{:,.2f}'.format(j.revenue) }}{% else %}—{% endif %}</td>
+                                <td class="py-2.5 text-right text-slate-600">{% if j.cost is not none %}${{ '{:,.2f}'.format(j.cost) }}{% else %}—{% endif %}</td>
+                                <td class="py-2.5 text-right font-bold {% if j.margin is not none and j.margin < 0 %}text-red-600{% else %}text-slate-900{% endif %}">{% if j.margin is not none %}${{ '{:,.2f}'.format(j.margin) }}{% else %}—{% endif %}</td>
+                                <td class="py-2.5 text-right text-slate-600">
+                                    {% if j.margin_pct is not none %}{{ '{:,.1f}'.format(j.margin_pct) }}%{% else %}—{% endif %}
+                                    <span class="block text-xs text-slate-400">{{ j.basis }}{% if not j.complete %} · add costs{% endif %}</span>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                    {% if unattached_hours %}
+                    <p class="mt-3 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
+                        {{ '{:,.1f}'.format(unattached_hours) }} hours in this period are not attached to a job, so they have no bid number and no profit. Fix them with <b>Edit hours</b> above.
+                    </p>
+                    {% endif %}
+                </div>
+                {% endif %}
+
                 {# ── Pay crew via direct deposit ─────────────────────────── #}
                 {% if pay_lines %}
                 <div class="mt-6 bg-white rounded-3xl border border-slate-200 p-5">

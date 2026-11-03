@@ -122,23 +122,33 @@ def post_cost_line(conn, bid, cost_line, company: str = "construction") -> dict:
 def accrue_payroll(conn, run, lines, company: str = "construction") -> dict:
     """Record approved crew wages as an expense and a liability.
 
-    `lines`: [{"crew": "Devon", "hours": 40, "rate": 38.00, "bid_id": 7}]
+    `lines`: [{"crew": "Devon", "hours": 40, "gross_cents": 152000,
+               "bid_id": 7}]. Legacy rate/hour lines remain accepted.
     """
     lines = _as_lines(lines, "accrue_payroll")
     if not lines:
         return {"posted": False, "reason": "no approved hours"}
     expense_lines, liability_total = [], 0
     for ln in lines:
-        rate = _d(ln.get("rate"), "pay rate")
         hours = float(ln.get("hours") or 0)
-        if hours <= 0:
-            continue
-        amt = int(round(rate * hours))
+        if ln.get("gross_cents") is not None:
+            # Payroll routes supply their stored gross, including OT and salary.
+            amt = _d(ln.get("gross_cents"), "gross pay")
+            detail = f"{ln.get('crew', 'crew')} payroll"
+            if hours > 0:
+                detail += f" — {hours:g}h"
+        else:
+            # Backwards-compatible shape for callers that predate stored gross.
+            rate = _d(ln.get("rate"), "pay rate")
+            if hours <= 0:
+                continue
+            amt = int(round(rate * hours))
+            detail = f"{ln.get('crew', 'crew')} {hours:g}h @ {rate/100:.2f}"
         if amt <= 0:
             continue
         expense_lines.append({
             "account": "5020", "debit": amt,
-            "description": f"{ln.get('crew', 'crew')} {hours:g}h @ {rate/100:.2f}"[:200],
+            "description": detail[:200],
             "bid_id": ln.get("bid_id"),
         })
         liability_total += amt

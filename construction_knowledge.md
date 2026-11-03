@@ -116,15 +116,16 @@ booking, `/hosts` onboarding. Owner: `/dashboard`, bookings/leads, rentals/analy
 - **Crew member fields** (table `crew`): name, phone, email, role
   (owner/foreman/framer/carpenter/laborer/electrician/plumber/painter/finisher/grunt),
   `pay_type` (hourly/salary), `pay_rate` (dollars), `pin_hash` (5-digit PIN), `is_active`,
-  `stripe_account_id` (for direct deposit), `bank_status` (none/onboarding/active/failed).
+  legacy `stripe_account_id` (retired payroll path), `bank_status` and PNC `crew_bank_accounts`.
 - **Clock-in/out:** crew logs hours via the crew portal; timesheets store
   date + hours + work_type + status.
 - **Payroll runs:** owner opens a pay period, approves timesheets, generates payroll →
   each worker line has gross/hours. Lines are recorded in `payments` (amount_cents, status).
   Crew who saved a bank account in the phone app are paid from the company's PNC business
   checking account: the owner downloads the run's NACHA file and uploads it to PNC's ACH
-  origination (PINACLE). A connected Stripe account, where one exists, can still be paid by
-  transfer — that is the legacy path, not the default.
+  origination (PINACLE). Stripe payroll transfers and Stripe onboarding are retired; no
+  payroll money moves from the Copilot. Every worker must have PNC bank details before
+  the run's ACH file can be created or the run can be marked paid.
 - **Direct deposit:** crew enter routing + account in the phone app (`/crew/pay`), stored
   encrypted; `bank_status` tracks it. Owner sees status per worker. Scheduled weekly payroll.
 - **Employees vs 1099:** be honest — owner decides classification; never promise benefits.
@@ -325,12 +326,12 @@ department — but always give the general "what's usually needed" guidance abov
 
 ## 12. Orientation, HR & pay-app (workers)
 
-- New workers: orientation → pay app setup (PIN login to crew portal), direct-deposit
-  onboarding (Stripe), timesheet/clock-in rules, sexual-harassment & safety training
+- New workers: orientation → pay app setup (PIN login to crew portal), PNC bank details
+  in the phone app, timesheet/clock-in rules, sexual-harassment & safety training
   (see §11-12), job-site expectations.
 - Pay app: crew login at `/crew/login` with phone + PIN; see hours, timesheets, pay
   history; submit hours; punch in/out.
-- Pay schedule: weekly/biweekly owned; direct deposit to the worker's Stripe account.
+- Pay schedule: weekly/biweekly owned; direct deposit from the business PNC account to the worker's bank.
 
 ---
 
@@ -358,7 +359,7 @@ records.
 
 - **Leads:** `register_lead`, `lookup_leads`, `list_leads`, `update_lead_status`,
   `skip_trace_owner`, `lookup_zip`, `contact_lookup`, `save_contact`, `draft_lead_email`,
-  `enrich_leads` (batch: runs the whole pipeline on several leads at once)
+  `enrich_leads` (batch: runs the whole pipeline on several leads at once; review mode stages drafts, while LEAD_AUTO_SEND sends eligible drafts through the guarded fire_lead_draft path)
 - **Money:** `get_business_summary`, `get_accounting_summary`, `create_deposit_link`,
   `create_deposit_links` (batch: checkout links for every waiting lead at once),
 - **Materials:** `estimate_materials`, `get_material_price`, `search_materials`
@@ -414,11 +415,13 @@ These five steps work as one flow. Each is only useful once the one before it ha
 
 `enrich_leads(limit)` runs steps 1–5 as a batch on the newest eligible leads (default 10,
 max 25) in one call — prefer it over walking leads one at a time. It spends Skip Sherpa
-credits and stages drafts; it never sends.
+credits and stages drafts. Review mode leaves them staged; with LEAD_AUTO_SEND enabled,
+eligible drafts send through `fire_lead_draft`, which rechecks caps, cooldowns and suppression.
 
-These are for **business** contacts, and every use is logged to the audit trail. Do not
-use them to build a list of homeowners. A phone or email recorded here is for the record
-only — never dial or text a residential number.
+General web sourcing remains **business contacts only**. The permit-owner skip-trace and
+contact-enrichment flow above is the owner-approved, audited exception for existing permit
+leads, not a way to build a new list of homeowners. A phone or email recorded here is for
+the record only — never dial or text a residential number without consent and a DNC check.
 
 ---
 

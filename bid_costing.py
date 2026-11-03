@@ -31,6 +31,8 @@ allocation, not a cost of this job, and it does not belong in a margin.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import date, datetime, timedelta, timezone
 
 COST_CATEGORIES = ["labor", "material", "sub", "equipment", "permit", "other"]
@@ -103,6 +105,11 @@ def ensure_accounting_schema(conn) -> None:
         cur.execute("ALTER TABLE bid_costs ADD COLUMN IF NOT EXISTS unit_cost NUMERIC(14,2);")
         cur.execute("ALTER TABLE bid_costs ADD COLUMN IF NOT EXISTS estimated NUMERIC(14,2);")
         cur.execute("ALTER TABLE bid_costs ADD COLUMN IF NOT EXISTS actual NUMERIC(14,2);")
+        # Revisions do not erase work. A line removed from the price stays on the
+        # card, struck through, so the owner can see what a customer asked to
+        # drop -- but it must never count toward the total or the PDFs again.
+        cur.execute("ALTER TABLE bid_costs ADD COLUMN IF NOT EXISTS removed_at TIMESTAMP WITH TIME ZONE;")
+        cur.execute("ALTER TABLE bid_costs ADD COLUMN IF NOT EXISTS removed_note TEXT;")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_bid_costs_bid ON bid_costs(bid_id);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_bid_costs_cat ON bid_costs(bid_id, category);")
 
@@ -187,12 +194,14 @@ def labor_actual(conn, bid_id: int, company: str = "construction") -> dict:
                 count(*) AS n,
                 COALESCE(SUM(t.hours), 0) AS hours,
                 COALESCE(SUM(t.hours) FILTER (WHERE c.pay_type = 'hourly'), 0) AS hourly_hours,
-                COALESCE(SUM(t.hours * c.pay_rate) FILTER (WHERE c.pay_type = 'hourly'), 0) AS labor_cost,
+                COALESCE(SUM(t.hours * c.pay_rate * CASE
+                    WHEN LOWER(COALESCE(t.work_type, 'regular')) IN ('overtime', 'ot') THEN 1.5 ELSE 1 END
+                ) FILTER (WHERE c.pay_type = 'hourly'), 0) AS labor_cost,
                 COALESCE(SUM(t.hours) FILTER (WHERE c.pay_type <> 'hourly'), 0) AS salaried_hours
             FROM timesheets t
             JOIN crew c ON c.id = t.crew_id
             JOIN projects p ON p.id = t.project_id
-            WHERE p.bid_id = %s AND p.company = %s
+            WHERE p.bid_id = %s AND p.company = %s AND t.status <> 'rejected'
         """, (bid_id, company))
         r = cur.fetchone()
     out.update({
@@ -204,10 +213,19 @@ def labor_actual(conn, bid_id: int, company: str = "construction") -> dict:
     return out
 
 
-def cost_lines(conn, bid_id: int, company: str = "construction") -> list[dict]:
+def cost_lines(conn, bid_id: int, company: str = "construction",
+               include_removed: bool = False) -> list[dict]:
+    """The card's line items.
+
+    Removed lines are history: they are excluded by default so totals, PDFs and
+    the books can never count them again. The bid card asks for them so a
+    removal is visible instead of the row silently vanishing.
+    """
+    clause = "" if include_removed else " AND removed_at IS NULL"
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT * FROM bid_costs WHERE bid_id = %s AND company = %s ORDER BY category, id",
+            "SELECT * FROM bid_costs WHERE bid_id = %s AND company = %s"
+            + clause + " ORDER BY category, id",
             (bid_id, company))
         return cur.fetchall()
 
@@ -231,10 +249,61 @@ def add_cost_line(conn, bid_id: int, category: str = "material", description: st
     return lid
 
 
-def delete_cost_line(conn, line_id: int, bid_id: int, company: str = "construction") -> bool:
+def update_cost_line(conn, line_id: int, bid_id: int, company: str = "construction",
+                     category: str = "", description: str = "", vendor: str = "",
+                     estimated=None, actual=None) -> bool:
+    """Correct one line in place. A revision is the same job, not a new bid."""
+    sets = ["updated_at = now()"]
+    params: list = []
+    if category:
+        if category not in COST_CATEGORIES:
+            raise ValueError(f"category must be one of {COST_CATEGORIES}")
+        sets.append("category = %s")
+        params.append(category)
+    sets.append("description = %s")
+    params.append(description.strip() if description else None)
+    sets.append("vendor = %s")
+    params.append(vendor.strip() if vendor else None)
+    sets.append("estimated = %s")
+    params.append(_money(estimated))
+    sets.append("actual = %s")
+    params.append(_money(actual))
+    params.extend([line_id, bid_id, company])
     with conn.cursor() as cur:
         cur.execute(
-            "DELETE FROM bid_costs WHERE id = %s AND bid_id = %s AND company = %s "
+            "UPDATE bid_costs SET " + ", ".join(sets) +
+            " WHERE id = %s AND bid_id = %s AND company = %s AND removed_at IS NULL "
+            "RETURNING id", tuple(params))
+        ok = cur.fetchone() is not None
+    conn.commit()
+    return ok
+
+
+def delete_cost_line(conn, line_id: int, bid_id: int, company: str = "construction",
+                     note: str = "") -> bool:
+    """Mark a line removed instead of deleting it.
+
+    The row stays so the card can show what the price used to include; every
+    total, PDF and ledger query filters ``removed_at IS NULL``, so keeping it
+    changes no number.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE bid_costs SET removed_at = now(), removed_note = %s, updated_at = now() "
+            "WHERE id = %s AND bid_id = %s AND company = %s AND removed_at IS NULL "
+            "RETURNING id",
+            ((note or "").strip()[:500] or None, line_id, bid_id, company))
+        ok = cur.fetchone() is not None
+    conn.commit()
+    return ok
+
+
+def restore_cost_line(conn, line_id: int, bid_id: int, company: str = "construction") -> bool:
+    """Put a previously removed line back into the price."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE bid_costs SET removed_at = NULL, removed_note = NULL, updated_at = now() "
+            "WHERE id = %s AND bid_id = %s AND company = %s AND removed_at IS NOT NULL "
             "RETURNING id", (line_id, bid_id, company))
         ok = cur.fetchone() is not None
     conn.commit()
@@ -249,11 +318,19 @@ def cost_summary(conn, bid_id: int, company: str = "construction") -> dict:
     """
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT name, trade, status, bid_amount, contract_value, won_date, lost_date "
+            "SELECT name, trade, status, bid_amount, contract_value, markup_pct, won_date, lost_date "
             "FROM bid_opportunities WHERE id = %s AND company = %s", (bid_id, company))
         bid = cur.fetchone()
 
     lines = cost_lines(conn, bid_id, company)
+    with conn.cursor() as cur:
+        # What the current price no longer includes. Shown on the card so a
+        # removed line reads as history rather than as a number that vanished.
+        cur.execute(
+            "SELECT COALESCE(SUM(estimated), 0) AS est, COUNT(*) AS n "
+            "FROM bid_costs WHERE bid_id = %s AND company = %s AND removed_at IS NOT NULL",
+            (bid_id, company))
+        removed = cur.fetchone() or {}
     by_cat: dict[str, dict] = {}
     for ln in lines:
         c = ln["category"]
@@ -307,9 +384,121 @@ def cost_summary(conn, bid_id: int, company: str = "construction") -> dict:
         "actual_margin": act_margin,
         "actual_margin_pct": act_pct,
         "materials_entered": materials_entered,
+        "removed_cost": round(float(removed.get("est") or 0), 2),
+        "removed_count": int(removed.get("n") or 0),
         "complete": complete,
         "won": won,
     }
+
+
+def quote_total(conn, bid_id: int, company: str = "construction") -> tuple:
+    """What the bid amount should be from the card's own rows.
+
+    Estimated cost lines plus the bid's markup. One place computes this so the
+    Recalculate button, the price form and the stale-amount warning cannot
+    disagree. Returns (total, estimated_base, markup_pct).
+    """
+    summary = cost_summary(conn, bid_id, company)
+    base = float(summary.get("estimated_cost") or 0)
+    bid = summary.get("bid") or {}
+    try:
+        markup = float(bid.get("markup_pct") or 0)
+    except (TypeError, ValueError):
+        markup = 0.0
+    return round(base * (1 + markup / 100.0), 2), round(base, 2), markup
+
+
+# --- Revisions ---------------------------------------------------------------
+# A revision is the numbered price the customer was shown, not every keystroke.
+# The owner makes the changes, checks them, then saves the result as Revision N.
+def _revision_fingerprint(lines: list, total, markup) -> str:
+    payload = sorted([
+        [str(l.get("category") or ""), str(l.get("description") or ""),
+         round(float(l.get("estimated") or 0), 2), round(float(l.get("actual") or 0), 2)]
+        for l in lines
+    ])
+    raw = json.dumps({"lines": payload, "total": round(float(total or 0), 2),
+                      "markup": round(float(markup or 0), 2)}, sort_keys=True)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _revision_context(conn, bid_id: int, company: str = "construction") -> dict | None:
+    with conn.cursor() as cur:
+        cur.execute("SELECT COALESCE(revision, 0) AS revision, bid_amount, status, contract_value "
+                    "FROM bid_opportunities WHERE id = %s AND company = %s", (bid_id, company))
+        bid = cur.fetchone()
+    if not bid:
+        return None
+    lines = cost_lines(conn, bid_id, company)
+    summary = cost_summary(conn, bid_id, company)
+    markup = (summary.get("bid") or {}).get("markup_pct") or 0
+    total = bid.get("bid_amount")
+    if total is None:
+        total = summary.get("estimated_cost") or 0
+    return {
+        "bid": bid, "lines": lines, "summary": summary,
+        "total": float(total or 0), "markup": float(markup or 0),
+        "fingerprint": _revision_fingerprint(lines, total, markup),
+    }
+
+
+def list_revisions(conn, bid_id: int, company: str = "construction", limit: int = 50) -> list[dict]:
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT revision, total, estimated_cost, markup_pct, fingerprint, note,
+                   created_by, created_at
+            FROM bid_revisions
+            WHERE bid_id = %s AND company = %s
+            ORDER BY revision DESC LIMIT %s
+        """, (bid_id, company, int(limit)))
+        return cur.fetchall()
+
+
+def revision_dirty(conn, bid_id: int, company: str = "construction") -> bool:
+    """Has anything changed since the last saved revision?"""
+    saved = list_revisions(conn, bid_id, company, limit=1)
+    if not saved:
+        return False
+    ctx = _revision_context(conn, bid_id, company)
+    return bool(ctx) and ctx["fingerprint"] != saved[0].get("fingerprint")
+
+
+def save_revision(conn, bid_id: int, company: str = "construction",
+                  note: str = "", created_by: str = "") -> int:
+    """Snapshot the price as the next revision: 1, then 2, then 3..."""
+    ctx = _revision_context(conn, bid_id, company)
+    if not ctx:
+        raise ValueError("Bid not found")
+    nxt = int(ctx["bid"].get("revision") or 0) + 1
+    lines_json = json.dumps([
+        {"category": l.get("category"), "description": l.get("description"),
+         "vendor": l.get("vendor"),
+         "estimated": float(l.get("estimated") or 0), "actual": float(l.get("actual") or 0)}
+        for l in ctx["lines"]
+    ])
+    with conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO bid_revisions
+                (bid_id, company, revision, total, estimated_cost, markup_pct,
+                 fingerprint, lines, note, created_by)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s)
+        """, (bid_id, company, nxt, ctx["total"],
+              (ctx["summary"].get("estimated_cost") or 0), ctx["markup"],
+              ctx["fingerprint"], lines_json,
+              (note or "").strip()[:1000] or None, (created_by or "").strip()[:255] or None))
+        cur.execute("UPDATE bid_opportunities SET revision = %s, updated_at = now() "
+                    "WHERE id = %s AND company = %s", (nxt, bid_id, company))
+    conn.commit()
+    return nxt
+
+
+def revision_label(bid: dict) -> str:
+    """What the card and every generated document print."""
+    try:
+        n = int((bid or {}).get("revision") or 0)
+    except (TypeError, ValueError):
+        n = 0
+    return f"Revision {n}" if n > 0 else "Original"
 
 
 # --- B. win / loss and margin history ---------------------------------------
@@ -361,6 +550,62 @@ def open_job_for_bid(conn, bid_id: int, company: str = "construction"):
         return cur.fetchone()
 
 
+def ensure_job_for_bid(conn, bid_id: int, company: str = "construction") -> dict:
+    """The job card for this bid, created on first use and kept in step after.
+
+    Documents used to land on a bid with no job to work them against, so the
+    office had to remember to press *Start project* before crew hours could
+    count. Uploading anything now finds the card by ``bid_id`` or makes one.
+
+    An existing card is only topped up where it is blank: a name, address or
+    summary typed by hand is never overwritten, and a completed or cancelled
+    job is not reopened just because a document arrived. A planned card is
+    promoted to active once the bid is won.
+    """
+    ensure_accounting_schema(conn)
+    if not _table_exists(conn, "projects"):
+        raise RuntimeError("projects table does not exist on this database")
+    with conn.cursor() as cur:
+        cur.execute("SELECT * FROM bid_opportunities WHERE id = %s AND company = %s",
+                    (bid_id, company))
+        bid = cur.fetchone()
+        if not bid:
+            raise ValueError("bid not found")
+        cur.execute("SELECT id, name, status FROM projects WHERE bid_id = %s", (bid_id,))
+        found = cur.fetchone()
+        name = (bid.get("name") or "Job")[:255]
+        addr = (bid.get("location") or "") or None
+        trade = bid.get("trade") or "job card"
+        summary = f"Bid #{bid_id} — {trade}"
+        wanted = "active" if bid.get("status") == "won" else "planned"
+        if not found and bid.get("status") in ("lost", "withdrawn"):
+            # Filing a document against a dead bid must not invent a job.
+            return None
+        if found:
+            cur.execute("""
+                UPDATE projects SET
+                    name = COALESCE(NULLIF(name, ''), %s),
+                    address = COALESCE(NULLIF(address, ''), %s),
+                    summary = COALESCE(NULLIF(summary, ''), %s),
+                    status = CASE
+                        WHEN status IN ('completed', 'done', 'closed', 'cancelled') THEN status
+                        WHEN %s = 'active' THEN 'active'
+                        ELSE status END
+                WHERE bid_id = %s AND company = %s
+                RETURNING id, name
+            """, (name, addr, summary, wanted, bid_id, company))
+            row = cur.fetchone() or found
+            conn.commit()
+            return {"id": row["id"], "name": row.get("name") or name, "created": False}
+        cur.execute("""
+            INSERT INTO projects (bid_id, name, address, summary, status, company)
+            VALUES (%s, %s, %s, %s, %s, %s) RETURNING id, name
+        """, (bid_id, name, addr, summary, wanted, company))
+        row = cur.fetchone()
+    conn.commit()
+    return {"id": row["id"], "name": row["name"], "created": True}
+
+
 def convert_bid_to_project(conn, bid_id: int, company: str = "construction",
                            start_date: str = "") -> int:
     """Turn a won bid into a project so crew hours land against it.
@@ -380,6 +625,13 @@ def convert_bid_to_project(conn, bid_id: int, company: str = "construction",
         cur.execute("SELECT id FROM projects WHERE bid_id = %s", (bid_id,))
         found = cur.fetchone()
         if found:
+            # A card created by a document upload starts planned. Winning the
+            # bid is what makes it active, without reopening a finished job.
+            if bid.get("status") == "won":
+                cur.execute(
+                    "UPDATE projects SET status = 'active' "
+                    "WHERE id = %s AND status = 'planned'", (found["id"],))
+                conn.commit()
             return found["id"]
         cur.execute("SELECT column_name FROM information_schema.columns "
                     "WHERE table_name = 'projects' AND column_name = 'company'")
@@ -434,10 +686,12 @@ def analytics(conn, company: str = "construction") -> dict:
     # Without crew and timesheets there is no cost to report, so revenue only.
     labor_sql = """
         COALESCE((
-            SELECT SUM(t.hours * cr.pay_rate) FROM timesheets t
+            SELECT SUM(t.hours * cr.pay_rate * CASE
+                WHEN LOWER(COALESCE(t.work_type, 'regular')) IN ('overtime', 'ot') THEN 1.5 ELSE 1 END
+            ) FROM timesheets t
             JOIN crew cr ON cr.id = t.crew_id
             JOIN projects p ON p.id = t.project_id
-            WHERE p.bid_id = b.id AND cr.pay_type = 'hourly'), 0)
+            WHERE p.bid_id = b.id AND cr.pay_type = 'hourly' AND t.status <> 'rejected'), 0)
     """ if has_time else "0"
     with conn.cursor() as cur:
         cur.execute(f"""
@@ -445,7 +699,8 @@ def analytics(conn, company: str = "construction") -> dict:
                    COALESCE(b.contract_value, b.bid_amount) AS revenue,
                    b.won_date,
                    COALESCE((SELECT SUM(actual) FROM bid_costs c
-                             WHERE c.bid_id = b.id AND c.category <> 'labor'), 0)
+                             WHERE c.bid_id = b.id AND c.category <> 'labor'
+                               AND c.removed_at IS NULL), 0)
                    + {labor_sql} AS cost
             FROM bid_opportunities b
             WHERE b.company = %s AND b.status = 'won'
@@ -636,19 +891,23 @@ def board_numbers(conn, company: str = "construction") -> dict[int, dict]:
     with conn.cursor() as cur:
         cur.execute("""
             SELECT p.bid_id AS bid_id,
-                   COALESCE(SUM(t.hours * c.pay_rate) FILTER (WHERE c.pay_type = 'hourly'), 0) AS labor
+                   COALESCE(SUM(t.hours * c.pay_rate * CASE
+                       WHEN LOWER(COALESCE(t.work_type, 'regular')) IN ('overtime', 'ot') THEN 1.5 ELSE 1 END
+                   ) FILTER (WHERE c.pay_type = 'hourly'), 0) AS labor
             FROM timesheets t
             JOIN crew c ON c.id = t.crew_id
             JOIN projects p ON p.id = t.project_id
-            WHERE p.company = %s AND p.bid_id IS NOT NULL
+            WHERE p.company = %s AND p.bid_id IS NOT NULL AND t.status <> 'rejected'
             GROUP BY p.bid_id
         """, (company,))
         labor = {r["bid_id"]: float(r["labor"] or 0) for r in cur.fetchall()}
+        for bid_id, amount in labor.items():
+            out[bid_id] = {"labor": amount, "other": 0.0, "estimated": 0.0}
         cur.execute("""
             SELECT bid_id,
-                   COALESCE(SUM(actual), 0) AS actual,
+                   COALESCE(SUM(actual) FILTER (WHERE category <> 'labor'), 0) AS actual,
                    COALESCE(SUM(estimated), 0) AS estimated
-            FROM bid_costs WHERE company = %s GROUP BY bid_id
+            FROM bid_costs WHERE company = %s AND removed_at IS NULL GROUP BY bid_id
         """, (company,))
         for r in cur.fetchall():
             bid_id = r["bid_id"]

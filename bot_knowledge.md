@@ -23,9 +23,10 @@ payroll data, or business numbers — use the tools, the knowledge file, and the
 - **Phone (calls/texts):** +1 (757) 908-7121 · **Email:** hello@bizstackperks.com
 - **Owner ID:** admin login → `/dashboard`, `/leads`, `/projects`, `/crew/admin`,
   `/payroll`, `/payments`, `/copilot`.
-- **Payments:** Stripe deposit links & project deposits; credit/debit via card.
+- **Payments:** deposit links show the business Zelle handle and PNC ACH details;
+  older Stripe card links still work, but new deposits do not use a card processor.
 - **Workers:** see §Payroll below — crew portal at `/crew/login`, PIN-based clock-in,
-  timesheets, direct deposit via Stripe transfers.
+  timesheets, direct deposit from the business PNC account.
 
 ### Broom Service (sister company — bizstackperks.com)
 - **What we do:** Professional short-term-rental **turnover cleaning**, laundry, deep
@@ -87,7 +88,7 @@ materials from memory.
 4. Customer gets an SMS with the range + invitation to book a free walkthrough.
 5. Crew portals + copilot review leads in `/dashboard`.
 
-Leads funnel: `new → contacted → quoted → deposit → in_progress → completed` (or `lost`).
+Leads funnel: `new → contacted → engaged → quoted → won` (or `lost`). Legacy statuses are translated onto these canonical stages.
 
 ---
 
@@ -109,20 +110,19 @@ booking, `/hosts` onboarding. Owner: `/dashboard`, bookings/leads, rentals/analy
 - **Crew member fields** (table `crew`): name, phone, email, role
   (owner/foreman/framer/carpenter/laborer/electrician/plumber/painter/finisher/grunt),
   `pay_type` (hourly/salary), `pay_rate` (dollars), `pin_hash` (5-digit PIN), `is_active`,
-  `stripe_account_id` (for direct deposit), `bank_status` (none/onboarding/active/failed).
+  `bank_status`, plus encrypted PNC bank records in `crew_bank_accounts`.
 - **Clock-in/out:** crew logs hours via the crew portal; timesheets store
-  date + hours + work_type + status.
-- **Payroll runs:** owner opens a pay period, approves timesheets, generates payroll →
-  each worker line has gross/hours. Payments are sent via **Stripe direct deposit**
-  (transfer to the worker's connected Stripe account) and recorded in `payments`
-  (amount_cents, status).
-- **Direct deposit:** each worker's `stripe_account_id` is set up through Stripe Connect;
-  `bank_status` tracks onboarding. Owner sees bank status and can re-send the onboarding
-  link. Scheduled weekly payroll.
+  date + hours + work_type + status. Only approved, unassigned sheets enter a payroll run.
+- **Payroll runs:** owner opens a pay period, approves timesheets and generates payroll →
+  each worker line has immutable gross/hours. Run creation locks sheets with
+  `payroll_run_id`; it does not mark them paid. The owner finalizes, downloads a NACHA/ACH
+  file and uploads it to PNC PINACLE. Confirming settlement marks the run and sheets paid.
+- **Direct deposit:** crew save routing + account in the phone app, encrypted at rest.
+  Every positive line needs PNC bank details before a file can be created or the run marked
+  paid. Stripe payroll transfers and onboarding are retired; the Copilot never moves money.
 - **Employees vs 1099:** be honest — owner decides classification; never promise benefits.
-- **Checks / direct deposit to workers:** if a worker hasn't completed Stripe onboarding,
-  payroll defaults to manual check (recorded; owner follows up). Always confirm amounts and
-  recipients before confirming anything to the owner.
+- **Checks / direct deposit to workers:** an unbanked worker is named and blocks ACH
+  settlement rather than being silently omitted. Always confirm amounts and recipients.
 - **Accounting summary** (`get_accounting_summary`): shows gross collections (deposits +
   job payments), plus open/unpaid lead value, for the period.
 
@@ -130,8 +130,8 @@ booking, `/hosts` onboarding. Owner: `/dashboard`, bookings/leads, rentals/analy
 
 ## 6. Accounting & business numbers
 
-- Money is stored in **cents** (`*_cents`). Gross = sum of `payments.amount_cents`;
-  leads' deposits via Stripe.
+- Money is stored in **cents** (`*_cents`). Customer collections exclude outbound
+  payroll rows. Deposits are recorded when Zelle, ACH, check or cash actually arrives.
 - Don't report net income from memory; use `get_business_summary` /
   `get_accounting_summary` tools for real numbers.
 - Concepts: ballpark vs fixed bid, deposit collects before scheduling, cost of materials
@@ -214,12 +214,12 @@ conservative and route to the building department.
 
 ## 12. Orientation, HR & pay-app (workers)
 
-- New workers: orientation → pay app setup (PIN login to crew portal), direct-deposit
-  onboarding (Stripe), timesheet/clock-in rules, sexual-harassment & safety training
+- New workers: orientation → pay app setup (PIN login to crew portal), PNC bank details
+  in the phone app, timesheet/clock-in rules, sexual-harassment & safety training
   (see §11-12), job-site expectations.
 - Pay app: crew login at `/crew/login` with phone + PIN; see hours, timesheets, pay
   history; submit hours; punch in/out.
-- Pay schedule: weekly/biweekly owned; direct deposit to the worker's Stripe account.
+- Pay schedule: weekly/biweekly owned; direct deposit from the business PNC account to the worker's bank.
 
 ---
 

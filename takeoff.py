@@ -281,7 +281,8 @@ def bid_cost_csv(conn, bid_id: int, company: str = "construction") -> str:
     """Everything the accountant needs for one bid: takeoff plus entered costs."""
     sheets = list_sheets(conn, bid_id, company)
     with conn.cursor() as cur:
-        cur.execute("SELECT * FROM bid_costs WHERE bid_id = %s AND company = %s ORDER BY category, id",
+        cur.execute("SELECT * FROM bid_costs WHERE bid_id = %s AND company = %s "
+                    "AND removed_at IS NULL ORDER BY category, id",
                     (bid_id, company))
         cost_lines = cur.fetchall()
         cur.execute("SELECT name, reference, status, bid_amount, contract_value, "

@@ -691,7 +691,8 @@ def _send_via_ses(cfg: dict, to: str, raw: bytes, cc: str = "") -> bool:
     return bool(resp.get("MessageId"))
 
 
-async def send_email(cfg: dict, to: str, subject: str, body: str, attachment: bytes = None, filename: str = "", cc: str = ""):
+async def send_email(cfg: dict, to: str, subject: str, body: str, attachment: bytes = None, filename: str = "",
+                     cc: str = "", attachments: list | None = None):
     msg = EmailMessage()
     msg["Subject"] = subject
     msg["From"] = formataddr((cfg.get("SMTP_NAME", ""), cfg.get("SMTP_FROM", "")))
@@ -704,6 +705,14 @@ async def send_email(cfg: dict, to: str, subject: str, body: str, attachment: by
         msg.add_attachment(
             attachment, maintype="application", subtype=mime_type(filename).split("/")[1], filename=filename
         )
+    # A job package is three documents, not one. Callers that only have a single
+    # file keep using attachment/filename above.
+    for extra, extra_name in (attachments or []):
+        if extra and extra_name:
+            msg.add_attachment(
+                extra, maintype="application",
+                subtype=mime_type(extra_name).split("/")[1], filename=extra_name
+            )
 
     host = cfg.get("SMTP_HOST", "")
     port = int(cfg.get("SMTP_PORT") or 587)

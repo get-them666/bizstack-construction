@@ -233,8 +233,14 @@ def _mc(pdf: FPDF, w: float, h: float, text: str, **kw) -> None:
 def _title_block(pdf: BidDocPDF, title: str, bid: dict, subtitle: str = "") -> None:
     pdf.set_font("Helvetica", "B", 15)
     pdf.cell(0, 8, title, new_x="LMARGIN", new_y="NEXT")
+    try:
+        number = int(bid.get("revision") or 0)
+    except (TypeError, ValueError):
+        number = 0
+    revision = f"Revision {number}" if number > 0 else "Original"
     pdf.set_font("Helvetica", "", 9)
     pdf.cell(0, 5, f"Bid #{bid.get('id', '')}   |   "
+                   f"{revision}   |   "
                    f"Reference: {_txt(bid.get('reference') or '-')}   |   "
                    f"Date: {date.today().strftime('%B %d, %Y')}",
              new_x="LMARGIN", new_y="NEXT")

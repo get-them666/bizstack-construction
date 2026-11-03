@@ -393,6 +393,7 @@
                 div.innerHTML = `
                     <div class="flex items-start justify-between gap-3">
                         <div>
+                            ${j.job_number ? '<p class="text-xs font-bold text-indigo-600">' + escapeHtml(j.job_number) + '</p>' : ''}
                             <p class="text-sm font-bold text-slate-800">${escapeHtml(j.name)}</p>
                             ${j.address ? '<p class="text-xs text-slate-500 mt-0.5">📍 ' + escapeHtml(j.address) + '</p>' : ''}
                             ${j.start_date ? '<p class="text-xs text-slate-400 mt-0.5">🗓 starts ' + escapeHtml(j.start_date) + '</p>' : ''}
@@ -832,6 +833,7 @@
                 div.innerHTML = `
                     <div class="flex items-start justify-between gap-3">
                         <div>
+                            ${j.job_number ? '<p class="text-xs font-bold text-indigo-600">' + escapeHtml(j.job_number) + '</p>' : ''}
                             <p class="text-sm font-bold text-slate-800">${escapeHtml(j.name)}</p>
                             ${j.address ? '<p class="text-xs text-slate-500 mt-0.5">📍 ' + escapeHtml(j.address) + '</p>' : ''}
                         </div>

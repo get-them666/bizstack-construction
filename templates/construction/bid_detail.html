@@ -22,12 +22,32 @@
         {% if b.trade %}<span class="px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide bg-indigo-50 text-indigo-700 rounded">{{ b.trade }}</span>{% endif %}
         <span class="px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide bg-slate-100 text-slate-600 rounded">{{ b.role or 'sub' }}</span>
         <span class="px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide bg-slate-800 text-white rounded">{{ b.status }}</span>
+        <span class="px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide rounded {% if b.revision %}bg-amber-100 text-amber-800 border border-amber-200{% else %}bg-slate-100 text-slate-500 border border-slate-200{% endif %}">{{ revision_label }}</span>
         {% if b.reference %}<span class="text-xs font-mono text-slate-400">{{ b.reference }}</span>{% endif %}
         {% if b.source %}<span class="text-xs text-slate-400">via {{ b.source }}</span>{% endif %}
       </div>
     </div>
     <a href="/bids" class="px-4 py-2.5 text-sm font-semibold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 rounded-xl transition-colors">&larr; Board</a>
   </div>
+
+  {% if recalculated %}
+  <div class="mb-6 rounded-xl bg-emerald-50 border border-emerald-200 px-4 py-3 text-sm text-emerald-800">
+    Bid amount recalculated from the cost lines and markup: <b>${{ '{:,.2f}'.format(recalculated|float) }}</b>. The Scope of Work, itemized pricing, contract and deposit schedule now use this total.
+  </div>
+  {% endif %}
+  {% if saved_revision %}
+  <div class="mb-6 rounded-xl bg-amber-50 border border-amber-200 px-4 py-3 text-sm text-amber-800">
+    Saved as <b>Revision {{ saved_revision }}</b>. The card and every generated document now state that revision, so this price cannot be confused with the one before it.
+  </div>
+  {% endif %}
+  {% if documents_sent %}
+  <div class="mb-6 rounded-xl bg-emerald-50 border border-emerald-200 px-4 py-3 text-sm text-emerald-800">
+    Documents sent to <b>{{ documents_sent }}</b> — Scope of Work, itemized pricing and the contract, at {{ revision_label }}.
+  </div>
+  {% endif %}
+  {% if error %}
+  <div class="mb-6 rounded-xl bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">{{ error }}</div>
+  {% endif %}
 
   <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
 
@@ -91,16 +111,42 @@
             <th></th></tr></thead>
           <tbody>
             {% for c in costs %}
-            <tr class="border-b border-slate-50">
+            <tr class="border-b border-slate-50 align-top {% if c.removed_at %}bg-slate-50/60{% endif %}">
               <td class="py-2 font-semibold text-slate-700">{{ c.category }}</td>
-              <td class="py-2 text-slate-600">{{ c.description or '—' }}{% if c.vendor %} <span class="text-slate-400">· {{ c.vendor }}</span>{% endif %}</td>
-              <td class="py-2 text-right">{{ "${:,.0f}".format(c.estimated or 0) }}</td>
-              <td class="py-2 text-right">{{ "${:,.0f}".format(c.actual or 0) }}</td>
+              <td class="py-2 text-slate-600">
+                <span class="{% if c.removed_at %}line-through text-slate-400{% endif %}">{{ c.description or '—' }}{% if c.vendor %} <span class="text-slate-400">· {{ c.vendor }}</span>{% endif %}</span>
+                {% if c.removed_at %}
+                <span class="block text-xs font-semibold text-red-500 mt-0.5">Removed {{ c.removed_at.strftime('%b %d, %Y') }} — kept as history, not in the total</span>
+                {% endif %}
+              </td>
+              <td class="py-2 text-right {% if c.removed_at %}text-slate-400 line-through{% endif %}">{{ "${:,.0f}".format(c.estimated or 0) }}</td>
+              <td class="py-2 text-right {% if c.removed_at %}text-slate-400 line-through{% endif %}">{{ "${:,.0f}".format(c.actual or 0) }}</td>
               <td class="py-2 text-right">
-                <form method="post" action="/api/bids/{{ b.id }}/costs/{{ c.id }}/delete">
+                {% if c.removed_at %}
+                <form method="post" action="/api/bids/{{ b.id }}/costs/{{ c.id }}/restore">
                   <input type="hidden" name="back" value="/bids/{{ b.id }}">
-                  <button class="text-xs font-semibold text-red-600 hover:text-red-700">Remove</button>
+                  <button class="text-xs font-semibold text-indigo-600 hover:text-indigo-700">Put back</button>
                 </form>
+                {% else %}
+                <details class="inline-block text-left">
+                  <summary class="cursor-pointer text-xs font-semibold text-indigo-600 hover:text-indigo-700">Update cost</summary>
+                  <form method="post" action="/api/bids/{{ b.id }}/costs/{{ c.id }}/update" class="mt-2 space-y-1.5 w-52">
+                    <input type="hidden" name="back" value="/bids/{{ b.id }}">
+                    <select name="category" class="block w-full text-xs border border-slate-200 rounded-lg px-2 py-1.5 bg-white">
+                      {% for cat in cost_categories %}<option value="{{ cat }}" {% if cat == c.category %}selected{% endif %}>{{ cat }}</option>{% endfor %}
+                    </select>
+                    <input name="description" value="{{ c.description or '' }}" placeholder="what it's for" class="block w-full text-xs border border-slate-200 rounded-lg px-2 py-1.5">
+                    <input name="vendor" value="{{ c.vendor or '' }}" placeholder="vendor" class="block w-full text-xs border border-slate-200 rounded-lg px-2 py-1.5">
+                    <input name="estimated" value="{{ c.estimated or '' }}" placeholder="estimated" inputmode="decimal" class="block w-full text-xs border border-slate-200 rounded-lg px-2 py-1.5">
+                    <input name="actual" value="{{ c.actual or '' }}" placeholder="actual" inputmode="decimal" class="block w-full text-xs border border-slate-200 rounded-lg px-2 py-1.5">
+                    <button class="w-full text-xs font-bold px-2 py-1.5 bg-slate-900 text-white rounded-lg hover:bg-slate-700">Save line</button>
+                  </form>
+                </details>
+                <form method="post" action="/api/bids/{{ b.id }}/costs/{{ c.id }}/delete" class="inline-block mt-1" onsubmit="return confirm('Take this line out of the price? It stays on the card as history and can be put back.')">
+                  <input type="hidden" name="back" value="/bids/{{ b.id }}">
+                  <button class="text-xs font-semibold text-red-600 hover:text-red-700">Take out</button>
+                </form>
+                {% endif %}
               </td>
             </tr>
             {% endfor %}
@@ -110,10 +156,37 @@
             <td class="pt-3 text-right">{{ "${:,.0f}".format(cost_summary.get('estimated', 0)) }}</td>
             <td class="pt-3 text-right">{{ "${:,.0f}".format(cost_summary.get('actual', 0)) }}</td>
             <td></td>
-          </tr></tfoot>
+          </tr>
+          {% if cost_summary.get('removed_count') %}
+          <tr class="text-xs text-slate-400">
+            <td colspan="2" class="pt-2">Kept on the card as history — not in the total</td>
+            <td class="pt-2 text-right line-through">{{ "${:,.2f}".format(cost_summary.get('removed_cost', 0)) }}</td>
+            <td colspan="2"></td>
+          </tr>
+          {% endif %}
+          </tfoot>
         </table>
         {% else %}
         <p class="text-sm text-slate-500">No cost lines yet.</p>
+        {% endif %}
+
+        {% if quote_total > 0 %}
+        <div class="mt-3 rounded-xl bg-slate-50 border border-slate-200 px-3 py-2.5 flex flex-wrap items-center justify-between gap-2">
+          <div class="text-xs text-slate-600">
+            Quoted total from these lines{% if markup_pct %} + {{ markup_pct }}% markup{% endif %}:
+            <b class="text-slate-900">${{ '{:,.2f}'.format(quote_total) }}</b>
+            {% if amount_stale %}
+            <span class="block text-amber-700 font-semibold">The bid amount is still ${{ '{:,.2f}'.format(b.bid_amount|float) }} — recalculate to match the revised scope before sending anything.</span>
+            {% endif %}
+            {% if b.contract_value %}
+            <span class="block text-slate-400">Invoices use the signed contract value of ${{ '{:,.2f}'.format(b.contract_value|float) }}; change that separately if this revision changes the contract.</span>
+            {% endif %}
+          </div>
+          <form method="post" action="/api/bids/{{ b.id }}/recalculate">
+            <input type="hidden" name="back" value="/bids/{{ b.id }}">
+            <button class="text-xs font-bold px-3 py-2 bg-slate-900 text-white rounded-lg hover:bg-slate-700">↻ Recalculate job total</button>
+          </form>
+        </div>
         {% endif %}
 
         <form method="post" action="/api/bids/{{ b.id }}/costs" class="mt-4 pt-4 border-t border-slate-100 grid grid-cols-1 sm:grid-cols-5 gap-2">
@@ -126,6 +199,40 @@
           <input type="hidden" name="back" value="/bids/{{ b.id }}">
           <button class="text-sm font-semibold px-4 py-2 bg-slate-900 text-white rounded-lg hover:bg-slate-700">Add</button>
         </form>
+      </section>
+
+      {# ── Revisions: the numbered price the customer was shown ────────── #}
+      <section class="bg-white rounded-2xl border border-amber-200 p-5">
+        <div class="flex flex-wrap items-center justify-between gap-2 mb-2">
+          <h2 class="text-sm font-bold uppercase tracking-wide text-amber-700">Revisions</h2>
+          <span class="text-[11px] font-bold uppercase tracking-wide rounded px-2 py-0.5 {% if b.revision %}bg-amber-100 text-amber-800 border border-amber-200{% else %}bg-slate-100 text-slate-500 border border-slate-200{% endif %}">{{ revision_label }}</span>
+        </div>
+        {% if revision_dirty %}
+        <p class="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 mb-3">
+          The price has changed since {{ revision_label }}. Save it as <b>Revision {{ (b.revision or 0) + 1 }}</b> so the card, the contract and the copy the customer holds all state the same number.
+        </p>
+        {% elif b.revision %}
+        <p class="text-xs text-slate-500 mb-3">This price is <b>{{ revision_label }}</b>. Saving again makes it Revision {{ (b.revision or 0) + 1 }}.</p>
+        {% else %}
+        <p class="text-xs text-slate-500 mb-3">This is the original price. Saving a revision numbers it <b>Revision 1</b>; every later save is Revision 2, 3, and so on.</p>
+        {% endif %}
+        <form method="post" action="/api/bids/{{ b.id }}/revision" class="grid grid-cols-1 sm:grid-cols-3 gap-2">
+          <input type="hidden" name="back" value="/bids/{{ b.id }}">
+          <input name="note" placeholder="What changed — customer asked for…" class="sm:col-span-2 text-sm border border-slate-200 rounded-lg px-3 py-2">
+          <button class="text-sm font-semibold px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700">Save as Revision {{ (b.revision or 0) + 1 }}</button>
+        </form>
+        {% if revisions %}
+        <ul class="mt-3 space-y-1">
+          {% for r in revisions %}
+          <li class="flex flex-wrap items-center justify-between gap-2 text-xs border-b border-slate-50 py-1.5">
+            <span class="font-bold text-slate-800">Revision {{ r.revision }}</span>
+            <span class="text-slate-400">{{ r.created_at.strftime('%b %d, %Y') if r.created_at else '' }}</span>
+            <span class="font-semibold text-slate-700">${{ '{:,.2f}'.format(r.total or 0) }}</span>
+            {% if r.note %}<span class="text-slate-500">{{ r.note }}</span>{% endif %}
+          </li>
+          {% endfor %}
+        </ul>
+        {% endif %}
       </section>
     </div>
 
@@ -282,11 +389,11 @@
       {# ── Contract package: uploaded docs first, auto-generated fallback ──── #}
       {% set upl_by_type = {} %}
       {% for d in docs %}
-      {% set _ = upl_by_type.setdefault(d.document_type or 'other', []) %}
+      {% if not d.superseded_at %}{% set _ = upl_by_type.setdefault(d.document_type or 'other', []) %}{% endif %}
       {% endfor %}
       <section class="bg-white rounded-2xl border border-emerald-200 p-5">
         <h2 class="text-sm font-bold uppercase tracking-wide text-emerald-700 mb-2">Contract package</h2>
-        <p class="text-xs text-slate-500 mb-3">Scope of Work with walkthrough photos, itemized pricing, and the renovation agreement with legal terms. Uploaded documents (above) take priority; otherwise auto-generated from the cost lines on this card.</p>
+        <p class="text-xs text-slate-500 mb-3">Scope of Work with walkthrough photos, itemized pricing, and the renovation agreement with legal terms. <b>Bid #{{ b.id }} · {{ revision_label }}</b> — uploaded documents (above) take priority; otherwise auto-generated from the cost lines on this card.</p>
         <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-4">
           {% set sow_list = upl_by_type.get('sow', []) %}
           {% set quote_list = upl_by_type.get('quote', []) %}
@@ -295,11 +402,12 @@
           {% set sow_doc = sow_list[0] if sow_list else none %}
           {% set quote_doc = quote_list[0] if quote_list else none %}
           {% set item_doc = item_list[0] if item_list else none %}
+          {% set price_doc = item_doc or quote_doc %}
           {% set contract_doc = contract_list[0] if contract_list else none %}
           {% if sow_doc %}
-          <a href="{{ sow_doc.url or ('/media/' ~ sow_doc.key) }}" target="_blank" rel="noopener"
+          <a href="{{ sow_doc.url or ('/media/' ~ sow_doc.key) }}" target="_blank" rel="noopener" title="{{ sow_doc.filename }}"
              class="block text-center text-xs font-semibold px-3 py-2.5 bg-emerald-900 text-emerald-200 rounded-lg hover:bg-emerald-800 border border-emerald-700">
-            📄 Scope of Work
+            📄 Scope of Work <span class="block text-[10px] font-normal opacity-80">uploaded</span>
           </a>
           {% else %}
           <a href="/bids/{{ b.id }}/sow.pdf" target="_blank" rel="noopener"
@@ -307,10 +415,10 @@
             📄 Scope of Work
           </a>
           {% endif %}
-          {% if quote_doc %}
-          <a href="{{ quote_doc.url or ('/media/' ~ quote_doc.key) }}" target="_blank" rel="noopener"
+          {% if price_doc %}
+          <a href="{{ price_doc.url or ('/media/' ~ price_doc.key) }}" target="_blank" rel="noopener" title="{{ price_doc.filename }}"
              class="block text-center text-xs font-semibold px-3 py-2.5 bg-emerald-900 text-emerald-200 rounded-lg hover:bg-emerald-800 border border-emerald-700">
-            💰 Quote
+            💰 {{ 'Quote' if quote_doc and not item_doc else 'Itemized Pricing' }} <span class="block text-[10px] font-normal opacity-80">uploaded</span>
           </a>
           {% else %}
           <a href="/bids/{{ b.id }}/itemized.pdf" target="_blank" rel="noopener"
@@ -319,9 +427,9 @@
           </a>
           {% endif %}
           {% if contract_doc %}
-          <a href="{{ contract_doc.url or ('/media/' ~ contract_doc.key) }}" target="_blank" rel="noopener"
+          <a href="{{ contract_doc.url or ('/media/' ~ contract_doc.key) }}" target="_blank" rel="noopener" title="{{ contract_doc.filename }}"
              class="block text-center text-xs font-semibold px-3 py-2.5 bg-emerald-900 text-emerald-200 rounded-lg hover:bg-emerald-800 border border-emerald-700">
-            ✍️ Contract
+            ✍️ Contract <span class="block text-[10px] font-normal opacity-80">uploaded</span>
           </a>
           {% else %}
           <a href="/bids/{{ b.id }}/contract.pdf" target="_blank" rel="noopener"
@@ -331,6 +439,22 @@
           {% endif %}
         </div>
         <p class="text-[11px] text-slate-400">Photos taken at the walkthrough are embedded in the auto-generated Scope of Work and Contract. Upload your own documents above to replace the templates for any job.</p>
+      </section>
+
+      {# ── Send the package to PNC / Bill.com ────────────── #}
+      <section class="bg-white rounded-2xl border border-emerald-200 p-5">
+        <h2 class="text-sm font-bold uppercase tracking-wide text-emerald-700 mb-2">Send to PNC</h2>
+        <p class="text-xs text-slate-500 mb-3">Emails the Scope of Work, itemized pricing and contract for <b>Bid #{{ b.id }} · {{ revision_label }}</b> to your PNC / Bill.com document inbox. Uploaded documents are used where you have them; otherwise the generated PDFs.</p>
+        {% if pnc_docs_email %}
+        <form method="post" action="/api/bids/{{ b.id }}/send-documents"
+              onsubmit="return confirm('Send Bid #{{ b.id }} {{ revision_label }} to {{ pnc_docs_email }}?');">
+          <input type="hidden" name="to_email" value="{{ pnc_docs_email }}">
+          <button class="w-full text-sm font-semibold px-4 py-2.5 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700">✉️ Send documents to PNC</button>
+        </form>
+        <p class="text-[11px] text-slate-400 mt-2">Goes to <span class="font-mono">{{ pnc_docs_email }}</span>. Change it under <a href="/settings#banking" class="underline">Settings → Banking</a>.</p>
+        {% else %}
+        <p class="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">Set the documents email under <a href="/settings#banking" class="underline">Settings → Banking</a> first.</p>
+        {% endif %}
       </section>
 
 
@@ -626,6 +750,7 @@
           <input name="markup_pct" value="{{ b.markup_pct or 0 }}" placeholder="Markup %" inputmode="decimal" class="text-sm border border-slate-200 rounded-lg px-3 py-2">
           <input name="bid_amount" value="{{ b.bid_amount or '' }}" placeholder="Final bid $" inputmode="decimal" class="text-sm border border-slate-200 rounded-lg px-3 py-2">
           <button class="text-sm font-semibold px-4 py-2 bg-white border border-slate-200 rounded-lg hover:border-emerald-300 col-span-2">Update Price</button>
+          <p class="text-[11px] text-slate-400 col-span-2">Leave <b>Final bid $</b> blank to set it from the cost lines plus this markup.</p>
         </form>
         <form method="post" action="/api/bids/{{ b.id }}/submit" class="space-y-2">
           <input type="hidden" name="back" value="/bids/{{ b.id }}">
@@ -638,7 +763,7 @@
 
       <section class="bg-white rounded-2xl border border-slate-200 p-5">
         <h2 class="text-sm font-bold uppercase tracking-wide text-slate-500 mb-3">Job documents</h2>
-        <p class="text-xs text-slate-500 mb-3">Upload the SOW, quote, itemized pricing, plans, and contract for this job. Uploaded documents are linked here and used in place of the auto-generated templates.</p>
+        <p class="text-xs text-slate-500 mb-3">Upload the SOW, quote, itemized pricing, plans, and contract for this job. Uploaded documents are linked here and used in place of the auto-generated templates. A revision becomes the one in use; superseding the old one keeps it listed as history without changing the package.</p>
         {% set docs_by_type = {} %}
         {% for d in docs %}
         {% set _ = docs_by_type.setdefault(d.document_type or 'other', []).append(d) %}
@@ -661,11 +786,18 @@
           <ul class="space-y-1 text-sm">
             {% for d in tdocs %}
             <li class="flex items-center justify-between gap-2 py-1.5 border-b border-slate-50">
-              <a href="{{ d.url or ('/media/' ~ d.key) }}" target="_blank" rel="noopener" class="min-w-0 truncate font-semibold text-indigo-700 hover:underline">{{ d.filename }}</a>
+              <a href="{{ d.url or ('/media/' ~ d.key) }}" target="_blank" rel="noopener" class="min-w-0 truncate font-semibold {% if d.superseded_at %}text-slate-400 line-through{% else %}text-indigo-700 hover:underline{% endif %}">{{ d.filename }}</a>
               <div class="flex items-center gap-2">
-                <form method="post" action="/api/bids/documents/{{ d.id }}/delete" onsubmit="return confirm('Remove this document?')">
-                  <button class="text-xs text-red-600 hover:underline">Remove</button>
+                {% if d.superseded_at %}
+                <span class="text-[11px] font-semibold text-red-500 whitespace-nowrap">superseded</span>
+                <form method="post" action="/api/bids/documents/{{ d.id }}/restore">
+                  <button class="text-xs text-indigo-600 hover:underline">Use again</button>
                 </form>
+                {% else %}
+                <form method="post" action="/api/bids/documents/{{ d.id }}/delete" onsubmit="return confirm('Retire this document from the package? It stays listed as history.')">
+                  <button class="text-xs text-red-600 hover:underline">Retire</button>
+                </form>
+                {% endif %}
               </div>
             </li>
             {% endfor %}
@@ -680,9 +812,6 @@
 
       <section class="bg-white rounded-2xl border border-slate-200 p-5">
         <h2 class="text-sm font-bold uppercase tracking-wide text-slate-500 mb-3">Invoices</h2>
-        {% if error %}
-        <div class="mb-3 rounded-xl bg-red-50 border border-red-200 p-3 text-xs text-red-800">{{ error }}</div>
-        {% endif %}
         {% if inv_summary %}
         <div class="grid grid-cols-3 gap-3 mb-4 text-sm">
           <div><div class="text-slate-500">Billed</div><div class="font-bold text-slate-800">{{ "${:,.0f}".format(inv_summary.get('billed', 0)) }}</div></div>

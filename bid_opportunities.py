@@ -455,6 +455,9 @@ def ensure_schema(conn) -> None:
         cur.execute("ALTER TABLE bid_opportunities ADD COLUMN IF NOT EXISTS notes TEXT;")
         cur.execute("ALTER TABLE bid_opportunities ADD COLUMN IF NOT EXISTS source VARCHAR(40) DEFAULT 'manual';")
         cur.execute("ALTER TABLE bid_opportunities ADD COLUMN IF NOT EXISTS company VARCHAR(40) DEFAULT 'construction';")
+        # A revision is a numbered snapshot of the price the customer was shown.
+        # 0 means the original; the first saved change is Revision 1.
+        cur.execute("ALTER TABLE bid_opportunities ADD COLUMN IF NOT EXISTS revision INTEGER DEFAULT 0;")
         # Where the bid actually lives, so the board can deep-link out to it.
         # BuildingConnected accepts
         #   https://app.buildingconnected.com/opportunities/{id}/info
@@ -517,8 +520,32 @@ def ensure_schema(conn) -> None:
             )
         """)
         cur.execute("ALTER TABLE bid_documents ADD COLUMN IF NOT EXISTS document_type VARCHAR(40) DEFAULT 'other';")
+        # A replaced contract stays attached so the card can show what was sent
+        # before; it is excluded from the Contract package by superseded_at.
+        cur.execute("ALTER TABLE bid_documents ADD COLUMN IF NOT EXISTS superseded_at TIMESTAMP WITH TIME ZONE;")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_bid_documents_bid ON bid_documents(bid_id);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_bid_documents_type ON bid_documents(bid_id, document_type);")
+        # Every saved revision, with the price and line list it contained. The
+        # card reads this for "Revision 3 · Nov 3 · $2,980.64"; the fingerprint
+        # tells it whether the working card has drifted since the last save.
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS bid_revisions (
+                id SERIAL PRIMARY KEY,
+                bid_id INTEGER NOT NULL REFERENCES bid_opportunities(id) ON DELETE CASCADE,
+                company VARCHAR(40) DEFAULT 'construction',
+                revision INTEGER NOT NULL,
+                total NUMERIC(14,2),
+                estimated_cost NUMERIC(14,2),
+                markup_pct NUMERIC(6,2),
+                fingerprint VARCHAR(64),
+                lines JSONB,
+                note TEXT,
+                created_by VARCHAR(255),
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (bid_id, revision)
+            )
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_bid_revisions_bid ON bid_revisions(bid_id);")
     conn.commit()
 
 
@@ -703,7 +730,8 @@ def add_document(conn, bid_id: int, company: str, filename: str, key: str,
 def list_documents(conn, bid_id: int, company: str = "construction") -> list[dict]:
     with conn.cursor() as cur:
         cur.execute("""
-            SELECT id, filename, key, url, content_type, bytes, uploaded_by, uploaded_at
+            SELECT id, filename, key, url, content_type, bytes, document_type,
+                   superseded_at, uploaded_by, uploaded_at
             FROM bid_documents
             WHERE bid_id = %s AND company = %s
             ORDER BY uploaded_at DESC, id DESC
@@ -712,9 +740,28 @@ def list_documents(conn, bid_id: int, company: str = "construction") -> list[dic
 
 
 def delete_document(conn, doc_id: int, company: str = "construction") -> bool:
+    """Supersede a document instead of erasing it.
+
+    The file stays attached and visible as history, but the Contract package
+    ignores it from the moment it is superseded, so a replaced contract cannot
+    keep answering the download button.
+    """
     with conn.cursor() as cur:
         cur.execute(
-            "DELETE FROM bid_documents WHERE id = %s AND company = %s RETURNING id",
+            "UPDATE bid_documents SET superseded_at = now() "
+            "WHERE id = %s AND company = %s AND superseded_at IS NULL RETURNING id",
+            (doc_id, company),
+        )
+        ok = cur.fetchone() is not None
+    conn.commit()
+    return ok
+
+
+def restore_document(conn, doc_id: int, company: str = "construction") -> bool:
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE bid_documents SET superseded_at = NULL "
+            "WHERE id = %s AND company = %s AND superseded_at IS NOT NULL RETURNING id",
             (doc_id, company),
         )
         ok = cur.fetchone() is not None

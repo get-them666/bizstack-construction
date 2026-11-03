@@ -594,6 +594,9 @@ async def lifecycle(app: FastAPI):
                     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
                 );
                 """)
+                # Assignment locks an approved sheet to one run. It stays
+                # approved until PNC confirms settlement; only then is it paid.
+                cur.execute("ALTER TABLE timesheets ADD COLUMN IF NOT EXISTS payroll_run_id INTEGER;")
                 cur.execute("""
                 CREATE TABLE IF NOT EXISTS payroll_runs (
                     id SERIAL PRIMARY KEY,
@@ -745,10 +748,14 @@ async def lifecycle(app: FastAPI):
     except Exception as e:
         print(f"⚠️ bid_opportunities init skipped: {e}")
 
-    # Lead pipeline orchestrator: auto-enrich → contact → quote flow
+    # Lead pipeline orchestrator: auto-enrich → contact → quote flow. Quote
+    # tables must exist before the leads board reads them for deposit amounts;
+    # creating them only from a quote route left every existing board broken on
+    # a database where no quote had yet been entered.
     try:
         with psycopg.connect(db_url) as conn:
             lead_pipeline.ensure_schema(conn)
+            quoting.ensure_schema(conn)
         print("🔄 Lead pipeline orchestrator ready.")
     except Exception as e:
         print(f"⚠️ Lead pipeline init skipped: {e}")
@@ -1595,15 +1602,15 @@ def build_tool_handlers(db, stripe_svc):
     def lookup_leads(phone):
         digits = "".join(ch for ch in str(phone or "") if ch.isdigit())
         with db.cursor() as cur:
-            cur.execute("SELECT id, name, project_type, status, deposit_status, created_at FROM leads WHERE company = 'construction' ORDER BY created_at DESC LIMIT 200;")
+            cur.execute("SELECT id, name, phone, project_type, status, deposit_status, created_at FROM leads WHERE company = 'construction' ORDER BY created_at DESC LIMIT 200;")
             rows = cur.fetchall()
         matches = [r for r in rows if digits and digits[-10:] in "".join(ch for ch in str(r.get("phone") or "") if ch.isdigit())]
         if not matches:
             matches = [r for r in rows if digits and digits[-10:] in "".join(ch for ch in str(r.get("name") or "") if ch.isdigit())]
         out = [
             {
-                "id": r["id"], "name": r["name"], "project_type": r["project_type"],
-                "status": r["status"], "deposit_status": r["deposit_status"],
+                "id": r["id"], "name": r["name"], "phone": r.get("phone"),
+                "project_type": r["project_type"], "status": r["status"], "deposit_status": r["deposit_status"],
                 "created_at": r["created_at"].isoformat() if r.get("created_at") else "",
             }
             for r in matches
@@ -1614,9 +1621,10 @@ def build_tool_handlers(db, stripe_svc):
         with db.cursor() as cur:
             cur.execute("SELECT COUNT(*) AS c FROM leads WHERE company = 'construction';")
             total = cur.fetchone()["c"]
-            cur.execute("SELECT COUNT(*) AS c FROM leads WHERE status NOT IN ('completed','lost') AND company = 'construction';")
+            cur.execute("SELECT COUNT(*) AS c FROM leads WHERE status NOT IN ('completed','lost','won') AND company = 'construction';")
             open_leads = cur.fetchone()["c"]
-            cur.execute("SELECT COUNT(*) AS c, COALESCE(SUM(amount_cents),0) AS amt FROM payments WHERE company = 'construction';")
+            cur.execute("SELECT COUNT(*) AS c, COALESCE(SUM(amount_cents),0)::BIGINT AS amt "
+                        "FROM payments WHERE company = 'construction' AND status = 'paid' AND lead_id IS NOT NULL;")
             pay = cur.fetchone()
         return {
             "ok": True,
@@ -1641,12 +1649,18 @@ def build_tool_handlers(db, stripe_svc):
         ]}
 
     def update_lead_status(lead_id, status):
-        if status not in LEAD_STATUSES:
+        requested = str(status or "").strip().lower()
+        if requested not in set(LEAD_STATUSES) | set(lead_lifecycle.STAGES):
             return {"ok": False, "error": f"Unknown status: {status}"}
         with db.cursor() as cur:
-            cur.execute("UPDATE leads SET status = %s WHERE id = %s;", (status, lead_id))
+            cur.execute("UPDATE leads SET status = %s WHERE id = %s;", (requested, lead_id))
             db.commit()
-        return {"ok": True, "lead_id": lead_id, "status": status}
+        # The leads board reads cached queue state, so a status write is not
+        # finished until the canonical stage and next action are recomputed.
+        saved = lead_store.recompute(db, lead_id)
+        return {"ok": True, "lead_id": lead_id,
+                "status": saved.get("status", lead_lifecycle.to_stage(requested)),
+                "next_action": saved.get("next_action")}
 
     def send_sms_message(to, body):
         ok = signalwire.send_sms(to, body)
@@ -1875,18 +1889,23 @@ f"The mail transport did not accept the message. This usually means the "
         ]}
 
     def get_payroll_summary():
+        direct_deposit.ensure_schema(db)
         with db.cursor() as cur:
-            cur.execute("SELECT * FROM payroll_runs WHERE status = 'open' ORDER BY period_start DESC LIMIT 1;")
+            cur.execute("SELECT * FROM payroll_runs WHERE status IN ('open','closed') "
+                        "ORDER BY period_start DESC LIMIT 1;")
             run = cur.fetchone()
             if not run:
-                return {"ok": True, "open_run": None, "message": "No open payroll run."}
+                return {"ok": True, "open_run": None, "message": "No unpaid payroll run."}
             cur.execute(
-                "SELECT pl.*, c.name AS crew_name, c.bank_status, c.stripe_account_id "
+                "SELECT pl.*, c.name AS crew_name, c.bank_status, "
+                "       (b.crew_id IS NOT NULL) AS direct_deposit_ready "
                 "FROM payroll_lines pl JOIN crew c ON c.id = pl.crew_id "
+                "LEFT JOIN crew_bank_accounts b ON b.crew_id = pl.crew_id "
                 "WHERE pl.run_id = %s ORDER BY c.name;", (run["id"],))
             lines = cur.fetchall()
         return {"ok": True, "open_run": {
             "run_id": run["id"],
+            "status": run["status"],
             "period_start": run["period_start"].isoformat(),
             "period_end": run["period_end"].isoformat(),
         }, "lines": [
@@ -1894,12 +1913,14 @@ f"The mail transport did not accept the message. This usually means the "
                 "crew_id": l["crew_id"], "crew_name": l["crew_name"],
                 "hours": float(l.get("hours") or 0), "overtime_hours": float(l.get("overtime_hours") or 0),
                 "gross_cents": l["gross_cents"],
-                "bank_status": l.get("bank_status"), "direct_deposit_ready": bool(l.get("stripe_account_id")),
+                "bank_status": l.get("bank_status"),
+                "direct_deposit_ready": bool(l.get("direct_deposit_ready")),
             }
             for l in lines
         ]}
 
     def run_payroll():
+        """Finalize a run for PNC ACH. Never move money from the Copilot."""
         with db.cursor() as cur:
             cur.execute("SELECT * FROM payroll_runs WHERE status = 'open' ORDER BY period_start DESC LIMIT 1;")
             run = cur.fetchone()
@@ -1907,62 +1928,38 @@ f"The mail transport did not accept the message. This usually means the "
             return {"ok": False, "error": "No open payroll run to finalize. Create one on the Payroll page first."}
         run_id = run["id"]
         with db.cursor() as cur:
-            cur.execute(
-                "SELECT pl.*, c.name AS crew_name, c.pay_rate, c.stripe_account_id, c.bank_status "
-                "FROM payroll_lines pl JOIN crew c ON c.id = pl.crew_id WHERE pl.run_id = %s;", (run_id,))
-            lines = cur.fetchall()
-        paid, skipped = [], []
-        for l in lines:
-            acct = (l.get("stripe_account_id") or "").strip()
-            if not acct:
-                skipped.append({"crew_name": l.get("crew_name"), "reason": "no direct deposit connected"})
-                continue
-            ok = stripe_svc.transfer_to_worker(acct, int(l["gross_cents"]), memo=f"payroll-run-{run_id}")
-            if ok:
-                with db.cursor() as cur:
-                    cur.execute(
-                        "INSERT INTO payments (lead_id, stripe_payment_intent_id, amount_cents, currency, status, company) "
-                        "VALUES (NULL, %s, %s, 'usd', 'paid', 'construction');",
-                        (f"payroll-run-{run_id}-crew-{l['crew_id']}", l["gross_cents"]),
-                    )
-                paid.append({"crew_name": l.get("crew_name"), "gross_cents": l["gross_cents"]})
-            else:
-                skipped.append({"crew_name": l.get("crew_name"), "reason": "Stripe transfer failed"})
-        with db.cursor() as cur:
-            cur.execute("UPDATE payroll_runs SET status = 'closed' WHERE id = %s;", (run_id,))
+            cur.execute("UPDATE payroll_runs SET status = 'closed' WHERE id = %s AND status = 'open';", (run_id,))
             db.commit()
-        # Only the crew who actually received money are relieved. A skipped
-        # transfer leaves the wage owed, which is correct -- the liability was
-        # accrued when the run was created and only goes away when cash moves.
-        if paid:
-            try:
-                ledger_sync.ensure_schema(db)
-                ledger_sync.sync_payroll_paid(db, run_id, company=_BID_COMPANY)
-            except Exception as e:
-                logger.warning("ledger not updated for payroll run %s: %s", run_id, e)
+        # Finalizing accrues the liability. Only the separate PNC confirmation
+        # route may relieve it, after every worker's bank line has been checked.
+        try:
+            ledger_sync.ensure_schema(db)
+            ledger_sync.sync_payroll_accrual(db, run_id, company=_BID_COMPANY)
+        except Exception as e:
+            logger.warning("ledger not updated for payroll run %s: %s", run_id, e)
         return {
-            "ok": True, "run_id": run_id,
-            "paid": paid,
-            "not_paid": skipped,
-            "total_paid_cents": sum(p["gross_cents"] for p in paid),
+            "ok": True, "run_id": run_id, "status": "closed", "money_moved": False,
+            "next_step": (f"On /payroll, review run {run_id}, download its PNC ACH file, "
+                          "upload it to PINACLE, then confirm it was sent. Every worker needs "
+                          "PNC bank details before the file can be created."),
         }
 
     def get_accounting_summary():
         with db.cursor() as cur:
             cur.execute(
-                "SELECT COALESCE(SUM(amount_cents),0) AS amt, COUNT(*) AS n "
-                "FROM payments WHERE company = 'construction' AND status = 'paid';")
+                "SELECT COALESCE(SUM(amount_cents),0)::BIGINT AS amt, COUNT(*) AS n "
+                "FROM payments WHERE company = 'construction' AND status = 'paid' AND lead_id IS NOT NULL;")
             collected = cur.fetchone()
             cur.execute(
-                "SELECT COALESCE(SUM(deposit_cents),0) AS amt, COUNT(*) AS n "
+                "SELECT COALESCE(SUM(deposit_cents),0)::BIGINT AS amt, COUNT(*) AS n "
                 "FROM leads WHERE company = 'construction' AND deposit_status = 'paid';")
             deposits = cur.fetchone()
             cur.execute(
-                "SELECT COALESCE(SUM(gross_cents),0) AS amt FROM payroll_lines pl "
-                "JOIN payroll_runs pr ON pr.id = pl.run_id WHERE pr.status = 'closed';")
+                "SELECT COALESCE(SUM(gross_cents),0)::BIGINT AS amt FROM payroll_lines pl "
+                "JOIN payroll_runs pr ON pr.id = pl.run_id WHERE pr.status = 'paid';")
             payroll_paid = cur.fetchone()
             cur.execute(
-                "SELECT COALESCE(SUM(estimated_value),0) AS amt, COUNT(*) AS n "
+                "SELECT COALESCE(SUM(estimated_value * 100),0)::BIGINT AS amt, COUNT(*) AS n "
                 "FROM job_leads WHERE status = 'new';")
             open_job_value = cur.fetchone()
         return {
@@ -2295,7 +2292,10 @@ f"The mail transport did not accept the message. This usually means the "
                     r["company"] = "construction"
                     matches.append(r)
             except Exception:
-                pass
+                # The optional customers table is absent on construction-only
+                # databases. Clear the aborted read transaction before searching
+                # leads, or this one optional miss takes down the whole tool.
+                db.rollback()
             lead_vis = source_visibility_clause()
             lead_vis_params = source_visibility_params()
             cur.execute(f"SELECT id, name, phone, email, project_type, 'lead' AS kind FROM leads "
@@ -2482,22 +2482,20 @@ def _bid_document_tools(db, owner_email: str):
                 db.rollback()
                 return {"ok": False, "error": f"Skip trace failed: {e.message}"}
 
-        # 2. Skip Sherpa trace for email/phone (one credit per address)
+        # 2. Skip Sherpa trace for email/phone. Go through the same cached,
+        # ZIP-resolving contact path as lead enrichment: calling the provider
+        # directly here billed repeat clicks and could spend on a ZIP-less guess.
         email = None
         phone = None
-        try:
-            trace = skip_sherpa_service.trace(parsed["street"], parsed["city"],
-                                              parsed["state"], parsed["zipcode"])
-            if trace.get("ok") and trace.get("found"):
-                emails = trace.get("emails") or []
-                phones = trace.get("phones") or []
-                email = emails[0] if emails else None
-                usable = [p for p in phones if p.get("usable")]
-                phone = (usable[0]["e164"] if usable else
-                         (trace.get("raw_phone") or "").strip() or None)
-        except skip_sherpa_service.ProviderError as e:
-            # Not a hard failure -- the name may still be useful.
-            pass
+        contact_tool = copilot_ops.build_contact_tools(db, owner_email)["contact_lookup"]
+        trace = contact_tool(address=address)
+        if trace.get("found"):
+            emails = trace.get("emails") or []
+            phones = trace.get("phones") or []
+            email = emails[0] if emails else None
+            usable = [p for p in phones if p.get("usable")]
+            phone = (usable[0]["e164"] if usable else
+                     (trace.get("preferred_phone") or trace.get("raw_phone") or "").strip() or None)
 
         # 3. Save to bid record
         with db.cursor() as cur:
@@ -4381,6 +4379,29 @@ async def bid_contract_pdf(bid_id: int, request: Request, db=Depends(get_db)):
                              "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"})
 
 
+def _recalc_bid_amount(db, bid_id: int):
+    """Keep the bid total equal to the card's own lines after a revision.
+
+    Runs on every cost add, edit, removal and restore, so the line list, the
+    total, the generated Scope of Work / itemized pricing / contract and the
+    deposit schedule cannot disagree. A won bid with a signed ``contract_value``
+    is deliberately left alone -- that number is the agreement, not a total.
+    """
+    bid = bid_opportunities.get_bid(db, bid_id, _BID_COMPANY)
+    if not bid:
+        return None
+    if bid.get("contract_value") and bid.get("status") == "won":
+        return None
+    try:
+        total, base, _markup = bid_costing.quote_total(db, bid_id, _BID_COMPANY)
+    except Exception:
+        return None
+    if base <= 0:
+        return None
+    bid_opportunities.set_bid_amount(db, bid_id, total, _BID_COMPANY)
+    return total
+
+
 @app.post("/api/bids/{bid_id}/costs")
 async def bid_cost_create(bid_id: int, request: Request, description: str = Form(...),
                           category: str = Form("material"), vendor: str = Form(""),
@@ -4397,6 +4418,7 @@ async def bid_cost_create(bid_id: int, request: Request, description: str = Form
     ledger_sync.ensure_schema(db)
     if actual:
         ledger_sync.sync_cost_line(db, lid, _BID_COMPANY)
+    _recalc_bid_amount(db, bid_id)
     # A cost entered from the bid page belongs to that bid, so put the owner
     # back where they were. Only ever follow a same-site path.
     if back.startswith("/bids/"):
@@ -4404,14 +4426,54 @@ async def bid_cost_create(bid_id: int, request: Request, description: str = Form
     return RedirectResponse(url="/books", status_code=status.HTTP_303_SEE_OTHER)
 
 
+@app.post("/api/bids/{bid_id}/costs/{line_id}/update")
+async def bid_cost_update(bid_id: int, line_id: int, request: Request,
+                          description: str = Form(""), category: str = Form(""),
+                          vendor: str = Form(""), estimated: str = Form(""),
+                          actual: str = Form(""), back: str = Form(""),
+                          db=Depends(get_db)):
+    """Correct a line in place: a changed quantity, a new find, a dropped item."""
+    require_admin(request)
+    try:
+        ok = bid_costing.update_cost_line(
+            db, line_id, bid_id, _BID_COMPANY, category=category,
+            description=description, vendor=vendor,
+            estimated=estimated or None, actual=actual or None)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not ok:
+        raise HTTPException(status_code=404, detail="Cost line not found")
+    if actual:
+        ledger_sync.ensure_schema(db)
+        ledger_sync.sync_cost_line(db, line_id, _BID_COMPANY)
+    _recalc_bid_amount(db, bid_id)
+    if back.startswith("/bids/"):
+        return RedirectResponse(url=back, status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(url="/books", status_code=status.HTTP_303_SEE_OTHER)
+
+
 @app.post("/api/bids/{bid_id}/costs/{line_id}/delete")
 async def bid_cost_delete(bid_id: int, line_id: int, request: Request,
-                          back: str = Form(""), db=Depends(get_db)):
-    """Remove one cost line. Used to be unreachable -- the accessor existed but
-    no route called it, so a wrong line could only be corrected in the database."""
+                          back: str = Form(""), note: str = Form(""),
+                          db=Depends(get_db)):
+    """Remove one cost line from the price but keep it on the card as history."""
     require_admin(request)
-    if not bid_costing.delete_cost_line(db, line_id, bid_id, _BID_COMPANY):
+    if not bid_costing.delete_cost_line(db, line_id, bid_id, _BID_COMPANY, note=note):
         raise HTTPException(status_code=404, detail="Cost line not found")
+    _recalc_bid_amount(db, bid_id)
+    if back.startswith("/bids/"):
+        return RedirectResponse(url=back, status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(url="/books", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/api/bids/{bid_id}/costs/{line_id}/restore")
+async def bid_cost_restore(bid_id: int, line_id: int, request: Request,
+                           back: str = Form(""), db=Depends(get_db)):
+    """Put a removed line back into the price."""
+    require_admin(request)
+    if not bid_costing.restore_cost_line(db, line_id, bid_id, _BID_COMPANY):
+        raise HTTPException(status_code=404, detail="Removed cost line not found")
+    _recalc_bid_amount(db, bid_id)
     if back.startswith("/bids/"):
         return RedirectResponse(url=back, status_code=status.HTTP_303_SEE_OTHER)
     return RedirectResponse(url="/books", status_code=status.HTTP_303_SEE_OTHER)
@@ -5869,6 +5931,7 @@ async def settings_page(request: Request, db=Depends(get_db)):
             "saved": request.query_params.get("saved", ""),
             "error": request.query_params.get("error", ""),
             "skip_sherpa_configured": skip_sherpa_service.configured(),
+            "docs_email": _docs_recipient(db),
             "resimply_configured": configured,
             "resimply_status": resimply_status,
             "resimply_missing": resimply_service.missing_ids(getter),
@@ -5937,6 +6000,7 @@ async def save_resimply_settings(request: Request, db=Depends(get_db)):
 async def save_banking_settings(request: Request, pnc_account_last4: str = Form(""),
                                 pnc_routing_number: str = Form(""),
                                 zelle_handle: str = Form(""), pnc_account_number: str = Form(""),
+                                pnc_docs_email: str = Form(""),
                                 db=Depends(get_db)):
     """Store what clients are told to pay, and the account payroll leaves from.
 
@@ -5972,11 +6036,18 @@ async def save_banking_settings(request: Request, pnc_account_last4: str = Form(
         return RedirectResponse(
             url="/settings?error=Add+the+routing+number+with+the+account+number#banking",
             status_code=status.HTTP_303_SEE_OTHER)
+    docs_email = (pnc_docs_email or "").strip()
+    if docs_email and ("@" not in docs_email or " " in docs_email):
+        return RedirectResponse(
+            url="/settings?error=The+documents+email+must+be+a+single+email+address#banking",
+            status_code=status.HTTP_303_SEE_OTHER)
     try:
         deposit_instructions.save(lambda k, v: _set_setting(db, k, v), zelle, routing, account)
     except deposit_instructions.NotConfigured as e:
         return RedirectResponse(url=f"/settings?error={urllib.parse.quote(str(e))}#banking",
                                 status_code=status.HTTP_303_SEE_OTHER)
+    if docs_email:
+        _set_setting(db, PNC_DOCS_EMAIL_KEY, docs_email)
     if last4:
         _set_setting(db, "pnc_account_last4", last4)
     return RedirectResponse(url="/settings?saved=banking#banking", status_code=status.HTTP_303_SEE_OTHER)
@@ -9570,7 +9641,7 @@ async def bid_detail_page(bid_id: int, request: Request, db=Depends(get_db)):
     signature: dict = {"signed": False}
     try:
         bid_costing.ensure_accounting_schema(db)
-        costs = bid_costing.cost_lines(db, bid_id, _BID_COMPANY)
+        costs = bid_costing.cost_lines(db, bid_id, _BID_COMPANY, include_removed=True)
         summary = bid_costing.cost_summary(db, bid_id, _BID_COMPANY)
         invoices = bid_costing.list_invoices(db, bid_id, _BID_COMPANY)
         inv_summary = bid_costing.invoice_summary(db, bid_id, _BID_COMPANY)
@@ -9591,13 +9662,44 @@ async def bid_detail_page(bid_id: int, request: Request, db=Depends(get_db)):
     except Exception as exc:
         print(f"[bids] documents unavailable for bid {bid_id}: {exc}", flush=True)
 
+    # What the card's cost lines say the bid should be, so a revised quote is
+    # visibly out of date until the owner recalculates rather than silently
+    # keeping last week's number on the contract and the generated documents.
+    quote_total = 0.0
+    quote_base = 0.0
+    markup_pct = 0.0
+    amount_stale = False
+    try:
+        quote_total, quote_base, markup_pct = bid_costing.quote_total(db, bid_id, _BID_COMPANY)
+        signed = bool(bid.get("contract_value")) and bid.get("status") == "won"
+        if quote_total > 0 and bid.get("bid_amount") is not None and not signed:
+            amount_stale = round(float(bid["bid_amount"]), 2) != round(quote_total, 2)
+    except Exception as exc:
+        print(f"[bids] quote total unavailable for bid {bid_id}: {exc}", flush=True)
+
+    revisions = []
+    revision_dirty = False
+    try:
+        revisions = bid_costing.list_revisions(db, bid_id, _BID_COMPANY)
+        revision_dirty = bid_costing.revision_dirty(db, bid_id, _BID_COMPANY)
+    except Exception as exc:
+        print(f"[bids] revisions unavailable for bid {bid_id}: {exc}", flush=True)
+
     return templates.TemplateResponse(
         request=request, name="bid_detail.html",
         context={
             "b": bid, "costs": costs, "cost_summary": summary,
             "invoices": invoices, "inv_summary": inv_summary,
             "error": request.query_params.get("error", ""),
+            "recalculated": request.query_params.get("recalculated", ""),
+            "saved_revision": request.query_params.get("revision", ""),
+            "documents_sent": request.query_params.get("documents_sent", ""),
+            "pnc_docs_email": _docs_recipient(db),
+            "revisions": revisions, "revision_dirty": revision_dirty,
+            "revision_label": bid_costing.revision_label(dict(bid)),
             "docs": docs,
+            "quote_total": quote_total, "quote_base": quote_base,
+            "markup_pct": markup_pct, "amount_stale": amount_stale,
             "deposit_invoice": deposit_invoice,
             "deposit_amount": bid_deposit.deposit_amount(dict(bid)),
             "deposit_pct": bid_package_pdf.DEPOSIT_PCT,
@@ -9744,6 +9846,15 @@ async def bid_document_upload(bid_id: int, request: Request, doc: UploadFile = F
                                    bytes_count=len(raw),
                                    uploaded_by=_owner_email(),
                                    document_type=doc_type)
+    # The first document is usually the point a real job starts. Make sure the
+    # card exists (or top up the blank fields on the one that does) so the bid
+    # number on the paperwork is the number crew, payroll and profit all use.
+    try:
+        bid_costing.ensure_accounting_schema(db)
+        bid_costing.ensure_job_for_bid(db, bid_id, _BID_COMPANY)
+    except Exception as e:
+        # An upload must never be lost because the job card could not be made.
+        print(f"[bids] job card unavailable for bid {bid_id}: {e}", flush=True)
     back = request.headers.get("referer") or f"/bids/{bid_id}"
     return RedirectResponse(url=back, status_code=status.HTTP_303_SEE_OTHER)
 
@@ -9755,6 +9866,130 @@ async def bid_document_delete(doc_id: int, request: Request, db=Depends(get_db))
     bid_opportunities.delete_document(db, doc_id, _BID_COMPANY)
     back = request.headers.get("referer") or "/bids"
     return RedirectResponse(url=back, status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/api/bids/documents/{doc_id}/restore")
+async def bid_document_restore(doc_id: int, request: Request, db=Depends(get_db)):
+    """Put a superseded document back in the Contract package."""
+    require_admin(request)
+    bid_opportunities.ensure_schema(db)
+    bid_opportunities.restore_document(db, doc_id, _BID_COMPANY)
+    back = request.headers.get("referer") or "/bids"
+    return RedirectResponse(url=back, status_code=status.HTTP_303_SEE_OTHER)
+
+
+PNC_DOCS_EMAIL_KEY = "pnc_docs_email"
+
+
+def _docs_recipient(db) -> str:
+    """Where job documents are emailed. Settings wins over the environment."""
+    try:
+        saved = (_get_setting(db, PNC_DOCS_EMAIL_KEY) or "").strip()
+    except Exception:
+        saved = ""
+    return saved or (os.getenv("PNC_DOCS_EMAIL") or "").strip()
+
+
+def _bid_email_attachments(db, bid: dict, bid_id: int, costs: list) -> list:
+    """The three package documents: the uploaded replacement if there is one.
+
+    Uploaded files win, exactly like the Contract package buttons; otherwise the
+    PDF is built from the card's current lines and revision. A failed read of an
+    uploaded file falls back to the generated document rather than sending an
+    email with a hole in it.
+    """
+    docs = bid_opportunities.list_documents(db, bid_id, _BID_COMPANY)
+    active: dict = {}
+    for d in docs:
+        if d.get("superseded_at"):
+            continue
+        active.setdefault(d.get("document_type") or "other", d)
+
+    def uploaded(*types):
+        for t in types:
+            if active.get(t):
+                return active[t]
+        return None
+
+    photos = [p for p, _ in _project_photo_paths(db, bid_id)]
+    signature = _package_signature(db, bid_id)
+    out = []
+    for doc, builder, fallback_name in (
+        (uploaded("sow"),
+         lambda: build_bid_documents.build_scope_of_work(dict(bid), costs, photos),
+         f"BuildStack-SOW-Bid-{bid_id}.pdf"),
+        (uploaded("itemized", "quote"),
+         lambda: build_bid_documents.build_itemized_pricing(dict(bid), costs),
+         f"BuildStack-Itemized-Bid-{bid_id}.pdf"),
+        (uploaded("contract"),
+         lambda: build_bid_documents.build_contract(dict(bid), costs, photos, signature=signature),
+         f"BuildStack-Contract-Bid-{bid_id}.pdf"),
+    ):
+        if doc:
+            try:
+                body, _ctype = photo_store.read(doc["key"])
+                out.append((body, doc.get("filename") or fallback_name))
+                continue
+            except Exception as e:
+                logger.warning("bid %s: could not read uploaded %s (%s); using generated",
+                               bid_id, doc.get("filename"), e)
+        out.append((builder(), fallback_name))
+    return out
+
+
+@app.post("/api/bids/{bid_id}/send-documents")
+async def bid_send_documents(bid_id: int, request: Request, to_email: str = Form(""),
+                             db=Depends(get_db)):
+    """Email the package to the owner's PNC / Bill.com document inbox.
+
+    Deliberately a button, not an automatic side effect: the card shows the
+    recipient and the confirm dialog names it, so a customer's paperwork is
+    never filed somewhere without the owner saying yes.
+    """
+    require_admin(request)
+    bid = bid_opportunities.get_bid(db, bid_id, _BID_COMPANY)
+    if not bid:
+        raise HTTPException(status_code=404, detail="Bid not found")
+    recipient = (to_email or _docs_recipient(db)).strip()
+    if not recipient or "@" not in recipient or " " in recipient:
+        return RedirectResponse(
+            url=f"/bids/{bid_id}?error=Set+the+PNC+documents+email+on+Settings+first.",
+            status_code=status.HTTP_303_SEE_OTHER)
+    try:
+        bid_costing.ensure_accounting_schema(db)
+        costs = bid_costing.cost_lines(db, bid_id, _BID_COMPANY)
+    except Exception:
+        costs = []
+    try:
+        attachments = _bid_email_attachments(db, bid, bid_id, costs)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Could not build the documents: {e}")
+    label = bid_costing.revision_label(dict(bid))
+    total = float(bid.get("contract_value") or bid.get("bid_amount") or 0)
+    subject = (f"Bid #{bid_id} · {label} · Scope, Itemized Pricing & Contract — "
+               f"{(bid.get('name') or '')[:80]}")
+    body = (
+        f"Bid #{bid_id} — {label}\n"
+        f"Job: {bid.get('name') or ''}\n"
+        f"Property: {bid.get('location') or ''}\n"
+        f"Total: ${total:,.2f}\n\n"
+        "Attached: Scope of Work, Itemized Pricing and the Renovation Agreement.\n"
+        "Uploaded replacements are used where they exist; otherwise the documents "
+        "are generated from the current lines on the bid card."
+    )
+    try:
+        cfg = documents_service.smtp_config_from_env()
+        ok = await documents_service.send_email(cfg, recipient, subject, body,
+                                                attachments=attachments)
+        if not ok:
+            raise HTTPException(status_code=502, detail="Email send failed")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Email send failed: {e}")
+    return RedirectResponse(
+        url=f"/bids/{bid_id}?documents_sent={urllib.parse.quote(recipient)}",
+        status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.get("/api/bids/sources")
@@ -10702,30 +10937,12 @@ async def crew_pay_page(request: Request, db=Depends(get_db)):
 
 @app.post("/api/crew/direct-deposit")
 async def crew_direct_deposit(request: Request, db=Depends(get_db)):
-    worker = require_worker(request)
-    with db.cursor() as cur:
-        cur.execute("SELECT * FROM crew WHERE id = %s;", (worker.get("id"),))
-        crew_row = cur.fetchone()
-    if not crew_row:
-        raise HTTPException(status_code=401, detail="Worker not found")
-    if not stripe_svc.is_configured():
-        return RedirectResponse(url="/crew/pay?error=Direct+deposit+is+not+enabled+yet",
-                                status_code=status.HTTP_303_SEE_OTHER)
-    account_id = crew_row.get("stripe_account_id")
-    if not account_id:
-        try:
-            account_id = stripe_svc.create_worker_account(crew_row["name"], crew_row["email"], crew_row["phone"])
-        except Exception:
-            return RedirectResponse(url="/crew/pay?error=Could+not+create+account",
-                                    status_code=status.HTTP_303_SEE_OTHER)
-        with db.cursor() as cur:
-            cur.execute("UPDATE crew SET stripe_account_id = %s WHERE id = %s;", (account_id, crew_row["id"]))
-            db.commit()
-    url = stripe_svc.account_link(account_id, "https://" + company()["domain"])
-    if not url:
-        return RedirectResponse(url="/crew/pay?error=Unable+to+open+onboarding",
-                                status_code=status.HTTP_303_SEE_OTHER)
-    return RedirectResponse(url=url)
+    """Retire Stripe onboarding; crew bank details belong in the PNC phone app."""
+    require_worker(request)
+    return RedirectResponse(
+        url="/crew/pay?error=Use+the+phone+app+to+save+PNC+bank+details",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
 
 
 # --- Direct deposit (ACH from the company bank account, no Stripe) -----------
@@ -10860,7 +11077,7 @@ async def worker_app_me(request: Request, db=Depends(get_db)):
         if not crew_row:
             return JSONResponse(status_code=401, content={"status": "error", "message": "Not logged in"})
         cur.execute("""
-            SELECT p.id, p.name, p.address, p.summary, p.status, p.start_date, p.end_date,
+            SELECT p.id, p.name, p.address, p.summary, p.status, p.start_date, p.end_date, p.bid_id,
                    c.id AS clock_id, c.punch_in_at AS clocked_since
             FROM project_assignments pa
             JOIN projects p ON p.id = pa.project_id
@@ -10873,6 +11090,10 @@ async def worker_app_me(request: Request, db=Depends(get_db)):
             jobs.append({
                 "id": j["id"], "name": j["name"], "address": j["address"],
                 "summary": j["summary"], "status": j["status"],
+                "bid_id": j["bid_id"],
+                # The bid number printed on the contract is the job number the
+                # crew see. Jobs with no bid fall back to their own id.
+                "job_number": (f"Bid #{j['bid_id']}" if j["bid_id"] else f"Job #{j['id']}"),
                 "start_date": j["start_date"].isoformat() if j["start_date"] else None,
                 "end_date": j["end_date"].isoformat() if j["end_date"] else None,
                 "clock_id": j["clock_id"], "clocked_since": (j["clocked_since"].isoformat() if j["clocked_since"] else None),
@@ -11395,6 +11616,56 @@ def _compute_gross(rate: float, sheets: list) -> tuple:
     return round(reg, 2), round(ot, 2), int(round(gross * 100))
 
 
+# The same four types the crew form offers, so an office-entered row cannot
+# introduce a type the rest of the app does not understand.
+PAY_WORK_TYPES = ("regular", "overtime", "travel", "material pickup")
+
+
+def _payroll_back(request: Request, period_start: str = "", period_end: str = "",
+                  **params) -> RedirectResponse:
+    """Back to /payroll on the same pay period, with a message."""
+    query = {"period_start": period_start, "period_end": period_end}
+    query.update({k: v for k, v in params.items() if v not in (None, "")})
+    return RedirectResponse(url="/payroll?" + urllib.parse.urlencode(query),
+                            status_code=status.HTTP_303_SEE_OTHER)
+
+
+def _parse_timesheet_form(crew_id: int, project_id: int, work_date: str, hours: str,
+                          work_type: str) -> tuple:
+    """Validate one owner-entered timesheet row. Returns (values, error)."""
+    try:
+        hrs = round(float(hours), 2)
+    except (TypeError, ValueError):
+        return {}, "Hours must be a number."
+    if hrs <= 0 or hrs > 24:
+        return {}, "Hours must be more than 0 and no more than 24 in one entry."
+    try:
+        wd = date.fromisoformat((work_date or "").strip())
+    except ValueError:
+        return {}, "Pick a valid work date."
+    if wd > date.today():
+        return {}, "A work date cannot be in the future."
+    wt = (work_type or "regular").strip().lower()
+    if wt not in PAY_WORK_TYPES:
+        return {}, "Unknown work type."
+    if not crew_id or crew_id <= 0:
+        return {}, "Choose the crew member these hours belong to."
+    return {"crew_id": int(crew_id), "project_id": int(project_id or 0) or None,
+            "work_date": wd, "hours": hrs, "work_type": wt}, ""
+
+
+def _check_timesheet_links(cur, crew_id: int, project_id) -> str:
+    """The crew and job must exist before an insert/update hits the foreign keys."""
+    cur.execute("SELECT id FROM crew WHERE id = %s;", (crew_id,))
+    if not cur.fetchone():
+        return "That crew member no longer exists."
+    if project_id:
+        cur.execute("SELECT id FROM projects WHERE id = %s;", (project_id,))
+        if not cur.fetchone():
+            return "That job no longer exists."
+    return ""
+
+
 @app.get("/payroll", response_class=HTMLResponse)
 async def payroll_page(request: Request, period_start: str = "", period_end: str = "", db=Depends(get_db)):
     require_admin(request)
@@ -11414,13 +11685,16 @@ async def payroll_page(request: Request, period_start: str = "", period_end: str
                    COALESCE(SUM(t.hours),0) AS h,
                    COUNT(t.id) AS ent
             FROM timesheets t JOIN crew c ON c.id = t.crew_id
-            WHERE t.work_date BETWEEN %s AND %s AND t.status IN ('submitted','approved')
+            WHERE t.work_date BETWEEN %s AND %s
+              AND t.status = 'approved' AND t.payroll_run_id IS NULL
             GROUP BY t.crew_id, c.name, c.pay_type, c.pay_rate
             ORDER BY c.name;
         """, (ps, pe))
         crew_totals = cur.fetchall()
         cur.execute("""
-            SELECT t.*, c.name AS crew_name, p.name AS project_name FROM timesheets t
+            SELECT t.*, c.name AS crew_name, p.name AS project_name,
+                   p.bid_id AS project_bid_id
+            FROM timesheets t
             JOIN crew c ON c.id = t.crew_id
             LEFT JOIN projects p ON p.id = t.project_id
             WHERE t.work_date BETWEEN %s AND %s ORDER BY t.work_date, c.name;
@@ -11445,23 +11719,97 @@ async def payroll_page(request: Request, period_start: str = "", period_end: str
             ORDER BY c.name;
         """, (ps, pe))
         pay_lines = cur.fetchall()
-        cur.execute("SELECT id, name FROM crew WHERE is_active IS NOT FALSE ORDER BY name;")
+        # Inactive crew stay in the picker: a final paycheck still has to be
+        # enterable after someone stops working.
+        cur.execute("SELECT id, name, COALESCE(is_active, TRUE) AS is_active FROM crew "
+                    "ORDER BY COALESCE(is_active, TRUE) DESC, name;")
         crew_list = cur.fetchall()
-        cur.execute("SELECT id, name FROM projects WHERE status NOT IN ('done','completed','closed','cancelled') ORDER BY name;")
+        # Completed jobs stay selectable too -- missed hours are usually noticed
+        # after the job is done, and the hours still belong to that job's cost.
+        cur.execute("SELECT id, name, status, bid_id FROM projects "
+                    "WHERE COALESCE(status, '') <> 'cancelled' ORDER BY name;")
         project_list = cur.fetchall()
+        # A punch with no clock-out holds the crew member in "already clocked
+        # in" and blocks the next one. Only the office can clear it.
+        cur.execute("""
+            SELECT ce.id, ce.crew_id, ce.project_id, ce.punch_in_at,
+                   c.name AS crew_name, p.name AS project_name
+            FROM clock_events ce JOIN crew c ON c.id = ce.crew_id
+            LEFT JOIN projects p ON p.id = ce.project_id
+            WHERE ce.punch_out_at IS NULL
+            ORDER BY ce.punch_in_at;
+        """)
+        open_punches = cur.fetchall()
     direct_deposit.ensure_schema(db)
     bank_by_crew = {}
     if direct_deposit.enabled():
         with db.cursor() as cur:
             cur.execute("SELECT crew_id, account_last4, account_type FROM crew_bank_accounts;")
             bank_by_crew = {r["crew_id"]: r for r in cur.fetchall()}
+    # payroll.html prints the bank badge and the NACHA button from the line
+    # itself; without these keys it silently rendered "No Bank Details" and an
+    # empty run id.
+    for pl in pay_lines:
+        bank = bank_by_crew.get(pl["crew_id"]) or {}
+        pl["has_bank"] = bool(bank)
+        pl["account_type"] = bank.get("account_type") or ""
+        pl["account_last4"] = bank.get("account_last4") or ""
+    # What each job worked in this period made. cost_summary already refuses to
+    # invent a margin when no real cost exists, and says whether the number is
+    # actual or still an estimate.
+    job_profit = []
+    unattached_hours = 0.0
+    with db.cursor() as cur:
+        cur.execute("""
+            SELECT p.bid_id, COALESCE(SUM(t.hours), 0) AS h
+            FROM timesheets t JOIN projects p ON p.id = t.project_id
+            WHERE t.work_date BETWEEN %s AND %s AND t.status <> 'rejected'
+            GROUP BY p.bid_id ORDER BY p.bid_id NULLS LAST;
+        """, (ps, pe))
+        period_by_bid = cur.fetchall()
+    for row in period_by_bid:
+        if not row["bid_id"]:
+            unattached_hours += float(row["h"] or 0)
+            continue
+        try:
+            summary = bid_costing.cost_summary(db, row["bid_id"], _BID_COMPANY)
+        except Exception as e:
+            logger.warning("payroll: job profit failed for bid %s: %s", row["bid_id"], e)
+            continue
+        bid = summary.get("bid") or {}
+        if summary.get("won") and summary.get("actual_margin") is not None:
+            basis, cost = "actual", summary.get("actual_cost")
+            margin, pct = summary.get("actual_margin"), summary.get("actual_margin_pct")
+        else:
+            basis, cost = "estimate", summary.get("estimated_cost")
+            margin, pct = summary.get("est_margin"), summary.get("est_margin_pct")
+        revenue = summary.get("revenue")
+        if revenue is None and basis == "estimate" and bid.get("bid_amount"):
+            revenue = float(bid["bid_amount"])
+        job_profit.append({
+            "bid_id": row["bid_id"],
+            "name": bid.get("name") or f"Bid #{row['bid_id']}",
+            "period_hours": float(row["h"] or 0),
+            "hours": (summary.get("labor") or {}).get("hours", 0),
+            "revenue": revenue,
+            "cost": cost,
+            "margin": margin,
+            "margin_pct": pct,
+            "basis": basis,
+            "complete": summary.get("complete", True),
+        })
     return templates.TemplateResponse(request=request, name="payroll.html", context={
         "crew_list": crew_list, "project_list": project_list, "bank_by_crew": bank_by_crew,
         "dd_enabled": direct_deposit.enabled(), "ach_missing": direct_deposit.missing(),
         "user": {"email": require_auth(request)[1]},
         "period_start": ps.isoformat(), "period_end": pe.isoformat(),
         "crew_totals": crew_totals, "sheets": sheets, "runs": runs,
-        "pay_lines": pay_lines,
+        "pay_lines": pay_lines, "open_punches": open_punches,
+        "run_id": pay_lines[0]["run_id"] if pay_lines else 0,
+        "today": date.today().isoformat(), "work_types": PAY_WORK_TYPES,
+        "job_profit": job_profit, "unattached_hours": round(unattached_hours, 2),
+        "ok": request.query_params.get("ok", ""),
+        "error": request.query_params.get("error", ""),
     })
 
 
@@ -11469,7 +11817,13 @@ async def payroll_page(request: Request, period_start: str = "", period_end: str
 async def payroll_sheet_approve(sheet_id: int, request: Request, db=Depends(get_db)):
     require_admin(request)
     with db.cursor() as cur:
-        cur.execute("UPDATE timesheets SET status = 'approved' WHERE id = %s;", (sheet_id,))
+        cur.execute(
+            "UPDATE timesheets SET status = 'approved' "
+            "WHERE id = %s AND status = 'submitted' AND payroll_run_id IS NULL;",
+            (sheet_id,),
+        )
+        if not cur.rowcount:
+            raise HTTPException(status_code=409, detail="Only an unassigned submitted timesheet can be approved.")
         db.commit()
     return RedirectResponse(url=request.headers.get("referer") or "/payroll", status_code=status.HTTP_303_SEE_OTHER)
 
@@ -11478,7 +11832,13 @@ async def payroll_sheet_approve(sheet_id: int, request: Request, db=Depends(get_
 async def payroll_sheet_reject(sheet_id: int, request: Request, db=Depends(get_db)):
     require_admin(request)
     with db.cursor() as cur:
-        cur.execute("UPDATE timesheets SET status = 'rejected' WHERE id = %s;", (sheet_id,))
+        cur.execute(
+            "UPDATE timesheets SET status = 'rejected' "
+            "WHERE id = %s AND status = 'submitted' AND payroll_run_id IS NULL;",
+            (sheet_id,),
+        )
+        if not cur.rowcount:
+            raise HTTPException(status_code=409, detail="Only an unassigned submitted timesheet can be rejected.")
         db.commit()
     return RedirectResponse(url=request.headers.get("referer") or "/payroll", status_code=status.HTTP_303_SEE_OTHER)
 
@@ -11493,19 +11853,25 @@ async def payroll_run_create(request: Request, period_start: str = Form(...), pe
         if cur.fetchone():
             return RedirectResponse(url=f"/payroll?period_start={ps}&period_end={pe}&error=run+exists",
                                     status_code=status.HTTP_303_SEE_OTHER)
-        cur.execute("INSERT INTO payroll_runs (period_start, period_end, status) VALUES (%s,%s,'open') RETURNING id;", (ps, pe))
-        run_id = cur.fetchone()["id"]
         cur.execute("""
             SELECT t.crew_id, c.pay_type, c.pay_rate FROM timesheets t
             JOIN crew c ON c.id = t.crew_id
-            WHERE t.work_date BETWEEN %s AND %s AND t.status IN ('submitted','approved')
+            WHERE t.work_date BETWEEN %s AND %s
+              AND t.status = 'approved' AND t.payroll_run_id IS NULL
             GROUP BY t.crew_id, c.pay_type, c.pay_rate;
         """, (ps, pe))
         crew_rows = cur.fetchall()
+        if not crew_rows:
+            return RedirectResponse(
+                url=f"/payroll?period_start={ps}&period_end={pe}&error=no+approved+unassigned+hours",
+                status_code=status.HTTP_303_SEE_OTHER,
+            )
+        cur.execute("INSERT INTO payroll_runs (period_start, period_end, status) VALUES (%s,%s,'open') RETURNING id;", (ps, pe))
+        run_id = cur.fetchone()["id"]
         jobs_done = 0
         for crew in crew_rows:
             cur.execute("SELECT work_date, hours FROM timesheets WHERE crew_id = %s AND work_date BETWEEN %s AND %s "
-                        "AND status IN ('submitted','approved');", (crew["crew_id"], ps, pe))
+                        "AND status = 'approved' AND payroll_run_id IS NULL;", (crew["crew_id"], ps, pe))
             sheets = cur.fetchall()
             if not sheets:
                 continue
@@ -11517,8 +11883,10 @@ async def payroll_run_create(request: Request, period_start: str = Form(...), pe
                 "INSERT INTO payroll_lines (run_id, crew_id, hours, overtime_hours, gross_cents) VALUES (%s,%s,%s,%s,%s);",
                 (run_id, crew["crew_id"], reg, ot, gross),
             )
-            cur.execute("UPDATE timesheets SET status = 'paid' WHERE crew_id = %s AND work_date BETWEEN %s AND %s "
-                        "AND status IN ('submitted','approved');", (crew["crew_id"], ps, pe))
+            # Assignment is not payment. Lock the sheets to this run so they
+            # cannot enter a second one, and mark paid only after PNC confirms.
+            cur.execute("UPDATE timesheets SET payroll_run_id = %s WHERE crew_id = %s AND work_date BETWEEN %s AND %s "
+                        "AND status = 'approved' AND payroll_run_id IS NULL;", (run_id, crew["crew_id"], ps, pe))
             jobs_done += 1
         db.commit()
     # Accrue the wages at run creation, not at payout. From this moment the
@@ -11544,7 +11912,9 @@ async def payroll_run_finalize(run_id: int, request: Request, db=Depends(get_db)
     """
     require_admin(request)
     with db.cursor() as cur:
-        cur.execute("UPDATE payroll_runs SET status = 'closed' WHERE id = %s;", (run_id,))
+        cur.execute("UPDATE payroll_runs SET status = 'closed' WHERE id = %s AND status = 'open' RETURNING id;", (run_id,))
+        if not cur.fetchone():
+            raise HTTPException(status_code=409, detail="Only an open payroll run can be finalized.")
         db.commit()
     try:
         ledger_sync.ensure_schema(db)
@@ -11788,40 +12158,145 @@ async def payroll_run_csv(run_id: int, request: Request, db=Depends(get_db)):
 
 
 @app.post("/api/payroll/timesheets/add")
-async def payroll_add_hours(request: Request, crew_id: int = Form(...), project_id: int = Form(0),
+async def payroll_add_hours(request: Request, crew_id: int = Form(0), project_id: int = Form(0),
                             work_date: str = Form(""), hours: str = Form(""), work_type: str = Form("regular"),
+                            notes: str = Form(""), period_start: str = Form(""), period_end: str = Form(""),
                             db=Depends(get_db)):
-    """Owner adds time for a crew member (missed punch, etc). Crew cannot add hours themselves."""
+    """Owner adds time for a crew member: a missed punch, a dead phone, no phone.
+
+    Crew cannot add hours themselves. The row is created already approved so it
+    enters the next pay run, and it carries the job it was worked on so the
+    hours land on that job's cost -- not just on the payroll total.
+    """
     require_admin(request)
-    try:
-        hrs = float(hours)
-    except (TypeError, ValueError):
-        hrs = 0
-    if hrs <= 0 or hrs > 24:
-        return RedirectResponse(url="/payroll?error=Hours+must+be+between+0+and+24", status_code=status.HTTP_303_SEE_OTHER)
-    wd = work_date or date.today().isoformat()
+    vals, err = _parse_timesheet_form(crew_id, project_id, work_date, hours, work_type)
+    if err:
+        return _payroll_back(request, period_start, period_end, error=err)
     with db.cursor() as cur:
+        link_err = _check_timesheet_links(cur, vals["crew_id"], vals["project_id"])
+        if link_err:
+            return _payroll_back(request, period_start, period_end, error=link_err)
         cur.execute(
-            "INSERT INTO timesheets (crew_id, project_id, work_date, hours, work_type, source, status) "
-            "VALUES (%s,%s,%s,%s,%s,'owner','approved');",
-            (crew_id, project_id or None, wd, hrs, work_type),
+            "INSERT INTO timesheets (crew_id, project_id, work_date, hours, work_type, source, status, notes) "
+            "VALUES (%s,%s,%s,%s,%s,'owner','approved',%s);",
+            (vals["crew_id"], vals["project_id"], vals["work_date"], vals["hours"],
+             vals["work_type"], (notes or "").strip()[:500] or None),
         )
         db.commit()
-    return RedirectResponse(url=f"/payroll?period_start={wd}&ok=hours+added", status_code=status.HTTP_303_SEE_OTHER)
+    ps = period_start or vals["work_date"].isoformat()
+    return _payroll_back(request, ps, period_end or ps, ok="Hours added")
+
+
+@app.post("/api/payroll/timesheets/{sheet_id}/edit")
+async def payroll_sheet_edit(sheet_id: int, request: Request, crew_id: int = Form(0),
+                             project_id: int = Form(0), work_date: str = Form(""),
+                             hours: str = Form(""), work_type: str = Form("regular"),
+                             notes: str = Form(""), period_start: str = Form(""),
+                             period_end: str = Form(""), db=Depends(get_db)):
+    """Correct a timesheet that is not yet in a pay run.
+
+    Once ``payroll_run_id`` is set the sheet is locked: that run's gross, its
+    accrual and the ACH file were all built from these hours, so changing them
+    afterwards would make the books disagree with the money that moved.
+    """
+    require_admin(request)
+    vals, err = _parse_timesheet_form(crew_id, project_id, work_date, hours, work_type)
+    if err:
+        return _payroll_back(request, period_start, period_end, error=err)
+    with db.cursor() as cur:
+        link_err = _check_timesheet_links(cur, vals["crew_id"], vals["project_id"])
+        if link_err:
+            return _payroll_back(request, period_start, period_end, error=link_err)
+        cur.execute(
+            "UPDATE timesheets SET crew_id=%s, project_id=%s, work_date=%s, hours=%s, "
+            "work_type=%s, notes=%s "
+            "WHERE id = %s AND payroll_run_id IS NULL AND status <> 'paid';",
+            (vals["crew_id"], vals["project_id"], vals["work_date"], vals["hours"],
+             vals["work_type"], (notes or "").strip()[:500] or None, sheet_id),
+        )
+        if not cur.rowcount:
+            return _payroll_back(
+                request, period_start, period_end,
+                error="That hours entry is already in a pay run and cannot be changed.")
+        db.commit()
+    return _payroll_back(request, period_start, period_end, ok="Hours updated")
+
+
+@app.post("/api/payroll/timesheets/{sheet_id}/delete")
+async def payroll_sheet_delete(sheet_id: int, request: Request,
+                               period_start: str = Form(""), period_end: str = Form(""),
+                               db=Depends(get_db)):
+    """Delete a timesheet that is not yet in a pay run."""
+    require_admin(request)
+    with db.cursor() as cur:
+        cur.execute(
+            "DELETE FROM timesheets WHERE id = %s AND payroll_run_id IS NULL AND status <> 'paid';",
+            (sheet_id,),
+        )
+        if not cur.rowcount:
+            return _payroll_back(
+                request, period_start, period_end,
+                error="That hours entry is already in a pay run and cannot be deleted.")
+        db.commit()
+    return _payroll_back(request, period_start, period_end, ok="Hours deleted")
+
+
+@app.post("/api/payroll/clock/{event_id}/discard")
+async def payroll_clock_discard(event_id: int, request: Request,
+                                period_start: str = Form(""), period_end: str = Form(""),
+                                db=Depends(get_db)):
+    """Clear a clock-in that never got a clock-out.
+
+    The stale punch is what leaves a crew member stuck on "already clocked in"
+    and unable to start the next day. Discarding it creates no hours on purpose:
+    the office adds the time they actually worked with the form above, so the
+    paid number is explicit instead of inferred from a timestamp.
+    """
+    require_admin(request)
+    with db.cursor() as cur:
+        cur.execute("DELETE FROM clock_events WHERE id = %s AND punch_out_at IS NULL;", (event_id,))
+        if not cur.rowcount:
+            return _payroll_back(request, period_start, period_end,
+                                 error="That clock-in is already closed, so there is nothing to clear.")
+        db.commit()
+    return _payroll_back(request, period_start, period_end,
+                         ok="Open clock-in cleared — now add the hours they worked")
+
+
+def _payroll_ach_ready(db, run_id: int):
+    """Return a finalized, fully banked run, or refuse before money is posted.
+
+    NACHA generation omits unbanked workers by design. The application must not
+    then mark the whole run paid: either every positive line can settle through
+    PNC, or the owner fixes the named bank records first. This all-or-nothing
+    check keeps ACH cash, payroll status and the ledger in agreement.
+    """
+    direct_deposit.ensure_schema(db)
+    with db.cursor() as cur:
+        cur.execute("SELECT * FROM payroll_runs WHERE id = %s;", (run_id,))
+        run = cur.fetchone()
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    if run.get("status") != "closed":
+        raise HTTPException(status_code=409, detail="Finalize the open payroll run before creating or confirming ACH.")
+    lines = direct_deposit.run_lines(db, run_id)
+    skipped = [str(l.get("name") or f"crew {l.get('crew_id')}") for l in lines if not l.get("has_bank")]
+    if skipped:
+        raise HTTPException(
+            status_code=409,
+            detail="Add PNC bank details for every worker before continuing: " + ", ".join(skipped),
+        )
+    if not lines:
+        raise HTTPException(status_code=409, detail="This payroll run has no positive pay lines.")
+    return run, lines
 
 
 @app.get("/api/payroll/run/{run_id}/nacha")
 async def payroll_run_nacha(run_id: int, request: Request, db=Depends(get_db)):
     """NACHA PPD credit file for this run -- upload to PNC ACH origination to pay crew."""
     require_admin(request)
-    with db.cursor() as cur:
-        cur.execute("SELECT * FROM payroll_runs WHERE id = %s;", (run_id,))
-        run = cur.fetchone()
-    if not run:
-        raise HTTPException(status_code=404, detail="Run not found")
-    direct_deposit.ensure_schema(db)
+    run, lines = _payroll_ach_ready(db, run_id)
     try:
-        lines = direct_deposit.run_lines(db, run_id)
         text, _ = direct_deposit.nacha(lines, company_name=company().get("short_name") or brand.name())
     except direct_deposit.NotConfigured as e:
         raise HTTPException(status_code=503, detail=str(e))
@@ -11833,14 +12308,9 @@ async def payroll_run_nacha(run_id: int, request: Request, db=Depends(get_db)):
 async def payroll_run_ach_csv(run_id: int, request: Request, db=Depends(get_db)):
     """Same payments as CSV (name, routing, account, amount) for a bank portal that imports CSV."""
     require_admin(request)
-    with db.cursor() as cur:
-        cur.execute("SELECT * FROM payroll_runs WHERE id = %s;", (run_id,))
-        run = cur.fetchone()
-    if not run:
-        raise HTTPException(status_code=404, detail="Run not found")
-    direct_deposit.ensure_schema(db)
+    run, lines = _payroll_ach_ready(db, run_id)
     try:
-        text = direct_deposit.ach_csv(direct_deposit.run_lines(db, run_id))
+        text = direct_deposit.ach_csv(lines)
     except direct_deposit.NotConfigured as e:
         raise HTTPException(status_code=503, detail=str(e))
     return Response(content=text, media_type="text/csv",
@@ -11851,11 +12321,13 @@ async def payroll_run_ach_csv(run_id: int, request: Request, db=Depends(get_db))
 async def payroll_run_ach_sent(run_id: int, request: Request, db=Depends(get_db)):
     """Owner confirms the ACH file was uploaded to PNC: mark the run paid and post it to the books."""
     require_admin(request)
-    direct_deposit.ensure_schema(db)
+    run, lines = _payroll_ach_ready(db, run_id)
     with db.cursor() as cur:
-        cur.execute("UPDATE payroll_runs SET status = 'paid', ach_sent_at = now() WHERE id = %s RETURNING id;", (run_id,))
+        cur.execute("UPDATE payroll_runs SET status = 'paid', ach_sent_at = now() "
+                    "WHERE id = %s AND status = 'closed' RETURNING id;", (run_id,))
         if not cur.fetchone():
-            raise HTTPException(status_code=404, detail="Run not found")
+            raise HTTPException(status_code=409, detail="This payroll run was already settled or is no longer finalized.")
+        cur.execute("UPDATE timesheets SET status = 'paid' WHERE payroll_run_id = %s;", (run_id,))
         db.commit()
     try:
         ledger_sync.ensure_schema(db)
@@ -11867,33 +12339,12 @@ async def payroll_run_ach_sent(run_id: int, request: Request, db=Depends(get_db)
 
 @app.post("/api/payroll/run/{run_id}/pay/{crew_id}")
 async def payroll_pay_worker(run_id: int, crew_id: int, request: Request, db=Depends(get_db)):
+    """Legacy Stripe payout path, retired when payroll moved to PNC."""
     require_admin(request)
-    with db.cursor() as cur:
-        cur.execute("SELECT * FROM payroll_lines WHERE run_id = %s AND crew_id = %s;", (run_id, crew_id))
-        line = cur.fetchone()
-        cur.execute("SELECT * FROM crew WHERE id = %s;", (crew_id,))
-        crew = cur.fetchone()
-    if not line or not crew:
-        raise HTTPException(status_code=404, detail="Pay line or crew not found")
-    ok = stripe_svc.transfer_to_worker(crew, line["gross_cents"])
-    if not ok:
-        return RedirectResponse(url=request.headers.get("referer") or "/payroll",
-                                status_code=status.HTTP_303_SEE_OTHER)
-    with db.cursor() as cur:
-        cur.execute(
-            "INSERT INTO payments (lead_id, stripe_payment_intent_id, amount_cents, currency, status, company) "
-            "VALUES (NULL, %s, %s, 'usd', 'paid', 'construction');",
-            (f"payroll-run-{run_id}-crew-{crew_id}", line["gross_cents"]),
-        )
-        db.commit()
-    # Post the payout to the books: relieves payroll payable, credits cash.
-    try:
-        ledger_sync.ensure_schema(db)
-        ledger_sync.sync_payroll_paid(db, run_id, company=_BID_COMPANY)
-    except Exception as e:
-        logger.warning("ledger not updated for payroll payout run %s crew %s: %s", run_id, crew_id, e)
-    return RedirectResponse(url=request.headers.get("referer") or "/payroll?ok=paid+%23" + str(crew_id),
-                            status_code=status.HTTP_303_SEE_OTHER)
+    raise HTTPException(
+        status_code=410,
+        detail="Stripe payroll is retired. Finalize the run and use its PNC ACH file instead.",
+    )
 
 
 @app.post("/api/payments/connect-webhook")
@@ -12167,9 +12618,80 @@ async def bid_set_price(bid_id: int, request: Request, markup_pct: str = Form("0
             bid_opportunities.set_bid_amount(db, bid_id, ba, _BID_COMPANY)
         except Exception:
             pass
+    else:
+        # A markup with a blank amount means "price it from the card": the same
+        # calculation the Recalculate button uses, so a revised quote cannot
+        # leave the old total in place.
+        try:
+            total, base, _mp = bid_costing.quote_total(db, bid_id, _BID_COMPANY)
+            if base > 0:
+                bid_opportunities.set_bid_amount(db, bid_id, total, _BID_COMPANY)
+        except Exception:
+            pass
     if back.startswith("/bids/"):
         return RedirectResponse(url=back, status_code=status.HTTP_303_SEE_OTHER)
     return RedirectResponse(url=f"/bids/{bid_id}", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/api/bids/{bid_id}/recalculate")
+async def bid_recalculate(bid_id: int, request: Request, back: str = Form(""),
+                          db=Depends(get_db)):
+    """Set the bid amount from the cost lines on this card plus the markup.
+
+    Uploading a revised quote or editing the lines changes the cost of the job,
+    but nothing used to move ``bid_amount``. The card, the generated Scope of
+    Work, the itemized pricing, the contract and the deposit schedule all read
+    that one number, so it has to be recomputed rather than retyped.
+    """
+    require_admin(request)
+    bid = bid_opportunities.get_bid(db, bid_id, _BID_COMPANY)
+    if not bid:
+        raise HTTPException(status_code=404, detail="Bid not found")
+    try:
+        total, base, _markup = bid_costing.quote_total(db, bid_id, _BID_COMPANY)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Could not total the cost lines: {e}")
+    target = back if back.startswith("/bids/") else f"/bids/{bid_id}"
+    if base <= 0:
+        join = "&" if "?" in target else "?"
+        return RedirectResponse(
+            url=f"{target}{join}error=Add+cost+lines+first%3B+there+is+nothing+to+total.",
+            status_code=status.HTTP_303_SEE_OTHER)
+    bid_opportunities.set_bid_amount(db, bid_id, total, _BID_COMPANY)
+    join = "&" if "?" in target else "?"
+    return RedirectResponse(url=f"{target}{join}recalculated={total:.2f}",
+                            status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/api/bids/{bid_id}/revision")
+async def bid_save_revision(bid_id: int, request: Request, note: str = Form(""),
+                            back: str = Form(""), db=Depends(get_db)):
+    """Save the current price as the next numbered revision: 1, 2, 3...
+
+    A revision is what the customer was shown, not every keystroke. The card
+    and every generated document print the number so two copies can never be
+    confused for the same price.
+    """
+    require_admin(request)
+    bid = bid_opportunities.get_bid(db, bid_id, _BID_COMPANY)
+    if not bid:
+        raise HTTPException(status_code=404, detail="Bid not found")
+    target = back if back.startswith("/bids/") else f"/bids/{bid_id}"
+    try:
+        saved = bid_costing.list_revisions(db, bid_id, _BID_COMPANY, limit=1)
+        if saved and not bid_costing.revision_dirty(db, bid_id, _BID_COMPANY):
+            join = "&" if "?" in target else "?"
+            return RedirectResponse(
+                url=f"{target}{join}error=Nothing+has+changed+since+Revision"
+                    f"+{int(saved[0].get('revision') or 0)}.",
+                status_code=status.HTTP_303_SEE_OTHER)
+        number = bid_costing.save_revision(db, bid_id, _BID_COMPANY, note=note,
+                                           created_by=_owner_email())
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    join = "&" if "?" in target else "?"
+    return RedirectResponse(url=f"{target}{join}revision={number}",
+                            status_code=status.HTTP_303_SEE_OTHER)
 
 
 def _package_signature(db, bid_id: int) -> dict | None:

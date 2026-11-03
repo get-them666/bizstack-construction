@@ -46,7 +46,7 @@ not a shared package, not two services over one database.
 ```bash
 venv/bin/python -m uvicorn construction_main:app --reload   # dev server
 npm run css                                                  # rebuild static/css/tailwind.css after editing templates
-venv/bin/python -m pytest -q                                 # 857 pass / 33 skip, ~17s — see trap below
+venv/bin/python -m pytest -q                                 # 896 pass / 37 skip, ~17s — see trap below
 venv/bin/python test_sql_safety.py                           # script-style file: run directly
 venv/bin/python -m pytest test_lead_pipeline_tools.py -v     # single file
 ```
@@ -140,10 +140,15 @@ This is how the pieces actually connect. Keep each hand-off intact when editing 
   `/api/crew/app/messages` (crew UI), `/ws/messages`. It works; don't rebuild it.
 - **Timesheets** come from `/api/crew/app/clock` and `/api/crew/app/hours` and sit in
   `timesheets`/`clock_events`. Owner approves at `/payroll` →
-  `/api/payroll/timesheets/{id}/approve|reject`.
-- **Payroll** `/api/payroll/run` → `/api/payroll/run/{id}/finalize` → `/csv`. Direct-deposit
-  details are per-crew (`/api/crew/direct-deposit`). Finalizing a payout **must** call
-  `ledger_sync.sync_payroll_paid(conn, run_id)` so books stay in step.
+  `/api/payroll/timesheets/{id}/approve|reject`. Only approved, unassigned sheets enter a
+  run. Run creation sets `timesheets.payroll_run_id` (locking them against double payment)
+  but leaves them `approved`; they become `paid` only after the PNC settlement confirmation.
+- **Payroll** `/api/payroll/run` → `/api/payroll/run/{id}/finalize` → PNC NACHA/ACH CSV →
+  `/api/payroll/run/{run_id}/ach-sent`. Stripe payroll and Stripe onboarding are retired.
+  ACH creation and settlement require a finalized run with PNC bank details for **every**
+  positive line; otherwise no worker may be silently omitted while the whole run is marked
+  paid. Settlement **must** call `ledger_sync.sync_payroll_paid(conn, run_id)` so books stay
+  in step. Copilot can finalize for PNC but cannot move money.
 - **Bids → job → invoices**: `bid_opportunities.py` (bid rows + per-bid `documents` with
   `document_type` ∈ `sow/quote/itemized/contract/plans/other`), `bid_costing.py`
   (`open_job_for_bid`, cost lines, `create_invoice`/`set_invoice_status`), `bid_deposit.py`
@@ -157,9 +162,10 @@ This is how the pieces actually connect. Keep each hand-off intact when editing 
   `ledger_sync`. Failures queue in `ledger_sync.pending`; `/books/retry` and
   `/api/bids/{id}/books/repair` replay them. **Any new route that moves money must call the
   matching `ledger_sync.*` function** or the books silently drift.
-- **Bid document Copilot tools** `research_bid_contact` / `generate_bid_documents` exist as
-  handlers in `_bid_document_tools` but have **no schema in `con_ai_agent.py`**, so the model
-  cannot call them yet (see the three-place rule below).
+- **Bid document Copilot tools** `research_bid_contact` / `generate_bid_documents` are wired
+  in `_bid_document_tools` and advertised in `con_ai_agent.py`; keep both sides in step (see
+  the three-place rule below). Bid contact research uses the same cached, ZIP-resolving
+  `contact_lookup` path as lead enrichment so repeat clicks do not rebill or guess without a ZIP.
 
 ### Database
 

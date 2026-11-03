@@ -189,3 +189,29 @@ def test_non_budget_errors_still_return_the_fallback():
     a._client = _StubClient([_Msg(tool_calls=[_TC("flaky")])] * 6)
     a._client.chat.completions.create = lambda **kw: (_ for _ in ()).throw(RuntimeError("boom"))
     assert a.process_conversation([], "go") == guest_fallback()
+
+
+def test_newer_models_use_max_completion_tokens_and_default_temperature():
+    """Production regression: GPT-5 rejected every Copilot turn with a 400.
+
+    The route caught that as a generic failure and returned the customer-facing
+    fallback with HTTP 200, which made a parameter incompatibility look like an
+    assistant that simply had no answer.
+    """
+    a = _agent([_Msg(content="answered")], lambda: {"ok": True})
+    a._model = "gpt-5.5"
+    assert a.process_conversation([], "go") == "answered"
+    call = a._client.chat.completions.calls[0]
+    assert call["max_completion_tokens"] == 800
+    assert "max_tokens" not in call
+    assert "temperature" not in call
+
+
+def test_legacy_chat_models_keep_the_original_completion_parameters():
+    a = _agent([_Msg(content="answered")], lambda: {"ok": True})
+    a._model = "gpt-4o-mini"
+    assert a.process_conversation([], "go") == "answered"
+    call = a._client.chat.completions.calls[0]
+    assert call["max_tokens"] == 800
+    assert call["temperature"] == 0.7
+    assert "max_completion_tokens" not in call

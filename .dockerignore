@@ -40,9 +40,10 @@ __pycache__/
 .opencode.json
 skills-lock.json
 
-# uploaded/generated
+# uploaded/generated and local-only tools
 uploads/
 *.log
+zmail-cli.jar
 
 # credential files must never enter an image
 calendar-sa.json

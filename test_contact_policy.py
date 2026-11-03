@@ -91,13 +91,17 @@ if __name__ == "__main__":
         def close(self):
             pass
 
+        def rollback(self):
+            pass
+
         def answer(self, sql):
             if self.boom:
                 raise RuntimeError("db down")
             if "FROM comms_logs" in sql:
                 return {"n": self.touches, "last_at": self.last_at}
             if "FROM leads" in sql:
-                return {"last_reply_at": "2026-09-30" if self.replied else None}
+                return {"last_reply_at": "2026-09-30" if self.replied else None,
+                        "opted_out_at": None}
             return None
 
 

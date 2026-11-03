@@ -252,7 +252,7 @@ def run_once(db=None, force: bool = False, limit=None) -> dict:
             # today, and a draft aimed at an unsendable channel is noise.
             if merged["gained_contact"] and email and not email.lower().endswith("@lead.local") \
                     and not has_draft:
-                subject, body = first_touch_draft(lead.get("name"), lead.get("address"))
+                subject, body = first_touch_draft(merged.get("name"), lead.get("address"))
                 with db.cursor() as cur:
                     cur.execute(
                         "UPDATE leads SET draft_reply = %s "

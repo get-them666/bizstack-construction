@@ -399,10 +399,10 @@ dead        = advertised - set(build_copilot_handlers(db, owner_email))  # can o
 unreachable = set(build_copilot_handlers(db, owner_email)) - advertised  # does nothing
 ```
 
-`test_lead_pipeline_tools.py` pins this for the permit pipeline. Six handlers
-remain unreachable (`find_people`, `get_inventory`, `navigation_guide`,
-`reorder_report`, `sync_calendars`, `update_inventory`) — all benign internal
-lookups, none left off on purpose.
+`test_lead_pipeline_tools.py` pins this for the permit pipeline. Five handlers
+remain unreachable (`get_inventory`, `navigation_guide`, `reorder_report`,
+`sync_calendars`, `update_inventory`) — all benign internal lookups, none left off
+on purpose. `find_people` gained a Copilot-only schema on 2026-11-02.
 
 `send_sms_message` is still fully wired to the Copilot, with the same hazard
 profile as the email tool that was withheld: no rate limit, no per-recipient
@@ -492,10 +492,12 @@ through the existing free pipeline: HRGEO parcels → Skip Sherpa (at most one
 billed credit per lead) → `data_enrichment.merge` write-back → a first-touch
 draft staged into `leads.draft_reply` when the lead gained a real email.
 
-**Nothing here sends.** The owner reviews and fires drafts from the leads page
-(`auto_reply.fire_lead_draft` re-checks caps and contact policy at send time).
-A phone-only gain does not stage a draft — email is the channel that sends
-today; SignalWire SMS is submitted and pending 10DLC carrier review (brand
+**Review mode stages; LEAD_AUTO_SEND sends through the guardrail.** Drafts always go
+through `auto_reply.fire_lead_draft` (caps, contact policy, federal block and
+suppression re-checked at send time) when auto-send is enabled; otherwise the owner
+reviews and fires them from the leads page. A phone-only gain does not stage a draft —
+email is the channel that sends today; SignalWire SMS is submitted and pending 10DLC
+carrier review (brand
 `460486de-…`, campaign `a76073da-…`, number order `0932cce2-…`, all `pending`
 as of 2026-10-21 — see the Account map).
 `DISABLE_LEAD_ENRICH` kills it (explicit parsing — Railway's string "false" is
@@ -656,13 +658,192 @@ shows the bank account instead of a Stripe status card.
   app (Fernet-encrypted), the owner finalizes a pay run and downloads a NACHA
   PPD file at `/api/payroll/runs/{id}/nacha`, then uploads it to PNC's ACH
   origination (PINACLE). The site never originates the transfer.
-- **Payroll ACH origination is not configured yet** — `ACH_IMMEDIATE_DEST`,
-  `ACH_IMMEDIATE_ORIGIN`, `ACH_COMPANY_ID`, `ACH_ODFI_ROUTING` are all unset in
-  Railway. The files build; PNC will not originate them until it issues those
-  identifiers. The Settings card names the missing ones.
+- **Client-facing payment details are on file** (verified in production
+  2026-11-03): Zelle handle `hello@bizstackperks.com`, PNC routing
+  `054000030` (a PNC Bank NA routing number, valid ABA — note it differs from
+  the `043000096` used as the payroll file's immediate destination), account
+  number stored Fernet-encrypted with `BANK_ENCRYPTION_KEY`. So
+  `deposit_instructions.details()` reports `ready`, and deposit links render
+  both Zelle and ACH. Zelle only works if that email is actually enrolled in
+  the business's PNC Zelle; send a $1 test before relying on it.
+- **Payroll ACH origination values are now filled, but one is derived, not
+  issued** (2026-11-03). `ACH_IMMEDIATE_DEST` (`043000096`) and
+  `ACH_ODFI_ROUTING` (`04300009`) are PNC's routing values. `ACH_COMPANY_ID`
+  and `ACH_IMMEDIATE_ORIGIN` are both `1` + the 9-digit EIN, the usual PNC
+  PINACLE convention — **PNC has not confirmed these**. A sample file now
+  builds with `missing_env: []` and 94-character CRLF records, so the Settings
+  card reports ready and `/payroll` stops naming missing variables; that only
+  proves the file is structurally valid, not that PNC will accept it. Before
+  the first real run, upload a one-line $1 test to PINACLE. If PNC rejects it,
+  the Company ID is wrong and only PNC's ACH company profile has the right
+  value — do not keep guessing. `ACH_COMPANY_NAME` is optional (defaults to the
+  brand short name, 16-char limit). Never write the EIN into this repo: it is
+  public.
 - Stripe deposit-link code, webhooks and the `stripe_income_report.py` history
   are deliberately left intact — links already sent still open — but nothing in
   the deposit path calls Stripe, and the crew training text no longer names it.
+
+### 2026-11-03: office-entered hours and the bid number as the job number
+
+- **Crew do not add their own hours.** `/payroll` now has an *Add hours* form
+  (crew, job, date, hours, type, note) writing a `source='owner'`,
+  `status='approved'` timesheet, and **Edit hours** / **Delete** on each row.
+  This covers a missed clock-in, a forgotten clock-out, a dead phone, or a crew
+  member with no phone at all. Routes: `/api/payroll/timesheets/add`,
+  `/{id}/edit`, `/{id}/delete`.
+- **Anything already in a pay run is locked.** Edit and delete both carry
+  `payroll_run_id IS NULL AND status <> 'paid'`; the run's gross, its accrual
+  and the ACH file were built from those hours, so changing them afterwards
+  would make the books disagree with the money. The row shows `🔒 in pay run`.
+- **A punch with no clock-out is cleared from `/payroll`**, not silently
+  discarded: `/api/payroll/clock/{id}/discard` deletes only the open
+  `clock_events` row and creates **no** hours, because a stale timestamp is not
+  evidence of work. The office adds the real hours with the form above. This is
+  what unblocks a crew member stuck on "Already clocked in".
+- **The bid number is the job number, end to end.** The contract prints
+  `Bid #18350`; `projects.bid_id` is the unique link from bid → job, and the
+  same id is what the crew see on every job card (`job_number` in
+  `/api/crew/app/me`), on `/crew/dashboard`, `/crew/jobs/{id}`, `/projects`,
+  and on every payroll row and job picker. Do not invent a second numbering
+  scheme. Jobs with no bid fall back to `Job #<project id>`; their hours are
+  reported on `/payroll` as "not attached to a job" because they have no bid to
+  cost against.
+- **`/payroll` now shows what each job made**: revenue, actual/estimated cost,
+  profit and margin per `Bid #`, using `bid_costing.cost_summary` so the
+  estimated-vs-actual rule and the "add costs" warning stay in one place.
+  Labor comes from timesheets; a job without materials/subs entered is flagged,
+  not given a fake margin.
+
+### 2026-11-03: the contract package honours uploads, and the total recalculates
+
+- **Root cause of "my uploaded SOW/quote never replaces the template":**
+  `bid_opportunities.list_documents` did not select `document_type`. Every
+  upload reached the card as `other`, so the Contract package's per-type lookup
+  never matched and it always fell back to the generated PDFs. It now returns
+  the type; the card prefers an uploaded SOW, itemized/quote and contract, and
+  labels them `uploaded` with the filename in the tooltip.
+- An uploaded **`itemized`** document now feeds the 💰 slot
+  (`price_doc = item_doc or quote_doc`). Before, only `quote` was checked, so an
+  itemized upload was ignored even once the type bug was fixed.
+- **`bid_costing.quote_total()`** is the one calculation for a bid total:
+  estimated cost lines × (1 + `markup_pct`/100). `POST
+  /api/bids/{id}/recalculate` writes it to `bid_amount`, and a blank *Final bid
+  $* in the price form now does the same instead of keeping the old number.
+  The card warns when `bid_amount` disagrees with the lines.
+- It deliberately does **not** touch `contract_value`: that is the signed
+  number the invoices and payment schedule use, and a revision that changes it
+  is a separate decision, not a side effect of a cost edit.
+- Generated SOW/itemized/contract/package PDFs were already built per request
+  from the current lines, so they never needed regenerating; the stale number
+  was `bid_amount`, not the documents.
+- **Revisions are automatic and nothing is erased.** `bid_costs.removed_at`
+  marks a line taken out of the price: it stays on the card, struck through,
+  with a "kept as history" subtotal, and is excluded from every total, PDF and
+  ledger query (`cost_lines()` defaults to active-only; `include_removed=True`
+  is for the card). `update_cost_line()` corrects a line in place and
+  `restore_cost_line()` puts it back. Uploaded documents are soft-superseded
+  the same way (`bid_documents.superseded_at`), so a retired contract stays
+  listed but never feeds the package.
+- **`_recalc_bid_amount()` runs after every cost add, update, removal and
+  restore**, so the line list, total, generated documents, deposit schedule and
+  job-profit table move together with no second click. It refuses to touch a
+  won bid that has a signed `contract_value`; that number is the agreement.
+  `cost_summary()` reports `removed_cost` / `removed_count` for the history row.
+- **Revisions are numbered snapshots.** `bid_opportunities.revision` is 0 for
+  the original, then 1, 2, 3 on each save; `bid_revisions` stores the total,
+  markup, line snapshot, note, who and a fingerprint. The card shows the
+  number plus every past revision, and warns when the working lines differ
+  from the last saved snapshot. Saving with nothing changed is refused.
+  `Revision N` (or `Original`) is printed by `_title_block` in the SOW,
+  itemized pricing, contract, and by the package/proposal PDFs. Revision is
+  saved explicitly after the owner has checked the change — one customer
+  change must not become Revision 7 because three lines moved.
+- **Uploading any document ensures the job card exists.**
+  `bid_costing.ensure_job_for_bid()` finds `projects` by `bid_id` or creates it
+  (`planned`, or `active` when the bid is won), fills only blank name/address/
+  summary, never overwrites a hand-edited field, never reopens a completed or
+  cancelled job, and creates nothing for a lost/withdrawn bid. The upload route
+  calls it after the file is stored and swallows its errors so a job-card
+  problem can never lose the upload.
+- **Send to PNC (Bill.com) is always a confirmed action.** `POST
+  /api/bids/{id}/send-documents` builds the three package documents — uploaded
+  replacements first, generated PDFs otherwise — and emails them as separate
+  attachments through `documents_service.send_email(..., attachments=[...])`.
+  The recipient lives in `app_settings.pnc_docs_email` (fallback
+  `PNC_DOCS_EMAIL`), is editable on Settings → Banking, and the card's confirm
+  dialog names it. It is never sent automatically; the point is that the owner
+  says yes. The address itself is the owner's Bill.com inbox and is kept in the
+  database, not in this public repo.
+
+### 2026-11-03: Zoho "Invalid Redirect Uri" is the client, not the app
+
+- **The connection itself is healthy.** Verified against production
+  2026-11-03: the Railway `ZOHO_REFRESH_TOKEN` returns a fresh access token and
+  grants all five products (CRM, Books, Campaigns, Mail, Calendar), and
+  `zoho_oauth.status()` reports `connected: true`, `token_ok: true` with
+  `source: environment`. `app_settings` holds no `zoho_refresh_token`, so the
+  env token is the one in use. **Nothing is disconnected** — do not re-run the
+  Connect flow to "fix" it; a successful connect would replace a working token.
+- **What fails is only the Reconnect button.** `zoho_oauth.redirect_uri()` is
+  `https://construction.bizstackperks.com/oauth/zoho/callback`. Zoho rejects
+  the authorize request with `Invalid Redirect Uri` before it reaches the
+  site, which means either the client is a **Self Client** (that type has no
+  redirect-URI field at all, so the button can never work) or a Server-based
+  client has a different address saved. This is Zoho API-console
+  configuration; no app change can make Zoho accept an unregistered URI.
+- **Use the Generate Code path to issue a new token** (Settings → Zoho →
+  paste grant code). `exchange_grant_code()` needs no redirect URI and is the
+  documented fallback. The scope string is printed on that card.
+- `redirect_uri()` now prefers `APP_BASE_URL` and strips a scheme/trailing
+  slash off `COMPANY_DOMAIN`; either used to be able to produce a malformed
+  URI that Zoho could never match. `ZOHO_REDIRECT_URI` still overrides
+  everything and must be copied exactly as registered.
+- Settings now shows the URI with a copy button, distinguishes Self Client from
+  Server-based, and demotes Reconnect to "Reconnect anyway" once everything is
+  connected and the token is live.
+
+## 2026-11-02: Copilot model compatibility and the missing quote tables
+
+Two live failures were found in the production logs and deployed in Railway deployment
+`1c8f1570-0ed0-4052-85c4-47759a95f135` (`SUCCESS`):
+
+- The configured Copilot model rejected every Chat Completions call with HTTP 400:
+  `max_tokens` is unsupported and `max_completion_tokens` is required. The generic
+  exception handler then returned the customer fallback with HTTP 200, hiding the
+  failure. `con_ai_agent` now uses `max_completion_tokens` and the default temperature
+  for GPT-5/o-series models, while retaining the original parameters for older chat
+  models and OpenAI-compatible providers. Regression tests cover both shapes.
+- The live database had no `quotes` table. It was only created lazily from quote
+  routes, while `/leads` and lead detail read it before those routes necessarily ran;
+  the pages returned 200 but logged the error and silently lost quote-backed deposit
+  amounts. Startup now runs `quoting.ensure_schema(conn)` with the lead-pipeline schema
+  setup. The successful boot logged `Lead pipeline orchestrator ready`, confirming the
+  quote DDL committed.
+
+The same live logs also show two external lead-enrichment limits, not code exceptions:
+RentCast's 50/month budget is exhausted, and Skip Sherpa returned 429 because its
+usage-block auto-recharge was gateway-rejected. Cached records still work; new lookups
+need the provider quota/billing resolved rather than another code workaround.
+
+### Follow-up Copilot, lead and money-flow audit (2026-11-02)
+
+- Copilot lead tools now find stored phone numbers, expose `find_people` only to the
+  owner, accept canonical `engaged`/`won` stages and recompute the work queue after
+  status/contact writes. `save_contact` no longer overwrites a real name. Batch drafts
+  use the newly resolved owner name, and bid contact research reuses cached,
+  ZIP-guarded `contact_lookup` instead of billing Skip Sherpa directly on every click.
+  `quote_project` accepts `lead_id` only in the Copilot schema, never the public widget.
+- Payroll no longer marks sheets paid at run creation or allows submitted/unapproved
+  hours into a run. Approved sheets are locked with `payroll_run_id`, and only PNC
+  confirmation marks them paid. ACH generation and settlement require a finalized run
+  with bank details for every positive line, preventing an unbanked worker from being
+  omitted while the whole run and ledger say paid. Stripe payroll/onboarding routes are
+  retired; Copilot only finalizes for PNC and never transfers money.
+- Payroll accrual uses immutable `payroll_lines.gross_cents` (OT and salary included),
+  allocates hourly gross across the run's bid ids, and pays only actual `paid` runs in
+  Copilot summaries. Customer collections exclude outbound payroll payment rows, and
+  permit-feed dollars are converted to cents. Bid actuals exclude rejected time and
+  manual labor lines no longer double count against timesheet labor.
 
 ## Open threads
 

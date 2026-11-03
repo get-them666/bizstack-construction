@@ -637,11 +637,17 @@ def build_contact_tools(db, owner_email: str):
         except (TypeError, ValueError):
             return {"ok": False, "error": f"Lead id must be a number, got {lead_id!r}."}
 
+        import skiptrace_service
+        from bizstack_leads import store as lead_store
+
         with db.cursor() as cur:
             cur.execute("SELECT id, name, email, phone FROM leads WHERE id = %s;", (lid,))
             lead = cur.fetchone()
             if not lead:
                 return {"ok": False, "error": f"No lead #{lid}. Check the id -- do not invent one."}
+            # A permit's city/placeholder may be replaced by the researched
+            # owner, but a real customer or applicant name always wins.
+            merged_name = name if name and skiptrace_service.is_placeholder_name(lead.get("name")) else ""
             cur.execute(
                 "UPDATE leads SET "
                 "  name  = CASE WHEN %s <> '' THEN %s ELSE name END, "
@@ -649,10 +655,13 @@ def build_contact_tools(db, owner_email: str):
                 "                OR LOWER(email) LIKE '%%@lead.local') THEN %s ELSE email END, "
                 "  phone = CASE WHEN %s <> '' AND BTRIM(COALESCE(phone,'')) = '' THEN %s ELSE phone END "
                 "WHERE id = %s RETURNING id, name, email, phone;",
-                (name, name, email, email, phone, phone, lid),
+                (merged_name, merged_name, email, email, phone, phone, lid),
             )
             saved = cur.fetchone()
             db.commit()
+        # Contact details determine the cached work queue. Without this the
+        # newly reachable lead stayed filed under "needs contact info".
+        lead_store.recompute(db, lid)
 
         return {
             "ok": True,
@@ -837,7 +846,9 @@ def build_contact_tools(db, owner_email: str):
         owner asked for this run): free parcel owner, Skip Sherpa contact
         (at most ONE credit per lead), conservative write-back, and a staged
         first-touch draft for every lead that gained a real email. The summary
-        reports credits spent and drafts staged. Nothing is sent.
+        reports credits spent, drafts staged and any sends. Review mode only stages;
+        with LEAD_AUTO_SEND enabled, eligible drafts go through fire_lead_draft's
+        caps, cooldown, federal-domain and suppression checks before sending.
 
         Prefer this over looping contact_lookup yourself: one call, one bill,
         and the per-request tool budget cannot cut the batch in half.

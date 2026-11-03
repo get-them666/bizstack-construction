@@ -196,3 +196,26 @@ def test_draft_lead_email_is_staged_not_sent(handlers):
     assert "draft_reply" in src
     for forbidden in ("documents_service", "send_email", "_fire_sent_effect"):
         assert forbidden not in src, f"draft tool must not transmit: {forbidden}"
+
+
+def test_people_search_and_existing_lead_quote_are_copilot_only():
+    copilot_tools = {t["function"]["name"]: t for t in BusinessAIAgent(subset="copilot")._tools()}
+    public_tools = {t["function"]["name"]: t for t in BusinessAIAgent(subset="widget")._tools()}
+    assert "find_people" in copilot_tools
+    assert "find_people" not in public_tools
+    copilot_quote = copilot_tools["quote_project"]["function"]["parameters"]
+    public_quote = public_tools["quote_project"]["function"]["parameters"]
+    assert "lead_id" in copilot_quote["properties"]
+    assert "lead_id" not in public_quote["properties"]
+
+
+def test_quote_tables_are_created_during_application_startup():
+    """The leads board reads quotes before any quote route may have run.
+
+    Production regression: ``quotes`` was only created lazily, so every leads
+    page logged a missing-table error and silently hid quote-backed deposits.
+    """
+    import construction_main
+
+    src = inspect.getsource(construction_main.lifecycle)
+    assert "quoting.ensure_schema(conn)" in src

@@ -203,7 +203,12 @@ def generate_bid_package_pdf(bid: dict, costs: list[dict], markup_pct: float = 0
     pdf.set_font("Helvetica", "B", 15)
     pdf.cell(0, 8, "BID PROPOSAL", new_x="LMARGIN", new_y="NEXT")
     pdf.set_font("Helvetica", "", 9)
-    pdf.cell(0, 5, f"Bid #{bid.get('id', '')}   |   "
+    try:
+        _number = int(bid.get("revision") or 0)
+    except (TypeError, ValueError):
+        _number = 0
+    _revision = f"Revision {_number}" if _number > 0 else "Original"
+    pdf.cell(0, 5, f"Bid #{bid.get('id', '')}   |   {_revision}   |   "
                    f"Proposal date: {date.today().strftime('%B %d, %Y')}   |   "
                    f"Valid {VALID_DAYS} days",
              new_x="LMARGIN", new_y="NEXT")
