@@ -224,6 +224,17 @@ Self Client cannot do redirects; it must be a Server-based client).
   key was retired with `credit_balance_exhausted`. Copilot is back on OpenAI
   (`COPILOT_MODEL=gpt-4o-mini`, `COPILOT_BASE_URL` deleted). Voice and web_search
   share this key. Verified with a live tool call.
+- **The model name decides the call shape, and the list rots.** `COPILOT_MODEL`
+  is `gpt-6-luna` (set 2026-11-02). It rejects `max_tokens` (wants
+  `max_completion_tokens`), a custom temperature, and function tools at the
+  default reasoning effort (`reasoning_effort="none"` is required on
+  `/v1/chat/completions`). The prefix list in `con_ai_agent` did not know the
+  name, so every turn 400'd into the "assistant is offline" fallback for ~15
+  hours while `/settings` happily reported "key accepted, gpt-6-luna available".
+  `_complete` now learns the shape from the rejection and caches it in
+  `_MODEL_QUIRKS`, so a future rename costs one round trip instead of an outage.
+  When the Copilot looks dead, grep the log for `AI agent fallback triggered`
+  before touching the key.
 - **OpenCode Zen** — the free tier now **403s every non-OpenCode client**
   (`FreeTierError`) regardless of key; the 2026-10-10 "verified live" note in
   AGENTS.md is stale. Console keys (`key_…` is only a tracking id; the secret is

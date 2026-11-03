@@ -54,6 +54,14 @@ def guest_fallback() -> str:
     )
 
 
+# Per-model parameter shapes learned from a provider rejection, keyed by the
+# bare model name ("gpt-6-luna"). Process-local on purpose: it is a cache of
+# something the provider told us, not configuration. Two facts are tracked
+# because they are independent -- a model can take `max_tokens` and still refuse
+# a custom temperature.
+_MODEL_QUIRKS: dict = {}
+
+
 class BusinessAIAgent:
     """Conversational assistant for BuildStack Construction LLC.
 
@@ -1086,6 +1094,96 @@ OPERATING MANUAL:
             return code_hit
         return ""
 
+    @staticmethod
+    def _model_key(model: str) -> str:
+        name = (model or "").strip().lower().split("/")[-1]
+        return name
+
+    @classmethod
+    def _uses_completion_token_limit(cls, model: str) -> bool:
+        """Whether this Chat Completions model uses the newer token parameter.
+
+        GPT-5 and the reasoning models reject both ``max_tokens`` and a custom
+        temperature. Older chat models and OpenAI-compatible providers still use
+        the original parameters, so this is deliberately model-aware rather than
+        a blanket rename.
+
+        The prefix list is only a guess. ``COPILOT_MODEL=gpt-6-luna`` was not on
+        it, so every Copilot turn 400'd on ``max_tokens`` and fell through to the
+        "assistant is offline" fallback until someone read the log. A rejected
+        parameter is now learned at runtime (see ``_learn_param_quirk``), because
+        the names keep changing and a list that has to be edited per release is a
+        guaranteed outage within one release.
+        """
+        learned = _MODEL_QUIRKS.get(cls._model_key(model), {}).get("completion_tokens")
+        if learned is not None:
+            return learned
+        return cls._model_key(model).startswith(("gpt-5", "gpt-6", "o1", "o3", "o4"))
+
+    @classmethod
+    def _accepts_temperature(cls, model: str) -> bool:
+        """Reasoning-style models refuse a custom temperature, not just max_tokens."""
+        learned = _MODEL_QUIRKS.get(cls._model_key(model), {}).get("temperature")
+        if learned is not None:
+            return learned
+        return not cls._uses_completion_token_limit(model)
+
+    @classmethod
+    def _completion_kwargs(cls, model: str, messages: list, max_tokens: int,
+                           tools=None, tool_choice=None) -> dict:
+        kwargs = {"model": model, "messages": messages}
+        if cls._uses_completion_token_limit(model):
+            kwargs["max_completion_tokens"] = max_tokens
+        else:
+            kwargs["max_tokens"] = max_tokens
+        if cls._accepts_temperature(model):
+            kwargs["temperature"] = 0.7
+        if tools:
+            kwargs["tools"] = tools
+            kwargs["tool_choice"] = tool_choice or "auto"
+            # gpt-6 refuses function tools at the default reasoning effort on
+            # /v1/chat/completions. Learned from the 400 below, then applied
+            # to every later call so the round trip is paid once per process.
+            if cls._model_quirks(model).get("reasoning_effort"):
+                kwargs["reasoning_effort"] = cls._model_quirks(model)["reasoning_effort"]
+        return kwargs
+
+    @classmethod
+    def _model_quirks(cls, model: str) -> dict:
+        return _MODEL_QUIRKS.setdefault(cls._model_key(model), {})
+
+    @classmethod
+    def _learn_param_quirk(cls, exc: Exception, model: str) -> bool:
+        """Record a rejected parameter shape and say whether a retry is worth it.
+
+        Matched on the error text rather than the status code: a 400 also covers
+        genuinely bad requests, and retrying those would just double the latency
+        before the same failure. Only the "this model does not take that
+        parameter" wording counts.
+
+        Returns False when the error taught us nothing new, which is what stops
+        a genuine bad request from being retried forever.
+        """
+        text = f"{type(exc).__name__} {exc}".lower()
+        if not any(w in text for w in ("unsupported", "not supported", "unrecognized",
+                                       "unknown parameter", "invalid parameter")):
+            return False
+        quirks = cls._model_quirks(model)
+        changed = False
+        if "reasoning_effort" in text:
+            if quirks.get("reasoning_effort") != "none":
+                quirks["reasoning_effort"] = "none"
+                changed = True
+        if "max_tokens" in text or "max completion tokens" in text or "max_completion_tokens" in text:
+            if quirks.get("completion_tokens") is not True:
+                quirks["completion_tokens"] = True
+                changed = True
+        if "temperature" in text:
+            if quirks.get("temperature") is not False:
+                quirks["temperature"] = False
+                changed = True
+        return changed
+
     def _complete(self, messages: list, max_tokens: int, tools=None,
                   tool_choice=None, deadline: Optional[float] = None):
         """One model call, dropping to a free Zen model if this one is unavailable.
@@ -1097,19 +1195,23 @@ OPERATING MANUAL:
         for model in self._model_candidates():
             if deadline is not None and time.monotonic() > deadline:
                 break
-            kwargs = {"model": model, "messages": messages,
-                      "max_tokens": max_tokens, "temperature": 0.7}
-            if tools:
-                kwargs["tools"] = tools
-                kwargs["tool_choice"] = tool_choice or "auto"
-            try:
-                return self.client.chat.completions.create(**kwargs)
-            except Exception as e:
-                last = e
-                reason = self._unavailable_model(e)
-                if not reason:
-                    raise
-                print(f"⚠️ Model {model} unavailable ({reason}); trying the next one.")
+            # A model can reject more than one parameter, and it reports them one
+            # at a time -- gpt-6-luna 400s on reasoning_effort first, then on
+            # max_tokens. Three passes is enough to learn a whole new shape
+            # without risking an unbounded retry loop; every quirk found is
+            # remembered, so the cost is paid once per process, not per call.
+            for _attempt in range(3):
+                kwargs = self._completion_kwargs(model, messages, max_tokens, tools, tool_choice)
+                try:
+                    return self.client.chat.completions.create(**kwargs)
+                except Exception as e:
+                    if not self._learn_param_quirk(e, model):
+                        last = e
+                        reason = self._unavailable_model(e)
+                        if not reason:
+                            raise
+                        print(f"⚠️ Model {model} unavailable ({reason}); trying the next one.")
+                        break
         if last is not None:
             raise last
         raise ModelUnavailable("No model was available to answer this request.")

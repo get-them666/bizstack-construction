@@ -338,3 +338,131 @@ def test_copilot_model_is_scoped_so_loan_outreach_is_untouched(monkeypatch):
 def test_an_explicit_model_argument_still_wins(monkeypatch):
     monkeypatch.setenv("COPILOT_MODEL", "space-bunny-free")
     assert BusinessAIAgent(subset="copilot", model="gpt-5.5")._model == "gpt-5.5"
+
+
+# --- parameter shapes the provider rejects ------------------------------
+#
+# 2026-11-03: COPILOT_MODEL was set to gpt-6-luna. That model rejects
+# `max_tokens` exactly as the GPT-5 reasoning models do, but it was not in the
+# prefix list, so every turn 400'd, fell into the generic handler and returned
+# the "assistant is offline" fallback. The Copilot looked dead for 15 hours and
+# the only evidence was one "AI agent fallback triggered" line in the log.
+#
+# The fix is not a longer prefix list: the shape is learned from the rejection
+# and remembered, so the next model rename costs one extra round trip instead of
+# an outage.
+
+import con_ai_agent  # noqa: E402
+
+MAX_TOKENS_400 = RuntimeError(
+    "Error code: 400 - Unsupported parameter: 'max_tokens' is not supported with "
+    "this model. Use 'max_completion_tokens' instead."
+)
+TEMPERATURE_400 = RuntimeError(
+    "Error code: 400 - Unsupported parameter: 'temperature' is not supported with "
+    "this model."
+)
+
+
+class _StrictCompletions:
+    """Rejects parameters the way gpt-6-luna does, and records every call."""
+
+    def __init__(self):
+        self.calls = []
+
+    def create(self, **kw):
+        self.calls.append(kw)
+        if "max_tokens" in kw:
+            raise MAX_TOKENS_400
+        if "temperature" in kw:
+            raise TEMPERATURE_400
+        return _Resp(_Msg(content="answered"))
+
+
+def _strict_agent(monkeypatch, model="gpt-6-luna"):
+    con_ai_agent._MODEL_QUIRKS.clear()
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    a = BusinessAIAgent(subset="copilot", model=model,
+                        tool_handlers={"t": lambda: {"ok": True}})
+    completions = _StrictCompletions()
+    a._client = type("C", (), {"chat": type("C", (), {"completions": completions})()})()
+    return a, completions
+
+
+def test_gpt6_uses_the_new_token_parameter_up_front(monkeypatch):
+    con_ai_agent._MODEL_QUIRKS.clear()
+    assert BusinessAIAgent._uses_completion_token_limit("gpt-6-luna")
+    assert not BusinessAIAgent._accepts_temperature("gpt-6-luna")
+
+
+def test_a_rejected_parameter_is_retried_not_fallen_back(monkeypatch):
+    a, calls = _strict_agent(monkeypatch, model="mystery-model-1")
+    assert a.process_conversation([], "hello") == "answered", \
+        "a 400 on max_tokens must still answer, not return the offline fallback"
+    assert "max_completion_tokens" in calls.calls[-1]
+    assert "max_tokens" not in calls.calls[-1]
+    assert "temperature" not in calls.calls[-1], "reasoning models refuse it too"
+
+
+def test_the_learned_shape_is_reused_on_the_next_turn(monkeypatch):
+    a, calls = _strict_agent(monkeypatch, model="mystery-model-2")
+    assert a.process_conversation([], "hello") == "answered"
+    settled = len(calls.calls)
+    assert a.process_conversation([], "again") == "answered"
+    assert len(calls.calls) == settled + 1, "the 400 must not be paid again every turn"
+
+
+def test_a_genuine_bad_request_is_not_retried(monkeypatch):
+    """Only the 'model does not take that parameter' wording counts.
+
+    A plain 400 is a real problem -- retrying it doubles the latency before the
+    same failure, and in the Copilot it would hide a bug behind a retry.
+    """
+    offending = RuntimeError("Error code: 400 - Invalid value for 'messages'")
+    assert not BusinessAIAgent._learn_param_quirk(offending, "gpt-6-luna")
+
+
+class _ToolReasoningCompletions:
+    """Mimics gpt-6-luna with tools on /v1/chat/completions.
+
+    It rejects *two* parameters and reports them one at a time: function tools at
+    the default reasoning effort first, then `max_tokens`. A single corrected
+    retry is not enough here, which is exactly the case the loop is for.
+    """
+
+    def __init__(self):
+        self.calls = []
+
+    def create(self, **kw):
+        self.calls.append(kw)
+        if kw.get("tools") and kw.get("reasoning_effort") != "none":
+            raise RuntimeError(
+                "Error code: 400 - Function tools with reasoning_effort are not "
+                "supported for gpt-6-luna in /v1/chat/completions. To use function "
+                "tools, use /v1/responses or set reasoning_effort to 'none'."
+            )
+        if "max_tokens" in kw:
+            raise MAX_TOKENS_400
+        if "temperature" in kw:
+            raise TEMPERATURE_400
+        return _Resp(_Msg(content="answered"))
+
+
+def test_every_rejected_parameter_is_learned_in_one_turn(monkeypatch):
+    con_ai_agent._MODEL_QUIRKS.clear()
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    a = BusinessAIAgent(subset="copilot", model="mystery-model-3",
+                        tool_handlers={"t": lambda: {"ok": True}})
+    completions = _ToolReasoningCompletions()
+    a._client = type("C", (), {"chat": type("C", (), {"completions": completions})()})()
+
+    assert a.process_conversation([], "hello") == "answered"
+    quirks = con_ai_agent._MODEL_QUIRKS["mystery-model-3"]
+    assert quirks["reasoning_effort"] == "none"
+    assert quirks["completion_tokens"] is True
+
+    settled = len(completions.calls)
+    assert a.process_conversation([], "again") == "answered"
+    assert len(completions.calls) == settled + 1, "the settled shape must go out first"
+    assert completions.calls[-1]["reasoning_effort"] == "none"
+    assert "max_completion_tokens" in completions.calls[-1]
