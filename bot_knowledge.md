@@ -245,10 +245,10 @@ records.
 
 ## 15. Available owner tools (copilot)
 
-- `register_lead`, `lookup_leads`, `list_leads`, `update_lead_status`,
-  `get_business_summary`, `get_accounting_summary`, `send_sms_message`,
-  `create_deposit_link`, `estimate_materials`, `get_material_price`,
-  `lookup_permits`,
+- `register_lead`, `lookup_leads`, `list_leads`, `list_addresses`, `update_lead_status`,
+  `get_business_summary`, `get_accounting_summary`, `get_deposit_invoices`,
+  `send_sms_message`, `create_deposit_link`, `estimate_materials`, `get_material_price`,
+  `get_payroll_summary`, `crew_pay_history`, `lookup_permits`,
   plus SMS/voice from leads.
 
 Use tools proactively. Confirm before any destructive change. Never show internal DB rows

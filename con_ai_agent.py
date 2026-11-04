@@ -585,9 +585,23 @@ OPERATING MANUAL:
                 "type": "function",
                 "function": {
                     "name": "list_leads",
-                    "description": "List leads, optionally filtered by status.",
+                    "description": "List leads with their postal address, optionally filtered by status.",
                     "parameters": self._props(
                         {"status": "string"}, [], "Optional status filter."
+                    ),
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "list_addresses",
+                    "description": (
+                        "Distinct postal addresses from leads, one row per property "
+                        "(duplicate permits collapsed). For flyer runs and door-to-door "
+                        "routes. Public permit addresses, not personal contact details."
+                    ),
+                    "parameters": self._props(
+                        {"limit": "integer"}, [], "How many addresses, default 50, max 200."
                     ),
                 },
             },
@@ -692,8 +706,27 @@ OPERATING MANUAL:
                 "type": "function",
                 "function": {
                     "name": "get_payroll_summary",
-                    "description": "Payroll summary for the latest unpaid open/finalized run: crew, hours/overtime, gross and PNC bank readiness.",
-                    "parameters": self._props({}, [], ""),
+                    "description": (
+                        "Recent pay runs including ones already paid: period, status, "
+                        "ach_sent_at, total and per-crew lines with bank readiness. Use "
+                        "this first for 'did X get paid'."
+                    ),
+                    "parameters": self._props(
+                        {"limit": "integer"}, [], "How many recent runs, default 5, max 12."
+                    ),
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "crew_pay_history",
+                    "description": (
+                        "Every pay line for one crew member, newest first, across paid "
+                        "and unpaid runs, with their bank-on-file status."
+                    ),
+                    "parameters": self._props(
+                        {"crew_id": "integer"}, ["crew_id"], "Crew id from list_crew."
+                    ),
                 },
             },
             {
@@ -701,6 +734,17 @@ OPERATING MANUAL:
                 "function": {
                     "name": "run_payroll",
                     "description": "Finalize the open payroll run for PNC ACH. Does not send money: the owner downloads the ACH file, uploads it to PNC, then confirms settlement.",
+                    "parameters": self._props({}, [], ""),
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_deposit_invoices",
+                    "description": (
+                        "Deposit invoices sent to a client but not collected: bid, "
+                        "amount, outstanding and days old. Use for 'who owes a deposit'."
+                    ),
                     "parameters": self._props({}, [], ""),
                 },
             },

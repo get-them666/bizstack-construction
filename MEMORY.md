@@ -875,6 +875,32 @@ post is idempotent on `(source_type, source_id)`; a second rebuild posts 0.
 Verified on a production clone: 7 entries posted, trial balance and balance
 sheet balanced, queue empty, second run a no-op.
 
+### 2026-11-04: the Copilot could not see paid runs, deposits or addresses
+
+Asked "did the direct deposit to Shaun OLeary go through", the Copilot answered
+from the newest *unpaid* run and said there were no pay lines. `get_payroll_summary`
+queried `status IN ('open','closed')`, so the paid run and its `ach_sent_at` were
+invisible. Three other answers were the same kind of gap, not model failure:
+
+- `list_leads` never selected `address`, so no address list was possible at all:
+  the Copilot refused "30 houses" on policy *and* could not have produced it.
+- "Which leads are waiting for a deposit" read `leads.deposit_status`; the real
+  answer is `bid_invoices` where `kind='deposit' AND status='sent'` (4 open,
+  $63,786.56). There was no tool for it.
+- `construction_knowledge.md` read the business-contacts-only rule as covering
+  *postal addresses*. It does not: the boundary is contact details (email, phone,
+  personal profiles). Public permit addresses are fine for flyers and routes.
+
+Added `crew_pay_history`, `get_deposit_invoices`, `list_addresses`, recent-run
+support in `get_payroll_summary`, and `address` on `list_leads`; narrowed the
+knowledge text. Both payroll tools return a `settlement_note` because
+`ach_sent_at` is the owner's upload confirmation, **not** bank settlement — the
+Copilot was inventing confidence it did not have, and once said a Nov 2
+timesheet showed 0 hours when the row holds 8. `test_copilot_money_tools.py`
+pins the wiring. Still not fixed: any Copilot exception returns
+`guest_fallback()` ("Call or text us at …") even in the owner tool, and the
+failure is only in the log.
+
 Payroll run 17 (Shaun, 4h = $200, 2026-10-25→11-01) was marked ACH-sent
 2026-11-03 22:19 UTC. `ach_sent_at` only records that the owner pressed
 "Mark sent" after uploading the NACHA file to PINACLE; it is not proof PNC paid.

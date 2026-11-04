@@ -1638,15 +1638,49 @@ def build_tool_handlers(db, stripe_svc):
         with db.cursor() as cur:
             if status:
                 cur.execute(
-                    "SELECT id, name, phone, project_type, status, deposit_status, created_at FROM leads WHERE status = %s AND company = 'construction' ORDER BY created_at DESC LIMIT 100;",
+                    "SELECT id, name, address, phone, project_type, status, deposit_status, created_at FROM leads WHERE status = %s AND company = 'construction' ORDER BY created_at DESC LIMIT 100;",
                     (status,),
                 )
             else:
-                cur.execute("SELECT id, name, phone, project_type, status, deposit_status, created_at FROM leads WHERE company = 'construction' ORDER BY created_at DESC LIMIT 100;")
+                cur.execute("SELECT id, name, address, phone, project_type, status, deposit_status, created_at FROM leads WHERE company = 'construction' ORDER BY created_at DESC LIMIT 100;")
             rows = cur.fetchall()
         return {"ok": True, "leads": [
             {**{k: (v.isoformat() if hasattr(v, "isoformat") else v) for k, v in r.items()}} for r in rows
         ]}
+
+    def list_addresses(limit=50):
+        """One row per distinct postal address, for flyers and door-to-door routes.
+
+        Permit feeds emit one row per permit, so a house with two permits is two
+        leads with the same address. This collapses whitespace and case so one
+        door is one row, which is what a print run or a walking route needs.
+        These are public permit addresses -- not personal contact details.
+        """
+        try:
+            limit = max(1, min(int(limit or 50), 200))
+        except (TypeError, ValueError):
+            limit = 50
+        with db.cursor() as cur:
+            cur.execute(
+                "SELECT id, name, address, status, source FROM leads "
+                "WHERE company = 'construction' AND address IS NOT NULL "
+                "  AND BTRIM(address) <> '' "
+                "ORDER BY LOWER(BTRIM(address)), id;")
+            rows = cur.fetchall()
+        seen, out = set(), []
+        for r in rows:
+            key = " ".join((r.get("address") or "").split()).strip().lower()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            out.append({"lead_id": r["id"], "address": (r.get("address") or "").strip(),
+                        "name": r.get("name"), "status": r.get("status"),
+                        "source": r.get("source")})
+            if len(out) >= limit:
+                break
+        return {"ok": True, "count": len(out), "addresses": out,
+                "note": ("One row per distinct street address. Order a route with "
+                         "maps_geocode then maps_directions.")}
 
     def update_lead_status(lead_id, status):
         requested = str(status or "").strip().lower()
@@ -1888,36 +1922,144 @@ f"The mail transport did not accept the message. This usually means the "
             for r in rows
         ]}
 
-    def get_payroll_summary():
+    def get_payroll_summary(limit=5):
+        """Recent pay runs, including the ones already paid.
+
+        This used to look only at open/closed runs, so "did Shaun's deposit go
+        through last week" was answered from whatever unpaid run happened to be
+        newest -- usually an empty one. Paid runs, their totals and their
+        ach_sent_at now appear here.
+        """
         direct_deposit.ensure_schema(db)
+        try:
+            limit = max(1, min(int(limit or 5), 12))
+        except (TypeError, ValueError):
+            limit = 5
         with db.cursor() as cur:
-            cur.execute("SELECT * FROM payroll_runs WHERE status IN ('open','closed') "
-                        "ORDER BY period_start DESC LIMIT 1;")
-            run = cur.fetchone()
-            if not run:
-                return {"ok": True, "open_run": None, "message": "No unpaid payroll run."}
             cur.execute(
-                "SELECT pl.*, c.name AS crew_name, c.bank_status, "
-                "       (b.crew_id IS NOT NULL) AS direct_deposit_ready "
-                "FROM payroll_lines pl JOIN crew c ON c.id = pl.crew_id "
-                "LEFT JOIN crew_bank_accounts b ON b.crew_id = pl.crew_id "
-                "WHERE pl.run_id = %s ORDER BY c.name;", (run["id"],))
-            lines = cur.fetchall()
-        return {"ok": True, "open_run": {
-            "run_id": run["id"],
-            "status": run["status"],
-            "period_start": run["period_start"].isoformat(),
-            "period_end": run["period_end"].isoformat(),
-        }, "lines": [
-            {
-                "crew_id": l["crew_id"], "crew_name": l["crew_name"],
-                "hours": float(l.get("hours") or 0), "overtime_hours": float(l.get("overtime_hours") or 0),
-                "gross_cents": l["gross_cents"],
-                "bank_status": l.get("bank_status"),
-                "direct_deposit_ready": bool(l.get("direct_deposit_ready")),
-            }
-            for l in lines
-        ]}
+                "SELECT id, period_start, period_end, status, ach_sent_at "
+                "FROM payroll_runs ORDER BY period_start DESC, id DESC LIMIT %s;", (limit,))
+            runs = cur.fetchall()
+            out = []
+            for run in runs:
+                cur.execute(
+                    "SELECT pl.crew_id, c.name AS crew_name, pl.hours, pl.overtime_hours, "
+                    "       pl.gross_cents, c.bank_status, "
+                    "       (b.crew_id IS NOT NULL) AS direct_deposit_ready "
+                    "FROM payroll_lines pl JOIN crew c ON c.id = pl.crew_id "
+                    "LEFT JOIN crew_bank_accounts b ON b.crew_id = pl.crew_id "
+                    "WHERE pl.run_id = %s ORDER BY c.name;", (run["id"],))
+                lines = cur.fetchall()
+                out.append({
+                    "run_id": run["id"],
+                    "status": run["status"],
+                    "period_start": run["period_start"].isoformat() if run.get("period_start") else "",
+                    "period_end": run["period_end"].isoformat() if run.get("period_end") else "",
+                    "ach_sent_at": (run.get("ach_sent_at").isoformat()
+                                    if run.get("ach_sent_at") else None),
+                    "total_gross_cents": sum(int(l.get("gross_cents") or 0) for l in lines),
+                    "lines": [
+                        {
+                            "crew_id": l["crew_id"], "crew_name": l["crew_name"],
+                            "hours": float(l.get("hours") or 0),
+                            "overtime_hours": float(l.get("overtime_hours") or 0),
+                            "gross_cents": int(l.get("gross_cents") or 0),
+                            "bank_status": l.get("bank_status"),
+                            "direct_deposit_ready": bool(l.get("direct_deposit_ready")),
+                        }
+                        for l in lines
+                    ],
+                })
+        unpaid = next((r for r in out if r["status"] in ("open", "closed")), None)
+        return {
+            "ok": True,
+            "runs": out,
+            "open_run": unpaid,
+            # Kept for the older contract: the unpaid run's lines at the top.
+            "lines": unpaid["lines"] if unpaid else [],
+            "settlement_note": (
+                "ach_sent_at is when the owner confirmed the NACHA file was uploaded to "
+                "PNC. It is not proof the bank settled or that the money reached the "
+                "account -- only PNC PINACLE shows that."),
+        }
+
+    def crew_pay_history(crew_id=0):
+        """Every pay line for one person, newest first, across runs paid or not."""
+        direct_deposit.ensure_schema(db)
+        try:
+            crew_id = int(crew_id or 0)
+        except (TypeError, ValueError):
+            crew_id = 0
+        if not crew_id:
+            return {"ok": False, "error": "Pass crew_id from list_crew."}
+        with db.cursor() as cur:
+            cur.execute("SELECT id, name, pay_type, pay_rate FROM crew WHERE id = %s;", (crew_id,))
+            person = cur.fetchone()
+            if not person:
+                return {"ok": False, "error": f"No crew member {crew_id}."}
+            cur.execute(
+                "SELECT pr.id AS run_id, pr.period_start, pr.period_end, pr.status, pr.ach_sent_at, "
+                "       pl.hours, pl.overtime_hours, pl.gross_cents "
+                "FROM payroll_lines pl JOIN payroll_runs pr ON pr.id = pl.run_id "
+                "WHERE pl.crew_id = %s "
+                "ORDER BY pr.period_start DESC, pr.id DESC LIMIT 24;", (crew_id,))
+            rows = cur.fetchall()
+        bank = direct_deposit.masked(db, crew_id)
+        payments = [{
+            "run_id": r["run_id"],
+            "period_start": r["period_start"].isoformat() if r.get("period_start") else "",
+            "period_end": r["period_end"].isoformat() if r.get("period_end") else "",
+            "status": r["status"],
+            "hours": float(r.get("hours") or 0),
+            "overtime_hours": float(r.get("overtime_hours") or 0),
+            "gross_cents": int(r.get("gross_cents") or 0),
+            "ach_sent_at": (r.get("ach_sent_at").isoformat() if r.get("ach_sent_at") else None),
+        } for r in rows]
+        return {
+            "ok": True,
+            "crew": {"id": person["id"], "name": person["name"],
+                     "pay_type": person["pay_type"],
+                     "pay_rate": float(person["pay_rate"] or 0)},
+            "bank": bank,
+            "payments": payments,
+            "total_paid_cents": sum(p["gross_cents"] for p in payments if p["status"] == "paid"),
+            "settlement_note": (
+                "A run marked paid with an ach_sent_at means the ACH file was uploaded "
+                "and the owner confirmed it. Bank settlement is only visible in PNC "
+                "PINACLE -- do not tell the owner the money landed."),
+        }
+
+    def get_deposit_invoices():
+        """Deposit invoices sent to a client and not yet collected."""
+        with db.cursor() as cur:
+            cur.execute(
+                "SELECT i.id, i.invoice_number, i.bid_id, i.amount, i.collected, i.status, "
+                "       i.issued_date, i.due_date, b.name AS bid_name, b.location "
+                "FROM bid_invoices i JOIN bid_opportunities b ON b.id = i.bid_id "
+                "WHERE i.company = %s AND COALESCE(i.kind, 'invoice') = 'deposit' "
+                "  AND i.status IN ('sent', 'partial') "
+                "ORDER BY i.issued_date NULLS LAST, i.id;", (_BID_COMPANY,))
+            rows = cur.fetchall()
+        today = date.today()
+        items = []
+        for r in rows:
+            amount = int(round(float(r.get("amount") or 0) * 100))
+            collected = int(round(float(r.get("collected") or 0) * 100))
+            issued = r.get("issued_date")
+            items.append({
+                "invoice_id": r["id"], "invoice_number": r.get("invoice_number"),
+                "bid_id": r["bid_id"], "bid_name": r.get("bid_name"),
+                "location": r.get("location"),
+                "amount_cents": amount, "collected_cents": collected,
+                "outstanding_cents": max(0, amount - collected),
+                "status": r["status"],
+                "issued_date": issued.isoformat() if issued else None,
+                "due_date": r["due_date"].isoformat() if r.get("due_date") else None,
+                "days_outstanding": (today - issued).days if issued else None,
+            })
+        return {"ok": True, "count": len(items),
+                "total_outstanding_cents": sum(i["outstanding_cents"] for i in items),
+                "invoices": items}
 
     def run_payroll():
         """Finalize a run for PNC ACH. Never move money from the Copilot."""
@@ -2347,6 +2489,7 @@ f"The mail transport did not accept the message. This usually means the "
         "lookup_leads": lookup_leads,
         "get_business_summary": get_business_summary,
         "list_leads": list_leads,
+        "list_addresses": list_addresses,
         "update_lead_status": update_lead_status,
         "send_sms_message": send_sms_message,
         "send_email_message": send_email_message,
@@ -2357,7 +2500,9 @@ f"The mail transport did not accept the message. This usually means the "
         "list_crew": list_crew,
         "lookup_crew_timesheets": lookup_crew_timesheets,
         "get_payroll_summary": get_payroll_summary,
+        "crew_pay_history": crew_pay_history,
         "run_payroll": run_payroll,
+        "get_deposit_invoices": get_deposit_invoices,
         "get_accounting_summary": get_accounting_summary,
         "estimate_materials": estimate_materials,
         "get_material_price": get_material_price,

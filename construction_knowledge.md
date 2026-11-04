@@ -132,6 +132,10 @@ booking, `/hosts` onboarding. Owner: `/dashboard`, bookings/leads, rentals/analy
 - **No bank on file:** the worker is left out of the ACH file and flagged by name; payroll
   defaults to a manual check. Always confirm amounts and recipients before telling the owner
   a run is paid.
+- **"Did the deposit go through?"** Look at `crew_pay_history` or `get_payroll_summary`, not
+  just the newest run. A run marked `paid` with an `ach_sent_at` means the ACH file was
+  uploaded and the owner confirmed it — it does **not** prove bank settlement. Only PNC
+  PINACLE shows that. Never say the money landed.
 - **Accounting summary** (`get_accounting_summary`): shows gross collections (deposits +
   job payments), plus open/unpaid lead value, for the period.
 
@@ -357,13 +361,19 @@ records.
 
 ## 15. Available owner tools (copilot)
 
-- **Leads:** `register_lead`, `lookup_leads`, `list_leads`, `update_lead_status`,
+- **Leads:** `register_lead`, `lookup_leads`, `list_leads`, `list_addresses` (one row per
+  distinct property, for flyer runs and routes — public permit addresses, not contact
+  details), `update_lead_status`,
   `skip_trace_owner`, `lookup_zip`, `contact_lookup`, `save_contact`, `draft_lead_email`,
   `enrich_leads` (batch: runs the whole pipeline on several leads at once; review mode stages drafts, while LEAD_AUTO_SEND sends eligible drafts through the guarded fire_lead_draft path)
-- **Money:** `get_business_summary`, `get_accounting_summary`, `create_deposit_link`,
+- **Money:** `get_business_summary`, `get_accounting_summary`, `get_deposit_invoices`
+  (deposit invoices sent and not yet collected, with what is still owed),
+  `create_deposit_link`,
   `create_deposit_links` (batch: checkout links for every waiting lead at once),
 - **Materials:** `estimate_materials`, `get_material_price`, `search_materials`
-- **Crew:** `list_crew`, `run_payroll`, `get_payroll_summary`, `lookup_crew_timesheets`,
+- **Crew:** `list_crew`, `run_payroll`, `get_payroll_summary` (recent runs **including paid
+  ones**, with `ach_sent_at`), `crew_pay_history` (one person across every run — use it for
+  "did Shaun get paid"), `lookup_crew_timesheets`,
   `training_status`, `grade_training_quiz`, `remind_crew_training`,
   `generate_training_deck`, `run_site_health_check`
 - **Permits & property:** `lookup_permits`, `enrich_permit_lead`, `lookup_property`,
@@ -418,10 +428,13 @@ max 25) in one call — prefer it over walking leads one at a time. It spends Sk
 credits and stages drafts. Review mode leaves them staged; with LEAD_AUTO_SEND enabled,
 eligible drafts send through `fire_lead_draft`, which rechecks caps, cooldowns and suppression.
 
-General web sourcing remains **business contacts only**. The permit-owner skip-trace and
-contact-enrichment flow above is the owner-approved, audited exception for existing permit
-leads, not a way to build a new list of homeowners. A phone or email recorded here is for
-the record only — never dial or text a residential number without consent and a DNC check.
+General web sourcing remains **business contacts only**, and that rule is about *contact
+details* — an email address, a phone number, or a personal profile scraped for a named
+person. It is not about postal addresses. `list_addresses` exists for exactly this: permit
+records are public, so a list of properties for a flyer run or a door-to-door route is fine,
+and the owner may ask for one. What the Copilot will not do is build a contact list of
+private individuals. A phone or email recorded on a lead is for the record only — never dial
+or text a residential number without consent and a DNC check.
 
 ---
 
