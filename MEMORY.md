@@ -894,12 +894,13 @@ invisible. Three other answers were the same kind of gap, not model failure:
 Added `crew_pay_history`, `get_deposit_invoices`, `list_addresses`, recent-run
 support in `get_payroll_summary`, and `address` on `list_leads`; narrowed the
 knowledge text. Both payroll tools return a `settlement_note` because
-`ach_sent_at` is the owner's upload confirmation, **not** bank settlement — the
-Copilot was inventing confidence it did not have, and once said a Nov 2
-timesheet showed 0 hours when the row holds 8. `test_copilot_money_tools.py`
-pins the wiring. Still not fixed: any Copilot exception returns
-`guest_fallback()` ("Call or text us at …") even in the owner tool, and the
-failure is only in the log.
+`ach_sent_at` is the owner's upload confirmation, **not** bank settlement.
+`test_copilot_money_tools.py` pins the wiring. One thing it got **right** and was
+wrongly accused of inventing: it reported a Nov 2 approved timesheet showing 0
+hours, which was a real test entry the owner had made and then deleted, so the
+row was gone by the time the database was inspected. Still not fixed: any
+Copilot exception returns `guest_fallback()` ("Call or text us at …") even in
+the owner tool, and the failure is only in the log.
 
 Payroll run 17 (Shaun, 4h = $200, 2026-10-25→11-01) was marked ACH-sent
 2026-11-03 22:19 UTC. `ach_sent_at` only records that the owner pressed
