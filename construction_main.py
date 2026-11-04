@@ -10977,14 +10977,15 @@ async def crew_clock_out(request: Request, clock_id: int = Form(0), lat: str = F
         in_dt = ev["punch_in_at"]
         if in_dt:
             out_dt = datetime.now(APP_TZ)
-            hours = max(round((out_dt - in_dt).total_seconds() / 3600, 2), 0)
-            cur.execute(
-                "INSERT INTO timesheets (crew_id, project_id, work_date, start_time, end_time, hours, work_type, source, status) "
-                "VALUES (%s,%s,%s,%s,%s,%s,'regular','clock','submitted');",
-                (crew_row["id"], ev["project_id"], in_dt.date(), in_dt.strftime("%H:%M"),
-                 out_dt.strftime("%H:%M"), hours),
-            )
-            db.commit()
+            hours = _punch_hours(in_dt, out_dt)
+            if hours > 0:
+                cur.execute(
+                    "INSERT INTO timesheets (crew_id, project_id, work_date, start_time, end_time, hours, work_type, source, status) "
+                    "VALUES (%s,%s,%s,%s,%s,%s,'regular','clock','submitted');",
+                    (crew_row["id"], ev["project_id"], in_dt.date(), in_dt.strftime("%H:%M"),
+                     out_dt.strftime("%H:%M"), hours),
+                )
+                db.commit()
     return RedirectResponse(url=request.headers.get("referer") or "/crew/dashboard", status_code=status.HTTP_303_SEE_OTHER)
 
 
@@ -11349,14 +11350,20 @@ async def worker_app_clock(request: Request, project_id: int = Form(0), action: 
             db.commit()
             in_dt = ev["punch_in_at"]
             out_dt = datetime.now(APP_TZ)
-            hours = max(round((out_dt - in_dt).total_seconds() / 3600, 2), 0)
-            cur.execute(
-                "INSERT INTO timesheets (crew_id, project_id, work_date, start_time, end_time, hours, work_type, source, status) "
-                "VALUES (%s,%s,%s,%s,%s,%s,'regular','clock','submitted');",
-                (worker.get("id"), ev["project_id"], in_dt.date(), in_dt.strftime("%H:%M"),
-                 out_dt.strftime("%H:%M"), hours),
-            )
-            db.commit()
+            hours = _punch_hours(in_dt, out_dt)
+            if hours > 0:
+                cur.execute(
+                    "INSERT INTO timesheets (crew_id, project_id, work_date, start_time, end_time, hours, work_type, source, status) "
+                    "VALUES (%s,%s,%s,%s,%s,%s,'regular','clock','submitted');",
+                    (worker.get("id"), ev["project_id"], in_dt.date(), in_dt.strftime("%H:%M"),
+                     out_dt.strftime("%H:%M"), hours),
+                )
+                db.commit()
+            else:
+                return JSONResponse(content={
+                    "status": "ok",
+                    "message": "Punched out. That shift was too short to record, so no hours were added.",
+                })
         elif action == "update":
             cur.execute("SELECT * FROM clock_events WHERE crew_id = %s AND punch_out_at IS NULL ORDER BY punch_in_at DESC LIMIT 1;",
                         (worker.get("id"),))
@@ -11796,6 +11803,19 @@ def _payroll_back(request: Request, period_start: str = "", period_end: str = ""
                             status_code=status.HTTP_303_SEE_OTHER)
 
 
+def _punch_hours(punched_in, punched_out) -> float:
+    """Hours for one completed clock punch, rounded to 2 dp.
+
+    A double-tap (in, then out seconds later) rounds to 0.00. That is not a
+    shift, and inserting it created an approved 0-hour timesheet which could
+    then be locked into a pay run as a pointless $0 line. Callers must skip the
+    insert when this returns 0.
+    """
+    if not punched_in or not punched_out:
+        return 0.0
+    return max(round((punched_out - punched_in).total_seconds() / 3600, 2), 0.0)
+
+
 def _parse_timesheet_form(crew_id: int, project_id: int, work_date: str, hours: str,
                           work_type: str) -> tuple:
     """Validate one owner-entered timesheet row. Returns (values, error)."""
@@ -12024,6 +12044,7 @@ async def payroll_run_create(request: Request, period_start: str = Form(...), pe
             JOIN crew c ON c.id = t.crew_id
             WHERE t.work_date BETWEEN %s AND %s
               AND t.status = 'approved' AND t.payroll_run_id IS NULL
+              AND t.hours > 0
             GROUP BY t.crew_id, c.pay_type, c.pay_rate;
         """, (ps, pe))
         crew_rows = cur.fetchall()
@@ -12037,7 +12058,7 @@ async def payroll_run_create(request: Request, period_start: str = Form(...), pe
         jobs_done = 0
         for crew in crew_rows:
             cur.execute("SELECT work_date, hours FROM timesheets WHERE crew_id = %s AND work_date BETWEEN %s AND %s "
-                        "AND status = 'approved' AND payroll_run_id IS NULL;", (crew["crew_id"], ps, pe))
+                        "AND status = 'approved' AND payroll_run_id IS NULL AND hours > 0;", (crew["crew_id"], ps, pe))
             sheets = cur.fetchall()
             if not sheets:
                 continue
@@ -12052,7 +12073,7 @@ async def payroll_run_create(request: Request, period_start: str = Form(...), pe
             # Assignment is not payment. Lock the sheets to this run so they
             # cannot enter a second one, and mark paid only after PNC confirms.
             cur.execute("UPDATE timesheets SET payroll_run_id = %s WHERE crew_id = %s AND work_date BETWEEN %s AND %s "
-                        "AND status = 'approved' AND payroll_run_id IS NULL;", (run_id, crew["crew_id"], ps, pe))
+                        "AND status = 'approved' AND payroll_run_id IS NULL AND hours > 0;", (run_id, crew["crew_id"], ps, pe))
             jobs_done += 1
         db.commit()
     # Accrue the wages at run creation, not at payout. From this moment the

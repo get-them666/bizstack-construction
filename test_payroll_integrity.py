@@ -221,3 +221,32 @@ def test_paid_or_assigned_timesheet_cannot_be_approved_again(monkeypatch):
         asyncio.run(construction_main.payroll_sheet_approve(4, object(), db))
     assert exc.value.status_code == 409
     assert "status = 'submitted' AND payroll_run_id IS NULL" in db.queries[0][0]
+
+
+# --- a double-tap punch is not a shift --------------------------------------
+
+def test_a_double_tap_punch_is_zero_hours():
+    """In and straight back out used to insert an approved 0-hour timesheet,
+    which then became a $0 line locked into a pay run."""
+    import datetime as dt
+    t = dt.datetime(2026, 11, 2, 8, 0, 0)
+    assert construction_main._punch_hours(t, t + dt.timedelta(seconds=5)) == 0.0
+    assert construction_main._punch_hours(t, t + dt.timedelta(seconds=17)) == 0.0
+    assert construction_main._punch_hours(t, t) == 0.0
+    assert construction_main._punch_hours(None, t) == 0.0
+
+
+def test_a_real_punch_keeps_its_hours():
+    import datetime as dt
+    t = dt.datetime(2026, 11, 2, 8, 0, 0)
+    assert construction_main._punch_hours(t, t + dt.timedelta(hours=8)) == 8.0
+    assert construction_main._punch_hours(t, t + dt.timedelta(minutes=30)) == 0.5
+
+
+def test_the_clock_paths_skip_a_zero_hour_sheet():
+    """Both clock-out paths must go through _punch_hours and refuse to insert
+    at 0, instead of the old inline max(round(...), 0)."""
+    import inspect
+    src = inspect.getsource(construction_main)
+    assert src.count("_punch_hours(") >= 3  # definition + two call sites
+    assert "max(round((out_dt - in_dt).total_seconds() / 3600, 2), 0)" not in src
