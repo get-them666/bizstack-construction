@@ -902,6 +902,18 @@ row was gone by the time the database was inspected. Still not fixed: any
 Copilot exception returns `guest_fallback()` ("Call or text us at …") even in
 the owner tool, and the failure is only in the log.
 
+### 2026-11-04: a 0-hour timesheet came from the clock, not the form
+
+The owner's test row was created by clocking in and straight back out: both
+clock-out paths inserted a timesheet with `hours = max(round(...), 0)`, which is
+`0.00` for any punch under ~18 seconds. The *Add hours* form already rejected
+0 (`_parse_timesheet_form` enforces `0 < hours <= 24`), so the form was never
+the hole. `_punch_hours()` is now the one rounding rule and both clock paths
+skip the insert at 0 — the punch is still closed, so "already clocked in"
+clears, but nothing reaches the timesheet table. A pay run also ignores
+`hours <= 0` when selecting and locking sheets, so a legacy row could never be
+pulled into a run as a $0 line. Verified in production: 0 existing 0-hour rows.
+
 Payroll run 17 (Shaun, 4h = $200, 2026-10-25→11-01) was marked ACH-sent
 2026-11-03 22:19 UTC. `ach_sent_at` only records that the owner pressed
 "Mark sent" after uploading the NACHA file to PINACLE; it is not proof PNC paid.
