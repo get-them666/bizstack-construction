@@ -4053,6 +4053,27 @@ async def books_retry(request: Request, db=Depends(get_db)):
     return RedirectResponse(url=back, status_code=status.HTTP_303_SEE_OTHER)
 
 
+@app.post("/books/rebuild")
+async def books_rebuild(request: Request, db=Depends(get_db)):
+    """Post every invoice, cost, payment and payroll run that is missing.
+
+    The queue only retries what managed to record itself as failed. This is the
+    repair for the other case: a posting that died before it could queue, which
+    left the books short while /books still said they were clean. Idempotent on
+    every source record, so pressing it more than once never double counts.
+    """
+    require_admin(request)
+    ledger_sync.ensure_schema(db)
+    result = ledger_sync.rebuild(db, company=_BID_COMPANY)
+    if request.headers.get("accept", "").startswith("application/json"):
+        return JSONResponse(content=result.as_dict())
+    back = request.headers.get("referer") or "/books"
+    sep = "&" if "?" in back else "?"
+    return RedirectResponse(
+        url=f"{back}{sep}rebuilt={result.posted}&queued={result.queued}",
+        status_code=status.HTTP_303_SEE_OTHER)
+
+
 @app.post("/books/expense")
 async def books_expense(request: Request, amount: str = Form(...), account: str = Form("6010"),
                         description: str = Form(...), when: str = Form(...),

@@ -845,6 +845,44 @@ need the provider quota/billing resolved rather than another code workaround.
   permit-feed dollars are converted to cents. Bid actuals exclude rejected time and
   manual labor lines no longer double count against timesheet labor.
 
+## 2026-11-04: the books were not posting, and said they were clean
+
+Nothing had reached the ledger since 2026-10-23 — 8 invoices, 19 cost lines, 4
+payments and every payroll run were missing — while `/books` showed zero queued
+failures. Root cause, found in a clone of production (`pg_dump` → scratch DB):
+
+- `ledger_entries.amount_cents` survived the double-entry rewrite as
+  `BIGINT NOT NULL` with **no default**, and `ledger.post()` writes amounts on
+  `ledger_lines`. Every INSERT raised `NotNullViolation`. `ensure_schema`
+  repaired `tx_type` the same way in August but not this column.
+- `ledger_sync._guard` then tried to queue the failure **on the already-aborted
+  transaction**, so the queue insert raised `InFailedSqlTransaction` and escaped
+  the handler. The result was nothing posted, nothing queued, and a `/books`
+  page that reported clean. Only the log line "ledger not updated for …" knew.
+
+Fixed: `ensure_schema` gives `amount_cents` a default and drops NOT NULL;
+`post()` fills it (debit total) so `pitch_numbers` still reads correctly;
+`_guard` rolls the failed attempt back before queueing. Two more silent-money
+bugs found on the way: a payment with no lead posted under `source_id "None"`
+(so a second one looked like a repost), and estimated-only cost lines were being
+queued as failures — an estimate is not an incurred expense.
+
+`ledger_sync.rebuild()` + `POST /books/rebuild` (button on `/books`) re-posts
+every invoice, cost, payment and payroll run created on/after the owner's
+historical summary (`owner_historical_summary`, 2026-10-23). Records older than
+that are left to that summary so pre-ledger history is not booked twice. Every
+post is idempotent on `(source_type, source_id)`; a second rebuild posts 0.
+Verified on a production clone: 7 entries posted, trial balance and balance
+sheet balanced, queue empty, second run a no-op.
+
+Payroll run 17 (Shaun, 4h = $200, 2026-10-25→11-01) was marked ACH-sent
+2026-11-03 22:19 UTC. `ach_sent_at` only records that the owner pressed
+"Mark sent" after uploading the NACHA file to PINACLE; it is not proof PNC paid.
+His bank record's account holder is misspelled **"Shsun OLeary"** — worth
+correcting before the next run. There is no pay run for 2026-11-09→11-15 yet;
+runs 14 and 15 (through 11-08) are open, with 2026-11-02 and 11-03 hours
+approved but not in any run.
+
 ## Open threads
 
 - `ATTIC_API_KEY` / `SERVICEKANI_API_KEY` / `REGRID_API_KEY` / `BATCHLEADS_API_KEY`

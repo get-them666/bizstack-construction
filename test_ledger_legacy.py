@@ -42,7 +42,8 @@ def legacy_db():
                 memo        TEXT,
                 tx_type     VARCHAR(20) NOT NULL,
                 company     VARCHAR(40),
-                created_at  TIMESTAMPTZ DEFAULT NOW()
+                created_at  TIMESTAMPTZ DEFAULT NOW(),
+                amount_cents BIGINT NOT NULL
             );
         """)
     conn.commit()
@@ -76,13 +77,61 @@ def test_migration_gives_tx_type_a_default(legacy_db):
 def test_migration_backfills_existing_nulls(legacy_db):
     with legacy_db.cursor() as cur:
         cur.execute("ALTER TABLE ledger_entries ALTER COLUMN tx_type DROP NOT NULL;")
-        cur.execute("""INSERT INTO ledger_entries (entry_no, entry_date, tx_type, company)
-                       VALUES ('JE-OLD', CURRENT_DATE, NULL, 'construction');""")
+        cur.execute("""INSERT INTO ledger_entries (entry_no, entry_date, tx_type, company, amount_cents)
+                       VALUES ('JE-OLD', CURRENT_DATE, NULL, 'construction', 0);""")
     legacy_db.commit()
     ledger.ensure_schema(legacy_db)
     with legacy_db.cursor() as cur:
         cur.execute("SELECT tx_type FROM ledger_entries WHERE entry_no = 'JE-OLD';")
         assert cur.fetchone()["tx_type"] == "journal"
+
+
+def test_migration_relaxes_the_legacy_amount_cents(legacy_db):
+    """Production ran out of an older shape than this fixture used to model:
+    amount_cents arrived NOT NULL with no default, and post() never wrote it.
+    Every ledger insert failed, and /books still reported clean."""
+    ledger.ensure_schema(legacy_db)
+    with legacy_db.cursor() as cur:
+        cur.execute("""
+            SELECT column_default, is_nullable FROM information_schema.columns
+             WHERE table_name = 'ledger_entries' AND column_name = 'amount_cents';
+        """)
+        row = cur.fetchone()
+    assert row["is_nullable"] == "YES", "amount_cents still rejects a write"
+    assert row["column_default"] is not None
+
+
+def test_write_fills_amount_cents_for_legacy_readers(legacy_db):
+    """pitch_numbers sums amount_cents; a new entry must not read as zero."""
+    ledger.ensure_schema(legacy_db)
+    ledger.post(legacy_db, [
+        {"account": "1010", "debit": 4200, "description": "Cash"},
+        {"account": "4010", "credit": 4200, "description": "Revenue"},
+    ], memo="Invoice", source_type="invoice", source_id="amt-1")
+    with legacy_db.cursor() as cur:
+        cur.execute("SELECT amount_cents FROM ledger_entries WHERE source_id = 'amt-1';")
+        assert cur.fetchone()["amount_cents"] == 4200
+
+
+def test_a_failed_post_is_queued_instead_of_vanishing(legacy_db):
+    """The queue lives on the same connection. Without a rollback first, the
+    insert that records the failure fails too, and the books say 'clean'."""
+    import uuid
+    import ledger_sync
+
+    ledger_sync.ensure_schema(legacy_db)
+
+    ref = f"diag-{uuid.uuid4().hex[:12]}"
+
+    def broken():
+        with legacy_db.cursor() as cur:
+            cur.execute("SELECT * FROM a_table_that_does_not_exist;")
+
+    s = ledger_sync.Sync()
+    ledger_sync._guard(legacy_db, "diag", ref, "diagnostic", broken, s)
+    pending = ledger_sync.pending(legacy_db)
+    assert s.queued == 1
+    assert any(r["ref_id"] == ref for r in pending)
 
 
 def test_write_succeeds_on_a_legacy_schema(legacy_db):

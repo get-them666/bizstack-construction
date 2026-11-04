@@ -63,7 +63,25 @@
         </div>
         {% endif %}
 
-        {# ── Legacy entries removed ───── #}
+        {# ── Rebuild from records ──────────────────────────────────────────── #}
+        <div class="bg-white rounded-2xl border border-slate-200 p-5 mb-6">
+            <div class="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                    <p class="text-sm font-bold text-slate-900">Rebuild the books from the records</p>
+                    <p class="text-xs text-slate-500 mt-1">
+                        Re-posts every invoice, cost, payment and payroll run that is not on the
+                        books yet. Safe to run at any time — each record is posted once, never twice.
+                    </p>
+                </div>
+                <form method="post" action="/books/rebuild"
+                      onsubmit="return confirm('Rebuild the books from every invoice, cost, payment and payroll run?');">
+                    <button class="px-4 py-2 text-sm font-bold text-white bg-slate-800 hover:bg-slate-900 rounded-lg">
+                        Rebuild
+                    </button>
+                </form>
+            </div>
+        </div>
+
 
         {# ── Record actual operating expense ───────────────────────────────── #}
         <div class="bg-white rounded-2xl border border-slate-200 p-5 mb-6">

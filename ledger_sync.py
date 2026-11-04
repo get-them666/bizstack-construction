@@ -104,9 +104,13 @@ def sync_deposit(conn, payment_id: int, company: str = "construction") -> Sync:
         s.skipped += 1
         return s
     _guard(conn, "deposit", payment_id, f"deposit {pay.get('lead_name') or pay.get('lead_id')}",
-           lambda: bridge.post_deposit(conn, {"id": pay.get("lead_id"),
-                                              "name": pay.get("lead_name")},
-                                      amount / 100.0, company), s)
+           lambda: bridge.post_deposit(conn, {
+               # A payment with no lead (cash recorded without one) used to post
+               # under source_id "None", so a second such deposit was silently
+               # treated as a repost. The payment id is unique either way.
+               "id": pay.get("lead_id") or f"payment-{payment_id}",
+               "name": pay.get("lead_name")},
+               amount / 100.0, company, when=pay.get("created_at")), s)
     return s
 
 
@@ -134,6 +138,17 @@ def _guard(conn, kind, ref_id, detail, fn, s: Sync) -> dict | None:
                 s.skipped -= 1
         return result
     except Exception as e:
+        # A failed statement leaves the transaction aborted, and this connection
+        # is reused. Queueing on top of that fails too ("current transaction is
+        # aborted"), and the queue insert's exception escaped this handler -- so
+        # the books failure vanished instead of being recorded and retryable.
+        # Clearing the failed attempt first is safe: every caller commits its
+        # application write before calling a sync, so this only discards the
+        # half-written journal entry.
+        try:
+            conn.rollback()
+        except Exception:
+            pass
         _queue(conn, kind, ref_id, detail, str(e))
         s.queued += 1
         s.errors.append(f"{kind}:{ref_id} {e}"[:200])
@@ -191,6 +206,17 @@ def sync_cost_line(conn, cost_line_id: int, company: str = "construction") -> Sy
                     "WHERE c.id = %s AND c.company = %s AND c.removed_at IS NULL", (cost_line_id, company))
         cl = cur.fetchone()
     if not cl:
+        s.skipped += 1
+        return s
+    # Only an incurred cost is an expense. A line that carries an estimate but
+    # no actual has not been spent yet, so there is nothing to post -- queueing
+    # it as a failure makes /books look broken and buries the real failures.
+    category = str(cl.get("category") or "other").lower()
+    try:
+        incurred = float(cl.get("actual") or 0) > 0
+    except (TypeError, ValueError):
+        incurred = False
+    if category == "labor" or not incurred:
         s.skipped += 1
         return s
     bid = {"id": cl["bid_id"], "name": cl["bid_name"]}
@@ -362,6 +388,72 @@ def retry_all(conn, company: str = "construction") -> Sync:
             _merge(total, sync_payroll_paid(conn, int(ref), company))
         elif kind == "payroll_accrual":
             _merge(total, sync_payroll_accrual(conn, int(ref), company))
+    return total
+
+
+def _opened_on(conn, company: str = "construction"):
+    """First day the books are actually kept: the owner's historical summary.
+
+    Anything older than that was either summarised already or predates the
+    ledger. Rebuilding it would book history twice, so rebuild() leaves it to
+    the owner's own closing entry.
+    """
+    if not ledger._table_exists(conn, "ledger_entries"):
+        return None
+    with conn.cursor() as cur:
+        cur.execute("SELECT MAX(entry_date) AS d FROM ledger_entries "
+                    "WHERE company = %s AND source_type = 'owner_historical_summary'",
+                    (company,))
+        row = cur.fetchone()
+    return row["d"] if row else None
+
+
+def rebuild(conn, company: str = "construction") -> Sync:
+    """Re-sync every ledger-backed record, not just the queued failures.
+
+    The queue only holds what *failed while being reported*. A failure that
+    died before it could queue (an aborted transaction, a dropped connection)
+    leaves nothing to retry, so the books stay short and /books says "clean".
+    This walks the real tables and posts each one; every post is idempotent on
+    (source_type, source_id), so running it is always safe and never doubles
+    anything.
+    """
+    total = Sync()
+    since = _opened_on(conn, company)
+    since_sql = " AND created_at::date >= %s" if since else ""
+    with conn.cursor() as cur:
+        invoices = costs = payments = runs = []
+        args = (company, since) if since else (company,)
+        if ledger._table_exists(conn, "bid_invoices"):
+            cur.execute("SELECT id FROM bid_invoices WHERE company = %s AND status <> 'void'"
+                        + since_sql + " ORDER BY id", args)
+            invoices = [r["id"] for r in cur.fetchall()]
+        if ledger._table_exists(conn, "bid_costs"):
+            cur.execute("SELECT id FROM bid_costs WHERE company = %s AND removed_at IS NULL"
+                        + since_sql + " ORDER BY id", args)
+            costs = [r["id"] for r in cur.fetchall()]
+        if ledger._table_exists(conn, "payments"):
+            cur.execute("SELECT id FROM payments WHERE company = %s"
+                        + since_sql + " ORDER BY id", args)
+            payments = [r["id"] for r in cur.fetchall()]
+        if ledger._table_exists(conn, "payroll_runs"):
+            cur.execute("SELECT id, status FROM payroll_runs"
+                        + (" WHERE created_at::date >= %s" if since else "")
+                        + " ORDER BY id", (since,) if since else ())
+            runs = cur.fetchall()
+    for i in invoices:
+        _merge(total, sync_invoice(conn, i, company))
+        _merge(total, sync_invoice_status(conn, i, company))
+    for c in costs:
+        _merge(total, sync_cost_line(conn, c, company))
+    for p in payments:
+        _merge(total, sync_deposit(conn, p, company))
+    for r in runs:
+        # Wages are owed from the moment the run exists; only a paid run has
+        # had the money leave the account.
+        _merge(total, sync_payroll_accrual(conn, r["id"], company))
+        if r["status"] == "paid":
+            _merge(total, sync_payroll_paid(conn, r["id"], company))
     return total
 
 

@@ -190,7 +190,7 @@ def pay_payroll(conn, run, lines, company: str = "construction") -> dict:
                        company=company)
 
 
-def post_deposit(conn, lead, amount, company: str = "construction") -> dict:
+def post_deposit(conn, lead, amount, company: str = "construction", when=None) -> dict:
     """Customer deposit to reserve a job. Held, not earned."""
     amt = _d(amount, "deposit amount")
     if amt <= 0:
@@ -199,6 +199,7 @@ def post_deposit(conn, lead, amount, company: str = "construction") -> dict:
         {"account": "1010", "debit": amt, "description": "Deposit received"},
         {"account": "2100", "credit": amt, "description": "Customer deposit held"},
     ], memo=f"Deposit — {str(lead.get('name') or lead.get('email') or '')[:120]}",
+        entry_date=when,
         source_type="deposit", source_id=str(lead.get("id")), company=company)
 
 

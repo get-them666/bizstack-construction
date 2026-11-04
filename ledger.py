@@ -227,6 +227,20 @@ def ensure_schema(conn) -> None:
         cur.execute("UPDATE ledger_entries SET tx_type = 'journal' WHERE tx_type IS NULL;")
         cur.execute("ALTER TABLE ledger_entries ALTER COLUMN tx_type SET NOT NULL;")
 
+        # Same class of leftover as tx_type, and it took the books down a second
+        # time. The pre-double-entry table carries `amount_cents BIGINT NOT
+        # NULL` with no default, and post() writes amounts on ledger_lines, not
+        # here -- so every INSERT raised NotNullViolation. _guard then tried to
+        # queue the failure on the already-aborted transaction, which raised
+        # InFailedSqlTransaction and escaped, so nothing posted AND nothing
+        # queued: /books looked clean while no entry had been written since
+        # October. Relax the column (post() now fills it too, for legacy
+        # readers such as pitch_numbers) rather than relying on callers.
+        cur.execute("ALTER TABLE ledger_entries ADD COLUMN IF NOT EXISTS amount_cents BIGINT;")
+        cur.execute("ALTER TABLE ledger_entries ALTER COLUMN amount_cents SET DEFAULT 0;")
+        cur.execute("ALTER TABLE ledger_entries ALTER COLUMN amount_cents DROP NOT NULL;")
+        cur.execute("UPDATE ledger_entries SET amount_cents = 0 WHERE amount_cents IS NULL;")
+
         # Idempotency. A repost of the same source record is a no-op rather
         # than a duplicate, which is what makes it safe to call on every save.
         cur.execute("""
@@ -365,6 +379,10 @@ def post(conn, lines: list[dict], entry_date=None, memo: str = "",
     when = entry_date or date.today()
     if isinstance(when, str):
         when = date.fromisoformat(when)
+    elif isinstance(when, datetime):
+        # entry_date is a DATE column; a timestamp would rely on an implicit
+        # assignment cast and can land on the wrong day across timezones.
+        when = when.date()
 
     with conn.cursor() as cur:
         if source_type and source_id:
@@ -377,10 +395,10 @@ def post(conn, lines: list[dict], entry_date=None, memo: str = "",
         entry_no = _next_entry_no(conn, company)
         cur.execute(
             "INSERT INTO ledger_entries (entry_no, entry_date, memo, source_type, source_id, "
-            "company, tx_type) VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING id",
+            "company, tx_type, amount_cents) VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
             (entry_no, when, (memo or "")[:1000] or None,
              source_type or None, str(source_id) if source_id else None, company,
-             _tx_type(prepared)))
+             _tx_type(prepared), debits))
         eid = cur.fetchone()["id"]
         for x in prepared:
             cur.execute(
