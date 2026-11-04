@@ -249,7 +249,8 @@ Much of this repo is real money and real people's data and is **not reproducible
 - **Untracked, NOT gitignored — `git add -A` would commit it:**
   `Hampton_Roads_Regional_Parcels.csv` (179 MB parcel data) and `zmail-cli.jar`.
   Always `git add` specific paths.
-- **Gitignored — never commit, never delete:** `outbox/` (278 mailed letters), `docs/stripe/`,
+- **Gitignored — never commit, never delete:** `outbox/` (letter PDFs and batch
+  folders; nothing in it was ever delivered — see MEMORY), `docs/stripe/`,
   `.env`, `SESSION_STATE.md`, `SESSION_NOTES.md`, `.agents/`, `.claude/`, `opencode.json`,
   `eva_intel.json`.
 - **Never delete anything in this repo without asking.**

@@ -84,9 +84,18 @@ because the multipart request shape is unverified against their live endpoint.
 
 `leads` mixes rows that are the same property. Permit feeds emit one row per
 permit, so a house with a deck permit and a roof permit is two leads with the
-same address. The Sept 2026 print batch was 177 letters over **58 deliverable
-doors** — 104 duplicates, and 15 more held back for a missing ZIP. Always
-dedupe on normalized address before spending money or postage on a list.
+same address. A September 2026 run of the letter generator produced 177 eligible
+rows but only **58 distinct doors** — 104 duplicates, plus 15 held back for a
+missing ZIP. Always dedupe on normalized address before spending money or
+postage on a list.
+
+**No letter has ever been delivered.** An earlier session reported a "177-letter
+mailed batch" and `outbox/` as "278 mailed letters"; that was the assistant's
+claim, not a delivery. `comms_logs` has zero `letter` rows, Lob has never sent,
+and there was no `outbox/` on this machine. Treat any past "mailed" statement in
+this repo's history as unverified. The current print run is tracked in
+`letter_batches` / `letter_batch_items` and only becomes a touch when the owner
+presses **I delivered these** on `/letters`.
 
 Neither open permit feed publishes an applicant or contractor name. Virginia
 Beach exposes `CreatedBy` as `PUBLICUSER<n>`; Norfolk has no applicant field at
@@ -913,6 +922,29 @@ skip the insert at 0 — the punch is still closed, so "already clocked in"
 clears, but nothing reaches the timesheet table. A pay run also ignores
 `hours <= 0` when selecting and locking sheets, so a legacy row could never be
 pulled into a run as a $0 line. Verified in production: 0 existing 0-hour rows.
+
+### 2026-11-04: letters are a batch you confirm, and permits age out
+
+**Letters.** `render_letter_batches.py --out outbox` renders the address-only
+backlog into dated folders of 100 doors each (route order, duplicate permit rows
+collapsed, no-ZIP addresses held back) and records each batch in
+`letter_batches` / `letter_batch_items`. `/letters` lists them with one
+**I delivered these** button per batch. That button is the only thing that
+writes a `letter` touch (`auto_reply.record_manual_touch`, channel `letter`) and
+moves the lead to `contacted`; printing writes nothing. A lead can belong to
+only one batch (`uq_letter_batch_lead`), and a batch with any delivered item
+cannot be deleted. First run 2026-11-04: 1,084 letters, 11 batches, 1 held back
+(Corolla NC, no ZIP), 0 delivered so far.
+
+**Permits age out.** A permit stays on the city's public record for years, so
+"listed" is not "live work". `permit_stats.recent_sql()` is the one predicate:
+issue date within `PERMIT_MAX_AGE_DAYS` (default 90). It is applied to every
+count in `permit_stats`, to the `/leads?lane=permits` row query, and in
+`ingest_permits` so an old record cannot walk back on during the next scan. Rows
+are kept, never deleted — `/leads` shows a `spent (over 90 days)` count. Written
+as a `CASE` with a regex guard because `issue_date` is a VARCHAR and one bad row
+would otherwise abort the whole board. On 2026-11-04 the table held nothing
+older than 90 days (6,305 rows, all Sep–Nov 2026), so the rule is forward-looking.
 
 Payroll run 17 (Shaun, 4h = $200, 2026-10-25→11-01) was marked ACH-sent
 2026-11-03 22:19 UTC. `ach_sent_at` only records that the owner pressed

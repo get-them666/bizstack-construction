@@ -79,6 +79,10 @@
               title="Could not tell from the permit text whether this is residential. Not a rejection — a human look. Some are residential.">
             <span id="live-unreviewed">{{ permit_unreviewed }}</span> unreviewed
         </span>
+        <span class="px-2.5 py-1 rounded-full bg-slate-100 text-slate-500 border border-slate-200 font-semibold"
+              title="Older than the working window (default 90 days). The row is kept, but it is off the board and the importer will not readmit it.">
+            <span id="live-stale">{{ permit_stale }}</span> spent (over 90 days)
+        </span>
     </div>
 
     {% if permit_by_city %}

@@ -31,9 +31,50 @@ Nothing is hidden. The excluded rows are returned too, so the UI can show
 what was dropped and why.
 """
 
+import os
+from datetime import date, timedelta
+
 # Demo rows are never real work. Permits without an address cannot be
 # worked by canvass at all -- there is no door to knock.
 _NOT_WORKABLE = "NOT is_demo AND COALESCE(address, '') <> ''"
+
+# A permit stays on the city's public record for years, so "listed" is not
+# "live work". Three months is the owner's line: after that either the job is
+# done or the homeowner has moved on, and the card is a wasted trip. The rows
+# are KEPT -- only the boards stop showing them -- and the importer refuses new
+# ones this old, so an old record cannot re-enter through the next scan.
+#
+# Override with PERMIT_MAX_AGE_DAYS. Built as a CASE so an unparseable date can
+# never raise inside a count over 6,000 rows.
+def max_age_days() -> int:
+    try:
+        return max(1, int(os.getenv("PERMIT_MAX_AGE_DAYS", "90")))
+    except (TypeError, ValueError):
+        return 90
+
+
+RECENT_PERMIT = (
+    "(CASE WHEN issue_date ~ '^[0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}}$' "
+    "THEN issue_date::date >= (CURRENT_DATE - INTERVAL '{days} days') "
+    "ELSE FALSE END)"
+)
+
+
+def recent_sql() -> str:
+    return RECENT_PERMIT.format(days=max_age_days())
+
+
+def is_recent(issue_date, today=None) -> bool:
+    """True when a permit is inside the working window. Unparseable dates are
+    kept: a missing date is not evidence the work is spent."""
+    text = str(issue_date or "")[:10]
+    if not text:
+        return True
+    try:
+        when = date.fromisoformat(text)
+    except ValueError:
+        return True
+    return when >= (today or date.today()) - timedelta(days=max_age_days())
 
 
 def permit_stats(cur) -> dict:
@@ -50,6 +91,7 @@ def permit_stats(cur) -> dict:
                count(*) AS permits
         FROM job_leads
         WHERE {_NOT_WORKABLE}
+          AND {recent_sql()}
           AND use_class = 'residential'
           AND status NOT IN ('won','lost','closed')
     """)
@@ -63,13 +105,15 @@ def permit_stats(cur) -> dict:
         SELECT status, count(*) AS c
         FROM job_leads
         WHERE {_NOT_WORKABLE}
+          AND {recent_sql()}
         GROUP BY status
     """)
     out["workable_by_status"] = {r["status"]: int(r["c"]) for r in cur.fetchall()}
 
     # The breakdown, so the total is explainable rather than a bare number.
-    cur.execute("""
+    cur.execute(f"""
         SELECT
+            count(*) FILTER (WHERE NOT {recent_sql()})                               AS stale,
             count(*) FILTER (WHERE use_class = 'commercial')                          AS commercial,
             count(*) FILTER (WHERE COALESCE(use_class,'') IN ('', 'unknown'))          AS unreviewed,
             count(*) FILTER (WHERE is_demo)                                            AS demo,
@@ -79,6 +123,7 @@ def permit_stats(cur) -> dict:
         FROM job_leads
     """)
     r = cur.fetchone()
+    out["stale"] = int(r["stale"] or 0)
     out["commercial"] = int(r["commercial"] or 0)
     out["unreviewed"] = int(r["unreviewed"] or 0)
     out["demo"] = int(r["demo"] or 0)
@@ -91,6 +136,7 @@ def permit_stats(cur) -> dict:
         SELECT COALESCE(NULLIF(use_class, ''), 'unknown') AS cls, count(*) AS c
         FROM job_leads
         WHERE {_NOT_WORKABLE}
+          AND {recent_sql()}
         GROUP BY 1
     """)
     out["by_use_class"] = {r["cls"]: int(r["c"]) for r in cur.fetchall()}
@@ -102,6 +148,7 @@ def permit_stats(cur) -> dict:
                count(*) AS permits
         FROM job_leads
         WHERE {_NOT_WORKABLE}
+          AND {recent_sql()}
           AND use_class = 'residential'
           AND status NOT IN ('won','lost','closed')
         GROUP BY 1
@@ -117,6 +164,7 @@ def permit_stats(cur) -> dict:
         SELECT count(DISTINCT upper(btrim(address))) AS c
         FROM job_leads
         WHERE {_NOT_WORKABLE}
+          AND {recent_sql()}
           AND use_class = 'residential'
           AND status IN ('contacted', 'reached', 'mailed', 'knocked', 'won')
     """)

@@ -67,6 +67,7 @@ import permit_stats
 import email_fetcher
 import bid_costing
 import direct_deposit
+import letter_batches
 import deposit_instructions
 import login_throttle
 import bid_deposit
@@ -728,6 +729,7 @@ async def lifecycle(app: FastAPI):
         with psycopg.connect(db_url, row_factory=dict_row) as conn:
             bid_opportunities.ensure_schema(conn)
             direct_deposit.ensure_schema(conn)
+            letter_batches.ensure_schema(conn)
             login_throttle.ensure_schema(conn)
             # Order matters and is not arbitrary: costing extends
             # bid_opportunities with outcome columns and a projects FK, so it
@@ -3849,7 +3851,9 @@ async def leads_page(request: Request,
 
     with db.cursor() as cur:
         # Intel lane: permits, which have no phone or email by nature.
-        p_where, p_params = [], []
+        # A permit is on the city's public record for years. Only the working
+        # window (default 90 days) is shown; older rows stay in the table.
+        p_where, p_params = [f"({permit_stats.recent_sql()})"], []
         if status_filter in PERMIT_STATUSES:
             p_where.append("status = %s")
             p_params.append(status_filter)
@@ -3920,6 +3924,7 @@ async def leads_page(request: Request,
         "permit_permits_total": permit_permits_total,
         "permit_commercial": permit_commercial,
         "permit_unreviewed": permit_unreviewed,
+        "permit_stale": pstats["stale"],
         "permit_untouched": permit_untouched,
         "permit_touched": permit_touched,
         "permit_by_city": permit_by_city,
@@ -4217,6 +4222,57 @@ async def books_rebuild(request: Request, db=Depends(get_db)):
     return RedirectResponse(
         url=f"{back}{sep}rebuilt={result.posted}&queued={result.queued}",
         status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.get("/letters", response_class=HTMLResponse)
+async def letters_page(request: Request, db=Depends(get_db)):
+    """Printed letter batches, and the "I delivered these" button.
+
+    Printing is free, postage is not, and the walk is the owner's. So the page
+    only records what was printed; the letter touch is written when the owner
+    confirms the batch was actually delivered.
+    """
+    require_admin(request)
+    letter_batches.ensure_schema(db)
+    batches = letter_batches.list_batches(db, _BID_COMPANY)
+    pending = [b for b in batches if int(b["delivered_count"] or 0) < int(b["item_count"] or 0)]
+    total_delivered = sum(int(b["delivered_count"] or 0) for b in batches)
+    return templates.TemplateResponse(
+        request=request, name="construction/letters.html",
+        context={"batches": batches, "pending_count": len(pending),
+                 "total_delivered": total_delivered,
+                 "pending_letters": sum(int(b["item_count"] or 0) - int(b["delivered_count"] or 0)
+                                        for b in pending),
+                 "today": date.today()})
+
+
+@app.post("/letters/{batch_id}/delivered")
+async def letters_delivered(batch_id: int, request: Request, db=Depends(get_db)):
+    """The owner says the batch reached the doors: record the touches."""
+    require_admin(request)
+    result = letter_batches.mark_delivered(db, batch_id, _BID_COMPANY)
+    back = (request.headers.get("referer") or "/letters").split("?")[0]
+    if not result.get("ok"):
+        sep = "&" if "?" in back else "?"
+        return RedirectResponse(url=f"{back}{sep}error={urllib.parse.quote(result.get('error', 'failed'))}",
+                                status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(
+        url=f"{back}?delivered={result['recorded']}"
+            + (f"&failed={result['failed']}" if result.get("failed") else ""),
+        status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/letters/{batch_id}/delete")
+async def letters_delete(batch_id: int, request: Request, db=Depends(get_db)):
+    """Remove a mis-printed batch. Refused once any letter is marked delivered."""
+    require_admin(request)
+    result = letter_batches.delete_batch(db, batch_id, _BID_COMPANY)
+    back = (request.headers.get("referer") or "/letters").split("?")[0]
+    if not result.get("ok"):
+        sep = "&" if "?" in back else "?"
+        return RedirectResponse(url=f"{back}{sep}error={urllib.parse.quote(result.get('error', 'failed'))}",
+                                status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(url=back, status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.post("/books/expense")
@@ -9448,8 +9504,15 @@ def ingest_permits(conn, permits):
     homeowner-driven jobs. Returns (added_jobs, added_leads)."""
     added = 0
     created_leads = []
+    skipped_old = 0
     with conn.cursor() as cur:
         for p in permits:
+            # The city feed keeps publishing permits long after the work is
+            # done. Refusing them at ingest is what stops an old record walking
+            # back onto the board on the next scan.
+            if not permit_stats.is_recent(p.get("issue_date")):
+                skipped_old += 1
+                continue
             cur.execute(
                 "SELECT id FROM job_leads WHERE permit_number = %s AND address = %s;",
                 (p["permit_number"], p["property_address"]),
@@ -9546,6 +9609,9 @@ def ingest_permits(conn, permits):
     # sends the first touch. The owner hears about a permit lead when it replies.
     if created_leads:
         print(f"[permit-scan] {len(created_leads)} new permit lead(s) queued for enrichment", flush=True)
+    if skipped_old:
+        print(f"[permit-scan] skipped {skipped_old} permit(s) older than "
+              f"{permit_stats.max_age_days()} days", flush=True)
     return added, len(created_leads)
 
 

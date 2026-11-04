@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+{% block title %}Letters{% endblock %}
+
+{% block content %}
+<section class="bg-slate-50 min-h-screen py-8">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+
+        <div class="flex flex-wrap items-end justify-between gap-4 mb-6">
+            <div>
+                <p class="text-sm font-bold text-indigo-600 uppercase tracking-widest">Direct mail</p>
+                <h1 class="text-3xl font-black tracking-tight text-slate-900">Letters</h1>
+                <p class="text-sm text-slate-500 mt-1">
+                    Printed batches. Nothing is recorded until you say the letters reached the doors.
+                </p>
+            </div>
+            <a href="/leads?lane=permits" class="px-4 py-2.5 text-sm font-semibold text-slate-700 bg-white border border-slate-200 rounded-xl">← Permits</a>
+        </div>
+
+        {% if request.query_params.get('delivered') %}
+        <div class="mb-6 px-4 py-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm font-semibold">
+            {{ request.query_params.get('delivered') }} letter(s) marked delivered and recorded as a letter touch.
+            {% if request.query_params.get('failed') %} {{ request.query_params.get('failed') }} could not be recorded.{% endif %}
+        </div>
+        {% endif %}
+        {% if request.query_params.get('error') %}
+        <div class="mb-6 px-4 py-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-sm font-semibold">
+            {{ request.query_params.get('error') }}
+        </div>
+        {% endif %}
+
+        <div class="grid sm:grid-cols-3 gap-4 mb-6">
+            <div class="bg-white rounded-2xl border border-slate-200 p-5">
+                <p class="text-xs font-bold uppercase tracking-widest text-slate-400">Batches</p>
+                <p class="text-3xl font-black text-slate-900 mt-1">{{ batches|length }}</p>
+            </div>
+            <div class="bg-white rounded-2xl border border-slate-200 p-5">
+                <p class="text-xs font-bold uppercase tracking-widest text-slate-400">Waiting to deliver</p>
+                <p class="text-3xl font-black text-amber-700 mt-1">{{ pending_letters }}</p>
+            </div>
+            <div class="bg-white rounded-2xl border border-slate-200 p-5">
+                <p class="text-xs font-bold uppercase tracking-widest text-slate-400">Delivered</p>
+                <p class="text-3xl font-black text-emerald-700 mt-1">{{ total_delivered }}</p>
+            </div>
+        </div>
+
+        {% if not batches %}
+        <div class="bg-white rounded-2xl border border-slate-200 p-6 mb-6">
+            <p class="text-sm font-bold text-slate-900">No batches yet</p>
+            <p class="text-xs text-slate-500 mt-1">
+                Render them from the repo with
+                <code class="font-mono bg-slate-100 px-1.5 py-0.5 rounded">python render_letter_batches.py --out outbox</code>.
+                Each batch of 100 then appears here, ready to print.
+            </p>
+        </div>
+        {% endif %}
+
+        {% for b in batches %}
+        {% set total = b.item_count|int %}
+        {% set done = b.delivered_count|int %}
+        <div class="bg-white rounded-2xl border border-slate-200 p-5 mb-4">
+            <div class="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                    <p class="text-sm font-bold text-slate-900">{{ b.name }}</p>
+                    <p class="text-xs text-slate-500 mt-1">
+                        {{ total }} letter{{ 's' if total != 1 else '' }} ·
+                        {{ done }} delivered ·
+                        printed {{ b.created_at.strftime('%Y-%m-%d %H:%M') if b.created_at else '' }}
+                        {% if b.out_dir %}<span class="font-mono"> · {{ b.out_dir }}</span>{% endif %}
+                    </p>
+                </div>
+                <div class="flex items-center gap-2">
+                    {% if done < total %}
+                    <form method="post" action="/letters/{{ b.id }}/delivered"
+                          onsubmit="return confirm('Mark {{ total - done }} letter(s) delivered? This records a letter touch on every lead in this batch and moves them to contacted.');">
+                        <button class="px-4 py-2 text-sm font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg">
+                            I delivered these
+                        </button>
+                    </form>
+                    {% else %}
+                    <span class="px-3 py-2 text-xs font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg">
+                        Delivered {{ b.delivered_at.strftime('%Y-%m-%d') if b.delivered_at else '' }}
+                    </span>
+                    {% endif %}
+                    {% if done == 0 %}
+                    <form method="post" action="/letters/{{ b.id }}/delete"
+                          onsubmit="return confirm('Delete this batch record? The PDFs on disk are not touched.');">
+                        <button class="px-3 py-2 text-xs font-semibold text-slate-500 bg-white border border-slate-200 rounded-lg">
+                            Delete
+                        </button>
+                    </form>
+                    {% endif %}
+                </div>
+            </div>
+            {% if total %}
+            <div class="mt-3 h-1.5 rounded-full bg-slate-100 overflow-hidden">
+                <div class="h-full bg-emerald-500" style="width: {{ (done * 100 / total)|round(0, 'floor') }}%"></div>
+            </div>
+            {% endif %}
+        </div>
+        {% endfor %}
+
+        <p class="text-xs text-slate-400 mt-6">
+            Rendering a PDF is not mailing it, so printing records nothing. Marking a batch delivered writes a
+            <span class="font-mono">letter</span> touch for each lead, which the contact policy counts.
+        </p>
+    </div>
+</section>
+{% endblock %}
