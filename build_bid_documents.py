@@ -61,37 +61,21 @@ from bid_package_pdf import (  # noqa: F401
     _txt,
 )
 
-PHOTO_CAPTIONS = {
-    "site-1": "Hallway with white door, black floor plastic, white wall "
-              "protection and debris pile.",
-    "site-2": "Hallway floor covered in black protective plastic with white "
-              "wall protection in place.",
-    "site-3": "Bathroom with door open, toilet, tiled floor and white wall "
-              "panel.",
-    "site-4": "Hallway with black protective plastic and blue protective "
-              "sheeting on the floor.",
-    "site-5": "White wall corner with a vertical scuff mark, baseboard and "
-              "floor plastic.",
-}
+# Photo captions. Kept generic so the same caption works for any job; callers
+# that want job-specific captions pass them in alongside the photos.
+PHOTO_CAPTIONS = {}
 
-# Areas as the owner described them. Kept out of the cost lines because they are
-# the measurement basis, not a line item.
-AREAS = [
-    ("Hallway", "8 ft x 4 ft, walls and ceiling", "32 sq ft floor"),
-    ("Runner floor", "8 ft x 4 ft", "32 sq ft"),
-    ("Bathroom", "floor and walls, dimensions to be confirmed on site",
-     "approx. 40 sq ft"),
-    ("Interior doors", "2 doors, casing both sides", "2 openings"),
-]
-
-# Contiguous runs of the priced lines, in the order the work happens. The card
-# was priced in job sequence, so a phase is just a slice of that sequence.
+# Contiguous runs of the priced lines, in the order the work happens. A phase
+# is just a slice of the cost-line sequence, so these names describe typical
+# trade groupings rather than any one job. They are used to band the itemized
+# pricing table; if a bid's lines don't fall into these buckets the band label
+# still reads as a work phase rather than a mismatch.
 PHASES = [
-    ("Sewage cleanup and demolition", 1, 6),
-    ("Bathroom subfloor and flooring", 7, 9),
+    ("Demolition and preparation", 1, 6),
+    ("Substrate and flooring", 7, 9),
     ("Drywall and priming", 10, 18),
     ("Baseboard and door casing", 19, 21),
-    ("Runner laminate flooring", 22, 23),
+    ("Finish flooring", 22, 23),
     ("Painting", 24, 30),
     ("Site protection and final cleanup", 31, 32),
     ("Contingency", 33, 33),
@@ -369,8 +353,9 @@ def _contact_sheet(pdf: BidDocPDF, photos: list[Path], cols: int = 3,
 
 def build_scope_of_work(bid: dict, costs: list[dict], photos: list[Path]) -> bytes:
     pdf = _new_pdf("Scope of work")
+    subtitle = (bid.get("name") or bid.get("location") or "").strip()
     _title_block(pdf, "SCOPE OF WORK", bid,
-                 "Hallway, runner and bathroom renovation")
+                 subtitle if subtitle else "Renovation scope of work")
     _party_block(pdf, bid)
 
     scope = _scope_items(bid, costs)
@@ -378,26 +363,18 @@ def build_scope_of_work(bid: dict, costs: list[dict], photos: list[Path]) -> byt
     _heading(pdf, "Summary")
     pdf.set_font("Helvetica", "", 9)
     total = sum(float(c.get("estimated") or 0) for c in costs)
-    _mc(pdf, 0, 4.8, _txt(
-        f"{COMPANY} will complete the interior renovation described below at "
-        f"the property named above for a contract price of {_money(total)}. "
-        f"The work covers {len(scope)} separate tasks across the hallway, the "
-        f"runner floor and the bathroom. Sewage cleanup, disinfection and "
-        f"haul-away of the affected material are included in this scope."))
-    pdf.ln(2)
-
-    _heading(pdf, "Measured areas")
-    pdf.set_font("Helvetica", "B", 8.5)
-    pdf.set_fill_color(245, 245, 245)
-    pdf.cell(40, 6.5, "Area", border=1, fill=True)
-    pdf.cell(100, 6.5, "Extent", border=1, fill=True)
-    pdf.cell(46, 6.5, "Quantity", border=1, fill=True,
-             new_x="LMARGIN", new_y="NEXT")
-    pdf.set_font("Helvetica", "", 8.5)
-    for area, extent, qty in AREAS:
-        pdf.cell(40, 6.0, _txt(area), border=1)
-        pdf.cell(100, 6.0, _txt(extent), border=1)
-        pdf.cell(46, 6.0, _txt(qty), border=1, new_x="LMARGIN", new_y="NEXT")
+    if scope:
+        _mc(pdf, 0, 4.8, _txt(
+            f"{COMPANY} will complete the renovation described below at the "
+            f"property named above for a contract price of {_money(total)}. "
+            f"The work covers {len(scope)} separate tasks set out in the "
+            f"scope of work below."))
+    else:
+        _mc(pdf, 0, 4.8, _txt(
+            f"{COMPANY} will complete the renovation described below at the "
+            f"property named above for a contract price of {_money(total)}. "
+            f"No scope lines have been entered on this bid yet - add cost "
+            f"lines on the bid card to build the scope."))
     pdf.ln(2)
 
     _heading(pdf, "Scope of work")
@@ -424,10 +401,10 @@ def build_scope_of_work(bid: dict, costs: list[dict], photos: list[Path]) -> byt
     pdf.set_font("Helvetica", "", 9)
     _mc(pdf, 0, 4.8, _txt(
         "If work exposes a condition this scope did not anticipate - rot, a "
-        "failed subfloor beyond the two sheets listed, failed plumbing, hidden "
-        "water damage - work stops in that area and a written change order is "
-        "issued with a price before anything further is done. No additional "
-        "amount is owed without written approval."))
+        "failed subfloor, failed plumbing, hidden water damage - work stops "
+        "in that area and a written change order is issued with a price "
+        "before anything further is done. No additional amount is owed "
+        "without written approval."))
     pdf.ln(2)
 
     if photos:

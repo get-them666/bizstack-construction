@@ -664,6 +664,18 @@ OPERATING MANUAL:
             {
                 "type": "function",
                 "function": {
+                    "name": "make_outbound_call",
+                    "description": "Place an outbound AI phone call to a number right now (e.g. call a lead back, or the owner asks the bot to reach out by phone). The call is answered by the same voice assistant.",
+                    "parameters": self._props(
+                        {"to": "string", "notes": "string"},
+                        ["to"],
+                        "Destination phone in E.164, plus optional context for the call.",
+                    ),
+                },
+            },
+            {
+                "type": "function",
+                "function": {
                     "name": "create_deposit_links",
                     "description": (
                         "Batch: create Zelle/ACH deposit links for up to `limit` "
@@ -1009,19 +1021,17 @@ OPERATING MANUAL:
         ]
         tools += self._operator_tools()
 
-        # send_email_message is deliberately withheld from the Copilot as of
-        # 2026-10-03, and build_copilot_handlers pops the handler to match. The
-        # SCHEMA was left behind, so the model was still offered a send tool whose
-        # only possible result was "No handler for tool: send_email_message" --
-        # burning a tool-loop iteration and reporting a capability that does not
-        # exist. Dropping it here completes the withholding.
+        # send_email_message is RESTORED to the Copilot as of 2026-11-05. The
+        # handler in build_copilot_handlers wraps the raw sender with the
+        # auto-reply guardrail layer: federal-domain block, per-recipient
+        # cooldown, daily cap, and identical-message dedupe. The Copilot is
+        # owner-only, so the same guardrails the lead autopilot uses apply.
+        # Schema and handler stay in step here.
         #
         # This list is copilot-only. send_email_message lives in _full_tools(),
-        # not _safe_tools(), so the public widget never saw it -- and the handler
-        # in build_tool_handlers is untouched for the paths that enforce
+        # not _safe_tools(), so the public widget never sees it -- and the raw
+        # handler in build_tool_handlers is untouched for the paths that enforce
         # contact_policy_allows (auto_reply, send-once, the digest mails).
-        tools = [t for t in tools
-                 if t.get("function", {}).get("name") != "send_email_message"]
 
         # The Maps tools no longer touch Google at all -- they are backed by
         # open_geo (Census/ArcGIS/Nominatim for geocoding, OSRM for routing).

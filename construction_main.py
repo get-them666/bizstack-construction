@@ -2560,7 +2560,45 @@ def build_copilot_handlers(db, owner_email: str):
     is not.
     """
     handlers = build_tool_handlers(db, stripe_svc)
-    handlers.pop("send_email_message", None)
+
+    # Restore send_email_message to the Copilot, but guarded. The raw handler
+    # has no rate limit, no dedupe, and no recipient allowlist -- that is what
+    # looped and sent three identical emails to real@norfolk.gov on 2026-10-03.
+    # The Copilot is owner-only, so the same guardrail layer the lead autopilot
+    # uses applies here: federal-domain block, per-recipient cooldown, daily cap,
+    # and identical-message dedupe. Nothing is sent unless every check passes.
+    _raw_send_email = handlers.get("send_email_message")
+
+    def _copilot_send_email_message(to: str = "", subject: str = "", body: str = "") -> dict:
+        """Owner-only send with the auto-reply guardrail layer applied."""
+        to = (to or "").strip()
+        subject = (subject or "").strip()
+        body = (body or "").strip()
+        if not to or not subject or not body:
+            return {"ok": False, "error": "to, subject and body are all required."}
+        # Federal-domain block: never mail a .gov/.mil or other government box.
+        br = auto_reply.blocked_reason(to)
+        if br:
+            return {"ok": False, "error": f"Recipient blocked: {br}."}
+        # Per-recipient cooldown: one email per address per day.
+        ok, reason = auto_reply._recent_send_guard(db, to, "email", days=1)
+        if not ok:
+            return {"ok": False, "error": f"Suppressed: {reason}."}
+        # Daily cap for the whole channel.
+        cap = auto_reply._outbound_cap("email", default=30)
+        sent_today = auto_reply._outbound_sent_today(db, "email")
+        if cap and sent_today >= cap:
+            return {"ok": False, "error": f"Daily email cap ({cap}) reached for today."}
+        # Dedupe: identical subject+body to the same recipient within the cooldown
+        # window is already blocked by _recent_send_guard above.
+        if not _raw_send_email:
+            return {"ok": False, "error": "Email send path unavailable."}
+        try:
+            return _raw_send_email(to=to, subject=subject, body=body)
+        except Exception as e:
+            return {"ok": False, "error": f"Send failed: {e}"}
+
+    handlers["send_email_message"] = _copilot_send_email_message
     handlers.update(copilot_ops.build_comms_log_tools(db))
     handlers.update(copilot_ops.build_maps_tools(db))
     handlers.update(copilot_ops.build_calendar_tools(db))
@@ -9160,6 +9198,34 @@ def _zoho_imap_loop():
         time.sleep(backoff)
 
 
+def _zoho_mail_loop():
+    """Collect lead replies and bid solicitations from the Zoho mailbox via
+    the Mail REST API (HTTPS -- no IMAP toggle needed).
+
+    MX for the domain points at Zoho, so replies and solicitations land there.
+    This is the sole inbound mail path: Gmail polling is off. Each poll hands
+    new messages to inbound_email._ingest, which parses solicitation emails
+    onto the bid board and lead replies onto the lead pipeline.
+    """
+    interval = max(120, int(os.getenv("ZOHO_MAIL_INTERVAL_SECONDS", "900") or 900))
+    while True:
+        try:
+            import zoho_mail
+            if zoho_mail.available():
+                with psycopg.connect(db_url, row_factory=dict_row) as conn:
+                    res = zoho_mail.poll_inbox(
+                        conn, "construction",
+                        os.getenv("SMTP_FROM", "") or "hello@bizstackperks.com")
+                if res.get("error"):
+                    print(f"[zoho-mail] {res['error']}", flush=True)
+                elif res.get("inserted"):
+                    print(f"[zoho-mail] {res}", flush=True)
+            time.sleep(interval)
+        except Exception as exc:
+            print(f"[zoho-mail] poll failed: {type(exc).__name__}: {exc}", flush=True)
+            time.sleep(max(3600, interval))
+
+
 def _call_list_loop():
     """Once a day, at CALL_LIST_HOUR, build tomorrow's list and text the link.
 
@@ -9208,6 +9274,9 @@ def _start_lead_source_scheduler():
             print(f"[call-list] could not start: {exc}", flush=True)
 
     # Zoho mailbox first: that is where replies actually arrive (MX -> Zoho).
+    # The Mail REST API path needs no IMAP toggle and no IMAP credentials --
+    # just the Zoho OAuth connection that already carries mail scopes. This is
+    # the sole inbound mail path: Gmail polling is off.
     try:
         import zoho_imap
         if zoho_imap.enabled():
@@ -9218,8 +9287,17 @@ def _start_lead_source_scheduler():
     except Exception as exc:
         print(f"[zoho-imap] could not start: {exc}", flush=True)
 
-    # The Gmail path stays: it is still the outbound mailbox and it may hold
-    # forwarded mail. It cannot see anything that only reached Zoho.
+    try:
+        import zoho_mail
+        if zoho_mail.available():
+            threading.Thread(target=_zoho_mail_loop, daemon=True).start()
+            print("[zoho-mail] loop started (REST API)", flush=True)
+        else:
+            print("[zoho-mail] off (Zoho Mail connection not available)", flush=True)
+    except Exception as exc:
+        print(f"[zoho-mail] could not start: {exc}", flush=True)
+
+    # Gmail polling stays off by design: mail is on Zoho, not Gmail.
     gmail_inbound = (os.getenv("GMAIL_INBOUND", "") or "").strip().lower() in ("1", "true", "yes", "on")
     if gmail_inbound:
         threading.Thread(target=_gmail_inbound_loop, daemon=True).start()
