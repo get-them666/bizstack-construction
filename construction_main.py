@@ -6251,6 +6251,11 @@ async def settings_page(request: Request, db=Depends(get_db)):
         }
     except Exception:
         zoho_books_status = {"configured": False, "org_id": False, "connected": False}
+    # Zoho Payments webhook status for the settings card.
+    zoho_payments_status = {
+        "configured": bool(ZOHO_PAYMENTS_WEBHOOK_KEY),
+        "webhook_url": f"https://{os.getenv('COMPANY_DOMAIN', 'construction.bizstackperks.com')}/api/payments/zoho/webhook",
+    }
     return templates.TemplateResponse(
         request=request,
         name="settings.html",
@@ -6275,6 +6280,7 @@ async def settings_page(request: Request, db=Depends(get_db)):
             "zoho_scope_string": ",".join(zoho_oauth.SCOPES),
             "zoho_mail_status": _zoho_mail_status(),
             "zoho_books_status": zoho_books_status,
+            "zoho_payments_status": zoho_payments_status,
             "zoho_lists": await asyncio.to_thread(zoho_campaigns.mailing_lists),
             "zoho_list_key": zoho_campaigns.list_key(),
         },
@@ -7351,6 +7357,124 @@ async def payments_webhook(request: Request, db=Depends(get_db)):
                 ledger_sync.sync_deposit(db, payment_id, company=_BID_COMPANY)
             except Exception as e:
                 logger.warning("ledger not updated for deposit payment %s: %s", payment_id, e)
+
+    return Response(content='{"received": true}', media_type="application/json")
+
+
+# --- Zoho Payments webhook ---------------------------------------------------
+# Zoho Payments sends payment events here when a customer pays via a Zoho
+# payment link or checkout. The site is the source of truth: the webhook
+# records the payment locally and posts it to the ledger. Zoho Payments is
+# downstream only -- it receives a copy and never tells the site what to do.
+ZOHO_PAYMENTS_WEBHOOK_KEY = (os.getenv("ZOHO_PAYMENTS_WEBHOOK_KEY") or "").strip()
+
+
+@app.post("/api/payments/zoho/webhook")
+async def zoho_payments_webhook(request: Request, db=Depends(get_db)):
+    """Receive Zoho Payments webhook events and record them as payments.
+
+    Verifies the HMAC-SHA256 signature using ZOHO_PAYMENTS_WEBHOOK_KEY, then
+    records the payment via today.record_payment so it lands in the local
+    ledger exactly like a Zelle, ACH, or card payment taken on the site.
+    """
+    payload = await request.body()
+    signature = (
+        request.headers.get("x-zoho-webhook-signature", "")
+        or request.headers.get("zoho-webhook-signature", "")
+        or request.headers.get("X-Zoho-Signature", "")
+    ).strip()
+
+    if not ZOHO_PAYMENTS_WEBHOOK_KEY:
+        return JSONResponse(
+            content={"error": "Zoho Payments webhook key not configured"},
+            status_code=503,
+        )
+
+    # Verify HMAC-SHA256 signature over the raw request body.
+    try:
+        expected = hmac.new(
+            ZOHO_PAYMENTS_WEBHOOK_KEY.encode(), payload, hashlib.sha256
+        ).hexdigest()
+    except Exception:
+        return JSONResponse(
+            content={"error": "signature verification failed"}, status_code=400
+        )
+
+    if not signature or not hmac.compare_digest(expected, signature):
+        return JSONResponse(content={"error": "invalid signature"}, status_code=400)
+
+    try:
+        event = json.loads(payload)
+    except json.JSONDecodeError:
+        return JSONResponse(content={"error": "invalid json"}, status_code=400)
+
+    event_type = str(event.get("event", "") or event.get("type", "")).lower()
+    data = event.get("data", {}) or event.get("payment", {}) or {}
+
+    # Only act on payment completion events.
+    if event_type not in (
+        "payment.captured",
+        "payment.success",
+        "payment.authorized",
+        "order.paid",
+        "payment.completed",
+    ):
+        return Response(content='{"received": true}', media_type="application/json")
+
+    amount = data.get("amount", 0) or data.get("total", 0) or 0
+    try:
+        amount = float(amount)
+    except (TypeError, ValueError):
+        amount = 0.0
+    # Zoho Payments amount may be in minor units (cents) or major units.
+    # Heuristic: if > 100,000 it's already cents; otherwise convert dollars.
+    amount_cents = int(amount) if amount > 100000 else int(round(amount * 100))
+    if amount_cents <= 0:
+        return JSONResponse(content={"error": "no amount"}, status_code=400)
+
+    # Try to find the lead from reference / metadata / order id.
+    reference = (
+        data.get("reference", "")
+        or data.get("order_reference", "")
+        or data.get("invoice_id", "")
+        or data.get("payment_id", "")
+        or ""
+    )
+    lead_id = None
+    if reference:
+        m = re.search(r"DEP-(\d+)", str(reference))
+        if m:
+            lead_id = int(m.group(1))
+        else:
+            # Fall back to matching the reference in an existing payment memo.
+            with db.cursor() as cur:
+                cur.execute(
+                    "SELECT id FROM payments WHERE memo LIKE %s LIMIT 1;",
+                    (f"%{reference}%",),
+                )
+                row = cur.fetchone()
+                if row:
+                    lead_id = row["id"]
+
+    memo = f"Zoho Payments — {event_type} — {reference}".strip() or "Zoho Payments payment"
+    kind = "deposit" if ("deposit" in memo.lower() or "DEP-" in str(reference)) else "progress"
+
+    try:
+        res = today.record_payment(
+            db,
+            lead_id=lead_id,
+            amount_cents=amount_cents,
+            method="card",
+            kind=kind,
+            memo=memo,
+            received_on=date.today(),
+            recorded_by="zoho_payments_webhook",
+        )
+    except ValueError as e:
+        return JSONResponse(content={"error": str(e)}, status_code=400)
+    except Exception as e:
+        logger.warning("zoho payments webhook record failed: %s", e)
+        return JSONResponse(content={"error": "record failed"}, status_code=500)
 
     return Response(content='{"received": true}', media_type="application/json")
 
