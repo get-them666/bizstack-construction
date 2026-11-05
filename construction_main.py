@@ -1,6 +1,7 @@
 """BuildStack Construction LLC — FastAPI web app.
 
-Sister company to Broom Service (short-term rental operations). This site is a
+Broom Service is an in-house division of BuildStack Construction LLC (short-term
+rental operations). This site is a
 licensed general contractor's marketing + lead engine:
 
 - Public marketing site with services, portfolio, about, and a free-estimate form
@@ -7467,7 +7468,7 @@ ABOUT THE COMPANY
 - {company()['name']} is a licensed, insured general contractor serving {company()['service_area']}.
 - We do whole-home renovations and repairs: kitchens, baths, drywall, roofing, plumbing, electrical, carpentry, tile, flooring, decks, and fences.
 - Website: https://{company()['domain']}. Phone, call or text 24/7: {company()['phone']}. Email: {company()['email']}.
-- We are the sister company to Broom Service, so we also turn short-term rentals (Airbnb/Vrbo) into stay-ready, revenue-producing properties.
+- Broom Service is our in-house division, so we also turn short-term rentals (Airbnb/Vrbo) into stay-ready, revenue-producing properties.
 
 HOW TO QUOTE CONSTRUCTION WORK (real numbers, right on the call):
 1. ALWAYS get the property street address first and run lookup_property to pull the real square footage, beds, baths, and year built. Ground the quote in the actual home, never a guess.
@@ -8429,8 +8430,9 @@ async def voice_debug(request: Request, db=Depends(get_db)):
 
 # --- Instant ballpark quote -------------------------------------------------
 INSTANT_PROJECT_TYPES = [
-    "Whole-Home Renovation", "Interior Refresh", "Kitchen", "Bathroom",
-    "Roofing & Siding", "Drywall & Paint", "Deck & Fence", "Short-Term Rental Make-Ready",
+    "Full Rehab / Whole-Home Renovation", "Rental Make-Ready (cosmetic)",
+    "Interior Refresh", "Kitchen", "Bathroom", "Roofing & Siding",
+    "Drywall & Paint", "Deck & Fence",
 ]
 
 
@@ -8441,6 +8443,7 @@ async def instant_quote_page(request: Request):
         "error": request.query_params.get("error"),
         "address": request.query_params.get("address", ""),
         "project_type": request.query_params.get("project_type", ""),
+        "rental_intent": request.query_params.get("rental_intent", ""),
         "quote": None, "prop": None,
     })
 
@@ -8462,12 +8465,14 @@ async def instant_quote_submit(
     address: str = Form(""),
     project_type: str = Form(""),
     sqft: str = Form(""),
+    rental_intent: str = Form(""),
     db=Depends(get_db),
 ):
     ctx = {
         "project_types": INSTANT_PROJECT_TYPES,
         "address": address, "project_type": project_type,
         "name": name, "phone": phone, "email": email, "sqft": sqft,
+        "rental_intent": rental_intent,
         "error": None, "quote": None, "prop": None,
     }
     email = (email or "").strip()
@@ -8503,6 +8508,7 @@ async def instant_quote_submit(
                 "estimate_low_cents": est["low_cents"],
                 "estimate_high_cents": est["high_cents"],
                 "estimate_json": json.dumps(est),
+                "rental_intent": rental_intent or None,
             },
         )
         lead_id, created = res["lead_id"], res["created"]

@@ -39,6 +39,7 @@ greetings and subject lines; the legal page and footer carry `entity_line()`.
 - **Vapi** assistant `80156d94-…` `firstMessage` lives in the Vapi dashboard
   and still says the old name; the bot's prompt (knowledge files) is updated.
 - `CONTRACTOR_LICENSE` is still unset (owner chose "skip for now" 2026-10-29).
+- **Broom Service is a division of BuildStack Construction LLC, not a separate LLC.** Customer-facing copy was updated from "sister company"/"sister business"/"family of companies" to "Broom Service division" / "in-house Broom Service division" across `base.html`, `index.html`, `about.html`, the voice-agent prompt in `construction_main.py`, `bot_knowledge.md`, `construction_knowledge.md`, `ai_agent.py`, and `docs/subcontractor_application.md`. A Virginia fictitious-name (DBA) registration for "Broom Service" is recommended but not yet filed — do not claim it is registered on the site.
 
 ## Project facts that aren't obvious from the code
 

@@ -60,7 +60,7 @@ out through the build, so your owner reports and your file stay current without 
 
 **3. We know the rental and remediation market.**
 This is a real niche, not a side note. A large share of our work is short-term rental make-readies
-and water/flood remediation rebuilds. Our sister company, Broom Service, handles the turnover
+and water/flood remediation rebuilds. Our Broom Service division handles the turnover
 side — cleaning, linen, and co-hosting — so we can scope and price a property to a stay-ready
 standard, not just to code. If your pipeline includes investor or hospitality work, we can carry
 a property from punch to first booking.
@@ -229,8 +229,8 @@ City, Chesapeake, Suffolk, Virginia Beach, Smithfield, Portsmouth
 3. **Written fixed-price scopes with signed change orders only.** No billing for undocumented
    changes.
 4. **Photo-documented progress** through the build — your owner reporting stays current.
-5. **Rental / STR specialization** with a sister operations company (Broom Service) covering
-   turnover, linen, and co-hosting — punch to first booking under one family of companies.
+5. **Rental / STR specialization** with our in-house Broom Service division covering
+   turnover, linen, and co-hosting — punch to first booking under one roof.
 6. **Remediation and insurance-restoration work** — water/flood rebuild, mold-aware scopes,
    documented for carrier claim files.
 7. **24/7 phone answer and fast turnarounds** on RFIs, change orders, and bid questions.
@@ -376,7 +376,7 @@ City, Chesapeake, Suffolk, Virginia Beach, Smithfield, Portsmouth
 > your chain of command to your owner.
 
 **Anything else we should know?**
-> `[24/7 answering line, sister company for STR turnovers, your ability to mobilize quickly on
+> `[24/7 answering line, Broom Service division for STR turnovers, your ability to mobilize quickly on
 > warranty/service work, insurance-restoration documentation, etc.]`
 
 ---

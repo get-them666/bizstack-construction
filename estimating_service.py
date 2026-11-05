@@ -160,13 +160,35 @@ MODELS = {
         "high": _env_float("EST_TRIM_HIGH", 10.0),
         "unit": "sq ft of trim",
     },
+    "rental_make_ready": {
+        "label": "Rental Make-Ready (cosmetic)",
+        "kind": "sqft",
+        # Cosmetic make-ready for investor rentals: durable LVP, neutral paint,
+        # fixture/cabinet refresh, code-compliance check. Not a gut rehab.
+        "low": _env_float("EST_RENTAL_MAKE_READY_LOW", 25.0),
+        "high": _env_float("EST_RENTAL_MAKE_READY_HIGH", 45.0),
+        "unit": "interior sq ft",
+    },
+    "full_rehab": {
+        "label": "Full Rehab / Whole-Home Renovation",
+        "kind": "sqft",
+        # Gut-level rehab: everything stripped to studs and rebuilt. Age matters
+        # -- pre-1970 stock carries structural/upgrade risk and prices toward the
+        # high end; newer stock toward the low end. _multipliers() applies the
+        # age/size bands automatically off year_built/sqft from public records.
+        "low": _env_float("EST_FULL_REHAB_LOW", 75.0),
+        "high": _env_float("EST_FULL_REHAB_HIGH", 120.0),
+        "unit": "interior sq ft",
+    },
 }
 
 # project_type (as submitted on the site) -> model key
 PROJECT_MODEL_MAP = {
     "whole-home": "whole-home",
-    "Whole-Home Renovation": "whole-home",
-    "Whole-home renovation": "whole-home",
+    "Whole-Home Renovation": "full_rehab",
+    "Whole-home renovation": "full_rehab",
+    "Full Rehab": "full_rehab",
+    "Full rehab": "full_rehab",
     "whole home": "whole-home",
     "whole-house": "whole-home",
     "new construction": "whole-home",
@@ -222,7 +244,11 @@ PROJECT_MODEL_MAP = {
     "fences": "fence",
     "patio": "fence",
     "porch": "fence",
-    "Short-Term Rental Make-Ready": "refresh",
+    "Short-Term Rental Make-Ready": "rental_make_ready",
+    "Rental Make-Ready": "rental_make_ready",
+    "Rental make-ready": "rental_make_ready",
+    "Cosmetic Make-Ready": "rental_make_ready",
+    "Cosmetic make-ready": "rental_make_ready",
     "basement": "basement",
     "Basement": "basement",
     "basement finishing": "basement",
@@ -431,6 +457,8 @@ def estimate(project_type: str, property_data: dict | None = None, manual_sqft: 
         "model_key": model_key,
         "label": model["label"],
         "unit": model["unit"],
+        "rate_low": round(model["low"], 2),
+        "rate_high": round(model["high"], 2),
         "low_cents": int(round(low * 100)),
         "high_cents": int(round(high * 100)),
         "low_est": round(low),
