@@ -1,0 +1,344 @@
+{% extends "base.html" %}
+{% set co = company() %}
+{% block title %}Live Monitor | {{ co.name }} Owner Portal{% endblock %}
+{% block meta %}<meta name="robots" content="noindex, nofollow">{% endblock %}
+
+{% block content %}
+<section class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
+    <div class="flex flex-wrap items-end justify-between gap-4">
+        <div>
+            <p class="text-sm font-bold text-indigo-600 uppercase tracking-widest">Owner portal</p>
+            <h1 class="text-3xl font-extrabold text-slate-900">Live bot monitor</h1>
+            <p class="mt-2 text-slate-600">What the phone bot, text bot, Copilot, and background loops are doing right now.</p>
+        </div>
+        <a href="/settings" class="px-4 py-2 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl">← Settings</a>
+    </div>
+
+    <p class="mt-4 text-xs text-slate-400 text-right">Last refreshed: {{ now }} · <a href="/monitor" class="text-indigo-600 hover:underline">refresh</a></p>
+
+    <!-- Comms activity overview -->
+    <section class="mt-6 bg-white rounded-2xl border border-slate-200 p-5">
+        <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-xl bg-indigo-50 flex items-center justify-center text-indigo-600 font-bold">📱</div>
+            <div>
+                <p class="text-base font-bold text-slate-900">Messages in last 24 hours</p>
+                <p class="text-xs text-slate-500">Phone calls, texts, and emails — inbound and outbound</p>
+            </div>
+        </div>
+        <div class="mt-4 grid grid-cols-1 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+            {% set channel_totals = {} %}
+            {% for row in comms_by_channel %}
+                {% set key = row.channel ~ '|' ~ row.direction %}
+                {% set _ = channel_totals.__setitem__(key, row.c) %}
+            {% endfor %}
+            <div class="bg-slate-50 rounded-xl border border-slate-200 p-3 text-center">
+                <div class="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">Voice calls</div>
+                <div class="text-2xl font-black text-slate-900">{{ channel_totals.get('voice|inbound', 0) + channel_totals.get('voice|outbound', 0) }}</div>
+                <div class="text-[10px] text-slate-500">{{ channel_totals.get('voice|inbound', 0) }} in · {{ channel_totals.get('voice|outbound', 0) }} out</div>
+            </div>
+            <div class="bg-slate-50 rounded-xl border border-slate-200 p-3 text-center">
+                <div class="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">Texts (SMS)</div>
+                <div class="text-2xl font-black text-slate-900">{{ channel_totals.get('sms|inbound', 0) + channel_totals.get('sms|outbound', 0) }}</div>
+                <div class="text-[10px] text-slate-500">{{ channel_totals.get('sms|inbound', 0) }} in · {{ channel_totals.get('sms|outbound', 0) }} out</div>
+            </div>
+            <div class="bg-slate-50 rounded-xl border border-slate-200 p-3 text-center">
+                <div class="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">Emails</div>
+                <div class="text-2xl font-black text-slate-900">{{ channel_totals.get('email|inbound', 0) + channel_totals.get('email|outbound', 0) }}</div>
+                <div class="text-[10px] text-slate-500">{{ channel_totals.get('email|inbound', 0) }} in · {{ channel_totals.get('email|outbound', 0) }} out</div>
+            </div>
+            <div class="bg-slate-50 rounded-xl border border-slate-200 p-3 text-center">
+                <div class="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">New leads (24h)</div>
+                <div class="text-2xl font-black text-slate-900">{{ new_leads_24h }}</div>
+                <div class="text-[10px] text-slate-500">from all sources</div>
+            </div>
+            <div class="bg-slate-50 rounded-xl border border-slate-200 p-3 text-center">
+                <div class="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">Copilot tools (24h)</div>
+                <div class="text-2xl font-black text-slate-900">{{ copilot_summary | sum(attribute='calls') if copilot_summary else 0 }}</div>
+                <div class="text-[10px] text-slate-500">tool calls by the bot</div>
+            </div>
+            <div class="bg-slate-50 rounded-xl border border-slate-200 p-3 text-center">
+                <div class="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">OpenAI</div>
+                <div class="text-2xl font-black text-slate-900">{{ 'OK' if openai.ok else 'DOWN' }}</div>
+                <div class="text-[10px] text-slate-500">{{ openai.model }} · {{ openai.checked_at }}</div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Phone bot -->
+    <section class="mt-6 bg-white rounded-2xl border border-slate-200 p-5">
+        <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center text-blue-600 font-bold">📞</div>
+            <div>
+                <p class="text-base font-bold text-slate-900">Phone bot (Vapi)</p>
+                <p class="text-xs text-slate-500">Recent voice calls — inbound and outbound AI conversations</p>
+            </div>
+        </div>
+        <div class="mt-4">
+            {% if recent_voice %}
+            <table class="w-full text-sm text-left border-collapse">
+                <thead>
+                    <tr class="text-slate-500 border-b border-slate-100">
+                        <th class="pb-2 text-left w-20">When</th>
+                        <th class="pb-2 text-left w-16">Direction</th>
+                        <th class="pb-2 text-left">From → To</th>
+                        <th class="pb-2 text-left">What was said</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for c in recent_voice %}
+                    <tr class="border-b border-slate-50 hover:bg-slate-50">
+                        <td class="py-2 text-slate-500 font-mono text-[10px]">{{ c.created_at }}</td>
+                        <td class="py-2">
+                            <span class="px-2 py-0.5 rounded-full text-[10px] font-semibold
+                                {% if c.direction == 'inbound' %}bg-emerald-50 text-emerald-700{% else %}bg-blue-50 text-blue-700{% endif %}">
+                                {{ c.direction }}
+                            </span>
+                        </td>
+                        <td class="py-2 text-slate-700">{{ c.sender }} → {{ c.recipient }}</td>
+                        <td class="py-2 text-slate-600 max-w-xs truncate">{{ c.message_body[:120] or '(no transcript)' }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <p class="text-xs text-slate-500 text-center py-4">No voice calls in the last 24 hours.</p>
+            {% endif %}
+        </div>
+    </section>
+
+    <!-- Text bot -->
+    <section class="mt-6 bg-white rounded-2xl border border-slate-200 p-5">
+        <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-xl bg-green-50 flex items-center justify-center text-green-600 font-bold">💬</div>
+            <div>
+                <p class="text-base font-bold text-slate-900">Text bot (SignalWire)</p>
+                <p class="text-xs text-slate-500">Recent SMS — inbound and outbound</p>
+            </div>
+        </div>
+        <div class="mt-4">
+            {% if recent_sms %}
+            <table class="w-full text-sm text-left border-collapse">
+                <thead>
+                    <tr class="text-slate-500 border-b border-slate-100">
+                        <th class="pb-2 text-left w-20">When</th>
+                        <th class="pb-2 text-left w-16">Direction</th>
+                        <th class="pb-2 text-left">From → To</th>
+                        <th class="pb-2 text-left">Message</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for c in recent_sms %}
+                    <tr class="border-b border-slate-50 hover:bg-slate-50">
+                        <td class="py-2 text-slate-500 font-mono text-[10px]">{{ c.created_at }}</td>
+                        <td class="py-2">
+                            <span class="px-2 py-0.5 rounded-full text-[10px] font-semibold
+                                {% if c.direction == 'inbound' %}bg-emerald-50 text-emerald-700{% else %}bg-green-50 text-green-700{% endif %}">
+                                {{ c.direction }}
+                            </span>
+                        </td>
+                        <td class="py-2 text-slate-700">{{ c.sender }} → {{ c.recipient }}</td>
+                        <td class="py-2 text-slate-600 max-w-xs truncate">{{ c.message_body[:120] }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <p class="text-xs text-slate-500 text-center py-4">No texts in the last 24 hours.</p>
+            {% endif %}
+        </div>
+    </section>
+
+    <!-- Copilot -->
+    <section class="mt-6 bg-white rounded-2xl border border-slate-200 p-5">
+        <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-xl bg-purple-50 flex items-center justify-center text-purple-600 font-bold">🤖</div>
+            <div>
+                <p class="text-base font-bold text-slate-900">Copilot (owner chat)</p>
+                <p class="text-xs text-slate-500">Tool calls made by the AI assistant in the last 24 hours</p>
+            </div>
+        </div>
+        <div class="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {% for t in copilot_summary %}
+            <div class="bg-slate-50 rounded-xl border border-slate-200 p-3">
+                <div class="flex justify-between items-start mb-1">
+                    <div class="font-semibold text-slate-900 text-sm">{{ t.tool_name }}</div>
+                    <span class="px-2 py-0.5 rounded-full text-[10px] font-semibold
+                        {% if t.failures > 0 %}bg-red-50 text-red-700{% else %}bg-emerald-50 text-emerald-700{% endif %}">
+                        {{ t.calls }} call{{ 's' if t.calls != 1 else '' }}
+                    </span>
+                </div>
+                {% if t.failures > 0 %}
+                <div class="text-[10px] text-red-700 font-semibold mt-1">{{ t.failures }} failed</div>
+                {% endif %}
+                <div class="text-[10px] text-slate-500 mt-1">Last: {{ t.last_at }}</div>
+                {% if t.errors %}
+                <div class="text-[10px] text-red-600 mt-1">{{ t.errors[:80] }}</div>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+
+        {% if copilot_tools %}
+        <div class="mt-4">
+            <table class="w-full text-sm text-left border-collapse">
+                <thead>
+                    <tr class="text-slate-500 border-b border-slate-100">
+                        <th class="pb-2 text-left w-20">When</th>
+                        <th class="pb-2 text-left w-32">Tool</th>
+                        <th class="pb-2 text-left">Result</th>
+                        <th class="pb-2 text-left">Error</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for c in copilot_tools %}
+                    <tr class="border-b border-slate-50 hover:bg-slate-50">
+                        <td class="py-2 text-slate-500 font-mono text-[10px]">{{ c.called_at }}</td>
+                        <td class="py-2 font-semibold text-slate-800">{{ c.tool_name }}</td>
+                        <td class="py-2">
+                            <span class="px-2 py-0.5 rounded-full text-[10px] font-semibold
+                                {% if c.ok %}bg-emerald-50 text-emerald-700{% else %}bg-red-50 text-red-700{% endif %}">
+                                {{ 'ok' if c.ok else 'failed' }}
+                            </span>
+                        </td>
+                        <td class="py-2 text-slate-600 text-[10px] max-w-xs truncate">{{ c.error or '—' }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% endif %}
+    </section>
+
+    <!-- Background loops -->
+    <section class="mt-6 bg-white rounded-2xl border border-slate-200 p-5">
+        <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center font-bold">⚙️</div>
+            <div>
+                <p class="text-base font-bold text-slate-900">Background loops</p>
+                <p class="text-xs text-slate-500">Daemon threads that run on their own</p>
+            </div>
+        </div>
+        <ul class="mt-4 divide-y divide-slate-100 text-xs">
+            {% set job_rows = [
+                ['Permit importer', 'DISABLE_PERMIT_IMPORT', env('PERMIT_SCAN_HOURS','24') ~ 'h'],
+                ['Lead-source scan', 'LEAD_SOURCE_SCAN', 'on demand'],
+                ['Lead enrichment', 'DISABLE_LEAD_ENRICH', 'daily'],
+                ['Bid autopilot', 'DISABLE_BID_AUTOPILOT', 'hourly'],
+                ['Lender outreach', 'DISABLE_LOAN_OUTREACH', 'hourly'],
+                ['Reddit radar', 'DISABLE_REDDIT_RADAR', 'hourly'],
+                ['LinkedIn radar', 'DISABLE_LINKEDIN_RADAR', 'hourly'],
+            ] %}
+            {% for job in job_rows %}
+            {% set name = job[0] %}
+            {% set switch = job[1] %}
+            {% set cadence = job[2] %}
+            {% set flag = env(switch, 'off') %}
+            <li class="flex items-center justify-between py-2">
+                <span class="font-semibold text-slate-800">{{ name }}</span>
+                <span class="text-slate-400">· every {{ cadence }}</span>
+                <span class="px-2 py-0.5 rounded-full text-[10px] font-semibold
+                    {% if flag in ('1','true','yes','on') %}bg-slate-100 text-slate-500{% else %}bg-emerald-50 text-emerald-700{% endif %}">
+                    {{ 'off (' ~ switch ~ ')' if flag in ('1','true','yes','on') else 'running' }}
+                </span>
+            </li>
+            {% endfor %}
+            <li class="flex items-center justify-between py-2 mt-2 pt-2 border-t border-slate-100">
+                <span class="font-semibold text-slate-800">Lead enrichment last run</span>
+                <span class="text-slate-400 font-mono text-[10px]">{{ lead_enrich_last_run or 'never' }}</span>
+            </li>
+        </ul>
+    </section>
+
+    <!-- Permit intake -->
+    <section class="mt-6 bg-white rounded-2xl border border-slate-200 p-5">
+        <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-xl bg-amber-50 flex items-center justify-center text-amber-600 font-bold">🏗️</div>
+            <div>
+                <p class="text-base font-bold text-slate-900">Permit intake</p>
+                <p class="text-xs text-slate-500">Public permit doors and permits being worked</p>
+            </div>
+        </div>
+        <div class="mt-4 grid grid-cols-1 sm:grid-cols-4 gap-3">
+            <div class="bg-slate-50 rounded-xl border border-slate-200 p-3 text-center">
+                <div class="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">Actionable doors</div>
+                <div class="text-2xl font-black text-slate-900">{{ permit_stats.actionable_doors }}</div>
+            </div>
+            <div class="bg-slate-50 rounded-xl border border-slate-200 p-3 text-center">
+                <div class="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">Actionable permits</div>
+                <div class="text-2xl font-black text-slate-900">{{ permit_stats.actionable_permits }}</div>
+            </div>
+            <div class="bg-slate-50 rounded-xl border border-slate-200 p-3 text-center">
+                <div class="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">Stale (90+ days)</div>
+                <div class="text-2xl font-black text-slate-900">{{ permit_stats.stale }}</div>
+            </div>
+            <div class="bg-slate-50 rounded-xl border border-slate-200 p-3 text-center">
+                <div class="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">Commercial</div>
+                <div class="text-2xl font-black text-slate-900">{{ permit_stats.commercial }}</div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Lead pipeline -->
+    <section class="mt-6 bg-white rounded-2xl border border-slate-200 p-5">
+        <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-xl bg-emerald-50 flex items-center justify-center text-emerald-600 font-bold">📋</div>
+            <div>
+                <p class="text-base font-bold text-slate-900">Lead pipeline</p>
+                <p class="text-xs text-slate-500">Leads by pipeline stage</p>
+            </div>
+        </div>
+        <div class="mt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            {% for status, label in [('new','New'), ('contacted','Contacted'), ('quoted','Quoted'), ('won','Won')] %}
+            <div class="bg-slate-50 rounded-xl border border-slate-200 p-3 text-center">
+                <div class="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">{{ label }}</div>
+                <div class="text-2xl font-black text-slate-900">{{ leads_by_status.get(status, 0) }}</div>
+            </div>
+            {% endfor %}
+        </div>
+    </section>
+
+    <!-- Bid autopilot recent -->
+    <section class="mt-6 bg-white rounded-2xl border border-slate-200 p-5">
+        <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-xl bg-indigo-50 flex items-center justify-center text-indigo-600 font-bold">🏗️</div>
+            <div>
+                <p class="text-base font-bold text-slate-900">Bid autopilot — recent activity</p>
+                <p class="text-xs text-slate-500">Contact research and document generation on active bids</p>
+            </div>
+        </div>
+        <div class="mt-4">
+            {% if bid_autopilot_recent %}
+            <table class="w-full text-sm text-left border-collapse">
+                <thead>
+                    <tr class="text-slate-500 border-b border-slate-100">
+                        <th class="pb-2 text-left w-20">When</th>
+                        <th class="pb-2 text-left w-16">Bid #</th>
+                        <th class="pb-2 text-left w-20">Kind</th>
+                        <th class="pb-2 text-left">Result</th>
+                        <th class="pb-2 text-left">Note</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for b in bid_autopilot_recent %}
+                    <tr class="border-b border-slate-50 hover:bg-slate-50">
+                        <td class="py-2 text-slate-500 font-mono text-[10px]">{{ b.ran_at }}</td>
+                        <td class="py-2 font-semibold text-slate-800">{{ b.bid_id }}</td>
+                        <td class="py-2 text-slate-600">{{ b.kind }}</td>
+                        <td class="py-2">
+                            <span class="px-2 py-0.5 rounded-full text-[10px] font-semibold
+                                {% if b.ok %}bg-emerald-50 text-emerald-700{% else %}bg-red-50 text-red-700{% endif %}">
+                                {{ 'ok' if b.ok else 'failed' }}
+                            </span>
+                        </td>
+                        <td class="py-2 text-slate-600 text-[10px] max-w-xs truncate">{{ b.note or '—' }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <p class="text-xs text-slate-500 text-center py-4">No bid autopilot activity yet.</p>
+            {% endif %}
+        </div>
+    </section>
+</section>
+{% endblock %}

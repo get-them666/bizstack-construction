@@ -465,6 +465,18 @@ async def lifecycle(app: FastAPI):
                     ON comms_logs (lead_id, direction, created_at)
                     WHERE lead_id IS NOT NULL;
                 """)
+                cur.execute("""
+                CREATE TABLE IF NOT EXISTS copilot_tool_log (
+                    id BIGSERIAL PRIMARY KEY,
+                    tool_name VARCHAR(120) NOT NULL,
+                    tool_args JSONB NOT NULL DEFAULT '{}',
+                    ok BOOLEAN NOT NULL DEFAULT TRUE,
+                    error TEXT,
+                    called_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                );
+                """)
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_copilot_tool_log_tool ON copilot_tool_log(tool_name, called_at DESC);")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_copilot_tool_log_called ON copilot_tool_log(called_at DESC);")
                 inbound_email._ensure_schema(cur)
                 cur.execute("""
                 CREATE TABLE IF NOT EXISTS users (
@@ -1348,6 +1360,7 @@ templates.env.globals["asset_version"] = ASSET_VERSION
 templates.env.globals["map_embed"] = _map_embed
 templates.env.globals["map_directions"] = _map_directions
 templates.env.globals["zoho_salesiq_widget"] = lambda: os.getenv("ZOHO_SALESIQ_WIDGET_CODE", "")
+templates.env.globals["env"] = lambda name, default="": (os.getenv(name) or default).strip()
 
 
 def _owner_email() -> str:
@@ -6224,6 +6237,151 @@ def _mail_status_safe() -> dict:
         return loan_outreach.mail_status()
     except Exception as exc:
         return {"ok": False, "detail": f"preflight failed: {exc}", "checked_at": ""}
+
+
+# --- Live activity monitor ----------------------------------------------------
+# One page that shows what every bot is doing right now: phone, text, Copilot,
+# background loops, permit intake, and lead flow. Read-only, cheap queries only.
+
+
+@app.get("/monitor", response_class=HTMLResponse)
+async def monitor_page(request: Request, db=Depends(get_db)):
+    require_admin(request)
+    is_authed, user_email = require_auth(request)
+    now = datetime.now(timezone.utc)
+    day_ago = now - timedelta(days=1)
+
+    with db.cursor() as cur:
+        # Comms activity (phone, text, email) — last 24h
+        cur.execute("""
+            SELECT channel, direction, count(*) AS c,
+                   max(created_at) AS last_at
+            FROM comms_logs
+            WHERE created_at >= %s
+            GROUP BY channel, direction
+            ORDER BY channel, direction
+        """, (day_ago,))
+        comms_by_channel = cur.fetchall()
+
+        # Most recent inbound/outbound voice call
+        cur.execute("""
+            SELECT channel, direction, sender, recipient, message_body, created_at
+            FROM comms_logs
+            WHERE channel = 'voice'
+            ORDER BY created_at DESC LIMIT 8
+        """)
+        recent_voice = cur.fetchall()
+
+        # Most recent SMS
+        cur.execute("""
+            SELECT channel, direction, sender, recipient, message_body, created_at
+            FROM comms_logs
+            WHERE channel = 'sms'
+            ORDER BY created_at DESC LIMIT 8
+        """)
+        recent_sms = cur.fetchall()
+
+        # Most recent email
+        cur.execute("""
+            SELECT channel, direction, sender, recipient, message_body, created_at
+            FROM comms_logs
+            WHERE channel = 'email'
+            ORDER BY created_at DESC LIMIT 8
+        """)
+        recent_email = cur.fetchall()
+
+        # Copilot tool calls — last 24h
+        cur.execute("""
+            SELECT tool_name, ok, error, called_at
+            FROM copilot_tool_log
+            WHERE called_at >= %s
+            ORDER BY called_at DESC LIMIT 25
+        """, (day_ago,))
+        copilot_tools = cur.fetchall()
+
+        # Copilot tool summary — counts by tool, last 24h
+        cur.execute("""
+            SELECT tool_name, count(*) AS calls,
+                   count(*) FILTER (WHERE NOT ok) AS failures,
+                   max(called_at) AS last_at
+            FROM copilot_tool_log
+            WHERE called_at >= %s
+            GROUP BY tool_name
+            ORDER BY calls DESC
+        """, (day_ago,))
+        copilot_summary = cur.fetchall()
+
+        # Lead counts by status
+        cur.execute("""
+            SELECT status, count(*) AS c
+            FROM leads
+            WHERE company = 'construction'
+            GROUP BY status
+        """)
+        leads_by_status = {r["status"]: int(r["c"]) for r in cur.fetchall()}
+
+        # New leads in last 24h
+        cur.execute("""
+            SELECT count(*) AS c FROM leads
+            WHERE company = 'construction' AND created_at >= %s
+        """, (day_ago,))
+        new_leads_24h = int(cur.fetchone()["c"] or 0)
+
+        # Bid autopilot — last 10 log entries
+        cur.execute("""
+            SELECT bid_id, kind, ok, note, ran_at
+            FROM bid_autopilot_log
+            ORDER BY ran_at DESC LIMIT 10
+        """)
+        bid_autopilot_recent = cur.fetchall()
+
+        # Lead enrichment last run
+        cur.execute("""
+            SELECT value FROM app_settings WHERE key = 'lead_enrich_last_run'
+        """)
+        row = cur.fetchone()
+        lead_enrich_last_run = row["value"] if row else None
+
+        # Permit stats
+        pstats = permit_stats.permit_stats(cur)
+
+    # In-memory background job status (not in DB)
+    try:
+        import lead_sources
+        lead_source_status = dict(_lead_source_status)
+    except Exception:
+        lead_source_status = {"running": False, "last_run": None, "found": 0, "created": 0, "pushed": 0, "errors": ""}
+
+    try:
+        radar_jobs = dict(_radar_jobs)
+    except Exception:
+        radar_jobs = {}
+
+    # OpenAI health
+    openai_h = settings_status.openai_health()
+
+    return templates.TemplateResponse(
+        request=request,
+        name="monitor.html",
+        context={
+            "user": {"email": user_email},
+            "comms_by_channel": comms_by_channel,
+            "recent_voice": recent_voice,
+            "recent_sms": recent_sms,
+            "recent_email": recent_email,
+            "copilot_tools": copilot_tools,
+            "copilot_summary": copilot_summary,
+            "leads_by_status": leads_by_status,
+            "new_leads_24h": new_leads_24h,
+            "bid_autopilot_recent": bid_autopilot_recent,
+            "lead_enrich_last_run": lead_enrich_last_run,
+            "permit_stats": pstats,
+            "lead_source_status": lead_source_status,
+            "radar_jobs": radar_jobs,
+            "openai": openai_h,
+            "now": now.isoformat(),
+        },
+    )
 
 
 @app.post("/api/settings/security")
@@ -12753,6 +12911,25 @@ async def copilot_chat(request: Request, message: str = Form(...), db=Depends(ge
         tool_handlers=build_copilot_handlers(db, owner_email),
         subset="copilot",
     )
+
+    def _log_copilot_tool(name: str, args: dict, ok: bool, error: str | None) -> None:
+        """Persist every Copilot tool call so /monitor can show live activity."""
+        try:
+            with db.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO copilot_tool_log (tool_name, tool_args, ok, error) "
+                    "VALUES (%s, %s, %s, %s);",
+                    (name, json.dumps(args), ok, error),
+                )
+            db.commit()
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+
+    con_ai_agent.copilot_agent_tool_logger(_log_copilot_tool)
+
     try:
         # Off the event loop: a Copilot turn can run tools for up to
         # COPILOT_TOOL_DEADLINE_SECONDS (180 in production). Synchronous here,

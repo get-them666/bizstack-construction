@@ -21,6 +21,22 @@ class ToolBudgetExhausted(RuntimeError):
     """
 
 
+# Module-level callback so the host app (construction_main.py) can log every
+# Copilot tool call to its own database. Set by build_copilot_handlers' caller
+# via copilot_agent_tool_logger(). Signature: (name, args, ok, error) -> None.
+_tool_logger = None
+
+
+def copilot_agent_tool_logger(callback):
+    """Register a callback that receives every Copilot tool execution.
+
+    ``callback(name, args, ok, error)`` where ``ok`` is a bool and ``error`` is
+    a string or None. Set once at app startup; called from ``_execute_tool``.
+    """
+    global _tool_logger
+    _tool_logger = callback
+
+
 class ModelUnavailable(RuntimeError):
     """The model API refused the request for a reason the owner must act on.
 
@@ -1332,11 +1348,35 @@ OPERATING MANUAL:
             result = handler(**args)
             if not isinstance(result, (str, bytes)):
                 result = json.dumps(result)
+            ok = True
+            error = None
+            if isinstance(result, (str, bytes)):
+                try:
+                    parsed = json.loads(result)
+                    ok = bool(parsed.get("ok", True)) if isinstance(parsed, dict) else True
+                    error = parsed.get("error") if isinstance(parsed, dict) and not ok else None
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            if _tool_logger is not None:
+                try:
+                    _tool_logger(name, args, ok, error)
+                except Exception:
+                    pass  # logging must never break a tool call
             return result
         except TypeError as e:
+            if _tool_logger is not None:
+                try:
+                    _tool_logger(name, {}, False, f"Invalid tool arguments: {e}")
+                except Exception:
+                    pass
             return json.dumps({"ok": False, "error": f"Invalid tool arguments: {e}"})
         except Exception as e:
             print(f"⚠️ Tool {name} failed: {e}")
+            if _tool_logger is not None:
+                try:
+                    _tool_logger(name, {}, False, str(e))
+                except Exception:
+                    pass
             return json.dumps({"ok": False, "error": str(e)})
 
     # --- Conversation loop ------------------------------------------------
