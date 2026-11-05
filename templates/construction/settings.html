@@ -301,6 +301,33 @@
         </form>
     </div>
 
+    <!-- Zoho Books -->
+    <div id="zoho-books" class="mt-4 bg-white rounded-2xl border border-slate-200 p-5">
+        <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-xl bg-violet-50 flex items-center justify-center text-violet-600 font-bold">📚</div>
+            <div>
+                <p class="text-base font-bold text-slate-900">Zoho Books</p>
+                <p class="text-xs text-slate-500">Invoices raised on the site are pushed to Zoho Books. Card payments recorded here sync to Zoho Books too.</p>
+            </div>
+            {% if zoho_books_status.connected %}
+            <span class="ml-auto px-2 py-1 bg-emerald-50 text-emerald-700 text-[10px] font-semibold rounded-full">Connected</span>
+            {% elif zoho_books_status.configured %}
+            <span class="ml-auto px-2 py-1 bg-amber-50 text-amber-700 text-[10px] font-semibold rounded-full">Configured, org ID missing</span>
+            {% else %}
+            <span class="ml-auto px-2 py-1 bg-slate-100 text-slate-500 text-[10px] font-semibold rounded-full">Not connected</span>
+            {% endif %}
+        </div>
+        <dl class="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2 text-xs">
+            <div class="flex justify-between border-b border-slate-100 py-1"><dt class="text-slate-500">Zoho connected</dt><dd class="font-semibold">{{ 'yes' if zoho_books_status.configured else 'no — connect Zoho on Settings' }}</dd></div>
+            <div class="flex justify-between border-b border-slate-100 py-1"><dt class="text-slate-500">Organization ID</dt><dd class="font-semibold">{{ 'set' if zoho_books_status.org_id else 'not set — add ZOHO_BOOKS_ORG_ID in Railway' }}</dd></div>
+        </dl>
+        {% if not zoho_books_status.connected %}
+        <div class="mt-3 rounded-xl bg-amber-50 border border-amber-200 p-3 text-xs text-amber-800">
+            Invoices raised on <code>/bids/{id}</code> still post to the local ledger, but they won't appear in Zoho Books until Zoho is connected and <code>ZOHO_BOOKS_ORG_ID</code> is set in Railway.
+        </div>
+        {% endif %}
+    </div>
+
     <!-- Sign-in -->
     <div id="security" class="mt-4 bg-white rounded-2xl border border-slate-200 p-5">
         <div class="flex items-center gap-3">

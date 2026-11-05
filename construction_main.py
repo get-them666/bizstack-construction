@@ -90,6 +90,7 @@ import enrichment
 from signalwire_service import SignalWireService
 import vapi_service
 import zoho_sync
+import zoho_books_sync
 import property_service
 import estimating_service
 import auto_reply
@@ -398,6 +399,7 @@ async def lifecycle(app: FastAPI):
                 cur.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS stripe_session_id VARCHAR(255);")
                 cur.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS notes TEXT;")
                 cur.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS draft_reply TEXT;")
+                cur.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS zoho_contact_id VARCHAR(120);")
                 cur.execute("""
                 CREATE TABLE IF NOT EXISTS payments (
                     id SERIAL PRIMARY KEY,
@@ -4424,6 +4426,21 @@ async def bid_invoice_create(bid_id: int, request: Request, amount: str = Form(.
     if issue:
         bid_costing.set_invoice_status(db, inv["id"], "sent", _BID_COMPANY)
         sync = ledger_sync.sync_invoice(db, inv["id"], _BID_COMPANY)
+
+    # Push the invoice to Zoho Books so the site and Zoho Books stay in step.
+    # Idempotent: if a zoho_invoice_id is already stored, nothing is re-created.
+    try:
+        full_inv = None
+        for i in bid_costing.list_invoices(db, bid_id, _BID_COMPANY):
+            if i["id"] == inv["id"]:
+                full_inv = i
+                break
+        if full_inv:
+            bid = bid_opportunities.get_bid(db, bid_id, _BID_COMPANY)
+            zoho_books_sync.push_invoice_to_zoho(db, bid_id, {**full_inv, "bid": bid or {}})
+    except Exception as e:
+        print(f"[zoho_books_sync] invoice push failed for bid {bid_id}: {e}", flush=True)
+
     if back.startswith("/bids/"):
         return RedirectResponse(url=back, status_code=status.HTTP_303_SEE_OTHER)
     return RedirectResponse(url=f"/bids?invoiced={inv['id']}", status_code=status.HTTP_303_SEE_OTHER)
@@ -4548,6 +4565,13 @@ async def bid_invoice_pay(bid_id: int, invoice_id: int, request: Request,
     bid_costing.set_invoice_status(db, invoice_id, new_status, _BID_COMPANY, pay)
     ledger_sync.ensure_schema(db)
     ledger_sync.sync_invoice_status(db, invoice_id, _BID_COMPANY)
+
+    # Record the payment in Zoho Books so Zoho Books shows the same paid status.
+    try:
+        zoho_books_sync.record_payment_in_zoho(db, inv, pay, method)
+    except Exception as e:
+        print(f"[zoho_books_sync] payment push failed for invoice {invoice_id}: {e}", flush=True)
+
     return RedirectResponse(url=f"/bids/{bid_id}", status_code=status.HTTP_303_SEE_OTHER)
 
 
@@ -5793,6 +5817,21 @@ async def payments_record(request: Request, lead_id: str = Form(""), amount: str
     note = f"Recorded {_money(cents)} {method} {kind}"
     if not (res.get("ledger") or {}).get("posted", True):
         note += " (books: " + str((res.get("ledger") or {}).get("reason", "not posted"))[:80] + ")"
+
+    # Sync the payer's contact to Zoho Books so future invoices have a customer.
+    try:
+        if lid:
+            with db.cursor() as cur:
+                cur.execute("SELECT name, email, phone, address FROM leads WHERE id = %s AND company = 'construction';", (lid,))
+                lrow = cur.fetchone()
+            if lrow:
+                zoho_books_sync.sync_customer_to_zoho(db, {
+                    "id": lid, "name": lrow.get("name"), "email": lrow.get("email"),
+                    "phone": lrow.get("phone"), "address": lrow.get("address"),
+                })
+    except Exception as e:
+        print(f"[zoho_books_sync] customer sync failed for lead {lid}: {e}", flush=True)
+
     return RedirectResponse(url=f"/pipeline?saved={urllib.parse.quote(note)}", status_code=status.HTTP_303_SEE_OTHER)
 
 
@@ -6202,6 +6241,16 @@ async def settings_page(request: Request, db=Depends(get_db)):
         direct_deposit.missing(), direct_deposit.enabled(),
         deposit_instructions.details(lambda k: _get_setting(db, k)),
     )
+    # Zoho Books status for the settings card: configured, org id set, connected.
+    try:
+        import zoho_books as _zb
+        zoho_books_status = {
+            "configured": _zb.zoho_client.is_configured(),
+            "org_id": bool(os.getenv("ZOHO_BOOKS_ORG_ID", "").strip()),
+            "connected": _zb.zoho_client.is_configured() and bool(os.getenv("ZOHO_BOOKS_ORG_ID", "").strip()),
+        }
+    except Exception:
+        zoho_books_status = {"configured": False, "org_id": False, "connected": False}
     return templates.TemplateResponse(
         request=request,
         name="settings.html",
@@ -6225,6 +6274,7 @@ async def settings_page(request: Request, db=Depends(get_db)):
             "zoho": zoho_oauth.status(),
             "zoho_scope_string": ",".join(zoho_oauth.SCOPES),
             "zoho_mail_status": _zoho_mail_status(),
+            "zoho_books_status": zoho_books_status,
             "zoho_lists": await asyncio.to_thread(zoho_campaigns.mailing_lists),
             "zoho_list_key": zoho_campaigns.list_key(),
         },

@@ -2,6 +2,7 @@
 Zoho Books integration - Customers, Vendors, Estimates, Invoices, Items
 """
 import os
+from datetime import date
 from typing import Dict, Any, Optional
 try:
     from . import zoho_client
@@ -242,4 +243,75 @@ def find_customer(email: str = "", phone: str = "") -> Optional[Dict]:
                     return c
     except Exception as e:
         print(f"[zoho_books] find_customer error: {e}", flush=True)
+    return None
+
+
+def record_payment(payment_data: Dict[str, Any]) -> Optional[Dict]:
+    """Record a payment against a Zoho Books invoice.
+
+    Expects: invoice_id (Zoho Books invoice id), amount, date, payment_mode,
+    description, reference_number (optional). Returns the Zoho Books response or None.
+    """
+    if not zoho_client.is_configured():
+        return None
+    if not ORG_ID:
+        return None
+
+    headers = get_headers_with_org()
+    if not headers:
+        return None
+
+    invoice_id = payment_data.get("invoice_id")
+    if not invoice_id:
+        print("[zoho_books] record_payment: no invoice_id", flush=True)
+        return None
+
+    zoho_payload = {
+        "invoice_id": invoice_id,
+        "amount": payment_data.get("amount", 0),
+        "date": payment_data.get("date", date.today().isoformat()),
+        "payment_mode": payment_data.get("payment_mode", "check"),
+        "description": payment_data.get("description", "Payment received"),
+        "reference_number": payment_data.get("reference_number", ""),
+    }
+    zoho_payload = {k: v for k, v in zoho_payload.items() if v is not None}
+
+    resp = zoho_client.api_request(
+        "POST", f"{BOOKS_BASE}/invoices/{invoice_id}/payments",
+        json=zoho_payload, headers=headers)
+    if not resp:
+        return None
+    if resp.status_code not in (200, 201):
+        print(f"[zoho_books] record_payment failed: {resp.status_code} {resp.text[:200]}", flush=True)
+        return None
+
+    try:
+        return resp.json()
+    except Exception as e:
+        print(f"[zoho_books] record_payment parse error: {e}", flush=True)
+        return None
+
+
+def get_or_create_customer(customer_data: Dict[str, Any]) -> Optional[str]:
+    """Find a Zoho Books contact by email/phone, or create one.
+
+    Returns the Zoho Books contact_id or None. Customer data keys:
+    name, email, phone, company_name, address, city, state, zip_code.
+    """
+    if not zoho_client.is_configured() or not ORG_ID:
+        return None
+
+    email = customer_data.get("email", "")
+    phone = customer_data.get("phone", "")
+
+    # Try to find existing contact
+    if email or phone:
+        existing = find_customer(email=email, phone=phone)
+        if existing and existing.get("contact_id"):
+            return existing["contact_id"]
+
+    # Create new contact
+    cust = create_customer(customer_data)
+    if cust and cust.get("contact"):
+        return cust["contact"].get("contact_id")
     return None
