@@ -2844,6 +2844,11 @@ async def legal_page(request: Request):
     return templates.TemplateResponse(request=request, name="legal.html", context={})
 
 
+@app.get("/refund-policy", response_class=HTMLResponse)
+async def refund_policy_page(request: Request):
+    return templates.TemplateResponse(request=request, name="refund_policy.html", context={})
+
+
 VISION_QUOTE_MAX_UPLOAD_BYTES = 12 * 1024 * 1024
 VISION_QUOTE_CACHE_MAX = 200
 VISION_QUOTE_WINDOW_SECONDS = 300
