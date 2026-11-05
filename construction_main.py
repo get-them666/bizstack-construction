@@ -2766,6 +2766,11 @@ async def about_page(request: Request):
     return templates.TemplateResponse(request=request, name="about.html", context={})
 
 
+@app.get("/rental-make-ready", response_class=HTMLResponse)
+async def rental_make_ready_page(request: Request):
+    return templates.TemplateResponse(request=request, name="rental_make_ready.html", context={})
+
+
 @app.get("/portfolio", response_class=HTMLResponse)
 async def portfolio_page(request: Request):
     return templates.TemplateResponse(request=request, name="portfolio.html", context={})
