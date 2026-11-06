@@ -955,6 +955,107 @@ correcting before the next run. There is no pay run for 2026-11-09→11-15 yet;
 runs 14 and 15 (through 11-08) are open, with 2026-11-02 and 11-03 hours
 approved but not in any run.
 
+### 2026-11-06: owner inbox with reply drafts, and solicitation attachments on the bid card
+
+**Inbox.** `/inbox` (`mail_inbox.py`) reads the connected Zoho mailbox live —
+one cached list call per minute, bodies fetched when a thread is opened. Threads
+are grouped locally by counterpart address + subject with every `Re:`/`Fwd:`
+stripped, because Zoho's list endpoint returns no thread id and the Threads API
+needs a folder id the grant cannot list. Two customers with the same subject are
+therefore two threads, which is the failure that matters.
+
+A reply is drafted against the whole thread with `con_ai_agent.BusinessAIAgent._complete`
+(Zen/free-model fallback comes along for free) and the construction manual. The
+prompt forbids invented prices, dates, availability and commitments; a holding
+reply is the intended answer to an unknown. **Nothing sends without the owner
+pressing Send.** Sending uses Zoho's `POST /messages/{messageId}` with
+`action=Reply` so it lands in the real conversation; other transports degrade to
+`documents_service.send_email` with a `Re:` subject. A successful send is
+written to `comms_logs` with the lead id when the address matches a lead, so the
+contact policy sees the touch. An identical body to the same address within 45
+seconds is refused — that is the double-click, not a policy.
+
+**Bid attachments.** A solicitation email's useful part is usually the plan set,
+not the body. `inbound_email.ingest_bid_email` records the Zoho coordinates of
+the source message in `bid_source_emails`, keyed to every bid the email
+produced. The bid card's **Pull attachments** button
+(`/api/bids/{id}/documents/from-email`, `bid_attachments.py`) lists the
+attachments on that exact message, downloads them through `photo_store`, and
+files them under `plans`/`sow`/`quote`/`itemized`/`contract`/`other` using
+filename hints. It also scans the email body for **direct document links**
+(pre-signed storage URLs) and fetches those, with an SSRF guard that refuses
+private/loopback hosts and an HTML-login-page check. Keys derive from the Zoho
+attachment id or a hash of the link, so pressing twice does not duplicate. For
+bids that predate the link, it first searches 365 days of mail by sender,
+reference, then name. The card also shows the full solicitation text (scope,
+RFIs, instructions) from `comms_logs`.
+
+**The bid board itself cannot be scraped for plans.** BuildingConnected's public
+API v2 documents only bid packages, invites, projects, users and trade-app
+flags/financials/qualifications — there is no files, drawings or RFIs endpoint.
+Those live behind the owner's signed-in web session at
+`app.buildingconnected.com`. That is why the card keeps a prominent deep link to
+the bid package and why a board URL found in an email is reported as
+"needs your sign-in" instead of being fetched. Getting plan rooms automatically
+from a specific board requires that board's API or an authorized session; do not
+pretend the current pull does it.
+
+`photo_store.ALLOWED_EXT` was widened for these two features: `.csv/.md/.txt`,
+`.doc/.docx/.xls/.xlsx` (the bid picker already offered Word files but the
+allowlist silently rewrote every one to `.jpg`), and `.dwg/.dxf/.ifc/.rvt/.zip`
+for plan sets. Scriptable formats (`.html/.svg/.js`) still fall back to `.jpg`.
+`_content_type` now uses `splitext`, which also fixed `.jpeg` being served as
+`application/octet-stream`.
+
+### 2026-11-06: payroll run 17 said paid, but the NACHA file was invalid
+
+Run 17 (Shaun, 4h = $200, 2026-10-25→11-01) was marked paid on 2026-11-03
+22:19 UTC after being uploaded to PINACLE, and the money never arrived. The
+generated file's **File Header Immediate Destination was zero-padded**
+(`0043000096`) instead of the NACHA-mandated blank plus 9-digit routing
+(` 043000096`); PNC rejects that. `direct_deposit.nacha()` now builds the field
+correctly and `validate_nacha()` checks record lengths, the destination,
+entry hash and totals before the route will serve the file. The download route
+also refuses when any `ACH_*` header id is unset.
+
+Two workflow holes made the failure unrecoverable and invisible:
+
+- Once a run was `paid`, `_payroll_ach_ready` refused to generate the file
+  again, so the exact bytes PNC rejected could not be retrieved. Downloads are
+  now allowed for paid runs (`allow_paid=True`); moving money still requires
+  the explicit "Uploaded to PNC" click.
+- There was no way to undo a false settlement. **↺ Reopen as unpaid** on
+  `/payroll` puts the run back to `closed`, clears `ach_sent_at`,
+  `nacha_downloaded_at` and `nacha_sha256`, unlocks its timesheets to
+  `approved`, and reverses the `payroll_paid` journal entry (run 17's is
+  `JE-2026-000020`, entry id 53). A fresh download is then required before it
+  can be marked sent again.
+
+The app does **not** submit ACH and cannot see PNC returns; PINACLE upload and
+approval are the owner's step. A bank return needs the reopen path. Run 17's
+account holder is misspelled **"Shsun OLeary"** on routing 031101279 /
+account ··4892 — the payroll page now warns on a crew-name/holder mismatch,
+because some banks hold or return a credit for that.
+
+### 2026-11-06: bid card shows its own job, and money lives in one card
+
+The page repeated `Bid #<id>` in every panel (contract package, PNC send), which
+read like another bid's information. The number now appears **once** in the
+header, and `/bids/{id}` is served with `Cache-Control: no-store` so a browser
+or proxy cannot hand back bid A's HTML for bid B. Verified against production:
+`/bids/17492`, `/bids/18041` and `/bids/18046` each render their own id.
+
+The three overlapping money cards (Payment schedule, Deposit & job, Invoices)
+became **one Payments card** with contract/billed/collected/still-to-collect,
+the 30/40/30 rows, custom invoices, and one action per invoice state. A separate
+**Job** card keeps the project/labour links. This removes the duplicate
+"Record payment" and duplicate deposit-request buttons that let the same invoice
+be acted on from two places.
+
+`/letters` was 500ing with `TemplateNotFound: 'construction/letters.html'`
+because the route passed a path that already included the template directory.
+Fixed to `letters.html`.
+
 ## Open threads
 
 - `ATTIC_API_KEY` / `SERVICEKANI_API_KEY` / `REGRID_API_KEY` / `BATCHLEADS_API_KEY`

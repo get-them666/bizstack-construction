@@ -152,6 +152,7 @@ def upsert_pulled(conn, rows: list[dict], company: str = "construction") -> dict
 def _upsert(conn, rows: list[dict], company: str = "construction",
             apply_status: bool = True) -> dict:
     created = updated = 0
+    ids: list = []
     errors: list[dict] = []
     for row in rows:
         if not isinstance(row, dict) or not str(row.get("name", "")).strip():
@@ -255,11 +256,12 @@ def _upsert(conn, rows: list[dict], company: str = "construction",
                 created += 1
             else:
                 updated += 1
+            ids.append(row["id"])
         except Exception as e:
             errors.append({"name": vals.get("name"), "error": str(e)})
     conn.commit()
     return {"created": created, "updated": updated, "errors": errors,
-            "loaded": created + updated}
+            "loaded": created + updated, "ids": ids}
 
 
 def _num_ok(v):
@@ -525,6 +527,26 @@ def ensure_schema(conn) -> None:
         cur.execute("ALTER TABLE bid_documents ADD COLUMN IF NOT EXISTS superseded_at TIMESTAMP WITH TIME ZONE;")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_bid_documents_bid ON bid_documents(bid_id);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_bid_documents_type ON bid_documents(bid_id, document_type);")
+        # The email a solicitation arrived in. Kept so the card can pull the
+        # attached paperwork and drawings later, on demand, without re-parsing
+        # the mailbox or guessing which message "this" bid came from.
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS bid_source_emails (
+                id SERIAL PRIMARY KEY,
+                bid_id INTEGER NOT NULL REFERENCES bid_opportunities(id) ON DELETE CASCADE,
+                company VARCHAR(40) DEFAULT 'construction',
+                account_id VARCHAR(80) DEFAULT '',
+                folder_id VARCHAR(80) DEFAULT '',
+                message_id VARCHAR(120) NOT NULL,
+                sender TEXT,
+                subject TEXT,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cur.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_bid_source_emails_unique "
+            "ON bid_source_emails(bid_id, company, message_id)"
+        )
         # Every saved revision, with the price and line list it contained. The
         # card reads this for "Revision 3 · Nov 3 · $2,980.64"; the fingerprint
         # tells it whether the working card has drifted since the last save.
@@ -737,6 +759,68 @@ def list_documents(conn, bid_id: int, company: str = "construction") -> list[dic
             ORDER BY uploaded_at DESC, id DESC
         """, (bid_id, company))
         return cur.fetchall()
+
+
+def remember_source_email(conn, bid_id: int, company: str, *,
+                          account_id: str = "", folder_id: str = "",
+                          message_id: str, sender: str = "", subject: str = "") -> bool:
+    """Link a bid to the email that solicited it.
+
+    Called after a bid is parsed from an inbound solicitation, so the card can
+    later ask Zoho for that message's attachments. Re-ingesting the same email
+    updates the row instead of stacking duplicates.
+    """
+    message_id = (message_id or "").strip()
+    if not (bid_id and message_id):
+        return False
+    with conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO bid_source_emails
+                (bid_id, company, account_id, folder_id, message_id, sender, subject)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (bid_id, company, message_id) DO UPDATE SET
+                account_id = EXCLUDED.account_id,
+                folder_id = EXCLUDED.folder_id,
+                sender = EXCLUDED.sender,
+                subject = EXCLUDED.subject
+        """, (bid_id, company, str(account_id or ""), str(folder_id or ""),
+              message_id, (sender or "")[:500], (subject or "")[:500]))
+    conn.commit()
+    return True
+
+
+def source_emails(conn, bid_id: int, company: str = "construction") -> list[dict]:
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT id, account_id, folder_id, message_id, sender, subject, created_at
+            FROM bid_source_emails
+            WHERE bid_id = %s AND company = %s
+            ORDER BY created_at DESC, id DESC
+        """, (bid_id, company))
+        return cur.fetchall()
+
+
+def source_email_body(conn, bid_id: int, company: str = "construction") -> str:
+    """The original solicitation text, read back from comms_logs.
+
+    `inbound_email` already stores every polled message verbatim under
+    `external_id = 'zoho|<id>'`, so the card can show the scope, RFI list and
+    instructions without another mailbox call and without a second copy of the
+    body in the bid tables.
+    """
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT cl.message_body
+            FROM bid_source_emails se
+            JOIN comms_logs cl ON cl.external_id = 'zoho|' || se.message_id
+            WHERE se.bid_id = %s AND se.company = %s
+            ORDER BY se.created_at DESC, se.id DESC
+            LIMIT 1
+        """, (bid_id, company))
+        row = cur.fetchone()
+    if not row:
+        return ""
+    return (row.get("message_body") if isinstance(row, dict) else row[0]) or ""
 
 
 def delete_document(conn, doc_id: int, company: str = "construction") -> bool:

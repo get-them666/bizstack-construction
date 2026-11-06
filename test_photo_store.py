@@ -146,10 +146,28 @@ def test_exists(monkeypatch):
 @pytest.mark.parametrize("given,expected_ext", [
     ("roof.jpg", ".jpg"), ("roof.PNG", ".png"), ("roof.jpeg", ".jpeg"),
     ("roof.webp", ".webp"), ("roof.pdf", ".pdf"),
+    ("takeoff.csv", ".csv"), ("notes.md", ".md"), ("spec.txt", ".txt"),
+    ("scope.doc", ".doc"), ("scope.docx", ".docx"),
+    ("prices.xls", ".xls"), ("prices.xlsx", ".xlsx"),
+    ("plans.dwg", ".dwg"), ("plans.dxf", ".dxf"), ("planset.zip", ".zip"),
     ("roof.exe", ".jpg"), ("roof", ".jpg"), ("", ".jpg"),
+    # Scriptable formats must keep falling back, never be stored as themselves.
+    ("evil.html", ".jpg"), ("evil.svg", ".jpg"), ("evil.js", ".jpg"),
 ])
 def test_extensions_are_allowed_listed(given, expected_ext):
     assert ps.safe_key(given).endswith(expected_ext)
+
+
+@pytest.mark.parametrize("given,expected", [
+    ("takeoff.csv", "text/csv"),
+    ("notes.md", "text/markdown"),
+    ("spec.txt", "text/plain"),
+    ("scope.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+    ("roof.jpeg", "image/jpeg"),
+    ("evil.html", "application/octet-stream"),
+])
+def test_content_type_matches_the_extension(given, expected):
+    assert ps._content_type(given) == expected
 
 
 @pytest.mark.parametrize("evil", [

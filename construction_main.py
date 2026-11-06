@@ -4302,7 +4302,7 @@ async def letters_page(request: Request, db=Depends(get_db)):
     pending = [b for b in batches if int(b["delivered_count"] or 0) < int(b["item_count"] or 0)]
     total_delivered = sum(int(b["delivered_count"] or 0) for b in batches)
     return templates.TemplateResponse(
-        request=request, name="construction/letters.html",
+        request=request, name="letters.html",
         context={"batches": batches, "pending_count": len(pending),
                  "total_delivered": total_delivered,
                  "pending_letters": sum(int(b["item_count"] or 0) - int(b["delivered_count"] or 0)
@@ -10320,6 +10320,16 @@ async def bid_detail_page(bid_id: int, request: Request, db=Depends(get_db)):
     except Exception as exc:
         print(f"[bids] documents unavailable for bid {bid_id}: {exc}", flush=True)
 
+    # The email this solicitation arrived in, so the card can offer to pull its
+    # paperwork and drawings. Empty for a hand-entered bid; the card says so.
+    source_emails: list = []
+    source_body = ""
+    try:
+        source_emails = bid_opportunities.source_emails(db, bid_id, _BID_COMPANY)
+        source_body = bid_opportunities.source_email_body(db, bid_id, _BID_COMPANY)
+    except Exception as exc:
+        print(f"[bids] source email unavailable for bid {bid_id}: {exc}", flush=True)
+
     # What the card's cost lines say the bid should be, so a revised quote is
     # visibly out of date until the owner recalculates rather than silently
     # keeping last week's number on the contract and the generated documents.
@@ -10343,7 +10353,7 @@ async def bid_detail_page(bid_id: int, request: Request, db=Depends(get_db)):
     except Exception as exc:
         print(f"[bids] revisions unavailable for bid {bid_id}: {exc}", flush=True)
 
-    return templates.TemplateResponse(
+    response = templates.TemplateResponse(
         request=request, name="bid_detail.html",
         context={
             "b": bid, "costs": costs, "cost_summary": summary,
@@ -10356,6 +10366,12 @@ async def bid_detail_page(bid_id: int, request: Request, db=Depends(get_db)):
             "revisions": revisions, "revision_dirty": revision_dirty,
             "revision_label": bid_costing.revision_label(dict(bid)),
             "docs": docs,
+            "source_emails": source_emails,
+            "source_body": source_body,
+            "pulled": request.query_params.get("pulled", ""),
+            "pull_skipped": request.query_params.get("skipped", ""),
+            "pull_errors": request.query_params.get("pull_errors", ""),
+            "pull_msg": request.query_params.get("pull_msg", ""),
             "quote_total": quote_total, "quote_base": quote_base,
             "markup_pct": markup_pct, "amount_stale": amount_stale,
             "deposit_invoice": deposit_invoice,
@@ -10367,6 +10383,11 @@ async def bid_detail_page(bid_id: int, request: Request, db=Depends(get_db)):
                          "won", "lost", "withdrawn"],
             "cost_categories": ["material", "labor", "sub", "equipment", "other"],
         })
+    # A bid page is per-record money data. no-store is the belt to the database's
+    # braces: a browser or intermediate cache must never hand back bid A's HTML
+    # for bid B, which is exactly how the same bid number appeared on every card.
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    return response
 
 
 @app.get("/api/bids")
@@ -10515,6 +10536,37 @@ async def bid_document_upload(bid_id: int, request: Request, doc: UploadFile = F
         print(f"[bids] job card unavailable for bid {bid_id}: {e}", flush=True)
     back = request.headers.get("referer") or f"/bids/{bid_id}"
     return RedirectResponse(url=back, status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/api/bids/{bid_id}/documents/from-email")
+async def bid_documents_from_email(bid_id: int, request: Request, db=Depends(get_db)):
+    """Pull the paperwork and drawings attached to the solicitation email.
+
+    Explicit button, not a side effect of ingesting the bid: downloads are
+    bounded by the app's upload limit and the owner should choose when a plan
+    set is fetched. Safe to press twice -- attachment ids make the stored keys
+    stable, so nothing duplicates.
+    """
+    require_admin(request)
+    bid_opportunities.ensure_schema(db)
+    if not bid_opportunities.get_bid(db, bid_id, _BID_COMPANY):
+        raise HTTPException(status_code=404, detail="Bid not found")
+    import bid_attachments
+    result = await asyncio.to_thread(bid_attachments.extract, db, bid_id, _BID_COMPANY)
+    from urllib.parse import quote
+    parts = [
+        f"pulled={int(result.get('saved') or 0)}",
+        f"skipped={int(result.get('skipped') or 0)}",
+        f"pull_errors={len(result.get('errors') or [])}",
+    ]
+    if result.get("reason"):
+        parts.append("pull_msg=" + quote(str(result["reason"])[:300]))
+    elif result.get("notes"):
+        parts.append("pull_msg=" + quote("; ".join(result["notes"])[:300]))
+    back = request.headers.get("referer") or f"/bids/{bid_id}"
+    sep = "&" if "?" in back else "?"
+    return RedirectResponse(url=f"{back}{sep}{'&'.join(parts)}",
+                            status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.post("/api/bids/documents/{doc_id}/delete")
@@ -12116,6 +12168,86 @@ async def ws_messages(websocket: WebSocket):
         MSG_CLIENTS.pop(websocket, None)
 
 
+# --- Owner inbox -------------------------------------------------------------
+# One page to read real mail from the connected Zoho mailbox and answer a
+# specific message. mail_inbox does the reading, grouping, drafting and the
+# explicit send; these routes only authenticate, call it, and render.
+#
+# Read every route here as owner-only. The draft prompt is fed a real customer's
+# email, and the send route moves mail, so neither is reachable with a crew
+# session.
+
+@app.get("/inbox", response_class=HTMLResponse)
+async def inbox_page(request: Request):
+    is_authed, user_email = require_auth(request)
+    if not is_authed:
+        return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
+    actor = current_actor(request) or {}
+    if actor.get("role") != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Owner login required")
+    return templates.TemplateResponse(request=request, name="inbox.html", context={
+        "user": {"email": user_email},
+        "company_line": os.getenv("COMPANY_PHONE") or "(757) 908-7121",
+    })
+
+
+@app.get("/api/inbox")
+async def inbox_list(request: Request, days: int = 14, limit: int = 60):
+    require_admin(request)
+    import mail_inbox
+    data = await asyncio.to_thread(mail_inbox.conversations, days, limit)
+    return JSONResponse(content=data)
+
+
+@app.get("/api/inbox/thread")
+async def inbox_thread(request: Request, party: str = "", key: str = "",
+                       days: int = 90, db=Depends(get_db)):
+    require_admin(request)
+    if not party:
+        raise HTTPException(status_code=400, detail="party is required")
+    import mail_inbox
+    data = await asyncio.to_thread(mail_inbox.thread, party, key, days)
+    if data.get("ok"):
+        # Linking back to the lead is the point where inbox and pipeline stop
+        # being two separate views of the same person.
+        try:
+            with db.cursor() as cur:
+                cur.execute(
+                    "SELECT id, name, status FROM leads "
+                    "WHERE LOWER(email) = %s AND company = 'construction' "
+                    "ORDER BY id DESC LIMIT 1;",
+                    (party.strip().lower(),),
+                )
+                data["lead"] = cur.fetchone()
+        except Exception:
+            data["lead"] = None
+    return JSONResponse(content=data)
+
+
+@app.post("/api/inbox/draft")
+async def inbox_draft(request: Request, party: str = Form(...), key: str = Form(""),
+                      instruction: str = Form(""), tone: str = Form("professional")):
+    require_admin(request)
+    import mail_inbox
+    result = await asyncio.to_thread(mail_inbox.draft, party, key, instruction, tone)
+    return JSONResponse(content=result, status_code=200 if result.get("ok") else 502)
+
+
+@app.post("/api/inbox/send")
+async def inbox_send(request: Request, party: str = Form(...), key: str = Form(""),
+                     subject: str = Form(""), body: str = Form(""), db=Depends(get_db)):
+    """Send the reply the owner has actually read and edited.
+
+    There is no "generate and send" path, by design: the draft route writes
+    text into the page, and this route is only reachable by pressing Send.
+    """
+    require_admin(request)
+    import mail_inbox
+    result = await mail_inbox.send_reply(
+        db, party=party, key=key, subject=subject, body=body)
+    return JSONResponse(content=result, status_code=200 if result.get("ok") else 502)
+
+
 # --- Training: safety orientation (OSHA-10 baseline) + trade skills tests -------------
 # Crew portal page and phone-app API. Content lives in training_service.py. Company
 # safety orientation module covers OSHA implementing rules (29 CFR 1926) and site
@@ -12424,6 +12556,33 @@ async def payroll_page(request: Request, period_start: str = "", period_end: str
         with db.cursor() as cur:
             cur.execute("SELECT crew_id, account_last4, account_type FROM crew_bank_accounts;")
             bank_by_crew = {r["crew_id"]: r for r in cur.fetchall()}
+    # The run row carries the file hash/date the page shows, and the reopen
+    # action needs to know a paid run was actually settled.
+    current_run = None
+    if pay_lines:
+        with db.cursor() as cur:
+            cur.execute("SELECT * FROM payroll_runs WHERE id = %s;", (pay_lines[0]["run_id"],))
+            current_run = cur.fetchone()
+    # A bank account whose holder name does not match the crew name can be
+    # returned or held. "Shsun OLeary" is exactly that kind of typo and cost a
+    # real payout cycle; surface it before the file is uploaded, not after.
+    holder_mismatches = []
+    if current_run:
+        import re as _re
+        with db.cursor() as cur:
+            cur.execute("""
+                SELECT c.name AS crew_name, b.account_holder
+                FROM payroll_lines pl
+                JOIN crew c ON c.id = pl.crew_id
+                JOIN crew_bank_accounts b ON b.crew_id = pl.crew_id
+                WHERE pl.run_id = %s AND COALESCE(pl.gross_cents, 0) > 0;
+            """, (current_run["id"],))
+            for row in cur.fetchall():
+                a = _re.sub(r"[^a-z]", "", (row["crew_name"] or "").lower())
+                b = _re.sub(r"[^a-z]", "", (row["account_holder"] or "").lower())
+                if a and b and a != b:
+                    holder_mismatches.append({"crew": row["crew_name"],
+                                              "holder": row["account_holder"]})
     # payroll.html prints the bank badge and the NACHA button from the line
     # itself; without these keys it silently rendered "No Bank Details" and an
     # empty run id.
@@ -12484,6 +12643,7 @@ async def payroll_page(request: Request, period_start: str = "", period_end: str
         "crew_totals": crew_totals, "sheets": sheets, "runs": runs,
         "pay_lines": pay_lines, "open_punches": open_punches,
         "run_id": pay_lines[0]["run_id"] if pay_lines else 0,
+        "run": current_run, "holder_mismatches": holder_mismatches,
         "today": date.today().isoformat(), "work_types": PAY_WORK_TYPES,
         "job_profit": job_profit, "unattached_hours": round(unattached_hours, 2),
         "ok": request.query_params.get("ok", ""),
@@ -12942,13 +13102,18 @@ async def payroll_clock_discard(event_id: int, request: Request,
                          ok="Open clock-in cleared — now add the hours they worked")
 
 
-def _payroll_ach_ready(db, run_id: int):
+def _payroll_ach_ready(db, run_id: int, allow_paid: bool = False):
     """Return a finalized, fully banked run, or refuse before money is posted.
 
     NACHA generation omits unbanked workers by design. The application must not
     then mark the whole run paid: either every positive line can settle through
     PNC, or the owner fixes the named bank records first. This all-or-nothing
     check keeps ACH cash, payroll status and the ledger in agreement.
+
+    `allow_paid` lets a paid run be downloaded again. Downloading moves no money
+    and is exactly what is needed when PNC rejects a file or a credit is
+    returned -- the old code locked the file away at the moment it became
+    important.
     """
     direct_deposit.ensure_schema(db)
     with db.cursor() as cur:
@@ -12956,7 +13121,8 @@ def _payroll_ach_ready(db, run_id: int):
         run = cur.fetchone()
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
-    if run.get("status") != "closed":
+    allowed = {"closed", "paid"} if allow_paid else {"closed"}
+    if run.get("status") not in allowed:
         raise HTTPException(status_code=409, detail="Finalize the open payroll run before creating or confirming ACH.")
     lines = direct_deposit.run_lines(db, run_id)
     skipped = [str(l.get("name") or f"crew {l.get('crew_id')}") for l in lines if not l.get("has_bank")]
@@ -12972,22 +13138,53 @@ def _payroll_ach_ready(db, run_id: int):
 
 @app.get("/api/payroll/run/{run_id}/nacha")
 async def payroll_run_nacha(run_id: int, request: Request, db=Depends(get_db)):
-    """NACHA PPD credit file for this run -- upload to PNC ACH origination to pay crew."""
+    """NACHA PPD credit file for this run -- upload to PNC ACH origination to pay crew.
+
+    Downloadable for a paid run too: when PNC rejects a file or a credit comes
+    back, the owner needs the exact bytes that were sent. Generating the file
+    does not move money.
+    """
     require_admin(request)
-    run, lines = _payroll_ach_ready(db, run_id)
+    run, lines = _payroll_ach_ready(db, run_id, allow_paid=True)
+    missing = direct_deposit.missing()
+    if missing:
+        raise HTTPException(
+            status_code=409,
+            detail="PNC ACH file-header IDs are not set: " + ", ".join(missing)
+                   + ". The file would be rejected; set these on Railway first.",
+        )
     try:
-        text, _ = direct_deposit.nacha(lines, company_name=company().get("short_name") or brand.name())
+        text, summary = direct_deposit.nacha(
+            lines, company_name=company().get("short_name") or brand.name())
     except direct_deposit.NotConfigured as e:
         raise HTTPException(status_code=503, detail=str(e))
+    if summary.get("problems"):
+        # Refuse to hand over a file PNC will bounce. This is what makes the
+        # difference between "marked paid" and "paid".
+        raise HTTPException(
+            status_code=500,
+            detail="The NACHA file failed its own checks: " + "; ".join(summary["problems"]),
+        )
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    with db.cursor() as cur:
+        cur.execute("UPDATE payroll_runs SET nacha_downloaded_at = now(), nacha_sha256 = %s "
+                    "WHERE id = %s;", (digest, run_id))
+        db.commit()
+    logger.info("NACHA run %s generated: %s entries, $%.2f, sha256 %s",
+                run_id, summary.get("entries"), (summary.get("total_cents") or 0) / 100, digest)
     return Response(content=text, media_type="text/plain",
-                    headers={"Content-Disposition": f'attachment; filename="pnc-ach-{run["period_start"]}-to-{run["period_end"]}.ach"'})
+                    headers={
+                        "Content-Disposition": f'attachment; filename="pnc-ach-{run["period_start"]}-to-{run["period_end"]}.ach"',
+                        "X-NACHA-SHA256": digest,
+                        "Cache-Control": "no-store",
+                    })
 
 
 @app.get("/api/payroll/run/{run_id}/ach.csv")
 async def payroll_run_ach_csv(run_id: int, request: Request, db=Depends(get_db)):
     """Same payments as CSV (name, routing, account, amount) for a bank portal that imports CSV."""
     require_admin(request)
-    run, lines = _payroll_ach_ready(db, run_id)
+    run, lines = _payroll_ach_ready(db, run_id, allow_paid=True)
     try:
         text = direct_deposit.ach_csv(lines)
     except direct_deposit.NotConfigured as e:
@@ -13001,6 +13198,12 @@ async def payroll_run_ach_sent(run_id: int, request: Request, db=Depends(get_db)
     """Owner confirms the ACH file was uploaded to PNC: mark the run paid and post it to the books."""
     require_admin(request)
     run, lines = _payroll_ach_ready(db, run_id)
+    if not run.get("nacha_downloaded_at"):
+        raise HTTPException(
+            status_code=409,
+            detail="Download the NACHA file first. Marking a run paid without generating "
+                   "the file is how a payroll can look settled when nothing was sent.",
+        )
     with db.cursor() as cur:
         cur.execute("UPDATE payroll_runs SET status = 'paid', ach_sent_at = now() "
                     "WHERE id = %s AND status = 'closed' RETURNING id;", (run_id,))
@@ -13014,6 +13217,74 @@ async def payroll_run_ach_sent(run_id: int, request: Request, db=Depends(get_db)
     except Exception as e:
         logger.warning("ledger not updated for ACH payroll run %s: %s", run_id, e)
     return RedirectResponse(url="/payroll?ok=payroll+sent+to+PNC", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/api/payroll/run/{run_id}/reopen")
+async def payroll_run_reopen(run_id: int, request: Request, db=Depends(get_db)):
+    """Undo 'Uploaded to PNC' when the money did not land.
+
+    An ACH can be rejected at upload or returned by the receiving bank days
+    later. Without this, the run stayed 'paid' forever, the timesheets stayed
+    locked, and the books carried a payment that never happened. Reopening puts
+    the run back to closed, unlocks the timesheets for the next attempt, and
+    reverses the payroll-paid journal entry so the liability is real again.
+    """
+    require_admin(request)
+    with db.cursor() as cur:
+        cur.execute("SELECT * FROM payroll_runs WHERE id = %s;", (run_id,))
+        run = cur.fetchone()
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    if run.get("status") != "paid":
+        raise HTTPException(status_code=409,
+                            detail="Only a run marked paid can be reopened.")
+
+    with db.cursor() as cur:
+        cur.execute("UPDATE payroll_runs SET status = 'closed', ach_sent_at = NULL, "
+                    "nacha_downloaded_at = NULL, nacha_sha256 = NULL, "
+                    "note = COALESCE(note, '') || %s "
+                    "WHERE id = %s AND status = 'paid' RETURNING id;",
+                    (f"\n[{date.today().isoformat()}] reopened as unpaid: ACH did not land; "
+                     f"ledger reversed and hours unlocked", run_id))
+        if not cur.fetchone():
+            raise HTTPException(status_code=409, detail="This run was already reopened.")
+        cur.execute("UPDATE timesheets SET status = 'approved' "
+                    "WHERE payroll_run_id = %s AND status = 'paid';", (run_id,))
+        db.commit()
+
+    reversed_entry = None
+    try:
+        import ledger
+        with db.cursor() as cur:
+            cur.execute(
+                "SELECT id FROM ledger_entries WHERE company = %s AND source_type = 'payroll_paid' "
+                "AND source_id = %s ORDER BY id DESC LIMIT 1;",
+                (_BID_COMPANY, str(run_id)),
+            )
+            row = cur.fetchone()
+        if row:
+            ledger.reverse_entry(
+                db, row["id"],
+                memo=f"Payroll run {run_id} reopened — ACH did not land")
+            reversed_entry = row["id"]
+    except Exception as exc:
+        # The status change is the important part; the failed reversal is said
+        # out loud rather than hidden. /books shows the missing entry.
+        logger.warning("ledger reversal failed for reopened payroll run %s: %s", run_id, exc)
+        try:
+            with db.cursor() as cur:
+                cur.execute("UPDATE payroll_runs SET note = COALESCE(note,'') || %s WHERE id = %s;",
+                            (f"\nWARNING: ledger reversal failed ({str(exc)[:160]}); reverse it on /books.",
+                             run_id))
+            db.commit()
+        except Exception:
+            pass
+
+    logger.info("payroll run %s reopened as unpaid (reversal entry %s)",
+                run_id, reversed_entry)
+    return RedirectResponse(
+        url="/payroll?ok=run+reopened+as+unpaid+%E2%80%94+fix+the+bank+file+and+re-upload",
+        status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.post("/api/payroll/run/{run_id}/pay/{crew_id}")

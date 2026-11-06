@@ -156,7 +156,12 @@ def _ingest(db, company_key, msgs, mailbox_from):
                 if looks_like_bid_email(sender, m.get("subject") or "", m.get("to") or ""):
                     bid_count += 1
                     bid_result = ingest_bid_email(db, sender, m.get("subject") or "",
-                                                  m.get("text") or "", company_key)
+                                                  m.get("text") or "", company_key,
+                                                  source={
+                                                      "account_id": m.get("account_id") or "",
+                                                      "folder_id": m.get("folder_id") or "",
+                                                      "message_id": m.get("message_id") or "",
+                                                  })
                     bids_created += bid_result.get("created", 0)
             except Exception as _be:
                 bid_errors.append(str(_be)[:200])
@@ -461,8 +466,14 @@ def looks_like_bid_email(sender: str, subject: str, to: str = "") -> bool:
 
 
 def ingest_bid_email(conn, sender: str, subject: str, text: str,
-                     company_key: str = "construction") -> dict:
-    """Parse a solicitation email into bid rows. Never touches leads."""
+                     company_key: str = "construction",
+                     source: dict | None = None) -> dict:
+    """Parse a solicitation email into bid rows. Never touches leads.
+
+    `source` carries the mailbox coordinates of the message (account/folder/
+    message id). It is recorded against every bid the email produced so the card
+    can pull the attached paperwork and drawings later, on demand.
+    """
     import bid_opportunities
     import bid_sources
 
@@ -474,6 +485,18 @@ def ingest_bid_email(conn, sender: str, subject: str, text: str,
         # preserved verbatim in comms_logs by _ingest.
         return {"created": 0, "updated": 0, "note": note or "nothing structured"}
     res = bid_opportunities.upsert_pulled(conn, rows, company_key)
+    source = source or {}
+    if source.get("message_id"):
+        for bid_id in res.get("ids") or []:
+            try:
+                bid_opportunities.remember_source_email(
+                    conn, bid_id, company_key,
+                    account_id=source.get("account_id") or "",
+                    folder_id=source.get("folder_id") or "",
+                    message_id=source.get("message_id") or "",
+                    sender=sender, subject=subject)
+            except Exception as exc:
+                print(f"[bid-email] could not link email to bid {bid_id}: {exc}", flush=True)
     with conn.cursor() as cur:
         cur.execute("UPDATE bid_opportunities SET notes = COALESCE(notes,'') || %s "
                     "WHERE company = %s AND source = 'pull' "

@@ -83,6 +83,68 @@ def test_ach_requires_a_finalized_run(monkeypatch):
     assert "Finalize" in exc.value.detail
 
 
+def test_ach_download_is_allowed_for_a_paid_run(monkeypatch):
+    """A rejected file must be downloadable after the run says paid."""
+    db = _Db(responses=[{"id": 9, "status": "paid"}])
+    monkeypatch.setattr(construction_main.direct_deposit, "ensure_schema", lambda conn: None)
+    monkeypatch.setattr(
+        construction_main.direct_deposit, "run_lines",
+        lambda conn, run_id: [{"name": "A", "has_bank": True, "gross_cents": 100}],
+    )
+    run, lines = construction_main._payroll_ach_ready(db, 9, allow_paid=True)
+    assert run["status"] == "paid" and len(lines) == 1
+
+
+def test_marking_sent_requires_a_downloaded_nacha_file(monkeypatch):
+    """No file generated means nothing could have been uploaded."""
+    db = _Db(responses=[{"id": 10, "status": "closed"}])
+    monkeypatch.setattr(construction_main, "require_admin", lambda request: None)
+    monkeypatch.setattr(construction_main.direct_deposit, "ensure_schema", lambda conn: None)
+    monkeypatch.setattr(
+        construction_main.direct_deposit, "run_lines",
+        lambda conn, run_id: [{"name": "A", "has_bank": True, "gross_cents": 100}],
+    )
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(construction_main.payroll_run_ach_sent(10, object(), db=db))
+    assert exc.value.status_code == 409
+    assert "Download the NACHA file" in exc.value.detail
+
+
+def test_reopen_unlocks_hours_and_reverses_payroll_paid(monkeypatch):
+    import ledger
+
+    reversed_ids = []
+    db = _Db(responses=[
+        {"id": 17, "status": "paid"},      # SELECT the run
+        {"id": 17},                        # UPDATE ... RETURNING id
+        {"id": 555},                       # SELECT the payroll_paid entry
+    ])
+    monkeypatch.setattr(construction_main, "require_admin", lambda request: None)
+    monkeypatch.setattr(ledger, "reverse_entry",
+                        lambda conn, entry_id, memo="", **kw: reversed_ids.append(entry_id))
+
+    response = asyncio.run(construction_main.payroll_run_reopen(17, object(), db=db))
+    assert response.status_code == 303
+    joined = " | ".join(q[0] for q in db.queries)
+    assert "status = 'closed'" in joined and "ach_sent_at = NULL" in joined
+    assert "nacha_downloaded_at = NULL" in joined
+    assert "UPDATE timesheets SET status = 'approved'" in joined
+    assert reversed_ids == [555]
+
+
+def test_reopen_refuses_a_run_that_was_never_paid():
+    db = _Db(responses=[{"id": 18, "status": "closed"}])
+    import construction_main as cm
+    original = cm.require_admin
+    cm.require_admin = lambda request: None
+    try:
+        with pytest.raises(HTTPException) as exc:
+            asyncio.run(cm.payroll_run_reopen(18, object(), db=db))
+    finally:
+        cm.require_admin = original
+    assert exc.value.status_code == 409
+
+
 def test_copilot_finalizes_for_pnc_without_calling_stripe(monkeypatch):
     class _StripeBomb:
         def transfer_to_worker(self, *args, **kwargs):

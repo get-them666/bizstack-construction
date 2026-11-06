@@ -39,7 +39,7 @@ def test_nacha_shape(monkeypatch):
     recs = text.split("\r\n")[:-1]
     assert all(len(r) == 94 for r in recs)
     assert len(recs) % 10 == 0
-    assert recs[0].startswith("101")
+    assert recs[0].startswith("101 043000096")
     assert recs[1].startswith("5220BUILDSTACK")
     assert recs[2].startswith("622" + "02100002" + "1")
     assert recs[3].startswith("632" + "04300009" + "6")
@@ -50,7 +50,38 @@ def test_nacha_shape(monkeypatch):
     assert summary["total_cents"] == 173456
     assert summary["skipped"] == ["No Bank"]
     assert summary["missing_env"] == []
+    assert summary["problems"] == []
     assert summary["effective"] == "2026-11-03"  # next business day after Monday
+
+
+def test_nacha_header_destination_is_blank_plus_routing(monkeypatch):
+    """A zero-padded destination is the bug that got a payroll file rejected."""
+    monkeypatch.setenv("ACH_IMMEDIATE_DEST", "043000096")
+    monkeypatch.setenv("ACH_IMMEDIATE_ORIGIN", "1201755044")
+    monkeypatch.setenv("ACH_COMPANY_ID", "0134297210")
+    monkeypatch.setenv("ACH_ODFI_ROUTING", "04300009")
+    text, summary = dd.nacha(
+        [{"crew_id": 1, "name": "Ann", "gross_cents": 20000, "has_bank": True,
+          "account_holder": "Ann", "routing_number": "021000021",
+          "account_number": "123456789", "account_type": "checking"}],
+        company_name="BuildStack", created=datetime(2026, 11, 3, 9, 30))
+    assert text[:13] == "101 043000096"
+    assert summary["problems"] == [], summary["problems"]
+
+
+def test_validate_nacha_catches_the_old_zero_padded_destination(monkeypatch):
+    monkeypatch.setenv("ACH_IMMEDIATE_DEST", "043000096")
+    monkeypatch.setenv("ACH_IMMEDIATE_ORIGIN", "1201755044")
+    monkeypatch.setenv("ACH_COMPANY_ID", "0134297210")
+    monkeypatch.setenv("ACH_ODFI_ROUTING", "04300009")
+    text, _ = dd.nacha(
+        [{"crew_id": 1, "name": "Ann", "gross_cents": 20000, "has_bank": True,
+          "account_holder": "Ann", "routing_number": "021000021",
+          "account_number": "123456789", "account_type": "checking"}],
+        company_name="BuildStack", created=datetime(2026, 11, 3, 9, 30))
+    broken = "1010043000096" + text[13:]
+    problems = dd.validate_nacha(broken)
+    assert any("blank" in p for p in problems), problems
 
 
 def test_nacha_effective_skips_weekend():

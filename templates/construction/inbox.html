@@ -1,0 +1,402 @@
+{% extends "base.html" %}
+{% set co = company() %}
+{% block title %}Inbox | {{ co.name }} Owner Portal{% endblock %}
+{% block meta %}<meta name="robots" content="noindex, nofollow">{% endblock %}
+
+{% block content %}
+<section class="bg-slate-50 py-6" style="min-height: calc(100vh - 4rem);">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="flex flex-wrap items-end justify-between gap-3 mb-5">
+            <div>
+                <p class="text-sm font-bold text-indigo-600 uppercase tracking-widest">Owner portal</p>
+                <h1 class="text-3xl font-black tracking-tight text-slate-900">Inbox</h1>
+                <p class="mt-1 text-sm text-slate-500">
+                    Your real mailbox, with a reply drafted against the exact email you are answering.
+                    Nothing sends until you press <span class="font-semibold text-slate-700">Send</span>.
+                </p>
+            </div>
+            <div class="flex items-center gap-2">
+                <span id="mailbox-chip" class="hidden text-xs font-semibold text-slate-500 bg-white border border-slate-200 rounded-full px-3 py-1.5"></span>
+                <button id="refresh-btn" type="button"
+                    class="px-4 py-2.5 text-sm font-semibold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 hover:text-indigo-600 rounded-xl transition-colors">
+                    ↻ Refresh
+                </button>
+            </div>
+        </div>
+
+        <div id="inbox-setup" class="hidden mb-5 rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-900">
+            <p class="font-bold">This inbox needs your Zoho Mail connection.</p>
+            <p class="mt-1" id="inbox-setup-reason"></p>
+            <a href="/settings" class="inline-block mt-2 font-bold underline">Open Settings →</a>
+        </div>
+
+        <div class="bg-white rounded-3xl border border-slate-200 shadow-xl shadow-slate-100 overflow-hidden">
+            <div class="flex flex-col lg:flex-row" style="min-height: 66vh;">
+
+                {# ── Conversation list ─────────────────────────────────────── #}
+                <aside class="lg:w-[22rem] lg:shrink-0 border-b lg:border-b-0 lg:border-r border-slate-100 flex flex-col">
+                    <div class="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
+                        <h2 class="text-xs font-black uppercase tracking-widest text-slate-400">Recent mail</h2>
+                        <div class="flex items-center gap-1">
+                            <select id="days-select" class="text-[11px] font-semibold text-slate-600 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1">
+                                <option value="7">7 days</option>
+                                <option value="14" selected>14 days</option>
+                                <option value="30">30 days</option>
+                                <option value="90">90 days</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div id="conv-list" class="flex-1 overflow-y-auto" style="max-height: 66vh;">
+                        <div class="px-4 py-10 text-center text-sm text-slate-400">Loading your mail…</div>
+                    </div>
+                </aside>
+
+                {# ── Reader + composer ────────────────────────────────────── #}
+                <div class="flex-1 flex flex-col min-w-0">
+                    <div id="reader" class="flex-1 overflow-y-auto px-5 sm:px-7 py-5" style="max-height: 66vh;">
+                        <div id="reader-empty" class="h-full flex flex-col items-center justify-center text-center py-16">
+                            <div class="text-4xl mb-3">📬</div>
+                            <p class="text-base font-bold text-slate-700">Pick a message</p>
+                            <p class="mt-1 text-sm text-slate-500 max-w-sm">
+                                Open a conversation on the left. You'll see the thread, and a
+                                <span class="font-semibold">Draft reply</span> button that writes back to
+                                that specific email.
+                            </p>
+                        </div>
+                        <div id="thread" class="hidden">
+                            <div class="flex flex-wrap items-start justify-between gap-3 pb-4 border-b border-slate-100">
+                                <div class="min-w-0">
+                                    <h2 id="thread-party" class="text-lg font-extrabold text-slate-900 truncate"></h2>
+                                    <p id="thread-party-email" class="text-xs text-slate-500 truncate"></p>
+                                    <p id="thread-subject" class="mt-1 text-sm text-slate-600 truncate"></p>
+                                </div>
+                                <a id="thread-lead-link" href="#" class="hidden shrink-0 text-xs font-bold text-indigo-600 bg-indigo-50 hover:bg-indigo-100 border border-indigo-100 rounded-xl px-3 py-2"></a>
+                            </div>
+                            <div id="thread-messages" class="py-4 space-y-4"></div>
+                            <p id="thread-trimmed" class="hidden text-xs text-slate-400 pb-3"></p>
+                        </div>
+                    </div>
+
+                    <div id="composer" class="hidden border-t border-slate-100 bg-slate-50 px-5 sm:px-7 py-4">
+                        <div class="grid sm:grid-cols-[1fr_auto] gap-2 mb-2">
+                            <input id="reply-instruction" type="text"
+                                placeholder="Anything specific to say? e.g. “we can start Tuesday, ask about the deck”"
+                                class="w-full px-3 py-2 rounded-xl border border-slate-200 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400">
+                            <div class="flex items-center gap-2">
+                                <select id="tone-select" class="px-2 py-2 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-slate-600">
+                                    <option value="professional" selected>Professional</option>
+                                    <option value="friendly">Friendly</option>
+                                    <option value="brief">Brief</option>
+                                    <option value="firm">Firm</option>
+                                </select>
+                                <button id="draft-btn" type="button"
+                                    class="shrink-0 px-4 py-2 text-sm font-bold text-indigo-700 bg-indigo-100 hover:bg-indigo-200 border border-indigo-200 rounded-xl transition-colors">
+                                    ✨ Draft reply
+                                </button>
+                            </div>
+                        </div>
+                        <input id="reply-subject" type="text" placeholder="Subject"
+                            class="w-full mb-2 px-3 py-2 rounded-xl border border-slate-200 bg-white text-sm font-semibold text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400">
+                        <textarea id="reply-body" rows="9"
+                            placeholder="Write your reply, or press ✨ Draft reply to have one written against this email…"
+                            class="w-full px-4 py-3 rounded-2xl border border-slate-200 bg-white text-sm leading-relaxed resize-y focus:outline-none focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400"></textarea>
+                        <div class="mt-2 flex flex-wrap items-center justify-between gap-2">
+                            <p id="reply-status" class="text-xs text-slate-500"></p>
+                            <div class="flex items-center gap-2">
+                                <button id="clear-btn" type="button"
+                                    class="px-3 py-2 text-xs font-semibold text-slate-500 hover:text-slate-700">Clear</button>
+                                <button id="send-btn" type="button"
+                                    class="px-5 py-2.5 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 rounded-xl transition-colors">
+                                    Send reply
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <p class="mt-3 text-xs text-slate-500">
+            Replies send from the mailbox above and land in the same conversation. A reply to a customer
+            is recorded against their lead, so the pipeline and the contact policy see it.
+        </p>
+    </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+    'use strict';
+
+    const listEl = document.getElementById('conv-list');
+    const readerEl = document.getElementById('reader');
+    const emptyEl = document.getElementById('reader-empty');
+    const threadEl = document.getElementById('thread');
+    const composerEl = document.getElementById('composer');
+    const mailboxChip = document.getElementById('mailbox-chip');
+    const setupEl = document.getElementById('inbox-setup');
+    const statusEl = document.getElementById('reply-status');
+    const sendBtn = document.getElementById('send-btn');
+    const draftBtn = document.getElementById('draft-btn');
+    const bodyEl = document.getElementById('reply-body');
+    const subjectEl = document.getElementById('reply-subject');
+    const instructionEl = document.getElementById('reply-instruction');
+    const toneEl = document.getElementById('tone-select');
+
+    let current = null;           // {party, key, subject}
+    let conversations = [];
+
+    function esc(s) {
+        return String(s == null ? '' : s).replace(/[<>&"']/g, c => (
+            {'<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#39;'}[c]));
+    }
+    function setStatus(msg, kind) {
+        statusEl.textContent = msg || '';
+        statusEl.className = 'text-xs ' + (kind === 'error' ? 'text-red-600'
+            : kind === 'ok' ? 'text-emerald-600' : 'text-slate-500');
+    }
+    function draftKey() {
+        return 'bz_inbox_draft:' + (current ? current.party + '|' + current.key : '');
+    }
+    function saveDraft() {
+        if (!current) return;
+        try {
+            localStorage.setItem(draftKey(), JSON.stringify({
+                subject: subjectEl.value, body: bodyEl.value,
+            }));
+        } catch (e) { /* private mode */ }
+    }
+    function restoreDraft() {
+        bodyEl.value = '';
+        try {
+            const raw = current && localStorage.getItem(draftKey());
+            if (!raw) return;
+            const saved = JSON.parse(raw);
+            if (saved && typeof saved.body === 'string') bodyEl.value = saved.body;
+            if (saved && saved.subject) subjectEl.value = saved.subject;
+        } catch (e) { /* ignore */ }
+    }
+
+    async function getJSON(url) {
+        const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(json.reason || json.detail || ('Request failed (' + res.status + ')'));
+        return json;
+    }
+    async function postForm(url, data) {
+        const fd = new URLSearchParams();
+        Object.entries(data).forEach(([k, v]) => fd.append(k, v == null ? '' : v));
+        const res = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' },
+            body: fd.toString(),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.ok === false) {
+            throw new Error(json.reason || json.detail || ('Request failed (' + res.status + ')'));
+        }
+        return json;
+    }
+
+    // ── List ────────────────────────────────────────────────────────────
+    async function loadList() {
+        const days = document.getElementById('days-select').value;
+        listEl.innerHTML = '<div class="px-4 py-10 text-center text-sm text-slate-400">Loading your mail…</div>';
+        try {
+            const data = await getJSON('/api/inbox?days=' + encodeURIComponent(days) + '&limit=80');
+            if (!data.ok) {
+                listEl.innerHTML = '<div class="px-4 py-8 text-center text-sm text-slate-400">Mail could not be read.</div>';
+                setupEl.classList.remove('hidden');
+                document.getElementById('inbox-setup-reason').textContent = data.reason || '';
+                return;
+            }
+            setupEl.classList.add('hidden');
+            if (data.mailbox) {
+                mailboxChip.textContent = data.mailbox;
+                mailboxChip.classList.remove('hidden');
+            }
+            conversations = data.items || [];
+            renderList();
+        } catch (err) {
+            listEl.innerHTML = '<div class="px-4 py-8 text-center text-sm text-red-500">' + esc(err.message) + '</div>';
+        }
+    }
+
+    function renderList() {
+        if (!conversations.length) {
+            listEl.innerHTML = '<div class="px-4 py-10 text-center text-sm text-slate-400">No mail in this window.</div>';
+            return;
+        }
+        listEl.innerHTML = conversations.map(c => {
+            const active = current && current.party === c.party && current.key === c.key;
+            const badge = c.needs_reply
+                ? '<span class="ml-2 shrink-0 text-[10px] font-black uppercase tracking-wide text-amber-700 bg-amber-100 rounded-full px-2 py-0.5">Reply</span>'
+                : '<span class="ml-2 shrink-0 text-[10px] font-semibold uppercase tracking-wide text-slate-400 bg-slate-100 rounded-full px-2 py-0.5">Sent</span>';
+            return '<button type="button" data-party="' + esc(c.party) + '" data-key="' + esc(c.key) + '"'
+                + ' data-subject="' + esc(c.subject) + '"'
+                + ' class="w-full text-left px-4 py-3 border-b border-slate-50 hover:bg-indigo-50/60 transition-colors '
+                + (active ? 'bg-indigo-50' : 'bg-white') + '">'
+                + '<div class="flex items-center justify-between gap-2">'
+                +   '<span class="text-sm font-bold text-slate-800 truncate">' + esc(c.party_name || c.party) + '</span>'
+                +   '<span class="shrink-0 text-[10px] font-semibold text-slate-400">' + esc(c.when || '') + '</span>'
+                + '</div>'
+                + '<div class="mt-0.5 text-xs font-semibold text-slate-600 truncate">' + esc(c.subject || '(no subject)') + '</div>'
+                + '<div class="mt-0.5 flex items-center text-xs text-slate-400">'
+                +   '<span class="truncate">' + esc(c.snippet || '') + '</span>' + badge
+                + '</div>'
+                + '</button>';
+        }).join('');
+    }
+
+    listEl.addEventListener('click', function (e) {
+        const btn = e.target.closest('button[data-party]');
+        if (!btn) return;
+        openConversation({
+            party: btn.getAttribute('data-party'),
+            key: btn.getAttribute('data-key'),
+            subject: btn.getAttribute('data-subject'),
+        });
+    });
+
+    // ── Thread ──────────────────────────────────────────────────────────
+    function renderMessage(m) {
+        const out = m.direction === 'out';
+        const who = out ? 'You' : (m.from_name || m.from || 'Them');
+        return '<div class="flex ' + (out ? 'justify-end' : 'justify-start') + '">'
+            + '<div class="max-w-[88%] rounded-2xl px-4 py-3 border '
+            + (out ? 'bg-indigo-50 border-indigo-100' : 'bg-white border-slate-200') + '">'
+            +   '<div class="flex items-center gap-2 mb-1">'
+            +     '<span class="text-[11px] font-black uppercase tracking-wide ' + (out ? 'text-indigo-500' : 'text-slate-500') + '">' + esc(who) + '</span>'
+            +     '<span class="text-[10px] text-slate-400">' + esc(m.date || '') + '</span>'
+            +   '</div>'
+            +   '<div class="text-sm text-slate-700 whitespace-pre-wrap leading-relaxed">' + esc(m.body || '') + '</div>'
+            +   (m.truncated ? '<p class="mt-2 text-[10px] text-slate-400">Message shortened for this view.</p>' : '')
+            + '</div></div>';
+    }
+
+    async function openConversation(conv) {
+        current = { party: conv.party, key: conv.key, subject: conv.subject || '' };
+        renderList();
+        emptyEl.classList.add('hidden');
+        threadEl.classList.remove('hidden');
+        composerEl.classList.remove('hidden');
+        document.getElementById('thread-party').textContent = conv.party;
+        document.getElementById('thread-party-email').textContent = conv.party;
+        document.getElementById('thread-subject').textContent = conv.subject || '';
+        document.getElementById('thread-messages').innerHTML =
+            '<p class="text-sm text-slate-400">Loading the thread…</p>';
+        document.getElementById('thread-trimmed').classList.add('hidden');
+        document.getElementById('thread-lead-link').classList.add('hidden');
+        subjectEl.value = 'Re: ' + (conv.subject || '');
+        bodyEl.value = '';
+        setStatus('');
+        readerEl.scrollTop = 0;
+
+        try {
+            const data = await getJSON('/api/inbox/thread?party=' + encodeURIComponent(conv.party)
+                + '&key=' + encodeURIComponent(conv.key || '') + '&days=90');
+            if (!current || current.party !== conv.party || current.key !== conv.key) return;
+            if (!data.ok) throw new Error(data.reason || 'Thread unavailable.');
+            current.subject = data.subject || conv.subject || '';
+            document.getElementById('thread-party').textContent = data.party_name || conv.party;
+            document.getElementById('thread-party-email').textContent = data.party;
+            document.getElementById('thread-subject').textContent = data.subject || '';
+            subjectEl.value = data.reply_subject || ('Re: ' + (data.subject || ''));
+            document.getElementById('thread-messages').innerHTML =
+                (data.messages || []).map(renderMessage).join('')
+                || '<p class="text-sm text-slate-400">No messages in this window.</p>';
+            if (data.folders_omitted) {
+                const t = document.getElementById('thread-trimmed');
+                t.textContent = data.folders_omitted + ' older message(s) are shown as a preview only.';
+                t.classList.remove('hidden');
+            }
+            if (data.lead) {
+                const link = document.getElementById('thread-lead-link');
+                link.href = '/leads/' + encodeURIComponent(data.lead.id);
+                link.textContent = 'Lead: ' + (data.lead.name || ('#' + data.lead.id))
+                    + (data.lead.status ? ' · ' + data.lead.status : '');
+                link.classList.remove('hidden');
+            }
+            restoreDraft();
+            setStatus('Drafted text is saved on this device until you send it.', 'muted');
+            readerEl.scrollTop = 0;
+        } catch (err) {
+            document.getElementById('thread-messages').innerHTML =
+                '<p class="text-sm text-red-600">' + esc(err.message) + '</p>';
+        }
+    }
+
+    // ── Draft + send ────────────────────────────────────────────────────
+    draftBtn.addEventListener('click', async function () {
+        if (!current) return;
+        draftBtn.disabled = true;
+        const original = draftBtn.textContent;
+        draftBtn.textContent = 'Drafting…';
+        setStatus('Reading the thread and writing a reply…');
+        try {
+            const data = await postForm('/api/inbox/draft', {
+                party: current.party,
+                key: current.key,
+                instruction: instructionEl.value || '',
+                tone: toneEl.value || 'professional',
+            });
+            subjectEl.value = data.subject || subjectEl.value;
+            bodyEl.value = data.body || '';
+            saveDraft();
+            setStatus('Draft ready. Edit anything that is not right, then Send.', 'ok');
+            bodyEl.focus();
+        } catch (err) {
+            setStatus(err.message, 'error');
+        } finally {
+            draftBtn.disabled = false;
+            draftBtn.textContent = original;
+        }
+    });
+
+    sendBtn.addEventListener('click', async function () {
+        if (!current) return;
+        const body = bodyEl.value.trim();
+        if (!body) {
+            setStatus('There is nothing to send yet.', 'error');
+            bodyEl.focus();
+            return;
+        }
+        sendBtn.disabled = true;
+        const original = sendBtn.textContent;
+        sendBtn.textContent = 'Sending…';
+        setStatus('');
+        try {
+            const data = await postForm('/api/inbox/send', {
+                party: current.party,
+                key: current.key,
+                subject: subjectEl.value,
+                body: body,
+            });
+            try { localStorage.removeItem(draftKey()); } catch (e) { /* ignore */ }
+            bodyEl.value = '';
+            setStatus('Sent to ' + (data.to || current.party) + '.', 'ok');
+            await loadList();
+            if (current) await openConversation(current);
+        } catch (err) {
+            setStatus(err.message, 'error');
+        } finally {
+            sendBtn.disabled = false;
+            sendBtn.textContent = original;
+        }
+    });
+
+    document.getElementById('clear-btn').addEventListener('click', function () {
+        bodyEl.value = '';
+        saveDraft();
+        setStatus('Cleared.');
+    });
+    bodyEl.addEventListener('input', saveDraft);
+    subjectEl.addEventListener('input', saveDraft);
+    document.getElementById('refresh-btn').addEventListener('click', loadList);
+    document.getElementById('days-select').addEventListener('change', loadList);
+
+    loadList();
+})();
+</script>
+{% endblock %}

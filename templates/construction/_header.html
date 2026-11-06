@@ -1,7 +1,7 @@
 {% set path = request.path %}
 {% macro act(t) %}{% if path == t or (t != '/' and path.startswith(t ~ '/')) %}nav-active{% endif %}{% endmacro %}
 {% set crew_on = path in ['/crew', '/crew/admin', '/crew/access', '/messages'] or path.startswith('/crew/') %}
-{% set leads_on = path in ['/leads', '/job-leads', '/skiptrace', '/copilot'] or path.startswith('/leads/') or path.startswith('/job-leads/') or path.startswith('/skiptrace/') or path.startswith('/copilot/') %}
+{% set leads_on = path in ['/leads', '/job-leads', '/skiptrace', '/copilot', '/inbox'] or path.startswith('/leads/') or path.startswith('/job-leads/') or path.startswith('/skiptrace/') or path.startswith('/copilot/') or path.startswith('/inbox/') %}
 {% set jobs_on = path in ['/books', '/projects', '/payments', '/payroll', '/backlog', '/materials', '/materials/suppliers'] or path.startswith('/projects/') or path.startswith('/payroll/') or path.startswith('/payments/') or path.startswith('/backlog/') or path.startswith('/materials/') %}
 <header class="dash-nav sticky top-0 z-50 border-b border-white/10 shadow-lg shadow-slate-900/[0.12]">
     <div class="w-full px-4 sm:px-6 lg:px-10 xl:px-14">
@@ -22,6 +22,7 @@
                    the bar (payroll, back-log, supplies, instant quote, owner lookup,
                    appearance) is still reachable from Settings or its parent page. #}
                 <a href="/pipeline" class="nav-link {{ act('/pipeline') }}{{ act('/dashboard') }}">Today</a>
+                <a href="/inbox" class="nav-link {{ act('/inbox') }}">Inbox</a>
                 <div class="nav-dropdown" tabindex="0">
                     <button class="nav-link nav-dropdown-trigger {{ 'nav-active' if leads_on else '' }}">
                         Leads
@@ -106,6 +107,7 @@
         {% if actor_role == 'admin' %}
         <div class="grid gap-0.5">
             <a href="/pipeline" class="mobile-link {{ act('/pipeline') }}">Today</a>
+            <a href="/inbox" class="mobile-link {{ act('/inbox') }}">Inbox</a>
         </div>
         <p class="mobile-section-label">Leads</p>
         <div class="grid gap-0.5">

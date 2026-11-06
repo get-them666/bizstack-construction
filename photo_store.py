@@ -37,7 +37,20 @@ import re
 import time
 
 DEFAULT_LOCAL_DIR = os.getenv("UPLOAD_DIR", "uploads")
-ALLOWED_EXT = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".heic", ".pdf"}
+
+# Images and PDFs are the crew/photo surface. Documents were added for the bid
+# uploader: it already offered .doc/.docx in the file picker, and because they
+# were missing here every Word file was silently rewritten to ".jpg". Kept to
+# inert formats on purpose -- no .html/.svg/.js, which a browser would execute
+# when /media serves them back.
+PHOTO_EXT = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".heic", ".pdf"}
+DOCUMENT_EXT = {
+    ".doc", ".docx", ".xls", ".xlsx", ".csv", ".md", ".txt",
+    # Solicitation packages are routinely a plan set, a CAD drawing, or a zip
+    # of both. They are stored and handed back as downloads, never rendered.
+    ".dwg", ".dxf", ".ifc", ".rvt", ".zip",
+}
+ALLOWED_EXT = PHOTO_EXT | DOCUMENT_EXT
 MAX_BYTES = int(os.getenv("UPLOAD_MAX_BYTES", str(20 * 1024 * 1024)))
 
 _warned_local = False
@@ -191,9 +204,30 @@ def status() -> dict:
 
 
 def _content_type(key: str) -> str:
-    return {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
-            ".webp": "image/webp", ".gif": "image/gif",
-            ".pdf": "application/pdf"}.get(key.lower()[-4:], "application/octet-stream")
+    """Media type for a stored key.
+
+    splitext, not key[-4:]: the old slice returned "jpeg" for ".jpeg" (no dot),
+    so JPEGs were already being served as octet-stream. The document types are
+    here so a CSV or Markdown file downloads as its real type instead of a
+    generic binary.
+    """
+    return {
+        ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+        ".webp": "image/webp", ".gif": "image/gif", ".heic": "image/heic",
+        ".pdf": "application/pdf",
+        ".doc": "application/msword",
+        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ".xls": "application/vnd.ms-excel",
+        ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ".csv": "text/csv",
+        ".md": "text/markdown",
+        ".txt": "text/plain",
+        ".dwg": "application/acad",
+        ".dxf": "application/dxf",
+        ".ifc": "application/octet-stream",
+        ".rvt": "application/octet-stream",
+        ".zip": "application/zip",
+    }.get(os.path.splitext(key.lower())[1], "application/octet-stream")
 
 
 def startup_check() -> dict:

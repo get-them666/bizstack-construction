@@ -65,6 +65,15 @@ def _account(sender: str) -> tuple[str, str]:
     return _account_cache["id"], _account_cache["address"]
 
 
+def account(sender: str = "") -> tuple:
+    """Public (account_id, address) for the connected mailbox.
+
+    `_account` is the resolver; this exists so callers outside this module do
+    not reach into a private name just to learn which account they are reading.
+    """
+    return _account(sender or os.getenv("SMTP_FROM") or "")
+
+
 def send(to: str, subject: str, body_text: str, *, sender: str = "", sender_name: str = "",
          cc: str = "", attachment: Optional[bytes] = None, filename: str = "") -> bool:
     """Deliver one message. Returns True only when Zoho accepted it."""
@@ -100,6 +109,96 @@ def send(to: str, subject: str, body_text: str, *, sender: str = "", sender_name
         print(f"[zoho-mail] send failed: {resp.status_code} {resp.text[:200]}", flush=True)
         return False
     return True
+
+
+def reply(account_id: str, message_id: str, to: str, subject: str, body_text: str,
+          *, sender: str = "", sender_name: str = "") -> bool:
+    """Reply inside the real Zoho conversation.
+
+    The ordinary send endpoint starts a new message with a new Message-ID, which
+    is why a reply sent through it arrives as a separate conversation in the
+    customer's client. Zoho's reply endpoint (POST /messages/{messageId} with
+    action=Reply) keeps the thread headers, so the answer lands under the
+    message the owner was reading.
+    """
+    if not zoho_client or not zoho_client.is_configured():
+        return False
+    if not (account_id and message_id and to):
+        return False
+    from_addr = sender or _account(sender)[1]
+    content = (_html.escape(body_text).replace("\n", "<br>")
+               if "<br>" not in body_text and "<" not in body_text else body_text)
+    payload = {
+        "fromAddress": f"{sender_name} <{from_addr}>" if sender_name else from_addr,
+        "toAddress": to,
+        "subject": subject,
+        "content": content,
+        "mailFormat": "html",
+        "askReceipt": "no",
+        "action": "Reply",
+    }
+    resp = zoho_client.api_request(
+        "POST", f"{MAIL_BASE}/accounts/{account_id}/messages/{message_id}", json=payload)
+    if resp is None:
+        return False
+    if resp.status_code not in (200, 201):
+        print(f"[zoho-mail] reply failed: {resp.status_code} {resp.text[:200]}", flush=True)
+        return False
+    return True
+
+
+def attachments(account_id: str, folder_id: str, message_id: str) -> list:
+    """Attachments on one message, excluding inline images.
+
+    Inline images are signature logos and tracking pixels; a solicitation's
+    plans and paperwork arrive as attachments, so including inline would put
+    noise on the bid card. Shape: [{id, name, size, inline}].
+    """
+    resp = zoho_client.api_request(
+        "GET",
+        f"{MAIL_BASE}/accounts/{account_id}/folders/{folder_id}/messages/{message_id}/attachmentinfo",
+        params={"includeInline": "false"})
+    if resp is None or resp.status_code != 200:
+        raise RuntimeError(f"Zoho attachment list failed: {getattr(resp, 'status_code', '?')} "
+                           f"{getattr(resp, 'text', '')[:160]}")
+    data = resp.json().get("data") or {}
+    out = []
+    for a in data.get("attachments") or []:
+        out.append({
+            "id": str(a.get("attachmentId") or ""),
+            "name": str(a.get("attachmentName") or ""),
+            "size": int(a.get("attachmentSize") or 0),
+            "inline": False,
+        })
+    for a in data.get("inline") or []:
+        out.append({
+            "id": str(a.get("attachmentId") or ""),
+            "name": str(a.get("attachmentName") or ""),
+            "size": int(a.get("attachmentSize") or 0),
+            "inline": True,
+        })
+    return [a for a in out if a["id"] and a["name"]]
+
+
+def attachment_bytes(account_id: str, folder_id: str, message_id: str,
+                     attachment_id: str) -> bytes:
+    """Download one attachment's raw bytes.
+
+    api_request parses JSON, so this uses the session directly: the endpoint
+    answers an octet-stream, and json.loads on a plan set would fail.
+    """
+    if not zoho_client or not zoho_client.is_configured():
+        raise RuntimeError("Zoho is not configured")
+    url = (f"{MAIL_BASE}/accounts/{account_id}/folders/{folder_id}"
+           f"/messages/{message_id}/attachments/{attachment_id}")
+    headers = zoho_client.get_headers()
+    if not headers:
+        raise RuntimeError("No Zoho access token")
+    import requests
+    resp = requests.get(url, headers={**headers, "Accept": "application/octet-stream"}, timeout=60)
+    if resp.status_code != 200:
+        raise RuntimeError(f"Zoho attachment download failed: {resp.status_code} {resp.text[:160]}")
+    return resp.content
 
 
 # --- reading the inbox ------------------------------------------------------------
@@ -231,7 +330,9 @@ def poll_inbox(db, company_key: str = "construction", mailbox_from: str = "",
             print(f"[zoho-mail] content fetch failed for {h['id']}: {exc}", flush=True)
             text = h.get("summary") or ""
         msgs.append({"from": h["from"], "to": h["to"], "subject": h["subject"], "date": h["date"],
-                     "text": text, "external_id": ext})
+                     "text": text, "external_id": ext,
+                     "account_id": h["account_id"], "folder_id": h["folder_id"],
+                     "message_id": h["id"]})
     if not msgs:
         return {"matched": 0, "inserted": 0, "deduped": len(heads), "skipped": 0, "unmatched": 0, "checked": len(heads)}
     result = inbound_email._ingest(db, company_key, msgs, mailbox or "hello@bizstackperks.com")

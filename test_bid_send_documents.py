@@ -92,6 +92,20 @@ def test_the_card_and_settings_expose_the_send_action():
     settings = Path("templates/construction/settings.html").read_text(encoding="utf-8")
     assert "/api/bids/{{ b.id }}/send-documents" in bid
     assert "Send documents to PNC" in bid
-    assert "return confirm('Send Bid #" in bid
+    assert "return confirm('Send this bid" in bid
+    # The bid number belongs in the page header once, not repeated in every
+    # card where it reads like another bid's information.
+    assert bid.count("Bid #") == 1
     assert 'name="pnc_docs_email"' in settings
     assert "Documents email (PNC)" in settings
+
+
+def test_money_lives_in_one_payments_card():
+    """Three overlapping money cards let the same invoice be billed twice."""
+    bid = Path("templates/construction/bid_detail.html").read_text(encoding="utf-8")
+    assert bid.count(">Payments<") == 1
+    assert "Payment schedule" not in bid
+    assert "Deposit &amp; job" not in bid
+    assert ">Invoices<" not in bid
+    assert "Record payment" in bid
+    assert "Raise a custom invoice" in bid

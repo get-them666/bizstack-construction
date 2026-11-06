@@ -55,6 +55,12 @@ def ensure_schema(conn) -> None:
         """)
         cur.execute("ALTER TABLE crew ADD COLUMN IF NOT EXISTS bank_method VARCHAR(10);")
         cur.execute("ALTER TABLE payroll_runs ADD COLUMN IF NOT EXISTS ach_sent_at TIMESTAMPTZ;")
+        # Which file the owner actually downloaded, and when. A rejected upload
+        # or a bank return can only be investigated if we can reproduce the
+        # exact bytes that were sent, and "Mark sent" should not be clickable
+        # before a file exists.
+        cur.execute("ALTER TABLE payroll_runs ADD COLUMN IF NOT EXISTS nacha_downloaded_at TIMESTAMPTZ;")
+        cur.execute("ALTER TABLE payroll_runs ADD COLUMN IF NOT EXISTS nacha_sha256 VARCHAR(64);")
     conn.commit()
 
 
@@ -153,6 +159,63 @@ def _f(s, n, left=True):
     return s.ljust(n) if left else s.rjust(n, "0")
 
 
+def validate_nacha(text: str) -> list[str]:
+    """Structural check of a generated NACHA file. Returns problems, empty is good.
+
+    This is the guard that would have caught the original header bug: the
+    Immediate Destination field is a *blank* followed by the 9-digit routing
+    number, not a zero-padded 10-digit number. PNC rejects the whole file for
+    that, and the owner only finds out days later when nobody was paid.
+    """
+    problems: list[str] = []
+    recs = [r for r in (text or "").replace("\r\n", "\n").split("\n") if r]
+    if not recs:
+        return ["file is empty"]
+    for i, r in enumerate(recs):
+        if len(r) != 94:
+            problems.append(f"record {i + 1} is {len(r)} characters, not 94")
+    if problems:
+        return problems
+    if recs[0][0] != "1":
+        problems.append("first record is not a file header")
+    dest = recs[0][3:13]
+    if not (dest.startswith(" ") and dest[1:].isdigit()):
+        problems.append("immediate destination must be a blank followed by the 9-digit routing number")
+    elif not valid_routing(dest[1:]):
+        problems.append("immediate destination routing number fails the ABA checksum")
+
+    batch_headers = [i for i, r in enumerate(recs) if r[0] == "5"]
+    batch_controls = [i for i, r in enumerate(recs) if r[0] == "8"]
+    if not batch_headers or not batch_controls:
+        problems.append("missing batch header or batch control record")
+        return problems
+
+    entries = [r for r in recs[batch_headers[0] + 1:batch_controls[0]] if r[0] == "6"]
+    n = len(entries)
+    total = sum(int(r[29:39]) for r in entries)
+    entry_hash = sum(int(r[3:11]) for r in entries) % 10_000_000_000
+    ctrl = recs[batch_controls[0]]
+    if int(ctrl[4:10]) != n:
+        problems.append(f"batch control says {int(ctrl[4:10])} entries, file has {n}")
+    if int(ctrl[10:20]) != entry_hash:
+        problems.append("batch control entry hash does not match the entries")
+    if int(ctrl[32:44]) != total:
+        problems.append("batch control total credit does not match the entries")
+
+    file_ctrl = next((r for r in recs if r[0] == "9" and r[1:7].strip().isdigit()), None)
+    if file_ctrl is None:
+        problems.append("missing file control record")
+    else:
+        if int(file_ctrl[13:21]) != n:
+            problems.append(f"file control says {int(file_ctrl[13:21])} entries, file has {n}")
+        if int(file_ctrl[43:55]) != total:
+            problems.append("file control total credit does not match the entries")
+        blocks = int(file_ctrl[7:13])
+        if blocks != len(recs) // 10:
+            problems.append(f"file control says {blocks} blocks, file has {len(recs) // 10}")
+    return problems
+
+
 def nacha(lines: list[dict], *, company_name: str, effective: date | None = None,
           created: datetime | None = None, description: str = "PAYROLL") -> tuple[str, dict]:
     """Build a NACHA PPD credit file. Returns (text, summary)."""
@@ -170,8 +233,12 @@ def nacha(lines: list[dict], *, company_name: str, effective: date | None = None
 
     rec = []
     
-    # 1 Record: File Header Record (Fixed: Explicit right-justification for routing parameters)
-    rec.append("1" + "01" + _f(dest, 10, left=False) + _f(origin, 10, left=False)
+    # 1 Record: File Header Record
+    # Immediate Destination is 10 positions: a blank followed by the 9-digit
+    # routing number. Zero-padding it to 10 digits (the old code did) is not a
+    # valid NACHA destination, and PNC rejects the whole file for it.
+    dest_field = (" " + dest) if len(dest) == 9 else _f(dest, 10)
+    rec.append("1" + "01" + dest_field + _f(origin, 10)
                + created.strftime("%y%m%d") + created.strftime("%H%M") + "A" + "094" + "10" + "1"
                + _f(dest_name, 23) + _f(cname, 23) + _f("", 8))
                
@@ -219,7 +286,7 @@ def nacha(lines: list[dict], *, company_name: str, effective: date | None = None
     assert all(len(r) == 94 for r in rec), [len(r) for r in rec]
     text = "\r\n".join(rec) + "\r\n"
     return text, {"entries": n, "total_cents": total, "skipped": skipped, "effective": effective.isoformat(),
-                  "missing_env": missing()}
+                  "missing_env": missing(), "problems": validate_nacha(text)}
 
 
 def ach_csv(lines: list[dict]) -> str:

@@ -22,6 +22,7 @@
         {% if b.trade %}<span class="px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide bg-indigo-50 text-indigo-700 rounded">{{ b.trade }}</span>{% endif %}
         <span class="px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide bg-slate-100 text-slate-600 rounded">{{ b.role or 'sub' }}</span>
         <span class="px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide bg-slate-800 text-white rounded">{{ b.status }}</span>
+        <span class="px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide bg-indigo-50 text-indigo-700 border border-indigo-100 rounded">Bid #{{ b.id }}</span>
         <span class="px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide rounded {% if b.revision %}bg-amber-100 text-amber-800 border border-amber-200{% else %}bg-slate-100 text-slate-500 border border-slate-200{% endif %}">{{ revision_label }}</span>
         {% if b.reference %}<span class="text-xs font-mono text-slate-400">{{ b.reference }}</span>{% endif %}
         {% if b.source %}<span class="text-xs text-slate-400">via {{ b.source }}</span>{% endif %}
@@ -268,74 +269,109 @@
         </form>
       </section>
 
-      {# ── Payment schedule: 30% deposit / 40% progress / 30% final ───────── #}
-      {# bid_amount comes back from Postgres as Decimal; Decimal * 0.30 raises TypeError #}
       {% set contract = (b.contract_value or b.bid_amount or 0) | float %}
       {% set dep_amt = (contract * 0.30) | round(2) if contract else 0 %}
       {% set prog_amt = (contract * 0.40) | round(2) if contract else 0 %}
       {% set final_amt = (contract - dep_amt - prog_amt) | round(2) if contract else 0 %}
-      <section class="bg-white rounded-2xl border border-slate-200 p-5">
-        <div class="flex items-center justify-between mb-3">
-          <h2 class="text-sm font-bold uppercase tracking-wide text-slate-500">Payment schedule</h2>
+
+      <section class="bg-white rounded-2xl border border-slate-200 p-5" id="payments">
+        <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
+          <h2 class="text-sm font-bold uppercase tracking-wide text-slate-500">Payments</h2>
           <span class="text-[11px] font-bold uppercase tracking-wide bg-slate-100 text-slate-600 rounded px-2 py-0.5">30 / 40 / 30</span>
         </div>
+
         {% if contract <= 0 %}
         <p class="text-sm text-slate-500">Set the bid amount under Pipeline and the payment schedule appears here.</p>
         {% else %}
+
+        {% set billed_total = inv_summary.get('billed', 0) if inv_summary else 0 %}
+        {% set collected_total = inv_summary.get('collected', 0) if inv_summary else 0 %}
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4 text-sm">
+          <div class="rounded-xl bg-slate-50 border border-slate-100 p-3">
+            <div class="text-[10px] font-bold uppercase tracking-wide text-slate-400">Contract</div>
+            <div class="font-black text-slate-900">${{ "{:,.0f}".format(contract) }}</div>
+          </div>
+          <div class="rounded-xl bg-slate-50 border border-slate-100 p-3">
+            <div class="text-[10px] font-bold uppercase tracking-wide text-slate-400">Billed</div>
+            <div class="font-black text-slate-900">${{ "{:,.0f}".format(billed_total) }}</div>
+          </div>
+          <div class="rounded-xl bg-emerald-50 border border-emerald-100 p-3">
+            <div class="text-[10px] font-bold uppercase tracking-wide text-emerald-600">Collected</div>
+            <div class="font-black text-emerald-700">${{ "{:,.0f}".format(collected_total) }}</div>
+          </div>
+          <div class="rounded-xl bg-amber-50 border border-amber-100 p-3">
+            <div class="text-[10px] font-bold uppercase tracking-wide text-amber-600">Still to collect</div>
+            <div class="font-black text-amber-700">${{ "{:,.0f}".format(contract - collected_total) }}</div>
+          </div>
+        </div>
+
         <table class="w-full text-sm">
           <thead><tr class="text-left text-xs uppercase tracking-wide text-slate-400 border-b border-slate-100">
-            <th class="pb-2">Stage</th><th class="pb-2 text-right">Amount</th><th class="pb-2 text-right">Status</th><th></th></tr></thead>
-            <tbody>
-            <tr class="border-b border-slate-50">
-              <td class="py-2 font-semibold text-slate-900">Deposit · 30%</td>
-              <td class="py-2 text-right text-slate-600">${{ "{:,.2f}".format(dep_amt) }}</td>
-              <td class="py-2">
+            <th class="pb-2">Stage</th><th class="pb-2 text-right">Amount</th><th class="pb-2">Invoice</th><th class="pb-2 text-right"></th></tr></thead>
+          <tbody>
+            <tr class="border-b border-slate-50 align-top">
+              <td class="py-2.5 font-semibold text-slate-900">Deposit · 30%</td>
+              <td class="py-2.5 text-right text-slate-600">${{ "{:,.2f}".format(dep_amt) }}</td>
+              <td class="py-2.5">
                 {% if deposit_invoice %}
-                <span class="px-2 py-0.5 text-xs font-bold rounded-full {% if deposit_invoice.status == 'paid' %}bg-emerald-50 text-emerald-700 border border-emerald-200{% elif deposit_invoice.status == 'sent' %}bg-blue-50 text-blue-700 border border-blue-200{% elif deposit_invoice.status == 'partial' %}bg-amber-50 text-amber-700 border border-amber-200{% else %}bg-slate-100 text-slate-600{% endif %}">
-                  {{ deposit_invoice.status|upper }}
-                </span>
+                <span class="px-2 py-0.5 text-xs font-bold rounded-full {% if deposit_invoice.status == 'paid' %}bg-emerald-50 text-emerald-700 border border-emerald-200{% elif deposit_invoice.status == 'sent' %}bg-blue-50 text-blue-700 border border-blue-200{% elif deposit_invoice.status == 'partial' %}bg-amber-50 text-amber-700 border border-amber-200{% else %}bg-slate-100 text-slate-600{% endif %}">{{ deposit_invoice.status|upper }}</span>
+                <span class="block mt-1 text-[11px] text-slate-400">{{ deposit_invoice.invoice_number or 'no number' }}{% if deposit_invoice.due_date %} · due {{ deposit_invoice.due_date }}{% endif %}</span>
                 {% else %}
-                <span class="px-2 py-0.5 text-xs font-bold rounded-full bg-slate-100 text-slate-600">Unbilled</span>
+                <span class="px-2 py-0.5 text-xs font-bold rounded-full bg-slate-100 text-slate-600">UNBILLED</span>
                 {% endif %}
               </td>
-              <td class="py-2 text-right">
-                {% if b.contact_email and deposit_invoice %}
-                <form method="post" action="/api/bids/{{ b.id }}/invoices/{{ deposit_invoice.id }}/pay" class="inline">
-                  <input name="amount" value="{{ deposit_invoice.amount }}" style="display:none">
-                  <button class="text-xs font-bold text-indigo-600 hover:text-indigo-700 px-1.5">✓ Record payment</button>
-                </form>
+              <td class="py-2.5 text-right">
+                {% if deposit_invoice %}
+                  {% if deposit_invoice.status not in ('paid', 'void') %}
+                  <form method="post" action="/api/bids/{{ b.id }}/invoices/{{ deposit_invoice.id }}/pay" class="inline">
+                    <input name="amount" value="{{ deposit_invoice.amount }}" style="display:none">
+                    <button class="text-xs font-bold text-indigo-600 hover:text-indigo-700 px-1.5">✓ Record payment</button>
+                  </form>
+                  {% if b.contact_email %}
+                  <form method="post" action="/api/bids/{{ b.id }}/deposit" class="inline">
+                    <input type="hidden" name="to_email" value="{{ b.contact_email }}">
+                    <button class="text-xs font-semibold text-slate-400 hover:text-indigo-600 px-1.5" title="Email the deposit request again">Email again</button>
+                  </form>
+                  {% endif %}
+                  {% elif deposit_invoice.status == 'paid' %}
+                  <span class="text-[10px] text-emerald-600 font-bold">PAID</span>
+                  {% endif %}
                 {% elif b.contact_email %}
-                <form method="post" action="/api/bids/{{ b.id }}/deposit">
+                <form method="post" action="/api/bids/{{ b.id }}/deposit" class="inline">
                   <input type="hidden" name="to_email" value="{{ b.contact_email }}">
-                  <button class="text-xs font-bold text-indigo-600 hover:text-indigo-700 px-1.5">Request</button>
+                  <button class="text-xs font-bold text-indigo-600 hover:text-indigo-700 px-1.5">Request deposit</button>
                 </form>
                 {% else %}
                 <span class="text-[10px] text-slate-400">add contact email</span>
                 {% endif %}
               </td>
             </tr>
-            <tr class="border-b border-slate-50">
-              <td class="py-2 font-semibold text-slate-900">Progress · 40%</td>
-              <td class="py-2 text-right text-slate-600">${{ "{:,.2f}".format(prog_amt) }}</td>
-              <td class="py-2">
+
+            <tr class="border-b border-slate-50 align-top">
+              <td class="py-2.5 font-semibold text-slate-900">Progress · 40%</td>
+              <td class="py-2.5 text-right text-slate-600">${{ "{:,.2f}".format(prog_amt) }}</td>
+              <td class="py-2.5">
                 {% set prog_inv = None %}
                 {% for inv in invoices %}
                 {% if inv.kind == 'progress' and inv.status != 'void' %}{% set prog_inv = inv %}{% endif %}
                 {% endfor %}
                 {% if prog_inv %}
-                <span class="px-2 py-0.5 text-xs font-bold rounded-full {% if prog_inv.status == 'paid' %}bg-emerald-50 text-emerald-700 border border-emerald-200{% elif prog_inv.status == 'sent' %}bg-blue-50 text-blue-700 border border-blue-200{% elif prog_inv.status == 'partial' %}bg-amber-50 text-amber-700 border border-amber-200{% else %}bg-slate-100 text-slate-600{% endif %}">
-                  {{ prog_inv.status|upper }}
-                </span>
+                <span class="px-2 py-0.5 text-xs font-bold rounded-full {% if prog_inv.status == 'paid' %}bg-emerald-50 text-emerald-700 border border-emerald-200{% elif prog_inv.status == 'sent' %}bg-blue-50 text-blue-700 border border-blue-200{% elif prog_inv.status == 'partial' %}bg-amber-50 text-amber-700 border border-amber-200{% else %}bg-slate-100 text-slate-600{% endif %}">{{ prog_inv.status|upper }}</span>
+                <span class="block mt-1 text-[11px] text-slate-400">{{ prog_inv.invoice_number or 'no number' }}{% if prog_inv.due_date %} · due {{ prog_inv.due_date }}{% endif %}</span>
                 {% else %}
-                <span class="px-2 py-0.5 text-xs font-bold rounded-full bg-slate-100 text-slate-600">Unbilled</span>
+                <span class="px-2 py-0.5 text-xs font-bold rounded-full bg-slate-100 text-slate-600">UNBILLED</span>
                 {% endif %}
               </td>
-              <td class="py-2 text-right">
+              <td class="py-2.5 text-right">
                 {% if prog_inv %}
-                <form method="post" action="/api/bids/{{ b.id }}/invoices/{{ prog_inv.id }}/pay" class="inline">
-                  <input name="amount" value="{{ prog_inv.amount }}" style="display:none">
-                  <button class="text-xs font-bold text-indigo-600 hover:text-indigo-700 px-1.5">✓ Record payment</button>
-                </form>
+                  {% if prog_inv.status not in ('paid', 'void') %}
+                  <form method="post" action="/api/bids/{{ b.id }}/invoices/{{ prog_inv.id }}/pay" class="inline">
+                    <input name="amount" value="{{ prog_inv.amount }}" style="display:none">
+                    <button class="text-xs font-bold text-indigo-600 hover:text-indigo-700 px-1.5">✓ Record payment</button>
+                  </form>
+                  {% elif prog_inv.status == 'paid' %}
+                  <span class="text-[10px] text-emerald-600 font-bold">PAID</span>
+                  {% endif %}
                 {% elif contract %}
                 <form method="post" action="/api/bids/{{ b.id }}/invoices/progress">
                   <button class="text-xs font-bold text-indigo-600 hover:text-indigo-700 px-1.5">Bill 40%</button>
@@ -343,28 +379,32 @@
                 {% endif %}
               </td>
             </tr>
-            <tr class="border-b border-slate-50">
-              <td class="py-2 font-semibold text-slate-900">Final · 30%</td>
-              <td class="py-2 text-right text-slate-600">${{ "{:,.2f}".format(final_amt) }}</td>
-              <td class="py-2">
+
+            <tr class="border-b border-slate-50 align-top">
+              <td class="py-2.5 font-semibold text-slate-900">Final · 30%</td>
+              <td class="py-2.5 text-right text-slate-600">${{ "{:,.2f}".format(final_amt) }}</td>
+              <td class="py-2.5">
                 {% set final_inv = None %}
                 {% for inv in invoices %}
                 {% if inv.kind == 'final' and inv.status != 'void' %}{% set final_inv = inv %}{% endif %}
                 {% endfor %}
                 {% if final_inv %}
-                <span class="px-2 py-0.5 text-xs font-bold rounded-full {% if final_inv.status == 'paid' %}bg-emerald-50 text-emerald-700 border border-emerald-200{% elif final_inv.status == 'sent' %}bg-blue-50 text-blue-700 border border-blue-200{% elif final_inv.status == 'partial' %}bg-amber-50 text-amber-700 border border-amber-200{% else %}bg-slate-100 text-slate-600{% endif %}">
-                  {{ final_inv.status|upper }}
-                </span>
+                <span class="px-2 py-0.5 text-xs font-bold rounded-full {% if final_inv.status == 'paid' %}bg-emerald-50 text-emerald-700 border border-emerald-200{% elif final_inv.status == 'sent' %}bg-blue-50 text-blue-700 border border-blue-200{% elif final_inv.status == 'partial' %}bg-amber-50 text-amber-700 border border-amber-200{% else %}bg-slate-100 text-slate-600{% endif %}">{{ final_inv.status|upper }}</span>
+                <span class="block mt-1 text-[11px] text-slate-400">{{ final_inv.invoice_number or 'no number' }}{% if final_inv.due_date %} · due {{ final_inv.due_date }}{% endif %}</span>
                 {% else %}
-                <span class="px-2 py-0.5 text-xs font-bold rounded-full bg-slate-100 text-slate-600">Unbilled</span>
+                <span class="px-2 py-0.5 text-xs font-bold rounded-full bg-slate-100 text-slate-600">UNBILLED</span>
                 {% endif %}
               </td>
-              <td class="py-2 text-right">
+              <td class="py-2.5 text-right">
                 {% if final_inv %}
-                <form method="post" action="/api/bids/{{ b.id }}/invoices/{{ final_inv.id }}/pay" class="inline">
-                  <input name="amount" value="{{ final_inv.amount }}" style="display:none">
-                  <button class="text-xs font-bold text-indigo-600 hover:text-indigo-700 px-1.5">✓ Record payment</button>
-                </form>
+                  {% if final_inv.status not in ('paid', 'void') %}
+                  <form method="post" action="/api/bids/{{ b.id }}/invoices/{{ final_inv.id }}/pay" class="inline">
+                    <input name="amount" value="{{ final_inv.amount }}" style="display:none">
+                    <button class="text-xs font-bold text-indigo-600 hover:text-indigo-700 px-1.5">✓ Record payment</button>
+                  </form>
+                  {% elif final_inv.status == 'paid' %}
+                  <span class="text-[10px] text-emerald-600 font-bold">PAID</span>
+                  {% endif %}
                 {% elif contract %}
                 <form method="post" action="/api/bids/{{ b.id }}/invoices/final">
                   <button class="text-xs font-bold text-indigo-600 hover:text-indigo-700 px-1.5">Bill 30%</button>
@@ -372,25 +412,72 @@
                 {% endif %}
               </td>
             </tr>
-            <tr class="font-bold bg-slate-50">
-              <td class="py-2">Total contract</td>
-              <td class="py-2 text-right text-slate-900">${{ "{:,.2f}".format(contract) }}</td>
-              <td class="py-2 text-right">
-                {% set collected = 0 %}
-                {% for inv in invoices %}
-                {% if inv.status != 'void' %}{% set collected = collected + (inv.collected or 0) %}{% endif %}
-                {% endfor %}
-                ${{ "{:,.2f}".format(collected) }} collected
-              </td>
-              <td class="py-2 text-right">
-                {% set outstanding = contract - collected %}
-                <span class="text-xs font-bold {% if outstanding <= 0 %}text-emerald-700{% else %}text-slate-600{% endif %}">
-                  ${{ "{:,.2f}".format(outstanding) }} outstanding
-                </span>
-              </td>
-            </tr>
-            </tbody>
+          </tbody>
         </table>
+
+        {% set custom_invoices = [] %}
+        {% for inv in invoices %}
+        {% if (inv.kind or 'invoice') not in ('deposit', 'progress', 'final') %}
+        {% set _ = custom_invoices.append(inv) %}
+        {% endif %}
+        {% endfor %}
+        {% if custom_invoices %}
+        <div class="mt-5 pt-4 border-t border-slate-100">
+          <p class="text-xs font-bold uppercase tracking-wide text-slate-400 mb-2">Other invoices on this bid</p>
+          <ul class="space-y-1 text-sm">
+            {% for inv in custom_invoices %}
+            <li class="flex items-center justify-between gap-2 py-1.5 border-b border-slate-50">
+              <div class="min-w-0">
+                <div class="font-semibold text-slate-800 truncate">{{ inv.description or inv.invoice_number or 'Invoice' }}</div>
+                <div class="text-xs text-slate-400">
+                  {% if inv.status == 'draft' %}<span class="text-amber-600 font-semibold">draft — not sent, not billed</span>{% else %}{{ inv.status }}{% endif %}
+                  {% if inv.due_date %} · due {{ inv.due_date }}{% endif %}
+                </div>
+              </div>
+              <div class="flex items-center gap-2 shrink-0">
+                <div class="font-bold text-slate-800">{{ "${:,.0f}".format(inv.amount or 0) }}</div>
+                {% if inv.status not in ('paid', 'void') %}
+                <form method="post" action="/api/bids/{{ b.id }}/invoices/{{ inv.id }}/pay" class="inline">
+                  <input name="amount" value="{{ inv.amount }}" style="display:none">
+                  <button class="text-xs font-bold text-indigo-600 hover:text-indigo-700 px-1.5">Mark paid</button>
+                </form>
+                {% elif inv.status == 'paid' %}
+                <span class="text-[10px] text-emerald-600 font-bold">PAID</span>
+                {% endif %}
+                {% if inv.status != 'void' %}
+                <form method="post" action="/api/bids/{{ b.id }}/invoices/{{ inv.id }}/status" class="inline"
+                      onsubmit="return confirm('Void {{ inv.invoice_number or 'this invoice' }}? It stops counting toward billed and outstanding, and its ledger entry is reversed.')">
+                  <input type="hidden" name="status" value="void">
+                  <input type="hidden" name="back" value="/bids/{{ b.id }}">
+                  <button class="text-xs font-semibold text-slate-400 hover:text-red-600 px-1.5">Void</button>
+                </form>
+                {% else %}
+                <span class="text-[10px] text-slate-400">VOID</span>
+                {% endif %}
+              </div>
+            </li>
+            {% endfor %}
+          </ul>
+        </div>
+        {% endif %}
+
+        <details class="mt-4 pt-4 border-t border-slate-100">
+          <summary class="text-xs font-bold text-slate-500 cursor-pointer hover:text-indigo-600">+ Raise a custom invoice</summary>
+          <form method="post" action="/api/bids/{{ b.id }}/invoices" class="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-3">
+            <input name="amount" placeholder="amount" inputmode="decimal" class="text-sm border border-slate-200 rounded-lg px-3 py-2">
+            <input name="due_date" placeholder="due YYYY-MM-DD" class="text-sm border border-slate-200 rounded-lg px-3 py-2">
+            <input name="description" placeholder="what it covers" class="text-sm border border-slate-200 rounded-lg px-3 py-2 sm:col-span-2">
+            <input type="hidden" name="back" value="/bids/{{ b.id }}">
+            <button class="text-sm font-semibold px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 sm:col-span-2">Raise custom invoice</button>
+          </form>
+        </details>
+
+        {% if inv_summary and inv_summary.get('draft_count') %}
+        <p class="mt-3 text-xs text-slate-500">
+          {{ inv_summary.get('draft_count') }} draft invoice{{ '' if inv_summary.get('draft_count') == 1 else 's' }}
+          ({{ "${:,.2f}".format(inv_summary.get('draft_total', 0)) }}) not counted above — a draft has not been sent, so nothing is owed on it yet.
+        </p>
+        {% endif %}
         {% endif %}
       </section>
 
@@ -401,7 +488,7 @@
       {% endfor %}
       <section class="bg-white rounded-2xl border border-emerald-200 p-5">
         <h2 class="text-sm font-bold uppercase tracking-wide text-emerald-700 mb-2">Contract package</h2>
-        <p class="text-xs text-slate-500 mb-3">Scope of Work with walkthrough photos, itemized pricing, and the renovation agreement with legal terms. <b>Bid #{{ b.id }} · {{ revision_label }}</b> — uploaded documents (above) take priority; otherwise auto-generated from the cost lines on this card.</p>
+        <p class="text-xs text-slate-500 mb-3">Scope of Work with walkthrough photos, itemized pricing, and the renovation agreement with legal terms. Uploaded documents (above) take priority; otherwise each one is auto-generated from the cost lines on this card.</p>
         <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-4">
           {% set sow_list = upl_by_type.get('sow', []) %}
           {% set quote_list = upl_by_type.get('quote', []) %}
@@ -452,10 +539,10 @@
       {# ── Send the package to PNC / Bill.com ────────────── #}
       <section class="bg-white rounded-2xl border border-emerald-200 p-5">
         <h2 class="text-sm font-bold uppercase tracking-wide text-emerald-700 mb-2">Send to PNC</h2>
-        <p class="text-xs text-slate-500 mb-3">Emails the Scope of Work, itemized pricing and contract for <b>Bid #{{ b.id }} · {{ revision_label }}</b> to your PNC / Bill.com document inbox. Uploaded documents are used where you have them; otherwise the generated PDFs.</p>
+        <p class="text-xs text-slate-500 mb-3">Emails the Scope of Work, itemized pricing and contract for <b>{{ b.name }}</b> to your PNC / Bill.com document inbox. Uploaded documents are used where you have them; otherwise the generated PDFs.</p>
         {% if pnc_docs_email %}
         <form method="post" action="/api/bids/{{ b.id }}/send-documents"
-              onsubmit="return confirm('Send Bid #{{ b.id }} {{ revision_label }} to {{ pnc_docs_email }}?');">
+              onsubmit="return confirm('Send this bid\u2019s document package to {{ pnc_docs_email }}?');">
           <input type="hidden" name="to_email" value="{{ pnc_docs_email }}">
           <button class="w-full text-sm font-semibold px-4 py-2.5 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700">✉️ Send documents to PNC</button>
         </form>
@@ -466,67 +553,30 @@
       </section>
 
 
-      <section class="bg-white rounded-2xl border border-slate-200 p-5">
-        <h2 class="text-sm font-bold uppercase tracking-wide text-slate-500 mb-3">Deposit &amp; job</h2>
-
-        {% if deposit_amount and deposit_amount > 0 %}
-        <div class="flex items-start justify-between gap-3 mb-3">
-          <div>
-            <div class="text-xs text-slate-500">{{ deposit_pct }}% deposit</div>
-            <div class="text-2xl font-bold text-slate-900">{{ "${:,.2f}".format(deposit_amount) }}</div>
-          </div>
-          {% if deposit_invoice %}
-          <span class="text-[11px] font-semibold px-2 py-1 rounded-lg bg-slate-100 text-slate-600 whitespace-nowrap">
-            {{ deposit_invoice.status }} · {{ deposit_invoice.invoice_number or 'no number' }}
-          </span>
-          {% endif %}
+            <section class="bg-white rounded-2xl border border-slate-200 p-5">
+        <h2 class="text-sm font-bold uppercase tracking-wide text-slate-500 mb-3">Job</h2>
+        {% if project %}
+        <div class="text-xs text-slate-500">Project</div>
+        <div class="font-semibold text-slate-800">#{{ project.id }} · {{ project.name }}</div>
+        {% if cost_summary and cost_summary.get('labor') %}
+        <div class="text-xs text-slate-500 mt-1">
+          {{ "%.1f"|format(cost_summary['labor'].get('hours', 0)) }} h logged
+          · {{ cost_summary['labor'].get('timesheets', 0) }} timesheet(s)
         </div>
-
-        {% if deposit_invoice %}
-        <p class="text-xs text-slate-500 mb-3">
-          Asked for {{ deposit_invoice.issued_date or '—' }} · due {{ deposit_invoice.due_date or '—' }}
-        </p>
         {% endif %}
-
-        {% if b.contact_email %}
-        <form method="post" action="/api/bids/{{ b.id }}/deposit">
-          <input type="hidden" name="to_email" value="{{ b.contact_email }}">
-          <button class="w-full text-sm font-semibold px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700">
-            {{ 'Resend deposit request' if deposit_invoice else 'Email deposit request' }}
+        <div class="flex gap-3 mt-3 text-xs">
+          <a href="/projects" class="text-indigo-600 hover:underline">Projects</a>
+          <a href="/payroll" class="text-indigo-600 hover:underline">Payroll</a>
+          <a href="/books" class="text-indigo-600 hover:underline">Books</a>
+        </div>
+        {% else %}
+        <form method="post" action="/api/bids/{{ b.id }}/project">
+          <button class="w-full text-sm font-semibold px-4 py-2 bg-white border border-slate-200 rounded-lg hover:border-indigo-300">
+            Start project
           </button>
         </form>
-        <p class="text-[11px] text-slate-400 mt-2">Goes to {{ b.contact_email }} with the deposit PDF attached and the invoice posted to the books.</p>
-        {% else %}
-        <p class="text-sm text-slate-500">Add a <span class="font-semibold">contact email</span> above to send the deposit request.</p>
+        <p class="text-[11px] text-slate-400 mt-2">Crew hours logged against the project flow into payroll and the ledger, so the job's margin is real rather than estimated.</p>
         {% endif %}
-        {% else %}
-        <p class="text-sm text-slate-500">Set a bid amount under Pipeline and the {{ deposit_pct }}% deposit appears here.</p>
-        {% endif %}
-
-        <div class="mt-4 pt-4 border-t border-slate-100">
-          {% if project %}
-          <div class="text-xs text-slate-500">Job</div>
-          <div class="font-semibold text-slate-800">Project #{{ project.id }} · {{ project.name }}</div>
-          {% if cost_summary and cost_summary.get('labor') %}
-          <div class="text-xs text-slate-500 mt-1">
-            {{ "%.1f"|format(cost_summary['labor'].get('hours', 0)) }} h logged
-            · {{ cost_summary['labor'].get('timesheets', 0) }} timesheet(s)
-          </div>
-          {% endif %}
-          <div class="flex gap-3 mt-2 text-xs">
-            <a href="/projects" class="text-indigo-600 hover:underline">Projects</a>
-            <a href="/payroll" class="text-indigo-600 hover:underline">Payroll</a>
-            <a href="/books" class="text-indigo-600 hover:underline">Books</a>
-          </div>
-          {% else %}
-          <form method="post" action="/api/bids/{{ b.id }}/project">
-            <button class="w-full text-sm font-semibold px-4 py-2 bg-white border border-slate-200 rounded-lg hover:border-indigo-300">
-              Start project
-            </button>
-          </form>
-          <p class="text-[11px] text-slate-400 mt-2">Crew hours logged against the project flow into payroll and the ledger, so the job's margin is real rather than estimated.</p>
-          {% endif %}
-        </div>
       </section>
 
       <section class="bg-white rounded-2xl border border-slate-200 p-5">
@@ -772,13 +822,51 @@
       <section class="bg-white rounded-2xl border border-slate-200 p-5">
         <h2 class="text-sm font-bold uppercase tracking-wide text-slate-500 mb-3">Job documents</h2>
         <p class="text-xs text-slate-500 mb-3">Upload the SOW, quote, itemized pricing, plans, and contract for this job. Uploaded documents are linked here and used in place of the auto-generated templates. A revision becomes the one in use; superseding the old one keeps it listed as history without changing the package.</p>
+
+        {% if pulled != '' %}
+        <div class="mb-4 rounded-xl border {{ 'border-emerald-200 bg-emerald-50 text-emerald-900' if pulled|int > 0 else 'border-amber-200 bg-amber-50 text-amber-900' }} px-4 py-3 text-xs">
+          <span class="font-bold">Pulled {{ pulled }} file{{ '' if pulled|int == 1 else 's' }} from the solicitation email.</span>
+          {% if pull_skipped and pull_skipped != '0' %}<span> {{ pull_skipped }} skipped (already here, too large, or not a document type we store).</span>{% endif %}
+          {% if pull_errors and pull_errors != '0' %}<span> {{ pull_errors }} could not be downloaded.</span>{% endif %}
+          {% if pull_msg %}<span class="block mt-1 opacity-80">{{ pull_msg }}</span>{% endif %}
+        </div>
+        {% endif %}
+
+        <div class="rounded-xl border border-indigo-100 bg-indigo-50/70 p-4 mb-5">
+          <div class="flex flex-wrap items-start justify-between gap-3">
+            <div class="min-w-0">
+              <p class="text-[11px] font-black uppercase tracking-wide text-indigo-800">From the solicitation email</p>
+              {% if source_emails %}
+              <p class="mt-1 text-xs font-semibold text-indigo-900 truncate">{{ source_emails[0].subject or 'Solicitation email' }}</p>
+              <p class="text-[11px] text-indigo-600 truncate">{{ source_emails[0].sender or '' }}</p>
+              <p class="mt-1 text-[11px] text-indigo-700">Pull the plans, scope, bid forms and addenda that came with the email, plus any direct document link inside it. Files behind the board's sign-in stay on the board — use the bid package link at the top. Safe to press more than once.</p>
+              {% else %}
+              <p class="mt-1 text-[11px] text-indigo-700">No solicitation email is linked to this bid yet. Press below to search the mailbox by the sender and reference; if it is found, its plans, scope and bid forms come across. Hand-entered bids have no email source.</p>
+              {% endif %}
+            </div>
+            <form method="post" action="/api/bids/{{ b.id }}/documents/from-email">
+              <button class="shrink-0 text-sm font-bold px-4 py-2.5 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700">{% if source_emails %}⬇ Pull attachments{% else %}🔎 Find email &amp; pull{% endif %}</button>
+            </form>
+          </div>
+        </div>
+
+        {% if source_body %}
+        <details class="mb-5 rounded-xl border border-slate-200 bg-slate-50">
+          <summary class="cursor-pointer px-4 py-3 text-xs font-bold text-slate-700">
+            Read the solicitation email — scope, RFIs and instructions
+          </summary>
+          <div class="px-4 pb-4">
+            <pre class="whitespace-pre-wrap break-words text-xs leading-relaxed text-slate-700 font-sans max-h-96 overflow-y-auto">{{ source_body }}</pre>
+          </div>
+        </details>
+        {% endif %}
         {% set docs_by_type = {} %}
         {% for d in docs %}
         {% set _ = docs_by_type.setdefault(d.document_type or 'other', []).append(d) %}
         {% endfor %}
         {% set doc_types = [('sow', 'Scope of Work'), ('quote', 'Quote'), ('itemized', 'Itemized Pricing'), ('contract', 'Contract'), ('plans', 'Plans & Specs'), ('other', 'Other')] %}
         <form method="post" action="/api/bids/{{ b.id }}/documents" enctype="multipart/form-data" class="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-4 border-t border-slate-100 mb-6">
-          <input type="file" name="doc" accept=".pdf,.doc,.docx,.jpg,.jpeg,.png" class="text-sm text-slate-600 sm:col-span-2">
+          <input type="file" name="doc" accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.md,.txt,.jpg,.jpeg,.png" class="text-sm text-slate-600 sm:col-span-2">
           <select name="doc_type" class="text-sm border border-slate-200 rounded-lg px-3 py-2 bg-white">
             {% for dt, label in doc_types %}
             <option value="{{ dt }}">{{ label }}</option>
@@ -818,70 +906,7 @@
         {% endif %}
       </section>
 
-      <section class="bg-white rounded-2xl border border-slate-200 p-5">
-        <h2 class="text-sm font-bold uppercase tracking-wide text-slate-500 mb-3">Invoices</h2>
-        {% if inv_summary %}
-        <div class="grid grid-cols-3 gap-3 mb-4 text-sm">
-          <div><div class="text-slate-500">Billed</div><div class="font-bold text-slate-800">{{ "${:,.0f}".format(inv_summary.get('billed', 0)) }}</div></div>
-          <div><div class="text-slate-500">Collected</div><div class="font-bold text-emerald-700">{{ "${:,.0f}".format(inv_summary.get('collected', 0)) }}</div></div>
-          <div><div class="text-slate-500">Outstanding</div><div class="font-bold text-slate-600">{{ "${:,.0f}".format(inv_summary.get('outstanding', 0)) }}</div></div>
-        </div>
-        {% if inv_summary.get('draft_count') %}
-        <p class="mb-3 text-xs text-slate-500">
-          {{ inv_summary.get('draft_count') }} draft invoice{{ '' if inv_summary.get('draft_count') == 1 else 's' }}
-          ({{ "${:,.2f}".format(inv_summary.get('draft_total', 0)) }}) not counted above — a draft has not been sent, so nothing is owed on it yet.
-          Void a duplicate to take it off this bid.
-        </p>
-        {% endif %}
-        {% endif %}
-
-        {% if invoices %}
-        <ul class="space-y-2 text-sm mb-4">
-          {% for inv in invoices %}
-          <li class="flex items-center justify-between gap-2 py-1.5 border-b border-slate-50">
-            <div class="min-w-0">
-              <div class="font-semibold text-slate-800 truncate">{{ inv.description or inv.invoice_number or 'Invoice' }}</div>
-              <div class="text-xs text-slate-400">
-                {{ inv.kind|upper }} · {% if inv.status == 'draft' %}<span class="text-amber-600 font-semibold">draft — not sent, not billed</span>{% else %}{{ inv.status }}{% endif %}
-                {% if inv.due_date %} · due {{ inv.due_date }}{% endif %}
-              </div>
-            </div>
-            <div class="flex items-center gap-2 shrink-0">
-              <div class="font-bold text-slate-800 shrink-0">{{ "${:,.0f}".format(inv.amount or 0) }}</div>
-              {% if inv.status not in ('paid', 'void') %}
-              <form method="post" action="/api/bids/{{ b.id }}/invoices/{{ inv.id }}/pay" class="inline">
-                <input name="amount" value="{{ inv.amount }}" style="display:none">
-                <button class="text-xs font-bold text-indigo-600 hover:text-indigo-700 px-1.5">Mark paid</button>
-              </form>
-              {% elif inv.status == 'paid' %}
-              <span class="text-[10px] text-emerald-600 font-bold">Paid</span>
-              {% endif %}
-              {% if inv.status != 'void' %}
-              <form method="post" action="/api/bids/{{ b.id }}/invoices/{{ inv.id }}/status" class="inline"
-                    onsubmit="return confirm('Void {{ inv.invoice_number or 'this invoice' }}? It stops counting toward billed and outstanding, and its ledger entry is reversed.')">
-                <input type="hidden" name="status" value="void">
-                <input type="hidden" name="back" value="/bids/{{ b.id }}">
-                <button class="text-xs font-semibold text-slate-400 hover:text-red-600 px-1.5">Void</button>
-              </form>
-              {% else %}
-              <span class="text-[10px] text-slate-400">Voided</span>
-              {% endif %}
-            </div>
-          </li>
-          {% endfor %}
-        </ul>
-        {% else %}
-        <p class="text-sm text-slate-500 mb-4">Nothing billed yet.</p>
-        {% endif %}
-
-        <form method="post" action="/api/bids/{{ b.id }}/invoices" class="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-4 border-t border-slate-100">
-          <input name="amount" placeholder="amount" inputmode="decimal" class="text-sm border border-slate-200 rounded-lg px-3 py-2">
-          <input name="due_date" placeholder="due YYYY-MM-DD" class="text-sm border border-slate-200 rounded-lg px-3 py-2">
-          <input name="description" placeholder="what it covers" class="text-sm border border-slate-200 rounded-lg px-3 py-2 sm:col-span-2">
-          <input type="hidden" name="back" value="/bids/{{ b.id }}">
-          <button class="text-sm font-semibold px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 sm:col-span-2">Raise custom invoice</button>
-        </form>
-      </section>
+      
     </div>
   </div>
 </div>
