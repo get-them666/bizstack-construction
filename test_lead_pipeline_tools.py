@@ -158,12 +158,12 @@ def test_every_advertised_tool_is_dispatchable():
 
 # --- safety invariants ------------------------------------------------------
 
-def test_copilot_send_email_is_guarded_not_withheld(monkeypatch):
-    """The tool is back, but only behind the guardrail layer.
+def test_copilot_send_email_is_one_per_person_per_day(monkeypatch):
+    """The only limit is the repeat to the same person.
 
-    2026-10-03: the Copilot looped and sent three identical emails to
-    real@norfolk.gov in ~30 seconds. The fix is not to hide the tool again --
-    it is to make the wrapper refuse the conditions that produced that loop.
+    The 2026-10-03 loop was three emails to one address in ~30 seconds. One
+    email per address per day stops exactly that, without blocking ordinary
+    owner-requested mail (including to a .gov RFI contact).
     """
     import construction_main
 
@@ -176,33 +176,23 @@ def test_copilot_send_email_is_guarded_not_withheld(monkeypatch):
     monkeypatch.setattr(construction_main, "build_tool_handlers",
                         lambda db, svc: {"send_email_message": _fake_raw})
     monkeypatch.setattr(
-        construction_main.auto_reply, "blocked_reason",
-        lambda to: ("government domain"
-                    if str(to).lower().endswith((".gov", ".mil")) else ""))
-    monkeypatch.setattr(construction_main.auto_reply, "_recent_send_guard",
-                        lambda db, recipient, channel, days=1: (True, ""))
-    monkeypatch.setattr(construction_main.auto_reply, "_outbound_cap",
-                        lambda channel, default=30: 30)
-    monkeypatch.setattr(construction_main.auto_reply, "_outbound_sent_today",
-                        lambda db, channel: 0)
+        construction_main.auto_reply, "_recent_send_guard",
+        lambda db, recipient, channel, days=1: (True, ""))
 
     handlers_map = construction_main.build_copilot_handlers(_FakeDb(), "owner@example.com")
     send = handlers_map["send_email_message"]
 
-    blocked = send(to="real@norfolk.gov", subject="Records", body="Send owner names")
-    assert blocked["ok"] is False and "blocked" in blocked["error"].lower()
-    assert sent == [], "a .gov recipient must never reach the raw sender"
+    first = send(to="real@norfolk.gov", subject="Plan set", body="Please send the RFI response.")
+    assert first["ok"] is True, "an owner-requested email is not domain-blocked"
+    assert sent and sent[0]["to"] == "real@norfolk.gov"
 
-    ok = send(to="customer@example.com", subject="Quote", body="Tuesday works")
-    assert ok["ok"] is True and sent and sent[0]["to"] == "customer@example.com"
-
-    # Second send to the same address is the exact loop the guard exists for.
     monkeypatch.setattr(
         construction_main.auto_reply, "_recent_send_guard",
         lambda db, recipient, channel, days=1: (False, "already emailed today"))
-    again = send(to="customer@example.com", subject="Quote", body="Tuesday works")
-    assert again["ok"] is False and "suppressed" in again["error"].lower()
-    assert len(sent) == 1, "the cooldown must stop the second send"
+    again = send(to="real@norfolk.gov", subject="Plan set", body="Please send the RFI response.")
+    assert again["ok"] is False
+    assert "one email per address per day" in again["error"].lower()
+    assert len(sent) == 1, "the repeat must never reach the sender"
 
 
 def test_copilot_can_place_an_outbound_call():

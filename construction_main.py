@@ -2550,15 +2550,13 @@ def build_copilot_handlers(db, owner_email: str):
     comms_logs, rather than by having a conversation with the voice agent.
 
     send_email_message and make_outbound_call ARE available to the Copilot
-    again (since 2026-11-05), but the email path is guarded. The raw sender
-    once had no rate limit, no per-recipient dedupe and no recipient
-    allowlist: asked to research property owners, the Copilot looped and sent
-    three identical emails within ~30 seconds to real@norfolk.gov and
-    real.estate@norfolk.gov asking a public office for the personal ownership
-    records of specific homeowners. Those were real sent messages and cannot be
-    recalled. The wrapper below applies the same guardrails as the lead
-    autopilot -- federal-domain block, per-recipient cooldown, daily cap and
-    dedupe -- before the raw handler is reached.
+    again (since 2026-11-05). The email path is guarded by one rule: one email
+    per address per day. That is what stops the 2026-10-03 loop, where the
+    Copilot sent three identical emails within ~30 seconds to
+    real@norfolk.gov and real.estate@norfolk.gov asking a public office for
+    homeowners' personal records. Those were real sent messages and cannot be
+    recalled. The owner's explicit request is the authorisation for the send
+    itself; only the repeat to the same person is refused.
 
     The raw handler in build_tool_handlers is untouched for paths that already
     enforce contact_policy_allows (auto_reply, send-once, the digest mails).
@@ -2567,36 +2565,33 @@ def build_copilot_handlers(db, owner_email: str):
     """
     handlers = build_tool_handlers(db, stripe_svc)
 
-    # Restore send_email_message to the Copilot, but guarded. The raw handler
-    # has no rate limit, no dedupe, and no recipient allowlist -- that is what
-    # looped and sent three identical emails to real@norfolk.gov on 2026-10-03.
-    # The Copilot is owner-only, so the same guardrail layer the lead autopilot
-    # uses applies here: federal-domain block, per-recipient cooldown, daily cap,
-    # and identical-message dedupe. Nothing is sent unless every check passes.
+    # Restore send_email_message to the Copilot. The raw handler once had no
+    # repeat guard at all, which is what looped and sent three identical emails
+    # to real@norfolk.gov on 2026-10-03. The wrapper applies exactly one rule:
+    # one email per address per day, read from comms_logs. The owner's request
+    # is the authorisation for everything else.
     _raw_send_email = handlers.get("send_email_message")
 
     def _copilot_send_email_message(to: str = "", subject: str = "", body: str = "") -> dict:
-        """Owner-only send with the auto-reply guardrail layer applied."""
+        """Owner-only send. The only limit is one email per address per day.
+
+        That single rule is what stops the 2026-10-03 loop (three identical
+        emails to one address in ~30 seconds) without making the Copilot refuse
+        ordinary mail the owner asked for. It reads comms_logs, so a manual
+        send or a deposit email to the same person also counts and cannot be
+        duplicated by the Copilot that day. There is no federal-domain block,
+        no channel-wide cap, and no body-based suppression here -- the owner is
+        the authorisation for those sends.
+        """
         to = (to or "").strip()
         subject = (subject or "").strip()
         body = (body or "").strip()
         if not to or not subject or not body:
             return {"ok": False, "error": "to, subject and body are all required."}
-        # Federal-domain block: never mail a .gov/.mil or other government box.
-        br = auto_reply.blocked_reason(to)
-        if br:
-            return {"ok": False, "error": f"Recipient blocked: {br}."}
-        # Per-recipient cooldown: one email per address per day.
         ok, reason = auto_reply._recent_send_guard(db, to, "email", days=1)
         if not ok:
-            return {"ok": False, "error": f"Suppressed: {reason}."}
-        # Daily cap for the whole channel.
-        cap = auto_reply._outbound_cap("email", default=30)
-        sent_today = auto_reply._outbound_sent_today(db, "email")
-        if cap and sent_today >= cap:
-            return {"ok": False, "error": f"Daily email cap ({cap}) reached for today."}
-        # Dedupe: identical subject+body to the same recipient within the cooldown
-        # window is already blocked by _recent_send_guard above.
+            return {"ok": False,
+                    "error": f"Already emailed {to} today ({reason}). One email per address per day."}
         if not _raw_send_email:
             return {"ok": False, "error": "Email send path unavailable."}
         try:

@@ -1089,14 +1089,15 @@ The `send_email_message` schema and a guarded handler had both been restored on
 outbound email tool. You cannot send email.”** That file is concatenated into
 the Copilot's system prompt, so the model refused a capability it had. The
 prose now names `send_email_message`, says it sends a real email, and explains
-the guard (no .gov/.mil, one per address per day, daily cap, duplicate text
-suppressed) and that a refusal must be reported, never claimed as sent.
+the only limit: **one email per address per day**. There is no federal-domain
+block, channel cap or body-based suppression on the Copilot path — the owner's
+explicit request authorises the send. A refusal (the repeat) must be reported,
+never claimed as sent.
 
 `test_copilot_cannot_send_email` was the other stale copy: it asserted the tool
-was absent and could never pass again. It now tests the guard itself — a .gov
-recipient never reaches the raw sender, the cooldown blocks the second send,
-and a normal recipient goes through. `copilot_ops.build_contact_tools` and the
-`build_copilot_handlers` docstring no longer claim the send is withheld.
+was absent and could never pass again. It now tests the one-per-day rule.
+`copilot_ops.build_contact_tools` and the `build_copilot_handlers` docstring no
+longer claim the send is withheld.
 
 Verified live inside the production container on 2026-11-06: the Copilot handler
 sent a real message through Zoho to hello@bizstackperks.com and returned
