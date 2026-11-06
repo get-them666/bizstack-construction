@@ -2549,30 +2549,21 @@ def build_copilot_handlers(db, owner_email: str):
     reads the 24/7 phone assistant's calls and texts -- straight from
     comms_logs, rather than by having a conversation with the voice agent.
 
-    send_email_message is DELIBERATELY WITHHELD from the Copilot as of
-    2026-10-03. It was the one unrestricted send path in the build: no rate
-    limit, no per-recipient dedupe, no allowlist, and no require-confirmation.
-    Asked to research property owners, the Copilot looped on it and sent three
-    identical emails within ~30 seconds to real@norfolk.gov and
-    real.estate@norfolk.gov asking a public office to hand over the personal
-    ownership records of specific homeowners. Those are real sent messages and
-    cannot be recalled.
+    send_email_message and make_outbound_call ARE available to the Copilot
+    again (since 2026-11-05), but the email path is guarded. The raw sender
+    once had no rate limit, no per-recipient dedupe and no recipient
+    allowlist: asked to research property owners, the Copilot looped and sent
+    three identical emails within ~30 seconds to real@norfolk.gov and
+    real.estate@norfolk.gov asking a public office for the personal ownership
+    records of specific homeowners. Those were real sent messages and cannot be
+    recalled. The wrapper below applies the same guardrails as the lead
+    autopilot -- federal-domain block, per-recipient cooldown, daily cap and
+    dedupe -- before the raw handler is reached.
 
-    The handler still exists in build_tool_handlers and is untouched -- it is
-    used by paths that already enforce contact_policy_allows. Restoring it here
-    is a one-line change, but it should not come back without a cooldown, a
-    dedupe check, and a recipient allowlist. Note that the handler's own
-    docstring never claimed to be safe for arbitrary recipients; the mistake was
-    treating "the owner asked for it" as sufficient authorization to send.
-
-    What the Copilot DOES get is skip_trace_owner and save_contact, which
-    complete the pipeline the owner needs without giving it a way to transmit:
-    address -> owner name (cached), name -> email (its own bounded web_search),
-    then persist the result onto the lead. Contacts used to be reported in chat
-    and evaporate, so there was no lead row and no dedupe. Writing a contact is
-    recoverable -- the owner sees a wrong address on the leads page -- whereas
-    emailing one is not. That asymmetry is why these are here and the send tool
-    is not.
+    The raw handler in build_tool_handlers is untouched for paths that already
+    enforce contact_policy_allows (auto_reply, send-once, the digest mails).
+    The public widget never sees either tool: they live in _full_tools(), not
+    _safe_tools().
     """
     handlers = build_tool_handlers(db, stripe_svc)
 

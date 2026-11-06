@@ -156,11 +156,57 @@ def test_every_advertised_tool_is_dispatchable():
 
 # --- safety invariants ------------------------------------------------------
 
-def test_copilot_cannot_send_email(agent):
-    """The withholding is half-done until the schema goes too."""
-    names = {t["function"]["name"] for t in agent._tools()}
-    assert "send_email_message" not in names
-    assert "make_outbound_call" not in names
+def test_copilot_send_email_is_guarded_not_withheld(monkeypatch):
+    """The tool is back, but only behind the guardrail layer.
+
+    2026-10-03: the Copilot looped and sent three identical emails to
+    real@norfolk.gov in ~30 seconds. The fix is not to hide the tool again --
+    it is to make the wrapper refuse the conditions that produced that loop.
+    """
+    import construction_main
+
+    sent = []
+
+    def _fake_raw(**kw):
+        sent.append(kw)
+        return {"ok": True, "sent_to": kw.get("to")}
+
+    monkeypatch.setattr(construction_main, "build_tool_handlers",
+                        lambda db, svc: {"send_email_message": _fake_raw})
+    monkeypatch.setattr(
+        construction_main.auto_reply, "blocked_reason",
+        lambda to: ("government domain"
+                    if str(to).lower().endswith((".gov", ".mil")) else ""))
+    monkeypatch.setattr(construction_main.auto_reply, "_recent_send_guard",
+                        lambda db, recipient, channel, days=1: (True, ""))
+    monkeypatch.setattr(construction_main.auto_reply, "_outbound_cap",
+                        lambda channel, default=30: 30)
+    monkeypatch.setattr(construction_main.auto_reply, "_outbound_sent_today",
+                        lambda db, channel: 0)
+
+    handlers_map = construction_main.build_copilot_handlers(_FakeDb(), "owner@example.com")
+    send = handlers_map["send_email_message"]
+
+    blocked = send(to="real@norfolk.gov", subject="Records", body="Send owner names")
+    assert blocked["ok"] is False and "blocked" in blocked["error"].lower()
+    assert sent == [], "a .gov recipient must never reach the raw sender"
+
+    ok = send(to="customer@example.com", subject="Quote", body="Tuesday works")
+    assert ok["ok"] is True and sent and sent[0]["to"] == "customer@example.com"
+
+    # Second send to the same address is the exact loop the guard exists for.
+    monkeypatch.setattr(
+        construction_main.auto_reply, "_recent_send_guard",
+        lambda db, recipient, channel, days=1: (False, "already emailed today"))
+    again = send(to="customer@example.com", subject="Quote", body="Tuesday works")
+    assert again["ok"] is False and "suppressed" in again["error"].lower()
+    assert len(sent) == 1, "the cooldown must stop the second send"
+
+
+def test_copilot_can_place_an_outbound_call():
+    """Restored with the email tool; the schema must contain it."""
+    names = {t["function"]["name"] for t in BusinessAIAgent(subset="copilot")._tools()}
+    assert "make_outbound_call" in names
 
 
 def test_contact_lookup_refuses_before_spending(monkeypatch, handlers):
