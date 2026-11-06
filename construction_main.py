@@ -2541,6 +2541,66 @@ f"The mail transport did not accept the message. This usually means the "
     }
 
 
+def _copilot_email_conversation_days() -> int:
+    try:
+        return max(1, int(os.getenv("COPILOT_EMAIL_CONVERSATION_DAYS", "7") or 7))
+    except (TypeError, ValueError):
+        return 7
+
+
+def _copilot_email_min_gap_seconds() -> int:
+    try:
+        return max(0, int(os.getenv("COPILOT_EMAIL_MIN_GAP_SECONDS", "60") or 60))
+    except (TypeError, ValueError):
+        return 60
+
+
+def _copilot_conversation_open(db, address: str) -> bool:
+    """True when this address has emailed us recently, so a reply is expected.
+
+    One initiated email per day is the anti-cold-outreach rule. A person who
+    replied is in a conversation, and the Copilot may answer that conversation
+    as often as it needs; this flag is what distinguishes the two. A failed
+    lookup is False (fail closed): a broken query must never unlock a blast.
+    """
+    try:
+        with db.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM comms_logs WHERE direction = 'inbound' AND channel = 'email' "
+                "AND LOWER(sender) = LOWER(%s) "
+                "AND created_at > now() - make_interval(days => %s) LIMIT 1;",
+                ((address or "").strip(), _copilot_email_conversation_days()),
+            )
+            return cur.fetchone() is not None
+    except Exception as exc:
+        print(f"[copilot-email] conversation check failed for {address}: {exc}", flush=True)
+        return False
+
+
+def _copilot_seconds_since_outbound(db, address: str) -> float:
+    """Seconds since the last outbound email to this address. 0.0 on failure.
+
+    Used only inside an open conversation, as a loop stopper: the 2026-10-03
+    incident was three emails in ~30 seconds. A normal reply is minutes away,
+    so a one-minute floor is invisible in real use and fatal to a tool loop.
+    """
+    try:
+        with db.cursor() as cur:
+            cur.execute(
+                "SELECT EXTRACT(EPOCH FROM (now() - MAX(created_at))) AS s "
+                "FROM comms_logs WHERE direction = 'outbound' AND channel = 'email' "
+                "AND LOWER(recipient) = LOWER(%s);",
+                ((address or "").strip(),),
+            )
+            row = cur.fetchone()
+        if not row:
+            return 0.0
+        value = row.get("s") if isinstance(row, dict) else row[0]
+        return float(value) if value is not None else 0.0
+    except Exception:
+        return 0.0
+
+
 def build_copilot_handlers(db, owner_email: str):
     """Everything `build_tool_handlers` offers, plus the operator-only tier.
 
@@ -2550,13 +2610,14 @@ def build_copilot_handlers(db, owner_email: str):
     comms_logs, rather than by having a conversation with the voice agent.
 
     send_email_message and make_outbound_call ARE available to the Copilot
-    again (since 2026-11-05). The email path is guarded by one rule: one email
-    per address per day. That is what stops the 2026-10-03 loop, where the
-    Copilot sent three identical emails within ~30 seconds to
-    real@norfolk.gov and real.estate@norfolk.gov asking a public office for
-    homeowners' personal records. Those were real sent messages and cannot be
-    recalled. The owner's explicit request is the authorisation for the send
-    itself; only the repeat to the same person is refused.
+    again (since 2026-11-05). The email rules are: one **initiated** email per
+    address per day, and once that person replies the thread is open, so the
+    Copilot may keep answering it (with a short gap to stop a tool loop). That
+    is what the 2026-10-03 incident needed -- three identical emails within
+    ~30 seconds to real@norfolk.gov and real.estate@norfolk.gov asking a public
+    office for homeowners' personal records. Those were real sent messages and
+    cannot be recalled. The owner's explicit request is the authorisation for
+    the send; the daily gate only limits cold repeats.
 
     The raw handler in build_tool_handlers is untouched for paths that already
     enforce contact_policy_allows (auto_reply, send-once, the digest mails).
@@ -2567,21 +2628,19 @@ def build_copilot_handlers(db, owner_email: str):
 
     # Restore send_email_message to the Copilot. The raw handler once had no
     # repeat guard at all, which is what looped and sent three identical emails
-    # to real@norfolk.gov on 2026-10-03. The wrapper applies exactly one rule:
-    # one email per address per day, read from comms_logs. The owner's request
-    # is the authorisation for everything else.
+    # to real@norfolk.gov on 2026-10-03. The wrapper enforces one *initiated*
+    # email per address per day; a reply opens the thread and the Copilot can
+    # answer it, with a one-minute floor between messages to stop a loop.
     _raw_send_email = handlers.get("send_email_message")
 
     def _copilot_send_email_message(to: str = "", subject: str = "", body: str = "") -> dict:
-        """Owner-only send. The only limit is one email per address per day.
+        """Owner-only send. One initiated email per address per day.
 
-        That single rule is what stops the 2026-10-03 loop (three identical
-        emails to one address in ~30 seconds) without making the Copilot refuse
-        ordinary mail the owner asked for. It reads comms_logs, so a manual
-        send or a deposit email to the same person also counts and cannot be
-        duplicated by the Copilot that day. There is no federal-domain block,
-        no channel-wide cap, and no body-based suppression here -- the owner is
-        the authorisation for those sends.
+        A reply reopens the thread: once that person has emailed us recently,
+        the Copilot may answer the conversation as often as it needs. A short
+        minimum gap between messages in an open thread is the only other limit;
+        it exists to stop a tool loop (2026-10-03 was three emails in ~30
+        seconds), not to ration ordinary replies.
         """
         to = (to or "").strip()
         subject = (subject or "").strip()
@@ -2590,8 +2649,16 @@ def build_copilot_handlers(db, owner_email: str):
             return {"ok": False, "error": "to, subject and body are all required."}
         ok, reason = auto_reply._recent_send_guard(db, to, "email", days=1)
         if not ok:
-            return {"ok": False,
-                    "error": f"Already emailed {to} today ({reason}). One email per address per day."}
+            if not _copilot_conversation_open(db, to):
+                return {"ok": False,
+                        "error": (f"Already emailed {to} today ({reason}). One initiated email "
+                                  f"per person per day until they reply.")}
+            gap = _copilot_seconds_since_outbound(db, to)
+            floor = _copilot_email_min_gap_seconds()
+            if gap < floor:
+                return {"ok": False,
+                        "error": (f"Just emailed {to} {int(gap)}s ago. Wait "
+                                  f"{max(1, int(floor - gap))}s before sending again in this thread.")}
         if not _raw_send_email:
             return {"ok": False, "error": "Email send path unavailable."}
         try:

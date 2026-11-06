@@ -662,10 +662,11 @@ OPERATING MANUAL:
                     "description": (
                         "Send a real email from the business address to any address. "
                         "Use when the owner asks you to email someone, send a quote or "
-                        "document, or follow up. One email per person per day: a second "
-                        "email to the same address within 24 hours is refused. Returns "
-                        "ok=false with the reason when refused -- never report an email "
-                        "as sent unless ok=true."
+                        "document, or follow up. One initiated email per person per day; "
+                        "once they reply, the thread is open and you may continue it "
+                        "(about a minute between messages). Returns ok=false with the "
+                        "reason when refused -- never report an email as sent unless "
+                        "ok=true."
                     ),
                     "parameters": self._props(
                         {"to": "string", "subject": "string", "body": "string"},

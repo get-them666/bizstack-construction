@@ -158,12 +158,11 @@ def test_every_advertised_tool_is_dispatchable():
 
 # --- safety invariants ------------------------------------------------------
 
-def test_copilot_send_email_is_one_per_person_per_day(monkeypatch):
-    """The only limit is the repeat to the same person.
+def test_copilot_email_is_one_initiated_per_day_but_replies_reopen_the_thread(monkeypatch):
+    """One cold email per day; once they answer, the conversation can continue.
 
-    The 2026-10-03 loop was three emails to one address in ~30 seconds. One
-    email per address per day stops exactly that, without blocking ordinary
-    owner-requested mail (including to a .gov RFI contact).
+    The 2026-10-03 loop was three emails to one address in ~30 seconds with no
+    reply. The gate is on *initiated* mail, not on answering someone.
     """
     import construction_main
 
@@ -178,21 +177,43 @@ def test_copilot_send_email_is_one_per_person_per_day(monkeypatch):
     monkeypatch.setattr(
         construction_main.auto_reply, "_recent_send_guard",
         lambda db, recipient, channel, days=1: (True, ""))
+    monkeypatch.setattr(construction_main, "_copilot_email_min_gap_seconds", lambda: 60)
 
     handlers_map = construction_main.build_copilot_handlers(_FakeDb(), "owner@example.com")
     send = handlers_map["send_email_message"]
 
-    first = send(to="real@norfolk.gov", subject="Plan set", body="Please send the RFI response.")
-    assert first["ok"] is True, "an owner-requested email is not domain-blocked"
-    assert sent and sent[0]["to"] == "real@norfolk.gov"
+    # First email of the day: allowed.
+    first = send(to="gc@example.com", subject="Plan set", body="Please send the RFI response.")
+    assert first["ok"] is True
+    assert len(sent) == 1
 
+    # Second email the same day, no reply: refused.
     monkeypatch.setattr(
         construction_main.auto_reply, "_recent_send_guard",
         lambda db, recipient, channel, days=1: (False, "already emailed today"))
-    again = send(to="real@norfolk.gov", subject="Plan set", body="Please send the RFI response.")
-    assert again["ok"] is False
-    assert "one email per address per day" in again["error"].lower()
-    assert len(sent) == 1, "the repeat must never reach the sender"
+    monkeypatch.setattr(construction_main, "_copilot_conversation_open",
+                        lambda db, address: False)
+    denied = send(to="gc@example.com", subject="Follow-up", body="Any update?")
+    assert denied["ok"] is False
+    assert "until they reply" in denied["error"].lower()
+    assert len(sent) == 1
+
+    # They replied: the thread is open, so another email is allowed.
+    monkeypatch.setattr(construction_main, "_copilot_conversation_open",
+                        lambda db, address: True)
+    monkeypatch.setattr(construction_main, "_copilot_seconds_since_outbound",
+                        lambda db, address: 120.0)
+    reply = send(to="gc@example.com", subject="Re: Plan set", body="Tuesday works.")
+    assert reply["ok"] is True
+    assert len(sent) == 2
+
+    # Open thread, but the loop floor still applies.
+    monkeypatch.setattr(construction_main, "_copilot_seconds_since_outbound",
+                        lambda db, address: 10.0)
+    too_soon = send(to="gc@example.com", subject="Re: Plan set", body="One more thing.")
+    assert too_soon["ok"] is False
+    assert "wait" in too_soon["error"].lower()
+    assert len(sent) == 2
 
 
 def test_copilot_can_place_an_outbound_call():

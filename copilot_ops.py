@@ -567,8 +567,9 @@ def build_contact_tools(db, owner_email: str):
     """Owner-scoped contact tools. These WRITE to leads but do not transmit.
 
     The Copilot's email send does not live here: build_copilot_handlers
-    restores `send_email_message` and enforces one email per address per day.
-    A tool that records a contact is still the safer half -- a wrong address
+    restores `send_email_message` and enforces one *initiated* email per address
+    per day; once the person replies, the thread is open and can continue. A
+    tool that records a contact is still the safer half -- a wrong address
     written to a lead is visible on the leads page, whereas a wrong address
     emailed is not recoverable -- but the send path exists and is available to
     the owner on request.
