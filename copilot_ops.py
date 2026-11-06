@@ -564,15 +564,16 @@ def _contact_cache_schema(cur) -> None:
 
 
 def build_contact_tools(db, owner_email: str):
-    """Owner-scoped. These WRITE to leads but CANNOT send anything.
+    """Owner-scoped contact tools. These WRITE to leads but do not transmit.
 
-    send_email_message stays withheld from the Copilot. A tool that records a
-    contact is far less dangerous than one that transmits: a wrong address
-    written to a lead is a bug the owner sees on the leads page, whereas a wrong
-    address emailed is unsendable. That asymmetry is the whole reason these are
-    here and the send tool is not.
+    The Copilot's email send does not live here: build_copilot_handlers
+    restores `send_email_message` and wraps it with the auto-reply guardrails
+    (federal-domain block, per-recipient cooldown, daily cap, dedupe). A tool
+    that records a contact is still the safer half -- a wrong address written to
+    a lead is visible on the leads page, whereas a wrong address emailed is not
+    recoverable -- but the send path exists and is guarded.
 
-    draft_lead_email sits on that same line: it writes leads.draft_reply and
+    draft_lead_email sits on the review side: it writes leads.draft_reply and
     nothing else. It cannot transmit, and the draft waits on the leads page for
     a human to press send.
     """

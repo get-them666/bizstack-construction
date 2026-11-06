@@ -659,7 +659,15 @@ OPERATING MANUAL:
                 "type": "function",
                 "function": {
                     "name": "send_email_message",
-                    "description": "Send a professional email message to any address.",
+                    "description": (
+                        "Send a real email from the business address to any address. "
+                        "Use when the owner asks you to email someone, send a quote or "
+                        "document, or follow up. Guarded: .gov/.mil recipients are "
+                        "refused, one email per address per day, a daily cap, and "
+                        "duplicate text is suppressed. Returns ok=false with the exact "
+                        "reason when refused -- never report an email as sent unless "
+                        "ok=true."
+                    ),
                     "parameters": self._props(
                         {"to": "string", "subject": "string", "body": "string"},
                         ["to", "subject", "body"],

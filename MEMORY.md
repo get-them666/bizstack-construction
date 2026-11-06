@@ -1082,6 +1082,27 @@ An uploaded **Itemized Pricing**/Quote is the file sent to the GC; it does **not
 rewrite the card's cost lines or total. Those remain the app's internal build-up
 and drive the generated documents — the Cost lines card now says so.
 
+### 2026-11-06: the Copilot could not email because the manual said it couldn't
+
+The `send_email_message` schema and a guarded handler had both been restored on
+2026-11-05, but `construction_knowledge.md` §15 still said **“There is no
+outbound email tool. You cannot send email.”** That file is concatenated into
+the Copilot's system prompt, so the model refused a capability it had. The
+prose now names `send_email_message`, says it sends a real email, and explains
+the guard (no .gov/.mil, one per address per day, daily cap, duplicate text
+suppressed) and that a refusal must be reported, never claimed as sent.
+
+`test_copilot_cannot_send_email` was the other stale copy: it asserted the tool
+was absent and could never pass again. It now tests the guard itself — a .gov
+recipient never reaches the raw sender, the cooldown blocks the second send,
+and a normal recipient goes through. `copilot_ops.build_contact_tools` and the
+`build_copilot_handlers` docstring no longer claim the send is withheld.
+
+Verified live inside the production container on 2026-11-06: the Copilot handler
+sent a real message through Zoho to hello@bizstackperks.com and returned
+`{'ok': True, 'sent_to': 'hello@bizstackperks.com'}`. The public website widget
+still does not get the tool; it remains copilot-only.
+
 ## Open threads
 
 - `ATTIC_API_KEY` / `SERVICEKANI_API_KEY` / `REGRID_API_KEY` / `BATCHLEADS_API_KEY`

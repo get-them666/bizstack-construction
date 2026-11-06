@@ -26,6 +26,8 @@ import inspect
 
 import pytest
 
+from pathlib import Path
+
 from con_ai_agent import BusinessAIAgent
 import copilot_ops
 
@@ -207,6 +209,26 @@ def test_copilot_can_place_an_outbound_call():
     """Restored with the email tool; the schema must contain it."""
     names = {t["function"]["name"] for t in BusinessAIAgent(subset="copilot")._tools()}
     assert "make_outbound_call" in names
+
+
+def test_the_operating_manual_does_not_forbid_email():
+    """The schema is useless if the manual says the tool does not exist.
+
+    construction_knowledge.md is concatenated into the system prompt, so a
+    stale "no outbound email tool" sentence overrides the schema and makes the
+    Copilot refuse a capability it actually has.
+    """
+    text = Path("construction_knowledge.md").read_text(encoding="utf-8")
+    low = text.lower()
+    assert "no outbound email tool" not in low
+    assert "you cannot send email" not in low
+    assert "send_email_message" in text
+
+    schemas = {t["function"]["name"]: t
+               for t in BusinessAIAgent(subset="copilot")._tools()}
+    desc = schemas["send_email_message"]["function"]["description"].lower()
+    assert "real email" in desc
+    assert "ok=false" in desc, "the model must know a refusal is possible"
 
 
 def test_contact_lookup_refuses_before_spending(monkeypatch, handlers):
