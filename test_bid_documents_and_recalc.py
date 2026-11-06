@@ -132,3 +132,76 @@ def test_the_card_offers_recalculate_and_prefers_uploaded_pricing():
     assert "{% set price_doc = item_doc or quote_doc %}" in html
     assert "price_doc.url" in html
     assert "amount_stale" in html
+
+
+def test_the_contract_package_buckets_actually_hold_uploaded_docs():
+    """The old setdefault() built an empty list, so the package always fell back
+    to generated PDFs even when a revised contract was uploaded."""
+    html = Path("templates/construction/bid_detail.html").read_text(encoding="utf-8")
+    assert "upl_by_type.setdefault(d.document_type or 'other', []).append(d)" in html
+    assert "upl_by_type.setdefault(d.document_type or 'other', []) %}" not in html
+
+
+class _DocCursor:
+    def __init__(self):
+        self.queries = []
+        self._row = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def execute(self, sql, params=()):
+        q = " ".join(sql.split())
+        self.queries.append((q, params))
+        if q.startswith("SELECT id FROM bid_documents") and "key" in q:
+            self._row = None
+        elif q.startswith("SELECT bid_id FROM bid_documents"):
+            self._row = {"bid_id": 7}
+        elif "RETURNING id" in q:
+            self._row = {"id": 99}
+        else:
+            self._row = None
+        return self
+
+    def fetchone(self):
+        return self._row
+
+
+class _DocConn:
+    def __init__(self):
+        self.cur = _DocCursor()
+
+    def cursor(self):
+        return self.cur
+
+    def commit(self):
+        pass
+
+
+def test_uploading_a_revision_retires_the_previous_file_in_that_slot():
+    conn = _DocConn()
+    doc_id = bid_opportunities.add_document(
+        conn, 7, "construction", "03-Contract-Revised.pdf", "bids/7/new.pdf",
+        document_type="contract", supersede=True)
+    assert doc_id == 99
+    joined = " | ".join(q for q, _ in conn.cur.queries)
+    assert "UPDATE bid_documents SET superseded_at = now()" in joined
+    # Plans are a set, not a slot: a second drawing must not retire the first.
+    conn2 = _DocConn()
+    bid_opportunities.add_document(
+        conn2, 7, "construction", "A-102.pdf", "bids/7/a102.pdf",
+        document_type="plans", supersede=True)
+    assert "UPDATE bid_documents SET superseded_at" not in " | ".join(
+        q for q, _ in conn2.cur.queries)
+
+
+def test_moving_a_misfiled_contract_into_its_slot_retires_the_old_one():
+    conn = _DocConn()
+    assert bid_opportunities.set_document_type(conn, 21, "construction", "contract") is True
+    joined = " | ".join(q for q, _ in conn.cur.queries)
+    assert "UPDATE bid_documents SET document_type" in joined
+    assert "superseded_at = now()" in joined
+    assert "document_type = %s" in joined

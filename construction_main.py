@@ -10320,6 +10320,18 @@ async def bid_detail_page(bid_id: int, request: Request, db=Depends(get_db)):
     except Exception as exc:
         print(f"[bids] documents unavailable for bid {bid_id}: {exc}", flush=True)
 
+    # A revision filed in the wrong dropdown slot is invisible to the package.
+    # Guess from the filename so the card can offer a one-click correction.
+    try:
+        import bid_attachments
+        for _d in docs:
+            guess = bid_attachments.classify(_d.get("filename") or "")
+            _d["suggested_type"] = guess if guess in (
+                "sow", "quote", "itemized", "contract", "plans") else ""
+    except Exception:
+        for _d in docs:
+            _d["suggested_type"] = ""
+
     # The email this solicitation arrived in, so the card can offer to pull its
     # paperwork and drawings. Empty for a hand-entered bid; the card says so.
     source_emails: list = []
@@ -10514,6 +10526,14 @@ async def bid_document_upload(bid_id: int, request: Request, doc: UploadFile = F
         raise HTTPException(status_code=400, detail="Empty file")
     ext = os.path.splitext(doc.filename or "")[1][:10] or ".pdf"
     fname = f"bid-{bid_id}-{uuid.uuid4().hex[:12]}{ext.lower()}"
+    # The dropdown is a human choice and humans mis-file revisions. When they
+    # leave it on "Other", read the filename so "03-Contract-Revised" does not
+    # land in the wrong slot.
+    if (doc_type or "").strip().lower() in ("", "other"):
+        import bid_attachments
+        guessed = bid_attachments.classify(doc.filename or "")
+        if guessed != "other":
+            doc_type = guessed
     try:
         stored = photo_store.save(raw, fname, key_prefix=f"bids/{bid_id}")
     except ValueError as e:
@@ -10524,7 +10544,8 @@ async def bid_document_upload(bid_id: int, request: Request, doc: UploadFile = F
                                    content_type=doc.content_type,
                                    bytes_count=len(raw),
                                    uploaded_by=_owner_email(),
-                                   document_type=doc_type)
+                                   document_type=doc_type,
+                                   supersede=True)
     # The first document is usually the point a real job starts. Make sure the
     # card exists (or top up the blank fields on the one that does) so the bid
     # number on the paperwork is the number crew, payroll and profit all use.
@@ -10567,6 +10588,18 @@ async def bid_documents_from_email(bid_id: int, request: Request, db=Depends(get
     sep = "&" if "?" in back else "?"
     return RedirectResponse(url=f"{back}{sep}{'&'.join(parts)}",
                             status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/api/bids/documents/{doc_id}/type")
+async def bid_document_type(doc_id: int, request: Request,
+                            document_type: str = Form(...), db=Depends(get_db)):
+    """Re-file a document into the right slot (e.g. a contract uploaded as Quote)."""
+    require_admin(request)
+    bid_opportunities.ensure_schema(db)
+    if not bid_opportunities.set_document_type(db, doc_id, _BID_COMPANY, document_type):
+        raise HTTPException(status_code=404, detail="Document not found")
+    back = request.headers.get("referer") or "/bids"
+    return RedirectResponse(url=back, status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.post("/api/bids/documents/{doc_id}/delete")

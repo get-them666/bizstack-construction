@@ -721,10 +721,20 @@ def deduplicate_bids(conn, company: str = "construction") -> dict:
     return {"deleted": len(deleted), "ids": [d["id"] for d in deleted]}
 
 
+SINGLE_SLOT_TYPES = ("sow", "quote", "itemized", "contract")
+
+
 def add_document(conn, bid_id: int, company: str, filename: str, key: str,
                   url: str | None = None, content_type: str | None = None,
                   bytes_count: int | None = None, uploaded_by: str = "",
-                  document_type: str = "other") -> int:
+                  document_type: str = "other", supersede: bool = False) -> int:
+    """Attach a document. `supersede` retires the previous one in that slot.
+
+    The card has one "in use" document for each of sow/quote/itemized/contract.
+    Uploading a revised contract without retiring the old one left two current
+    contracts, and the package could keep serving the older file. Plans and
+    "other" are deliberately multi-file, so they are never auto-retired.
+    """
     # Don't duplicate the same file on the same bid
     with conn.cursor() as cur:
         cur.execute("""
@@ -739,6 +749,12 @@ def add_document(conn, bid_id: int, company: str, filename: str, key: str,
             """, (bid_id, company, filename))
             row = cur.fetchone()
             return row["id"] if row else 0
+        if supersede and document_type in SINGLE_SLOT_TYPES:
+            cur.execute("""
+                UPDATE bid_documents SET superseded_at = now()
+                WHERE bid_id = %s AND company = %s AND document_type = %s
+                  AND superseded_at IS NULL
+            """, (bid_id, company, document_type))
         cur.execute("""
             INSERT INTO bid_documents (bid_id, company, filename, key, url, content_type, bytes, document_type, uploaded_by)
             VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
@@ -747,6 +763,39 @@ def add_document(conn, bid_id: int, company: str, filename: str, key: str,
         row = cur.fetchone()
     conn.commit()
     return row["id"]
+
+
+def set_document_type(conn, doc_id: int, company: str, document_type: str) -> bool:
+    """Re-file one document into a different slot.
+
+    Uploads are filed by a dropdown, and a contract uploaded as "Quote" is why
+    the card kept showing the old contract. This is the correction without
+    asking the owner to upload the same file again. Moving a file into a
+    single-slot slot retires whatever was there, so the choice is immediate.
+    """
+    document_type = (document_type or "").strip().lower()
+    if document_type not in ("sow", "quote", "itemized", "contract", "plans", "other"):
+        return False
+    with conn.cursor() as cur:
+        cur.execute("SELECT bid_id FROM bid_documents WHERE id = %s AND company = %s;",
+                    (doc_id, company))
+        found = cur.fetchone()
+        if not found:
+            conn.commit()
+            return False
+        bid_id = found["bid_id"]
+        cur.execute("UPDATE bid_documents SET document_type = %s "
+                    "WHERE id = %s AND company = %s RETURNING id;",
+                    (document_type, doc_id, company))
+        ok = cur.fetchone() is not None
+        if ok and document_type in SINGLE_SLOT_TYPES:
+            cur.execute("""
+                UPDATE bid_documents SET superseded_at = now()
+                WHERE bid_id = %s AND company = %s AND document_type = %s
+                  AND id <> %s AND superseded_at IS NULL
+            """, (bid_id, company, document_type, doc_id))
+    conn.commit()
+    return ok
 
 
 def list_documents(conn, bid_id: int, company: str = "construction") -> list[dict]:

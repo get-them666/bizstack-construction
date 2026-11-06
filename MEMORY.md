@@ -1056,6 +1056,32 @@ be acted on from two places.
 because the route passed a path that already included the template directory.
 Fixed to `letters.html`.
 
+### 2026-11-06: a revised upload was not the file in use
+
+Two independent bugs made an uploaded revision invisible:
+
+1. `upl_by_type` in `bid_detail.html` did
+   `setdefault(d.document_type, [])` **without** `.append(d)`, so every bucket
+   stayed empty and the Contract package always fell back to the generated
+   PDFs — even when a revised SOW/quote/contract had been uploaded. Fixed.
+2. Uploads trusted the `doc_type` dropdown and never retired the previous file
+   in a slot. On bid 18350 the revised contract
+   (`03-Contract-Revised-3-SIGNED.pdf`, doc 21) was filed as **quote**, so the
+   Contract slot kept the old/generated file and the contract appeared in the
+   price slot. The card now:
+   - retires the previous document when a new one is uploaded into
+     sow/quote/itemized/contract (`supersede=True`); plans and other stay a set;
+   - guesses the slot from the filename in the browser and, when the dropdown
+     is left on Other, on the server too;
+   - offers **Move to &lt;type&gt;** on a mis-filed active document
+     (`POST /api/bids/documents/{id}/type`), which also retires the old occupant;
+   - marks the first active document per slot **In use** and prints its filename
+     on each Contract-package button.
+
+An uploaded **Itemized Pricing**/Quote is the file sent to the GC; it does **not**
+rewrite the card's cost lines or total. Those remain the app's internal build-up
+and drive the generated documents — the Cost lines card now says so.
+
 ## Open threads
 
 - `ATTIC_API_KEY` / `SERVICEKANI_API_KEY` / `REGRID_API_KEY` / `BATCHLEADS_API_KEY`
