@@ -47,6 +47,7 @@ import aiosmtplib
 from email.message import EmailMessage
 
 from con_ai_agent import BusinessAIAgent, ModelUnavailable, ToolBudgetExhausted
+import con_ai_agent
 from loan_outreach import start_outreach_tasks
 import brand
 import documents_service

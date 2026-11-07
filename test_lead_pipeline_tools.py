@@ -216,6 +216,19 @@ def test_copilot_email_is_one_initiated_per_day_but_replies_reopen_the_thread(mo
     assert len(sent) == 2
 
 
+def test_copilot_chat_can_resolve_the_tool_logger_module():
+    """The route calls con_ai_agent.copilot_agent_tool_logger.
+
+    Only names were imported from con_ai_agent, so `con_ai_agent` itself was
+    undefined in construction_main's globals. Every /api/copilot request died
+    with NameError before the model was reached -- the Copilot was 500ing, not
+    refusing. This pins the module binding the route actually uses.
+    """
+    import construction_main
+    assert hasattr(construction_main, "con_ai_agent")
+    assert callable(construction_main.con_ai_agent.copilot_agent_tool_logger)
+
+
 def test_copilot_can_place_an_outbound_call():
     """Restored with the email tool; the schema must contain it."""
     names = {t["function"]["name"] for t in BusinessAIAgent(subset="copilot")._tools()}
