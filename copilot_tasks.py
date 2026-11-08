@@ -74,12 +74,15 @@ def update_task(conn, owner_email: str, task_id: int, status: str, result: str =
     Returns False when the id is not one of this owner's tasks, so the model gets
     a truthful "not found" instead of a silent no-op.
     """
-    if status not in ("open", "done", "dropped"):
-        raise ValueError("status must be open, done or dropped")
+    if status not in ("open", "done", "dropped", "blocked"):
+        raise ValueError("status must be open, done, dropped or blocked")
     with conn.cursor() as cur:
         cur.execute(
+            # 'blocked' means an attempt was made and refused (a spent vendor
+            # quota, a dead transport). It must NOT stamp completed_at: the work
+            # is still outstanding, and a closed task reads as done.
             "UPDATE copilot_tasks SET status = %s, result = %s, "
-            "  completed_at = CASE WHEN %s = 'open' THEN NULL ELSE NOW() END "
+            "  completed_at = CASE WHEN %s IN ('done','dropped') THEN NOW() ELSE NULL END "
             "WHERE id = %s AND owner_email = %s RETURNING id;",
             (status, result, status, task_id, owner_email),
         )

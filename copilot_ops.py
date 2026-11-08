@@ -509,9 +509,24 @@ def build_task_tools(db, owner_email: str):
         return {"ok": True, "count": len(rows), "tasks": rows}
 
     def complete_task(task_id: str = "", result: str = "", status: str = "done") -> dict:
-        """Close out a task by its id."""
+        """Close out a task by its id, or mark it blocked.
+
+        A task may only be marked done with a recorded outcome. The Copilot once
+        closed two follow-up tasks while merely reading them, so the queue
+        looked empty while neither customer had been contacted -- and nothing
+        said so. If the attempt failed (quota, dead transport), the honest state
+        is blocked plus the reason, not done.
+        """
         import copilot_tasks as ct
 
+        status = (status or "done").strip().lower()
+        if status not in ("done", "dropped", "blocked", "open"):
+            return {"ok": False, "error": "status must be done, dropped, blocked or open."}
+        if status in ("done", "dropped") and not (result or "").strip():
+            return {"ok": False,
+                    "error": ("Say what was actually done before closing this task. "
+                              "If nothing was sent or nobody was reached, use "
+                              "status=blocked and record why.")}
         try:
             found = ct.update_task(db, owner_email, int(task_id), status.strip().lower(), result)
         except (TypeError, ValueError) as e:

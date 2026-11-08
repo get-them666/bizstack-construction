@@ -2825,6 +2825,21 @@ def _bid_document_tools(db, owner_email: str):
         if cached is not None:
             owner_name = (cached.get("owner_of_record") or "").strip() or None
         else:
+            # A spent monthly budget makes trace_address come back with nothing,
+            # which reads exactly like "this owner has no contact details" -- and
+            # the Copilot then told the owner that three customers were
+            # unreachable when the lookup had never run at all.
+            try:
+                if not property_service.budget_allows(1):
+                    b = property_service.budget_summary()
+                    return {"ok": False,
+                            "error": (f"Property lookup budget is spent for this month "
+                                      f"({b.get('spent')}/{b.get('limit')}). No lookup was "
+                                      f"run, so no contact details are known yet. That is "
+                                      f"NOT the same as the customer having none -- the "
+                                      f"budget resets next month.")}
+            except Exception:
+                pass
             try:
                 result = sts.trace_address(parsed["street"], parsed["city"], parsed["state"], parsed["zipcode"])
                 with db.cursor() as cur:

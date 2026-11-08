@@ -577,10 +577,10 @@ OPERATING MANUAL:
                 "type": "function",
                 "function": {
                     "name": "complete_task",
-                    "description": "Close out a task by id.",
+                    "description": ("Close out a task by id. Only use status=done when the work is genuinely finished and say what was done in `result`. If the attempt failed -- a spent quota, a dead transport, no usable contact -- use status=blocked and record the reason; the task stays open because nothing was actually accomplished."),
                     "parameters": self._props(
                         {"task_id": "string", "result": "string", "status": "string"}, ["task_id"],
-                        "status: done (default) or dropped. result records the outcome.",
+                        "status: done (default), blocked if the attempt failed, dropped if abandoned. result records the outcome and is required for done.",
                     ),
                 },
             },
