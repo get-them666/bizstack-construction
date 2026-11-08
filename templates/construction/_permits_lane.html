@@ -270,3 +270,23 @@
     <p class="text-sm text-slate-500">{% if q or active_status %}Try a different filter or search.{% else %}No permits loaded yet. Hit “Scan now” above, or wait for the daily import.{% endif %}</p>
 </div>
 {% endif %}
+
+{# Permits are capped separately from leads: 500 rows of permit cards was a
+   4.3 MB page, and nobody works past the first hundred doors in one sitting. #}
+{% if permit_total > permit_page_size %}
+{% set pq = 'q=' ~ (q|urlencode) ~ '&status=' ~ (active_status|urlencode) %}
+<div class="bg-white rounded-2xl border border-slate-200 p-4 mt-4 flex flex-wrap items-center justify-between gap-3">
+    <p class="text-sm text-slate-500">Showing {{ (page - 1) * permit_page_size + 1 }}–{{ (page - 1) * permit_page_size + permits|length }} of {{ permit_total }} permits</p>
+    <div class="flex items-center gap-2">
+        {% if page > 1 %}
+        <a href="/leads?lane=permits&{{ pq }}&page={{ page - 1 }}"
+           class="text-sm font-semibold px-3 py-1.5 border border-slate-200 rounded-lg hover:bg-slate-50">Previous</a>
+        {% endif %}
+        <span class="text-xs text-slate-400">page {{ page }} of {{ permit_pages }}</span>
+        {% if page < permit_pages %}
+        <a href="/leads?lane=permits&{{ pq }}&page={{ page + 1 }}"
+           class="text-sm font-semibold px-3 py-1.5 border border-slate-200 rounded-lg hover:bg-slate-50">Next</a>
+        {% endif %}
+    </div>
+</div>
+{% endif %}

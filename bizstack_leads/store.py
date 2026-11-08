@@ -327,13 +327,13 @@ def clear_draft(db, lead_id) -> bool:
     return bool(row)
 
 
-def list_leads(db, company=None, *, action=None, stage=None, q="", limit=500,
-               include_closed=False, where_extra="", extra_params=()):
-    """Open leads, logically first.
+def _lead_filter(company=None, *, action=None, stage=None, q="",
+                 include_closed=False, where_extra="", extra_params=()):
+    """Shared WHERE builder for list_leads and count_leads.
 
-    ``where_extra`` / ``extra_params`` let an app layer its own policy (source
-    visibility, a campaign, a partner scope) onto the query without the package
-    having to know about it. ``where_extra`` is a bare SQL condition, ANDed on.
+    Kept as one function on purpose: the board's pager shows "showing 1-100 of N",
+    and if the count query drifted from the row query even slightly, that number
+    would lie. Two copies of this logic would eventually disagree.
     """
     where, params = [], []
     if company:
@@ -360,13 +360,47 @@ def list_leads(db, company=None, *, action=None, stage=None, q="", limit=500,
         where.append(where_extra)
         params += list(extra_params)
     clause = ("WHERE " + " AND ".join(where)) if where else ""
+    return clause, params
+
+
+def list_leads(db, company=None, *, action=None, stage=None, q="", limit=500,
+               offset=0, include_closed=False, where_extra="", extra_params=()):
+    """Open leads, logically first.
+
+    ``where_extra`` / ``extra_params`` let an app layer its own policy (source
+    visibility, a campaign, a partner scope) onto the query without the package
+    having to know about it. ``where_extra`` is a bare SQL condition, ANDed on.
+
+    ``offset`` exists so the board can page. Rendering the whole queue as one
+    response cost ~10 KB per lead card; 500 of them was a 4.9 MB page.
+    """
+    clause, params = _lead_filter(
+        company, action=action, stage=stage, q=q,
+        include_closed=include_closed, where_extra=where_extra,
+        extra_params=extra_params,
+    )
     with db.cursor() as cur:
         cur.execute(
             f"SELECT * FROM leads {clause} "
-            "ORDER BY next_action_at ASC NULLS LAST, created_at DESC LIMIT %s;",
-            tuple(params) + (limit,),
+            "ORDER BY next_action_at ASC NULLS LAST, created_at DESC "
+            "LIMIT %s OFFSET %s;",
+            tuple(params) + (limit, max(0, int(offset))),
         )
         return cur.fetchall()
+
+
+def count_leads(db, company=None, *, action=None, stage=None, q="",
+                include_closed=False, where_extra="", extra_params=()) -> int:
+    """Total matching leads, so the board can say "of N" instead of implying the
+    rows past the current page no longer exist."""
+    clause, params = _lead_filter(
+        company, action=action, stage=stage, q=q,
+        include_closed=include_closed, where_extra=where_extra,
+        extra_params=extra_params,
+    )
+    with db.cursor() as cur:
+        cur.execute(f"SELECT COUNT(*)::int AS c FROM leads {clause};", tuple(params))
+        return cur.fetchone()["c"]
 
 
 def queue_counts(db, company=None) -> dict:

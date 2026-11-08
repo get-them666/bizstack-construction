@@ -33,6 +33,27 @@
         {% include "_permits_lane.html" %}
         {% else %}
         {% include "_leads_lane.html" %}
+
+        {# ── Pager ──────────────────────────────────────────────────────── #}
+        {# Without this the board would silently show only the first page and
+           look like the rest of the queue had been deleted. #}
+        {% if total > page_size %}
+        {% set base_qs = 'q=' ~ (q|urlencode) ~ '&status=' ~ (active_status|urlencode) ~ '&action=' ~ (active_action|urlencode) ~ '&closed=' ~ ('1' if closed else '0') %}
+        <div class="bg-white rounded-2xl border border-slate-200 p-4 mt-4 flex flex-wrap items-center justify-between gap-3">
+            <p class="text-sm text-slate-500">Showing {{ shown_from }}–{{ shown_to }} of {{ total }} leads</p>
+            <div class="flex items-center gap-2">
+                {% if page > 1 %}
+                <a href="/leads?lane=contactable&{{ base_qs }}&page={{ page - 1 }}"
+                   class="text-sm font-semibold px-3 py-1.5 border border-slate-200 rounded-lg hover:bg-slate-50">Previous</a>
+                {% endif %}
+                <span class="text-xs text-slate-400">page {{ page }} of {{ pages }}</span>
+                {% if page < pages %}
+                <a href="/leads?lane=contactable&{{ base_qs }}&page={{ page + 1 }}"
+                   class="text-sm font-semibold px-3 py-1.5 border border-slate-200 rounded-lg hover:bg-slate-50">Next</a>
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
         {% endif %}
     </div>
 </section>

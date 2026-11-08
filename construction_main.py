@@ -3930,7 +3930,8 @@ async def leads_page(request: Request,
                      # links.
                      status_filter: str = Query("", alias="status"),
                      q: str = "", lane: str = "contactable",
-                     action: str = "", closed: str = "", db=Depends(get_db)):
+                     action: str = "", closed: str = "", page: int = 1,
+                     db=Depends(get_db)):
     is_authed, user_email = require_auth(request)
     if not is_authed:
         return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
@@ -3943,8 +3944,20 @@ async def leads_page(request: Request,
     vis = source_visibility_clause()
     vis_where = vis[len(" AND "):] if vis.startswith(" AND ") else vis.strip()
     vis_params = source_visibility_params()
+    # 100 cards is ~1 MB instead of ~4.9 MB for 500. A lead card carries the
+    # contact block, the draft and the action buttons, so it is much heavier
+    # than a bid card -- the whole board as one response was the single largest
+    # thing this app served.
+    page_size = 100
+    permit_page_size = 100
+    page = max(1, int(page or 1))
+    total = lead_store.count_leads(
+        db, "construction", q=q, include_closed=(closed == "1"),
+        stage=(status_filter or None),
+        where_extra=vis_where, extra_params=tuple(vis_params),
+    )
     rows = lead_store.list_leads(
-        db, "construction", q=q, limit=500,
+        db, "construction", q=q, limit=page_size, offset=(page - 1) * page_size,
         include_closed=(closed == "1"),
         stage=(status_filter or None),
         where_extra=vis_where, extra_params=tuple(vis_params),
@@ -3987,7 +4000,10 @@ async def leads_page(request: Request,
             p_where.append("(address ILIKE %s OR work_type ILIKE %s OR permit_number ILIKE %s OR contractor_name ILIKE %s)")
             p_params += [like, like, like, like]
         p_clause = ("WHERE " + " AND ".join(p_where)) if p_where else ""
-        cur.execute(f"SELECT * FROM job_leads {p_clause} ORDER BY found_at DESC LIMIT 500;", tuple(p_params))
+        cur.execute(f"SELECT COUNT(*)::int AS c FROM job_leads {p_clause};", tuple(p_params))
+        permit_total = (cur.fetchone() or {}).get("c") or 0
+        cur.execute(f"SELECT * FROM job_leads {p_clause} ORDER BY found_at DESC LIMIT %s OFFSET %s;",
+                    tuple(p_params) + (permit_page_size, (page - 1) * permit_page_size))
         permits = cur.fetchall()
         # Every permit tally is recomputed here, from job_leads, on every page
         # load. Nothing is cached, so a status change from ANY source -- the
@@ -4033,6 +4049,15 @@ async def leads_page(request: Request,
         "stage_labels": lead_lifecycle.STAGE_LABELS,
         "active_status": status_filter,
         "q": q,
+        "page": page,
+        "page_size": page_size,
+        "total": total,
+        "permit_total": permit_total,
+        "permit_page_size": permit_page_size,
+        "permit_pages": max(1, (permit_total + permit_page_size - 1) // permit_page_size),
+        "pages": max(1, (total + page_size - 1) // page_size),
+        "shown_from": (page - 1) * page_size + 1 if rows else 0,
+        "shown_to": (page - 1) * page_size + len(rows),
         "draft_count": draft_count,
         "default_deposit": 0,
         "permits": permits,
