@@ -1096,8 +1096,15 @@ def require_admin(request: Request) -> None:
 # Auth0 proves who someone is; it does not know who your crew are. This
 # answers that on every login so an Action can either attach a role claim or
 # deny the login outright.
+#
+# PATH CHANGED 2026-11-08 (was POST /api/auth/login). That path is the owner
+# sign-in form in templates/construction/login.html, and because Starlette
+# matches the first registered route, this bridge shadowed it: every real
+# login attempt hit this handler, found no Auth0 header, and returned 401.
+# Password login was dead from 2026-10-15 (a7261a5) until this fix. Any Auth0
+# Action in the tenant must point at /api/auth/auth0/check, NOT /api/auth/login.
 
-@app.post("/api/auth/login")
+@app.post("/api/auth/auth0/check")
 async def auth_login_check(request: Request, db=Depends(get_db)):
     """Called by an Auth0 Action during login. Answers: allowed, and what role.
 

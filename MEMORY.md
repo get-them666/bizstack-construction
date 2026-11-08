@@ -1108,6 +1108,41 @@ sent a real message through Zoho to hello@bizstackperks.com and returned
 `{'ok': True, 'sent_to': 'hello@bizstackperks.com'}`. The public website widget
 still does not get the tool; it remains copilot-only.
 
+## 2026-11-08: migrating to Render, and the login route that shadowed itself
+
+The owner is leaving Railway for Render. `render.yaml` at the repo root is the
+Blueprint: web service `bizstack-construction`, Postgres `bizstack-construction-db`,
+both in **virginia**. Region is not cosmetic — a service and its database in
+different regions cannot use Render's private network, and the app then fails
+with `failed to resolve host 'dpg-...'` on every database init while the health
+check still passes.
+
+Render's **free Postgres is deleted 30 days after creation**, and **free web
+services spin down after 15 idle minutes**, which kills the daemon threads
+started in `lifecycle()` — the app looks healthy and quietly stops importing
+permits. Neither tier is usable for this app.
+
+Production on Railway runs **PostgreSQL 18.6** and has the **pgvector**
+extension, which `CREATE EXTENSION vector` in the dump requires. Dump with a
+client of the same major version or the restore fails on extensions.
+
+**The login shadowing bug.** `POST /api/auth/login` was registered twice: the
+Auth0 Action bridge (`auth_login_check`, added a7261a5 on 2026-10-15) and the
+real form login (`api_login`). Starlette matches the first route, so every
+owner login hit the bridge, found no Auth0 header, and returned 401. Password
+login had been dead for three weeks and nothing caught it: the route table was
+valid, just doubled. The bridge now owns `/api/auth/auth0/check`, and
+`test_login_route.py` asserts which handler owns each path. If Auth0 is ever
+configured, the tenant's Action must point at the new path — that URL lives
+outside this repo and will not update itself.
+
+During the migration the Render service runs in a deliberately inert mode
+(`LEAD_AUTO_SEND=0`, `BOT_AUTO_SEND_EMAIL=false`, `LEAD_SOURCE_AUTO_EMAIL=0`,
+`LEAD_SOURCE_OWNER_DIGEST=0`, `SKIPTRACE_ENRICH_MAX=0` and all five `DISABLE_*`
+flags) because its database is a copy of production. Railway is still live and
+still sending, so those must stay on until Railway is stopped — enabling them
+first means two systems emailing the same leads.
+
 ## Open threads
 
 - `ATTIC_API_KEY` / `SERVICEKANI_API_KEY` / `REGRID_API_KEY` / `BATCHLEADS_API_KEY`
