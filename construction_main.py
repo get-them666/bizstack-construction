@@ -365,6 +365,48 @@ templates.env.filters["money"] = _money
 
 
 
+def _probe_external_limits() -> None:
+    """Poll the two vendor caps that fail silently.
+
+    Both of these produce "nothing happened" rather than an error anyone sees:
+    Vapi returns a call id even when the call dies at start on the outbound
+    daily limit, and a spent RentCast budget simply makes every lookup return
+    no result. The Copilot then reports "the lookup found nothing", which is
+    true and useless.
+    """
+    key = (os.getenv("VAPI_API_KEY") or "").strip()
+    if key:
+        try:
+            import urllib.request as _ur
+            req = _ur.Request("https://api.vapi.ai/call?limit=10",
+                              headers={"Authorization": f"Bearer {key}",
+                                       "User-Agent": "bizstack-voice/1.0"})
+            with _ur.urlopen(req, timeout=20) as r:
+                calls = json.load(r)
+            out = [c for c in (calls or []) if c.get("type") == "outboundPhoneCall"]
+            if out:
+                why = str(out[0].get("endedReason") or "")
+                if "limit" in why.lower():
+                    transport_health.record("calls", False, f"Vapi outbound limit: {why}")
+                else:
+                    transport_health.record("calls", True)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[transport-health] vapi probe failed: {exc}", flush=True)
+
+    try:
+        import property_service
+        b = property_service.budget_summary()
+        if b.get("configured") and b.get("remaining") is not None:
+            if b["remaining"] <= 0:
+                transport_health.record(
+                    "lookups", False,
+                    f"RentCast monthly budget spent ({b.get('spent')}/{b.get('limit')})")
+            else:
+                transport_health.record("lookups", True)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[transport-health] rentcast probe failed: {exc}", flush=True)
+
+
 def _transport_health_loop() -> None:
     """Notice when a transport dies, and say so once.
 
@@ -394,6 +436,7 @@ def _transport_health_loop() -> None:
                 auto_reply.run_coro(documents_service.send_email(
                     cfg, to, subject, body.replace("\n", "<br>")))
 
+            _probe_external_limits()
             transport_health.maybe_alert(_notify)
         except Exception as exc:  # noqa: BLE001 - a monitor must never kill the app
             print(f"[transport-health] loop error: {exc}", flush=True)
