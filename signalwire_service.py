@@ -2,6 +2,7 @@ import brand
 import os
 
 import requests
+import transport_health
 from signalwire.rest.client import RestClient
 
 
@@ -48,9 +49,13 @@ class SignalWireService:
                 to=to,
                 body=body,
             )
+            # Recorded so a provider-side stop (an inactive A2P campaign, for
+            # one) surfaces as an alert instead of three weeks of silence.
+            transport_health.record("sms", True)
             return True
         except Exception as e:
             print(f"❌ SignalWire SMS send failure: {e}")
+            transport_health.record("sms", False, str(e))
             return False
 
     def create_outbound_call(self, to: str, twiml_url: str) -> str:

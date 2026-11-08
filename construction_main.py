@@ -127,6 +127,7 @@ import materials_service
 import quoting
 import quote_documents
 import suppression
+import transport_health
 logger = logging.getLogger("construction")
 
 db_url = os.getenv("DATABASE_URL", "postgresql://shaun:secret@localhost:5432/buildstack")
@@ -361,6 +362,42 @@ def _money(value):
 
 
 templates.env.filters["money"] = _money
+
+
+
+def _transport_health_loop() -> None:
+    """Notice when a transport dies, and say so once.
+
+    SignalWire SMS failed for three weeks with `inactive_campaign` and the only
+    trace was a line in the logs: follow-ups were quietly skipped and nobody
+    knew. This mails the owner on the transition down and again on recovery --
+    deliberately not once per failure.
+    """
+    import time as _time
+    while True:
+        try:
+            cfg = documents_service.smtp_config_from_env()
+
+            def _notify(channel: str, ok: bool, detail: str) -> None:
+                to = (os.getenv("NOTIFY_EMAIL") or os.getenv("ADMIN_EMAIL") or "").strip()
+                if not to or not documents_service.smtp_configured(cfg):
+                    print(f"[transport-health] {channel} {'up' if ok else 'DOWN'} "
+                          f"(no email configured to alert)", flush=True)
+                    return
+                if ok:
+                    subject = f"[BuildStack] {channel} sending recovered"
+                    body = f"{channel} is delivering again."
+                else:
+                    subject = f"[BuildStack] {channel} transport is DOWN"
+                    body = (f"{channel} sends are failing:\n\n{detail}\n\n"
+                            f"Nothing is going out on this channel until it is fixed.")
+                auto_reply.run_coro(documents_service.send_email(
+                    cfg, to, subject, body.replace("\n", "<br>")))
+
+            transport_health.maybe_alert(_notify)
+        except Exception as exc:  # noqa: BLE001 - a monitor must never kill the app
+            print(f"[transport-health] loop error: {exc}", flush=True)
+        _time.sleep(600)
 
 
 @asynccontextmanager
@@ -810,6 +847,9 @@ async def lifecycle(app: FastAPI):
             print(f"[vapi] assistant url sync failed: {exc}", flush=True)
 
     threading.Thread(target=_sync_vapi_assistant, daemon=True).start()
+
+    # Transport watchdog: SMS/voice failures must be loud, not silent.
+    threading.Thread(target=_transport_health_loop, daemon=True).start()
 
     # Copilot conversation memory + the one-year task list. Self-initializing, so
     # this is safe on every boot and on redeploys against an existing database.
@@ -3127,15 +3167,40 @@ def _run_followups() -> dict:
     conn = psycopg.connect(db_url, row_factory=dict_row)
     try:
         cfg = documents_service.smtp_config_from_env()
+        suppression.ensure_schema(conn)
+
+        def _blocked(channel, recipient):
+            """Suppression is absolute: DNC, DMA, unsubscribe, internal opt-out.
+
+            The follow-up sweep used to hand the phone number straight to
+            SignalWire, so a Do-Not-Call entry blocked mail but not the text or
+            the call -- the opposite of what DNC means. Every send on this path
+            now asks the same pre-send question the other outbound paths ask.
+            """
+            try:
+                allowed, why = suppression.check_outbound(conn, channel, recipient)
+            except Exception as exc:  # noqa: BLE001
+                print(f"[followups] suppression check failed for {channel}: {exc}", flush=True)
+                return True  # fail closed: do not send on an unknown
+            if not allowed:
+                print(f"[followups] blocked {channel} ({why})", flush=True)
+            return not allowed
 
         def _send_email(to, subject, body):
+            if _blocked(suppression.CHANNEL_EMAIL, to):
+                return False
             if not documents_service.smtp_configured(cfg):
                 return False
             return bool(auto_reply.run_coro(documents_service.send_email(cfg, to, subject, body.replace("\n", "<br>"))))
 
-        _send_sms = signalwire.send_sms if signalwire.is_configured() else None
+        def _send_sms(to, body):
+            if _blocked(suppression.CHANNEL_SMS, to):
+                return False
+            return signalwire.send_sms(to, body)
+
+        _send_sms_cb = _send_sms if signalwire.is_configured() else None
         return followups.run_once(
-            conn, send_email=_send_email, send_sms=_send_sms,
+            conn, send_email=_send_email, send_sms=_send_sms_cb,
             channel_allowed=lambda ch: auto_reply._channel_allowed(conn, ch),
             review_mode=auto_reply._review_mode(),
         )
@@ -10486,6 +10551,19 @@ async def bid_detail_page(bid_id: int, request: Request, db=Depends(get_db)):
     # for bid B, which is exactly how the same bid number appeared on every card.
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     return response
+
+
+@app.get("/api/health/transports")
+async def transports_health(request: Request, db=Depends(get_db)):
+    """Delivery health per channel. Admin only.
+
+    2026-10-29: SignalWire SMS began failing with inactive_campaign and nothing
+    surfaced it for three weeks. This is where that state is readable without
+    opening the logs.
+    """
+    require_admin(request)
+    from fastapi.encoders import jsonable_encoder
+    return JSONResponse(content=jsonable_encoder(transport_health.status(db)))
 
 
 @app.get("/api/bids")
