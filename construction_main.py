@@ -10491,7 +10491,13 @@ async def bid_detail_page(bid_id: int, request: Request, db=Depends(get_db)):
 @app.get("/api/bids")
 async def bids_api(request: Request, status: str = "", db=Depends(get_db)):
     require_admin(request)
-    return JSONResponse(content=bid_opportunities.list_bids(db, _BID_COMPANY, status))
+    # due_date, first_seen_at and last_seen_at come back from psycopg as date /
+    # datetime objects, which json.dumps refuses. Returning the rows directly
+    # meant this endpoint 500'd for any bid that had a due date -- i.e. almost
+    # every real one. jsonable_encoder converts them to ISO strings.
+    from fastapi.encoders import jsonable_encoder
+    return JSONResponse(content=jsonable_encoder(
+        bid_opportunities.list_bids(db, _BID_COMPANY, status)))
 
 
 @app.get("/api/bids/stats")
@@ -10829,10 +10835,13 @@ async def bid_sources_api(request: Request, db=Depends(get_db)):
     echoes a token back out.
     """
     require_admin(request)
-    return JSONResponse(content={
+    # Same date/datetime serialisation trap as /api/bids: recent_pulls carries
+    # started_at/finished_at as datetime objects.
+    from fastapi.encoders import jsonable_encoder
+    return JSONResponse(content=jsonable_encoder({
         "sources": bid_sources.source_status(),
         "recent": bid_opportunities.recent_pulls(db, _BID_COMPANY),
-    })
+    }))
 
 
 @app.post("/api/bids/pull")
