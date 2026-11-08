@@ -7811,6 +7811,16 @@ def _follow_up_new_lead(lead_id: int) -> None:
             own = _bot_phone_digits(getattr(signalwire, "from_number", ""))
             if own and digits[-10:] == own[-10:]:
                 return
+            # DNC is about the number, not the transport: an entry has to stop the
+            # automatic dialler as well as the text. This path had no check.
+            try:
+                allowed, why = suppression.check_outbound(db, suppression.CHANNEL_VOICE, to)
+            except Exception as exc:
+                print(f"📞[followup] suppression check failed, not dialling: {exc}", flush=True)
+                return
+            if not allowed:
+                print(f"📞[followup] lead {lead_id} not called ({why})", flush=True)
+                return
             try:
                 # Use the module-level client: it defaults to this app's domain
                 # (construction.bizstackperks.com). A bare VapiService() falls
