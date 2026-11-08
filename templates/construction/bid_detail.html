@@ -506,7 +506,7 @@
             📄 Scope of Work <span class="block text-[10px] font-normal opacity-80 truncate">{{ sow_doc.filename }}</span>
           </a>
           {% else %}
-          <a href="/bids/{{ b.id }}/sow.pdf" target="_blank" rel="noopener"
+          <a href="/bids/{{ b.id }}/sow.pdf?v={{ b.id }}-{{ saved_revision or 0 }}" target="_blank" rel="noopener"
              class="block text-center text-xs font-semibold px-3 py-2.5 bg-slate-900 text-white rounded-lg hover:bg-slate-700">
             📄 Scope of Work
           </a>
@@ -517,7 +517,7 @@
             💰 {{ 'Quote' if quote_doc and not item_doc else 'Itemized Pricing' }} <span class="block text-[10px] font-normal opacity-80 truncate">{{ price_doc.filename }}</span>
           </a>
           {% else %}
-          <a href="/bids/{{ b.id }}/itemized.pdf" target="_blank" rel="noopener"
+          <a href="/bids/{{ b.id }}/itemized.pdf?v={{ b.id }}-{{ saved_revision or 0 }}" target="_blank" rel="noopener"
              class="block text-center text-xs font-semibold px-3 py-2.5 bg-slate-900 text-white rounded-lg hover:bg-slate-700">
             💰 Itemized Pricing
           </a>
@@ -528,7 +528,7 @@
             ✍️ Contract <span class="block text-[10px] font-normal opacity-80 truncate">{{ contract_doc.filename }}</span>
           </a>
           {% else %}
-          <a href="/bids/{{ b.id }}/contract.pdf" target="_blank" rel="noopener"
+          <a href="/bids/{{ b.id }}/contract.pdf?v={{ b.id }}-{{ saved_revision or 0 }}" target="_blank" rel="noopener"
              class="block text-center text-xs font-semibold px-3 py-2.5 bg-slate-900 text-white rounded-lg hover:bg-slate-700">
             ✍️ Contract
           </a>
