@@ -185,20 +185,33 @@ def _upsert(conn, rows: list[dict], company: str = "construction",
         # the owner typed in themselves.
         if not apply_status:
             updates = []
-            params: list = []
-            for k in ("name", "owner", "reference", "trade", "location", "notes"):
-                if vals.get(k):
+            # Refresh only what the source actually returned. A pull must not
+            # blank a field it simply did not send.
+            for k in ("name", "owner", "reference", "trade", "location",
+                      "contact_name", "contact_email", "contact_phone"):
+                if k in vals and vals.get(k):
                     updates.append(f"{k} = EXCLUDED.{k}")
-                    params.append(vals[k])
+            # `notes` is written by BOTH sides: normalize_bc_opportunity builds it
+            # from the API (RFI deadline, job walk, trade), and the owner types
+            # their own on the card. Replacing it wholesale meant every nightly
+            # sync silently wiped the owner's notes, so a pull now only fills
+            # the column when it is empty. To let a pull re-populate it, clear
+            # the note; to keep both, the owner's text wins.
+            if vals.get("notes"):
+                updates.append(
+                    "notes = CASE WHEN bid_opportunities.notes IS NULL "
+                    "OR BTRIM(bid_opportunities.notes) = '' "
+                    "THEN EXCLUDED.notes ELSE bid_opportunities.notes END")
+            # The deep link into Bid Board never changed after the first insert,
+            # so a re-pull could not fix one that had been stored stale or blank.
+            if vals.get("external_url"):
+                updates.append("external_url = EXCLUDED.external_url")
             if _num_ok(vals.get("bid_amount")) is not None:
                 updates.append("bid_amount = EXCLUDED.bid_amount")
-                params.append(_coerce_amount(vals.get("bid_amount")))
             if _coerce_date(vals.get("due_date")) is not None:
                 updates.append("due_date = EXCLUDED.due_date")
-                params.append(_coerce_date(vals.get("due_date")))
             if vals.get("kind") in ("solicitation", "permit"):
                 updates.append("kind = EXCLUDED.kind")
-                params.append(vals.get("kind"))
             updates.append("last_seen_at = now()")
             set_clause = ", ".join(updates)
         else:
