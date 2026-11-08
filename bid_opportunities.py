@@ -575,7 +575,17 @@ def _db_url() -> str:
     return os.getenv("DATABASE_URL", "")
 
 
-def list_bids(conn, company: str = "construction", status: str = "", include_permits: bool = False) -> list[dict]:
+def list_bids(conn, company: str = "construction", status: str = "", include_permits: bool = False,
+              limit: int | None = None, offset: int = 0) -> list[dict]:
+    """Bids for one company, soonest due first.
+
+    `limit`/`offset` default to "no limit" so the JSON API keeps returning the
+    whole set. The HTML board must pass a limit: without one it shipped every
+    row to the browser, and at 995 bids that was a 4 MB response -- enough that
+    roughly a thousand page views would have consumed a whole month of hosting
+    bandwidth. The card board does not need 995 rows to be useful; it needs the
+    next 200 and a way to ask for more.
+    """
     sql = ["SELECT * FROM bid_opportunities WHERE company = %s"]
     params: list = [company]
     if not include_permits:
@@ -584,9 +594,29 @@ def list_bids(conn, company: str = "construction", status: str = "", include_per
         sql.append("AND status = %s")
         params.append(status)
     sql.append("ORDER BY due_date NULLS LAST, id DESC")
+    if limit is not None:
+        sql.append("LIMIT %s OFFSET %s")
+        params.extend([int(limit), max(0, int(offset))])
     with conn.cursor() as cur:
         cur.execute(" ".join(sql), params)
         return cur.fetchall()
+
+
+def count_bids(conn, company: str = "construction", status: str = "",
+               include_permits: bool = False) -> int:
+    """Total matching rows, so the board can say "showing 200 of 995" instead of
+    silently looking like the missing ones were deleted."""
+    sql = ["SELECT COUNT(*) AS n FROM bid_opportunities WHERE company = %s"]
+    params: list = [company]
+    if not include_permits:
+        sql.append("AND COALESCE(kind,'solicitation') <> 'permit'")
+    if status:
+        sql.append("AND status = %s")
+        params.append(status)
+    with conn.cursor() as cur:
+        cur.execute(" ".join(sql), params)
+        row = cur.fetchone()
+    return int((row or {}).get("n") or 0)
 
 
 def get_bid(conn, bid_id: int, company: str = "construction") -> dict | None:

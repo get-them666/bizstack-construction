@@ -255,6 +255,27 @@
         </div>
         {% endfor %}
 
+        {# ── Pager ──────────────────────────────────────────────────────── #}
+        {% if total > rows|length %}
+        <div class="bg-white rounded-2xl border border-slate-200 p-4 mb-4 flex flex-wrap items-center justify-between gap-3">
+            <p class="text-sm text-slate-500">
+                Showing {{ shown_from }}–{{ shown_to }} of {{ total }} bids
+                {% if status %}· filtered to <span class="font-semibold text-slate-700">{{ status }}</span>{% endif %}
+            </p>
+            <div class="flex items-center gap-2">
+                {% if page > 1 %}
+                <a href="/bids?status={{ status }}&page={{ page - 1 }}"
+                   class="text-sm font-semibold px-3 py-1.5 border border-slate-200 rounded-lg hover:bg-slate-50">Previous</a>
+                {% endif %}
+                <span class="text-xs text-slate-400">page {{ page }} of {{ pages }}</span>
+                {% if page < pages %}
+                <a href="/bids?status={{ status }}&page={{ page + 1 }}"
+                   class="text-sm font-semibold px-3 py-1.5 border border-slate-200 rounded-lg hover:bg-slate-50">Next</a>
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
+
         {# ── Add ────────────────────────────────────────────────────────── #}
         <details class="bg-white rounded-2xl border border-slate-200 p-5">
             <summary class="text-sm font-bold text-slate-700 cursor-pointer hover:text-indigo-600">+ Add a bid</summary>

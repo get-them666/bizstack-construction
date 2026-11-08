@@ -10885,9 +10885,15 @@ async def bids_deduplicate(request: Request, db=Depends(get_db)):
 
 
 @app.get("/bids", response_class=HTMLResponse)
-async def bids_page(request: Request, status: str = "", db=Depends(get_db)):
+async def bids_page(request: Request, status: str = "", page: int = 1, db=Depends(get_db)):
     require_admin(request)
-    rows = bid_opportunities.list_bids(db, _BID_COMPANY, status)
+    # 200 cards is ~800 KB instead of ~4 MB unbounded, and 200 is far more than
+    # anyone scrolls before filtering by status.
+    page_size = 200
+    page = max(1, int(page or 1))
+    total = bid_opportunities.count_bids(db, _BID_COMPANY, status)
+    rows = bid_opportunities.list_bids(db, _BID_COMPANY, status,
+                                       limit=page_size, offset=(page - 1) * page_size)
     pulls = bid_opportunities.recent_pulls(db, _BID_COMPANY, 6)
     # "New" means first seen in the most recent pull. No pulls yet means nothing
     # is new, which is right: a hand-entered bid did not arrive from a source.
@@ -10902,6 +10908,12 @@ async def bids_page(request: Request, status: str = "", db=Depends(get_db)):
         request=request, name="bids.html",
         context={
             "rows": rows,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "pages": max(1, (total + page_size - 1) // page_size),
+            "shown_from": (page - 1) * page_size + 1 if rows else 0,
+            "shown_to": (page - 1) * page_size + len(rows),
             "statuses": bid_opportunities.STATUSES,
             "roles": bid_opportunities.ROLES,
             "sel": status,
