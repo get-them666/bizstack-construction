@@ -1,0 +1,190 @@
+# Render Blueprint — BuildStack Construction
+#
+# Staging first, on purpose. This service exists to prove the app runs on
+# Render before anything moves off Railway. It gets its OWN Postgres, and every
+# background worker and outbound side effect is switched off, because staging
+# is seeded from a copy of the production database: without these flags the
+# permit importer, lead scanner and bid autopilot would immediately start
+# spending real RentCast/PDL calls (RentCast's free tier is 50 calls per
+# MONTH, shared across every consumer) and the bid-inquiry loop would email
+# real general contractors.
+#
+# The flags matter in this direction: the code reads them as
+# `if not os.getenv("DISABLE_X")`, so ANY non-empty value disables the worker.
+# Render also stores booleans as the strings "true"/"false", and "false" is
+# truthy in Python — so these must be "true", never "false".
+#
+# Once staging is verified, production is a second service in this file with
+# its own database and the DISABLE_* flags removed.
+
+envVarGroups:
+  # Secrets. `sync: false` means Render asks for the value in the dashboard on
+  # first deploy and never stores it in git. Values are copied from the Railway
+  # service, not invented.
+  - name: construction-secrets
+    envVars:
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+
+      # Outbound email. Gmail is the only supported lead transport.
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+
+      # Uploads. Without R2 the app silently falls back to local disk, and
+      # Render's filesystem is ephemeral — every deploy would delete crew
+      # photos. R2 is required, not optional.
+      - key: R2_ACCOUNT_ID
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET
+        sync: false
+      - key: R2_PUBLIC_URL
+        sync: false
+
+      # Voice/SMS. Left blank on staging so no text can reach a real phone.
+      - key: SIGNALWIRE_PROJECT_ID
+        sync: false
+      - key: SIGNALWIRE_API_TOKEN
+        sync: false
+      - key: SIGNALWIRE_SPACE_URL
+        sync: false
+      - key: SIGNALWIRE_PHONE
+        sync: false
+
+      # Lead enrichment / skip trace.
+      - key: RENTCAST_API_KEY
+        sync: false
+      - key: SHOVELS_API_KEY
+        sync: false
+      - key: PDL_API_KEY
+        sync: false
+      - key: SKIP_SHERPA_API_KEY
+        sync: false
+      - key: SCRAP_IO_API_KEY
+        sync: false
+      - key: ACCURATE_APPEND_API_KEY
+        sync: false
+
+      # Analytics — must never be able to break a page.
+      - key: RUDDERSTACK_WRITE_KEY
+        sync: false
+      - key: RUDDERSTACK_DATA_PLANE_URL
+        sync: false
+
+databases:
+  - name: bizstack-construction-db
+    databaseName: construction
+    user: construction
+    region: virginia
+    # NOT `free`: Render deletes free Postgres 30 days after creation, which
+    # would take staging down mid-cutover. This is the paid 256 MB tier.
+    plan: 0.1c-256mb
+    # Must match the source or the dump will not restore: production on Railway
+    # runs PostgreSQL 18.6, and pg_dump output from a newer major version is
+    # not guaranteed to load into an older one.
+    postgresMajorVersion: "18"
+
+services:
+  - type: web
+    name: bizstack-construction
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    region: virginia
+    # `free` spins down after 15 minutes idle and kills the daemon threads in
+    # lifecycle() — the app would look fine and quietly stop importing permits.
+    # 2 GB rather than 512 MB: this app imports ~190 flat modules and starts
+    # eight background threads at boot, and an OOM kill mid-verification looks
+    # exactly like a code bug.
+    plan: 1c-2g
+    healthCheckPath: /health
+    autoDeployTrigger: commit
+    # Let in-flight requests and background threads finish on deploy instead of
+    # being cut off at the default 30s.
+    maxShutdownDelaySeconds: 60
+
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: bizstack-construction-db
+          property: connectionString
+
+      - fromGroup: construction-secrets
+
+      # --- identity ---------------------------------------------------------
+      - key: ADMIN_EMAIL
+        value: hello@bizstackperks.com
+      - key: ADMIN_NAME
+        value: Owner
+      - key: COMPANY_NAME
+        value: Buildstack Construction Co.
+      # Customer-facing number only. 252-665-5891 is Shaun's personal mobile
+      # and belongs on lending material alone.
+      - key: COMPANY_PHONE
+        value: +1 (757) 908-7121
+      - key: COMPANY_EMAIL
+        value: hello@bizstackperks.com
+      # The real customer-facing domain. The onrender.com subdomain is only a
+      # pre-cutover testing address and must never be advertised.
+      - key: COMPANY_DOMAIN
+        value: construction.bizstackperks.com
+      - key: SERVICE_AREA
+        value: Williamsburg–Hampton Roads, VA · Currituck County & Elizabeth City, NC
+      - key: APP_TIMEZONE
+        value: America/New_York
+
+      # --- auth -------------------------------------------------------------
+      - key: APP_SECRET
+        generateValue: true
+      - key: COOKIE_SECURE
+        value: "true"
+      - key: OTP_ENABLED
+        value: "true"
+
+      # --- safety switches: staging must not move money or send anything ----
+      - key: DISABLE_PERMIT_IMPORT
+        value: "true"
+      - key: DISABLE_LEAD_SCAN
+        value: "true"
+      - key: DISABLE_LOAN_OUTREACH
+        value: "true"
+      - key: DISABLE_LEAD_ENRICH
+        value: "true"
+      - key: DISABLE_BID_AUTOPILOT
+        value: "true"
+      # auto_reply.py: anything but 1/true/yes/on stages a draft for owner
+      # review instead of sending. This is the guardrail layer — leave it on.
+      - key: LEAD_AUTO_SEND
+        value: "0"
+      # Skip trace is the one owner-approved exception to the
+      # business-contacts-only rule, and every lookup is audited. Zero here
+      # means staging never traces a homeowner even if the key is present.
+      - key: SKIPTRACE_ENRICH_MAX
+        value: "0"
+
+      # --- model ------------------------------------------------------------
+      - key: OPENAI_MODEL
+        value: gpt-4o-mini
+
+      # --- mail identity ----------------------------------------------------
+      - key: SMTP_PORT
+        value: "587"
+      - key: SMTP_FROM
+        value: hello@bizstackperks.com
+      - key: SMTP_NAME
+        value: Buildstack Construction
+      - key: SMTP_TLS
+        value: "true"
+      - key: SENDER_PHYSICAL_ADDRESS
+        value: Buildstack Construction Co., 701 Dana Dr, Chesapeake, VA 23321. To stop receiving email from us, reply "unsubscribe" and we will remove your address.
+      - key: LETTER_BRAND_PHONE
+        value: 252-665-5891
