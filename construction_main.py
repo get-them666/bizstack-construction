@@ -1812,6 +1812,15 @@ f"The mail transport did not accept the message. This usually means the "
         e164 = ("+1" + digits) if not digits.startswith("1") else ("+" + digits)
         if not vapi.is_configured():
             return {"ok": False, "error": "Vapi is not configured (VAPI_API_KEY missing)."}
+        # DNC applies to the telephone, not the transport: the same number that
+        # cannot be texted must not be dialled either. This path had no check at
+        # all, so the Copilot could call anyone on the suppression list.
+        try:
+            allowed, why = suppression.check_outbound(db, suppression.CHANNEL_VOICE, e164)
+        except Exception as exc:
+            return {"ok": False, "error": f"Could not verify do-not-call status: {exc}"}
+        if not allowed:
+            return {"ok": False, "error": f"Not calling {e164}: {why}"}
         try:
             sid = vapi.create_ai_outbound_call(e164, notes or "")
         except Exception as e:
