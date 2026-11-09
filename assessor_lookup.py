@@ -199,6 +199,73 @@ def owner_for_address(address: str, session: requests.Session | None = None) -> 
     }
 
 
+# --- Point -> parcel --------------------------------------------------------
+# Permit records carry coordinates, and a point is more reliable than matching an
+# address string: no abbreviations, no suite numbers, no "Dr" vs "Drive".
+GIS_PARCELS = ("https://geo.vbgov.com/mapservices/rest/services/Basemaps/"
+               "Property_Information/MapServer/12/query")
+
+
+def pin_for_point(lat, lon, timeout: int = 30) -> str:
+    """Return the GPIN of the parcel containing a lat/lon, or "" if none."""
+    try:
+        lat_f, lon_f = float(lat), float(lon)
+    except (TypeError, ValueError):
+        return ""
+    if not (-90 <= lat_f <= 90 and -180 <= lon_f <= 180):
+        return ""
+    params = {
+        "geometry": f"{lon_f},{lat_f}",
+        "geometryType": "esriGeometryPoint",
+        "inSR": "4326",
+        "spatialRel": "esriSpatialRelIntersects",
+        "outFields": "PAR_GPIN",
+        "returnGeometry": "false",
+        "f": "json",
+    }
+    try:
+        r = requests.get(GIS_PARCELS, params=params, timeout=timeout,
+                         verify=_ca_bundle(), headers={"User-Agent": _UA})
+    except requests.RequestException as exc:
+        raise AssessorError(f"parcel lookup failed: {exc}") from exc
+    if r.status_code >= 400:
+        raise AssessorError(f"parcel lookup returned {r.status_code}")
+    try:
+        feats = (r.json() or {}).get("features") or []
+    except ValueError as exc:
+        raise AssessorError("parcel lookup returned non-JSON") from exc
+    if not feats:
+        return ""
+    attrs = feats[0].get("attributes") or {}
+    return str(attrs.get("PAR_GPIN") or "").strip()
+
+
+def owner_for_point(lat, lon, session: requests.Session | None = None) -> dict | None:
+    """Coordinates -> the same record owner_for_address returns.
+
+    Use this when the permit carries geometry: it avoids every address-string
+    mismatch. Returns None when the point is outside Virginia Beach.
+    """
+    pin = pin_for_point(lat, lon)
+    if not pin:
+        return None
+    s = session or _session()
+    card = record_card(s, pin)
+    header = (card.get("parcel") or {}).get("header") or {}
+    if not header:
+        return None
+    return {
+        "pin": pin,
+        "owner_name": str(header.get("OwnerName1") or "").strip(),
+        "owner_name2": str(header.get("OwnerName2") or "").strip(),
+        "mailing_address": _mailing_address(card),
+        "situs_address": str(header.get("FullAddress") or header.get("SitusStreet") or "").strip(),
+        "total_value": header.get("TotalValue") or "",
+        "property_class": header.get("ClassCdDesc") or "",
+        "source": "vb_assessor_point",
+    }
+
+
 if __name__ == "__main__":
     import sys
     target = " ".join(sys.argv[1:]) or "252 Town Center Drive"
