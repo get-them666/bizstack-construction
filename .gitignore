@@ -36,3 +36,6 @@ docs/stripe/
 # Local bid board seed: live contract pricing and GC contact details. Loaded by
 # the "Load my current bids" button on /bids. Never enters the repo.
 bids_local.json
+
+# Generated CA bundle (certifi + vendored DigiCert intermediate)
+.ca_bundle_vb.pem

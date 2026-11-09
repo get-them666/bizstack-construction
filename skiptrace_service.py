@@ -470,7 +470,38 @@ def trace_address(street: str, city: str, state: str, zip_code: str = "") -> dic
             attempted.append("hrgeo: parcel matched")
         else:
             attempted.append("hrgeo: no unique parcel match")
-            rentcast_result = fetch_rentcast(address)
+            # Virginia Beach publishes its own assessor record, keyed by address,
+            # for free. Try it before spending a metered RentCast call: the free
+            # tier is 50 a month shared with the quote lookup and the AVM sweep.
+            vb_record = None
+            if (city or "").strip().upper() == "VIRGINIA BEACH":
+                try:
+                    import assessor_lookup
+                    vb = assessor_lookup.owner_for_address(address)
+                except Exception as exc:  # noqa: BLE001 - never break the waterfall
+                    attempted.append(f"vb_assessor: {exc}"[:120])
+                    vb = None
+                if vb and vb.get("owner_name"):
+                    klass = str(vb.get("property_class") or "").upper()
+                    commercial = any(k in klass for k in
+                                     ("COMMERCIAL", "HOTEL", "MOTEL", "OFFICE",
+                                      "RETAIL", "INDUSTRIAL", "APARTMENT", "CONDO"))
+                    vb_record = {
+                        "found": True,
+                        "owner_of_record": vb["owner_name"],
+                        "is_residential": not commercial,
+                        "source": "vb_assessor",
+                        "mailing_address": vb.get("mailing_address") or "",
+                        "pin": vb.get("pin") or "",
+                    }
+                    attempted.append("vb_assessor: parcel matched")
+                else:
+                    attempted.append("vb_assessor: no match")
+            if vb_record is not None:
+                vb_record["no_zip"] = not zip_code
+                record = vb_record
+            else:
+                rentcast_result = fetch_rentcast(address)
 
     if record is None:
         got = rentcast_result
