@@ -137,6 +137,9 @@ def ensure_accounting_schema(conn) -> None:
         cur.execute("ALTER TABLE bid_invoices ADD COLUMN IF NOT EXISTS kind VARCHAR(20) DEFAULT 'invoice';")
         # Zoho Books invoice id, set when the invoice is pushed to Zoho Books.
         cur.execute("ALTER TABLE bid_invoices ADD COLUMN IF NOT EXISTS zoho_invoice_id VARCHAR(120);")
+        # The shareable invoice page. Once a payment gateway is connected in
+        # Zoho Books this is the URL that carries the card/ACH pay button.
+        cur.execute("ALTER TABLE bid_invoices ADD COLUMN IF NOT EXISTS zoho_invoice_url VARCHAR(600);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_bid_invoices_bid ON bid_invoices(bid_id);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_bid_invoices_kind ON bid_invoices(bid_id, kind);")
         # One invoice number per company. NULL numbers are allowed to repeat,

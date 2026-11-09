@@ -104,12 +104,17 @@ def push_invoice_to_zoho(db, bid_id: int, invoice: dict) -> Optional[str]:
 
     if result and result.get("invoice"):
         zoho_invoice_id = result["invoice"].get("invoice_id")
+        # invoice_url is the shareable page the client opens to view and pay.
+        # Zoho only renders a Pay Now button there when a gateway is connected,
+        # but the link is useful either way, so it is stored rather than dropped.
+        zoho_invoice_url = result["invoice"].get("invoice_url") or ""
         # Store the Zoho invoice id on the local row
         try:
             with db.cursor() as cur:
                 cur.execute(
-                    "UPDATE bid_invoices SET zoho_invoice_id = %s WHERE id = %s AND company = 'construction';",
-                    (zoho_invoice_id, invoice["id"]))
+                    "UPDATE bid_invoices SET zoho_invoice_id = %s, zoho_invoice_url = %s "
+                    "WHERE id = %s AND company = 'construction';",
+                    (zoho_invoice_id, zoho_invoice_url, invoice["id"]))
             db.commit()
         except Exception:
             db.rollback()
