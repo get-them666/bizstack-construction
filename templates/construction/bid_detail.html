@@ -317,6 +317,13 @@
                 {% if deposit_invoice %}
                 <span class="px-2 py-0.5 text-xs font-bold rounded-full {% if deposit_invoice.status == 'paid' %}bg-emerald-50 text-emerald-700 border border-emerald-200{% elif deposit_invoice.status == 'sent' %}bg-blue-50 text-blue-700 border border-blue-200{% elif deposit_invoice.status == 'partial' %}bg-amber-50 text-amber-700 border border-amber-200{% else %}bg-slate-100 text-slate-600{% endif %}">{{ deposit_invoice.status|upper }}</span>
                 <span class="block mt-1 text-[11px] text-slate-400">{{ deposit_invoice.invoice_number or 'no number' }}{% if deposit_invoice.due_date %} · due {{ deposit_invoice.due_date }}{% endif %}</span>
+                {# The Zoho invoice page carries a card/ACH button once the gateway
+                   is verified. Shown only when the URL exists, so an invoice that
+                   never reached Zoho does not present a dead link. #}
+                {% if deposit_invoice.zoho_invoice_url %}
+                <a href="{{ deposit_invoice.zoho_invoice_url }}" target="_blank" rel="noopener"
+                   class="inline-block mt-1 text-[11px] font-bold text-indigo-600 hover:text-indigo-700 hover:underline">Pay online &rarr;</a>
+                {% endif %}
                 {% else %}
                 <span class="px-2 py-0.5 text-xs font-bold rounded-full bg-slate-100 text-slate-600">UNBILLED</span>
                 {% endif %}
@@ -359,6 +366,10 @@
                 {% if prog_inv %}
                 <span class="px-2 py-0.5 text-xs font-bold rounded-full {% if prog_inv.status == 'paid' %}bg-emerald-50 text-emerald-700 border border-emerald-200{% elif prog_inv.status == 'sent' %}bg-blue-50 text-blue-700 border border-blue-200{% elif prog_inv.status == 'partial' %}bg-amber-50 text-amber-700 border border-amber-200{% else %}bg-slate-100 text-slate-600{% endif %}">{{ prog_inv.status|upper }}</span>
                 <span class="block mt-1 text-[11px] text-slate-400">{{ prog_inv.invoice_number or 'no number' }}{% if prog_inv.due_date %} · due {{ prog_inv.due_date }}{% endif %}</span>
+                {% if prog_inv.zoho_invoice_url %}
+                <a href="{{ prog_inv.zoho_invoice_url }}" target="_blank" rel="noopener"
+                   class="inline-block mt-1 text-[11px] font-bold text-indigo-600 hover:text-indigo-700 hover:underline">Pay online &rarr;</a>
+                {% endif %}
                 {% else %}
                 <span class="px-2 py-0.5 text-xs font-bold rounded-full bg-slate-100 text-slate-600">UNBILLED</span>
                 {% endif %}
