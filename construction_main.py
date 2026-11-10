@@ -11121,6 +11121,37 @@ async def bids_page(request: Request, status: str = "", page: int = 1, db=Depend
 
 
 # --- Website lead webhook (for external sites/forms) -------------------------
+@app.post("/api/webhooks/tidy/{token}")
+async def tidy_webhook_receiver(token: str, request: Request, db=Depends(get_db)):
+    """Tidy job events, for the construction side of a turnover.
+
+    Same receiver as the Broom app, deliberately duplicated rather than shared:
+    the two companies are separate deploys with separate databases, and
+    AGENTS.md forbids a dependency between the repos.
+
+    The path token is the authentication -- Tidy sends unauthenticated POSTs, so
+    there is no signature to check. Unset TIDY_WEBHOOK_TOKEN means this 404s.
+    """
+    import tidy_webhook
+
+    if not tidy_webhook.token_ok(token):
+        raise HTTPException(status_code=404, detail="Not found")
+    raw = await request.body()
+    try:
+        payload = json.loads(raw or b"{}")
+    except ValueError:
+        return JSONResponse({"ok": True, "stored": False, "why": "not json"})
+    if not isinstance(payload, dict):
+        return JSONResponse({"ok": True, "stored": False, "why": "not an object"})
+    try:
+        result = tidy_webhook.record(db, payload)
+    except Exception as exc:
+        print(f"[tidy-webhook] store failed: {exc}", flush=True)
+        return JSONResponse({"ok": True, "stored": False})
+    print(f"[tidy-webhook] {result}", flush=True)
+    return JSONResponse(result)
+
+
 @app.post("/api/webhooks/leads")
 async def website_lead_webhook(request: Request, db=Depends(get_db)):
     try:
