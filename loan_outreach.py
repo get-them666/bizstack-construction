@@ -226,8 +226,25 @@ def mail_ready() -> bool:
     detail = ""
     try:
         sender = (FROM_ADDR or "").strip()
+        # The owner's mail runs on Zoho now. This check only ever asked Gmail,
+        # so once Gmail was retired every send looked broken while Zoho was
+        # delivering fine -- the status tile said "Broken" and the outreach
+        # cadence refused to spend touches. Ask the transport that is actually
+        # configured first, and only fall through to Gmail if it is not.
+        transport = (os.getenv("EMAIL_TRANSPORT", "gmail") or "").strip().lower()
+        if transport in ("zoho", "auto"):
+            try:
+                import zoho_mail
+                if zoho_mail.available():
+                    _MAIL_READY_CACHE["value"] = True
+                    _MAIL_READY_CACHE["detail"] = "Zoho Mail connected"
+                    _MAIL_READY_CACHE["checked_at"] = datetime.now(timezone.utc).isoformat()
+                    print("[outreach] mail preflight: OK — Zoho Mail connected", flush=True)
+                    return True
+            except Exception as exc:  # noqa: BLE001
+                detail = f"zoho: {exc}"[:160]
         if not sender:
-            detail = "no SMTP_FROM set"
+            detail = detail or "no SMTP_FROM set"
         else:
             import google_oauth
             services = (os.getenv("GMAIL_SEND_SERVICES", "construction") or "")
