@@ -230,7 +230,7 @@ def enrich_str_leads(limit: int = 15) -> int:
                 "SELECT id, name, email, phone, address, analysis_json FROM leads "
                 "WHERE source = 'str_seed' "
                 "AND COALESCE(phone, '') = '' "
-                "AND (email IS NULL OR LOWER(email) LIKE '%@lead.local') "
+                "AND (email IS NULL OR LOWER(email) LIKE '%%@lead.local') "
                 "AND (analysis_json::text NOT LIKE '%\"enriched\"%') "
                 "ORDER BY id DESC LIMIT %s;",
                 (limit,),
@@ -305,7 +305,7 @@ def enrich_pending_leads(limit: int = 15, dry_run: bool = False) -> int:
                 "WHERE company = 'construction' "
                 "AND source = 'permit_finder' "
                 "AND COALESCE(phone, '') = '' "
-                "AND (email IS NULL OR LOWER(email) LIKE '%@lead.local') "
+                "AND (email IS NULL OR LOWER(email) LIKE '%%@lead.local') "
                 "AND (analysis_json::text NOT LIKE '%\"enriched\"%') "
                 "ORDER BY id DESC LIMIT %s;",
                 (limit,),
@@ -377,4 +377,97 @@ def enrich_pending_leads(limit: int = 15, dry_run: bool = False) -> int:
             "cost_usd": round((len(hits) + len(misses)) * 0.20, 2),
         })
         return 0
+    return updated
+
+def enrich_from_assessor(limit: int = 25, dry_run: bool = False) -> int:
+    """Fill owner names on address-only leads from the city assessor, for free.
+
+    The PDL pass above is gated on a paid key and a per-record cost, so when the
+    RentCast budget is spent these permit leads sit forever with an @lead.local
+    placeholder. Virginia Beach publishes the owner of record at no cost, and
+    that name is what makes a permit address mailable: "Dear Lloyd Luallin"
+    instead of "Dear Permit · 833 LINDENWOOD".
+
+    The lead's name is replaced with the owner of record because mail_letters
+    uses it as the salutation, and the original permit label is preserved in
+    notes so the card still says what the work is.
+
+    Returns the number of leads updated.
+    """
+    import assessor_lookup
+    try:
+        db = psycopg.connect(os.environ["DATABASE_URL"], row_factory=dict_row)
+    except Exception as e:
+        print(f"[assessor] db failure: {e}")
+        return 0
+    updated = 0
+    try:
+        with db.cursor() as cur:
+            cur.execute(
+                "SELECT id, name, address, notes, analysis_json FROM leads "
+                "WHERE company = 'construction' AND status = 'new' "
+                "  AND COALESCE(address,'') <> '' "
+                "  AND COALESCE(phone,'') = '' "
+                "  AND (email IS NULL OR LOWER(email) LIKE '%%@lead.local') "
+                "  AND COALESCE(analysis_json::text,'') NOT LIKE '%%assessor_owner%%' "
+                "ORDER BY id DESC LIMIT %s;",
+                (limit,),
+            )
+            rows = cur.fetchall()
+        for r in rows:
+            address = (r.get("address") or "").strip()
+            if not address:
+                continue
+            try:
+                # Jurisdiction decides the source. Fighting over one scraper for
+                # every city is what left Norfolk leads permanently empty.
+                if "norfolk" in address.lower():
+                    import norfolk_assessor
+                    found = norfolk_assessor.owner_for_address(address)
+                else:
+                    found = assessor_lookup.owner_for_address(address)
+            except Exception as exc:
+                print(f"[assessor] lead {r['id']}: {exc}", flush=True)
+                continue
+            except Exception as exc:
+                print(f"[assessor] lead {r['id']} unexpected: {exc}", flush=True)
+                continue
+            owner = (found or {}).get("owner_name") or ""
+            if not owner:
+                continue
+            if dry_run:
+                print(f"[assessor] would set lead {r['id']} -> {owner}")
+                updated += 1
+                continue
+            pretty = " ".join(w.capitalize() if w.isupper() and len(w) > 1 else w
+                              for w in owner.split())
+            note = (r.get("notes") or "").strip()
+            marker = f"Owner of record: {pretty} (VB assessor)"
+            if marker not in note:
+                note = (note + "\n" if note else "") + marker
+            # psycopg returns a jsonb column as text, not a dict, so dict(...)
+            # raised "element #0 has length 1" on the first real update.
+            raw_json = r.get("analysis_json")
+            if isinstance(raw_json, dict):
+                stamp = dict(raw_json)
+            elif isinstance(raw_json, str) and raw_json.strip():
+                try:
+                    parsed = json.loads(raw_json)
+                    stamp = dict(parsed) if isinstance(parsed, dict) else {}
+                except ValueError:
+                    stamp = {}
+            else:
+                stamp = {}
+            stamp["assessor_owner"] = pretty
+            stamp["assessor_mailing"] = (found or {}).get("mailing_address") or ""
+            with db.cursor() as cur:
+                cur.execute(
+                    "UPDATE leads SET name = %s, notes = %s, analysis_json = %s "
+                    "WHERE id = %s AND company = 'construction';",
+                    (pretty[:120], note[:4000], json.dumps(stamp), r["id"]),
+                )
+            db.commit()
+            updated += 1
+    finally:
+        db.close()
     return updated
