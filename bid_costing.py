@@ -828,7 +828,12 @@ def set_invoice_status(conn, invoice_id: int, status: str, company: str = "const
         amt = float(inv["amount"] or 0)
         coll = float(inv["collected"] or 0)
         if collected not in (None, ""):
-            coll = max(0.0, min(amt, _money(collected)))
+            # ADD the money just received to what was already collected. This
+            # used to overwrite: paying 4,000 then 3,000 on a 10,000 invoice
+            # left collected=3,000 (7,000 vanished), and the next "mark paid"
+            # click posted the full 10,000 to the ledger, so the books showed
+            # 17,000 received against a 10,000 invoice.
+            coll = max(0.0, min(amt, coll + _money(collected)))
         if status == "paid":
             coll = amt
         elif status in ("draft", "void"):

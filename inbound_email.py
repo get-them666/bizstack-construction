@@ -204,15 +204,25 @@ def _ingest(db, company_key, msgs, mailbox_from):
             note = f"[reply {stamp} from {sender}] {subject}: {text[:500]}"
             notes = (notes.strip() + "\n" + note).strip() if notes else note
             notes = notes[:4000]
+            # A reply is the one thing that must reach the top of the queue:
+            # lifecycle only produces ACTION_RESPOND for stage 'engaged', and
+            # this used to write 'contacted', so every real reply stayed in
+            # "waiting"/"follow_up" and "Replied — respond" read 0 forever.
             cur.execute(
                 "UPDATE leads SET notes = %s, last_reply_at = CURRENT_TIMESTAMP, "
-                "status = CASE WHEN status IN ('new', 'contacted') THEN 'contacted' ELSE status END "
+                "status = CASE WHEN status IN ('won', 'lost', 'closed', 'cancelled', 'archived') "
+                "              THEN status ELSE 'engaged' END "
                 "WHERE id = %s;",
                 (notes, lead_id),
             )
             # Commit the inbound row + reply note before any AI work, so a slow or
             # failing draft call can never roll the recorded reply away.
             db.commit()
+            try:
+                from bizstack_leads import store as lead_store
+                lead_store.recompute(db, lead_id)
+            except Exception as exc:
+                print(f"[inbound-email] recompute failed for lead {lead_id}: {exc}", flush=True)
             # "Reply STOP" has been in every email; this is the first thing that
             # honours it. An opt-out ends every automated touch for the lead and
             # must not be answered by the reply bot.

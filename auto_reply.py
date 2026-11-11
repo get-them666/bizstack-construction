@@ -765,8 +765,13 @@ def _fire_sent_effect(db, lead_id, company_key, channel, recipient, body):
         print(f"[auto-reply {company_key}] sent {channel} to {recipient} (lead #{lead_id})", flush=True)
         return True
     except Exception as exc:
-        print(f"[auto-reply {company_key}] post-send bookkeeping failed for lead {lead_id}: {exc}", flush=True)
-        return False
+        # The message is already out. Returning False here told the callers
+        # "not delivered", so the reply bot staged a draft AND sent the other
+        # channel as well -- one email became email + text + a queued draft.
+        # A bookkeeping failure must never be mistaken for a delivery failure.
+        print(f"[auto-reply {company_key}] DELIVERED but bookkeeping failed for "
+              f"lead {lead_id}: {exc}", flush=True)
+        return True
 
 
 def _strip_draft_marker(notes: str) -> str:

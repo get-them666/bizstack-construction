@@ -7764,9 +7764,35 @@ async def inbound_sms_webhook(request: Request, db=Depends(get_db)):
     agent = BusinessAIAgent(knowledge_path="construction_knowledge.md", tool_handlers=build_tool_handlers(db, stripe_svc))
     ai_reply = await asyncio.to_thread(agent.process_inbound_text, f"Inbound SMS from {From}: {Body}")
 
+    # Hang the inbound text on the lead and mark it replied. Previously the row
+    # was written with no lead_id, so a customer who texted back was invisible
+    # to the queue (and to the "already replied" guard) and kept receiving the
+    # email cadence.
     with db.cursor() as cur:
-        cur.execute("INSERT INTO comms_logs (direction, channel, sender, recipient, message_body) VALUES ('inbound', 'sms', %s, 'system', %s);", (From, Body))
+        digits = re.sub(r"\D", "", From or "")[-10:]
+        lead_id = None
+        if digits:
+            cur.execute(
+                "SELECT id FROM leads WHERE company = 'construction' "
+                "  AND regexp_replace(COALESCE(phone, ''), '\\D', '', 'g') LIKE %s "
+                "ORDER BY id DESC LIMIT 1;", (f"%{digits}",))
+            row = cur.fetchone()
+            lead_id = row["id"] if row else None
+        cur.execute(
+            "INSERT INTO comms_logs (direction, channel, sender, recipient, message_body, lead_id) "
+            "VALUES ('inbound', 'sms', %s, 'system', %s, %s);", (From, Body, lead_id))
+        if lead_id:
+            cur.execute(
+                "UPDATE leads SET status = CASE WHEN status IN "
+                "  ('won','lost','closed','cancelled','archived') THEN status ELSE 'engaged' END, "
+                "  last_reply_at = CURRENT_TIMESTAMP WHERE id = %s;", (lead_id,))
         db.commit()
+    if lead_id:
+        try:
+            from bizstack_leads import store as lead_store
+            lead_store.recompute(db, lead_id)
+        except Exception as exc:
+            print(f"[sms] recompute failed for lead {lead_id}: {exc}", flush=True)
 
     sxml_payload = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response><Message to="{From}">{ai_reply}</Message></Response>"""

@@ -580,7 +580,13 @@ def build_itemized_pricing(bid: dict, costs: list[dict]) -> bytes:
 def build_contract(bid: dict, costs: list[dict], photos: list[Path],
                    signature: dict | None = None) -> bytes:
     pdf = _new_pdf("Renovation agreement")
-    total = sum(float(c.get("estimated") or 0) for c in costs)
+    # bill the CUSTOMER the bid amount, not the raw cost lines. bid_amount is
+    # base x (1 + markup), which is what the bid card and the deposit invoice
+    # use; summing costs here produced a contract priced at cost, so a
+    # $120,000 job was signed at $100,000 and then invoiced at $120,000.
+    total = float(bid.get("bid_amount") or 0)
+    if total <= 0:
+        total = sum(float(c.get("estimated") or 0) for c in costs)
     dep_amt = round(total * DEPOSIT_PCT / 100.0, 2)
     prog_amt = round(total * PROGRESS_PCT / 100.0, 2)
     final_amt = round(total - dep_amt - prog_amt, 2)
@@ -772,7 +778,8 @@ def main() -> int:
         ("03-Contract.pdf", build_contract(bid, costs, photos, signature=signature)),
     ]
 
-    total = sum(float(c.get("estimated") or 0) for c in costs)
+    total = float(bid.get("bid_amount") or 0) or sum(
+        float(c.get("estimated") or 0) for c in costs)
     print(f"Bid #{bid.get('id')}  {bid.get('name')}")
     print(f"  {len(costs)} lines, total {_money(total)}")
     print(f"  {len(photos)} photos")

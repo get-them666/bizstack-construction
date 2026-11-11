@@ -49,3 +49,81 @@ def test_no_drafts_reports_zero(monkeypatch):
     s = _summary(monkeypatch, [r for r in _rows() if r["status"] != "draft"])
     assert (s["draft_count"], s["draft_total"]) == (0, 0)
     assert s["billed"] == 6506.0
+
+
+def test_partial_payments_accumulate_instead_of_overwriting():
+    """Paying 4,000 then 3,000 on a 10,000 invoice must leave 7,000 collected.
+
+    The old code SET collected to the amount of each click, so the second
+    payment erased the first (7,000 received, 3,000 on the books), and the
+    next "mark paid" posted the full 10,000 to the ledger -- 17,000 against a
+    10,000 invoice.
+    """
+    class Cur:
+        def __init__(self):
+            self.params = None
+            self.row = {"amount": 10000.0, "collected": 4000.0, "bid_id": 1}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def execute(self, sql, params=None):
+            if sql.strip().upper().startswith("UPDATE"):
+                self.params = params
+
+        def fetchone(self):
+            return self.row
+
+    class Conn:
+        def __init__(self):
+            self.cur = Cur()
+
+        def cursor(self):
+            return self.cur
+
+        def commit(self):
+            pass
+
+    conn = Conn()
+    assert bid_costing.set_invoice_status(conn, 1, "partial", "construction", 3000) is True
+    # UPDATE params: (derived_status, collected, invoice_id, company)
+    assert conn.cur.params[1] == 7000.0, conn.cur.params
+    assert conn.cur.params[0] == "partial"
+
+
+def test_paying_the_balance_marks_it_paid_and_keeps_the_full_total():
+    class Cur:
+        def __init__(self):
+            self.params = None
+            self.row = {"amount": 10000.0, "collected": 7000.0, "bid_id": 1}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def execute(self, sql, params=None):
+            if sql.strip().upper().startswith("UPDATE"):
+                self.params = params
+
+        def fetchone(self):
+            return self.row
+
+    class Conn:
+        def __init__(self):
+            self.cur = Cur()
+
+        def cursor(self):
+            return self.cur
+
+        def commit(self):
+            pass
+
+    conn = Conn()
+    assert bid_costing.set_invoice_status(conn, 1, "paid", "construction", 3000) is True
+    assert conn.cur.params[1] == 10000.0
+    assert conn.cur.params[0] == "paid"
