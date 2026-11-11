@@ -4,7 +4,26 @@
 {% block meta %}<meta name="robots" content="noindex, nofollow">{% endblock %}
 
 {% block content %}
-<div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
+<div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-10 pb-28">
+
+  {# The pull redirects back here with pull_* in the query string. Without this
+     the button looked like it did nothing at all: the page reloaded and the
+     result was only rendered on the Bids board. #}
+  {% if request.query_params.get('pulled') is not none or request.query_params.get('pull_msg') %}
+  <div class="mb-4 rounded-xl border px-4 py-3 text-sm
+              {% if request.query_params.get('pull_errors') and request.query_params.get('pull_errors') != '0' %}border-amber-200 bg-amber-50 text-amber-900
+              {% else %}border-emerald-200 bg-emerald-50 text-emerald-900{% endif %}">
+    <b>Document pull:</b>
+    {{ request.query_params.get('pulled') or 0 }} saved ·
+    {{ request.query_params.get('skipped') or 0 }} skipped
+    {% if request.query_params.get('pull_errors') and request.query_params.get('pull_errors') != '0' %}
+      · {{ request.query_params.get('pull_errors') }} error(s)
+    {% endif %}
+    {% if request.query_params.get('pull_msg') %}
+      <div class="mt-1 text-xs">{{ request.query_params.get('pull_msg') }}</div>
+    {% endif %}
+  </div>
+  {% endif %}
 
   <a href="/bids" class="text-sm font-semibold text-indigo-600 hover:text-indigo-700">&larr; All bids</a>
 
@@ -954,7 +973,7 @@
 {# ── One action bar, pinned, so the card is usable without scrolling the
    whole page. Every action here already existed somewhere above; this is the
    shortcut, not a second implementation. #}
-<div class="sticky bottom-0 z-40 -mx-4 sm:-mx-6 lg:-mx-8 px-4 sm:px-6 lg:px-8 py-3 bg-white/95 backdrop-blur border-t border-slate-200 shadow-[0_-8px_24px_-16px_rgba(15,23,42,0.35)]">
+<div class="fixed bottom-0 left-0 right-0 z-40 px-4 sm:px-6 lg:px-8 py-3 bg-white/95 backdrop-blur border-t border-slate-200 shadow-[0_-8px_24px_-16px_rgba(15,23,42,0.35)]">
   <div class="max-w-7xl mx-auto flex flex-wrap items-center gap-2">
     <span class="text-[11px] font-bold uppercase tracking-wider text-slate-400 mr-1">Documents</span>
     <a href="/bids/{{ b.id }}/sow.pdf" target="_blank" rel="noopener" class="px-3 py-2 text-xs font-bold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 rounded-lg">SOW</a>
