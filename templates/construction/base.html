@@ -38,8 +38,12 @@
     <link rel="icon" href="/static/construction_favicon.svg" type="image/svg+xml">
     {# Static Tailwind build (see tailwind.config.js). Replaces the Play CDN,
        which shipped ~400 KB of render-blocking JS and compiled the stylesheet
-       in the browser on every page view. Rebuild with `npm run css`. #}
-    <link rel="stylesheet" href="/static/css/tailwind.css?v={{ asset_version }}">
+       in the browser on every page view. Rebuild with `npm run css`.
+       
+       NOTE: npm is broken on this machine (dyld/simdutf), so we use the CDN
+       until Node is restored. The CDN compiles Tailwind in-browser — adds
+       ~400ms to first page load but guarantees every class is styled. #}
+    <script src="https://cdn.tailwindcss.com"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
