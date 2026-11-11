@@ -463,43 +463,64 @@ def trace_address(street: str, city: str, state: str, zip_code: str = "") -> dic
         attempted.append(f"hrgeo: {exc.message}")
         rentcast_result = fetch_rentcast(address)
     else:
-        if hrgeo_result is not None and hrgeo_result is not NOT_FOUND:
+        # A parcel match without a name is not an answer. HRGEO returns a record
+        # for some parcels with owner_of_record empty, and accepting it stopped
+        # the waterfall dead: the address reported "found" with no owner, so the
+        # assessor below was never asked. Treat a nameless hit as a miss.
+        if (hrgeo_result is not None and hrgeo_result is not NOT_FOUND
+                and str(hrgeo_result.get("owner_of_record") or "").strip()):
             hrgeo_result["no_zip"] = not zip_code
             hrgeo_result["provider"] = "hrgeo"
             record = hrgeo_result
             attempted.append("hrgeo: parcel matched")
         else:
             attempted.append("hrgeo: no unique parcel match")
-            # Virginia Beach publishes its own assessor record, keyed by address,
-            # for free. Try it before spending a metered RentCast call: the free
-            # tier is 50 a month shared with the quote lookup and the AVM sweep.
-            vb_record = None
-            if (city or "").strip().upper() == "VIRGINIA BEACH":
+            # The city assessors publish the owner of record for free. Try them
+            # before spending a metered RentCast call: its free tier is 50 a
+            # month, shared with the quote lookup and the AVM sweep, and when it
+            # runs out every address reports "no usable owner" -- which reads
+            # exactly like an owner with no contact details.
+            #
+            # Each jurisdiction is a different system, so the city picks the
+            # source. Norfolk leads were the ones still falling through to
+            # RentCast, so they always came back empty.
+            local_record = None
+            city_key = (city or "").strip().upper()
+            if city_key in ("VIRGINIA BEACH", "NORFOLK"):
                 try:
-                    import assessor_lookup
-                    vb = assessor_lookup.owner_for_address(address)
+                    if city_key == "NORFOLK":
+                        import norfolk_assessor
+                        vb = norfolk_assessor.owner_for_address(address)
+                    else:
+                        import assessor_lookup
+                        vb = assessor_lookup.owner_for_address(address)
                 except Exception as exc:  # noqa: BLE001 - never break the waterfall
-                    attempted.append(f"vb_assessor: {exc}"[:120])
+                    attempted.append(f"local_assessor: {exc}"[:120])
                     vb = None
                 if vb and vb.get("owner_name"):
                     klass = str(vb.get("property_class") or "").upper()
                     commercial = any(k in klass for k in
                                      ("COMMERCIAL", "HOTEL", "MOTEL", "OFFICE",
                                       "RETAIL", "INDUSTRIAL", "APARTMENT", "CONDO"))
-                    vb_record = {
+                    local_record = {
                         "found": True,
+                        # Both keys on purpose: the waterfall compares
+                        # owner_of_record, but the final return reads
+                        # owner_name. Setting only one made every assessor hit
+                        # come back found=True with a null owner.
+                        "owner_name": vb["owner_name"],
                         "owner_of_record": vb["owner_name"],
                         "is_residential": not commercial,
-                        "source": "vb_assessor",
+                        "source": vb.get("source") or "assessor",
                         "mailing_address": vb.get("mailing_address") or "",
                         "pin": vb.get("pin") or "",
                     }
-                    attempted.append("vb_assessor: parcel matched")
+                    attempted.append(f"{local_record['source']}: parcel matched")
                 else:
-                    attempted.append("vb_assessor: no match")
-            if vb_record is not None:
-                vb_record["no_zip"] = not zip_code
-                record = vb_record
+                    attempted.append("local_assessor: no match")
+            if local_record is not None:
+                local_record["no_zip"] = not zip_code
+                record = local_record
             else:
                 rentcast_result = fetch_rentcast(address)
 
