@@ -3188,6 +3188,7 @@ def _is_form_bot(honeypot: str, source: str = "") -> bool:
 
 @app.post("/submit-lead")
 async def submit_lead(
+    request: Request,
     name: str = Form(...),
     phone: str = Form(""),
     email: str = Form(""),
