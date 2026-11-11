@@ -204,7 +204,6 @@
                         <span class="px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide bg-amber-100 text-amber-900 rounded">New</span>
                         {% endif %}
                     </div>
-                    <h2 class="text-base font-bold text-slate-900">{{ b.name }}</h2>
                     <p class="text-xs text-slate-500 mt-0.5">
                         {% if b.owner %}{{ b.owner }}{% endif %}
                         {% if b.location %} · {{ b.location }}{% endif %}
@@ -234,6 +233,16 @@
             {% endif %}
 
             <div class="flex flex-wrap items-center gap-2 mt-4 pt-4 border-t border-slate-100">
+                {# Documents are generated from this bid's lines, so they are one
+                   click from the board instead of only inside the detail page. #}
+                <div class="flex items-center gap-1 mr-1">
+                    <a href="/bids/{{ b.id }}/sow.pdf" target="_blank" rel="noopener"
+                       class="px-2.5 py-1.5 text-xs font-semibold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 rounded-lg">SOW</a>
+                    <a href="/bids/{{ b.id }}/itemized.pdf" target="_blank" rel="noopener"
+                       class="px-2.5 py-1.5 text-xs font-semibold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 rounded-lg">Quote</a>
+                    <a href="/bids/{{ b.id }}/contract.pdf" target="_blank" rel="noopener"
+                       class="px-2.5 py-1.5 text-xs font-semibold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 rounded-lg">Contract</a>
+                </div>
                 <form method="post" action="/api/bids/{{ b.id }}/status" class="flex items-center gap-1">
                     <select name="status" class="text-xs border border-slate-200 rounded-lg px-2 py-1.5 bg-white">
                         {% for s in statuses %}<option value="{{ s }}" {% if s == b.status %}selected{% endif %}>{{ s }}</option>{% endfor %}

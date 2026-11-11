@@ -4848,9 +4848,48 @@ def _project_photo_paths(db, bid_id: int) -> list:
     return paths
 
 
+def _bid_drawing_paths(db, bid_id: int, limit: int = 12) -> list:
+    """Uploaded plan/drawing images for a bid, as temp files for the PDFs.
+
+    Until now the documents only carried job_photos, which require an open job
+    card, so a bid with drawings attached produced a scope of work with no
+    drawings at all. Images are embedded; a PDF drawing cannot be embedded by
+    fpdf, so those are skipped here (they are still listed on the bid card).
+    """
+    import tempfile
+    try:
+        bid_opportunities.ensure_schema(db)
+        docs = bid_opportunities.list_documents(db, bid_id, _BID_COMPANY)
+    except Exception:
+        return []
+    wanted = []
+    for d in docs:
+        if d.get("superseded_at"):
+            continue
+        kind = str(d.get("document_type") or "").lower()
+        ctype = str(d.get("content_type") or "").lower()
+        if kind in ("plans", "drawing", "drawings") and ctype.startswith("image/"):
+            wanted.append(d)
+    if not wanted:
+        return []
+    tmpdir = tempfile.mkdtemp(prefix=f"buildstack-drawings-{bid_id}-")
+    paths = []
+    for i, d in enumerate(wanted[:limit]):
+        try:
+            body, _ctype = photo_store.read(d.get("key") or "")
+        except Exception:
+            continue
+        ext = os.path.splitext(d.get("filename") or "")[1] or ".png"
+        path = os.path.join(tmpdir, f"drawing-{i:03d}{ext}")
+        with open(path, "wb") as fh:
+            fh.write(body)
+        paths.append((path, f"Drawing: {d.get('filename') or f'sheet {i + 1}'}"))
+    return paths
+
+
 @app.get("/bids/{bid_id}/sow.pdf")
 async def bid_sow_pdf(bid_id: int, request: Request, db=Depends(get_db)):
-    """Scope of Work PDF, with walkthrough photos embedded."""
+    """Scope of Work PDF, with walkthrough photos and drawings embedded."""
     require_admin(request)
     bid = bid_opportunities.get_bid(db, bid_id, _BID_COMPANY)
     if not bid:
@@ -4860,7 +4899,7 @@ async def bid_sow_pdf(bid_id: int, request: Request, db=Depends(get_db)):
         costs = bid_costing.cost_lines(db, bid_id, _BID_COMPANY)
     except Exception:
         costs = []
-    photos = _project_photo_paths(db, bid_id)
+    photos = _project_photo_paths(db, bid_id) + _bid_drawing_paths(db, bid_id)
     pdf = build_bid_documents.build_scope_of_work(dict(bid), costs, [p for p, _ in photos])
     name = f"BuildStack-SOW-Bid-{bid_id}.pdf"
     return Response(content=pdf, media_type="application/pdf",
@@ -4899,7 +4938,7 @@ async def bid_contract_pdf(bid_id: int, request: Request, db=Depends(get_db)):
         costs = bid_costing.cost_lines(db, bid_id, _BID_COMPANY)
     except Exception:
         costs = []
-    photos = _project_photo_paths(db, bid_id)
+    photos = _project_photo_paths(db, bid_id) + _bid_drawing_paths(db, bid_id)
     try:
         bid_signing.ensure_schema(db)
         signature = bid_signing.describe(

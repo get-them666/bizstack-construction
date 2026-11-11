@@ -362,7 +362,10 @@ def build_scope_of_work(bid: dict, costs: list[dict], photos: list[Path]) -> byt
 
     _heading(pdf, "Summary")
     pdf.set_font("Helvetica", "", 9)
-    total = sum(float(c.get("estimated") or 0) for c in costs)
+    # Same contract price as the contract and the bid card: bid_amount carries
+    # the markup, the cost lines do not.
+    total = float(bid.get("bid_amount") or 0) or sum(
+        float(c.get("estimated") or 0) for c in costs)
     if scope:
         _mc(pdf, 0, 4.8, _txt(
             f"{COMPANY} will complete the renovation described below at the "
@@ -453,7 +456,16 @@ def build_itemized_pricing(bid: dict, costs: list[dict]) -> bytes:
     _party_block(pdf, bid)
 
     ordered = sorted(costs, key=lambda x: x.get("id") or 0)
-    total = sum(float(c.get("estimated") or 0) for c in ordered)
+    total = float(bid.get("bid_amount") or 0) or sum(
+        float(c.get("estimated") or 0) for c in ordered)
+    if not ordered and total > 0:
+        # A bid priced as one number (or a solicitation we have not broken down
+        # yet) still has to produce a usable document. Previously this rendered
+        # an empty table with a total, which looks like a broken quote.
+        ordered = [{
+            "id": 0, "description": f"Lump sum - {bid.get('name') or 'renovation'}",
+            "qty": 1, "unit": "lot", "estimated": total,
+        }]
 
     _heading(pdf, "Line items")
     widths = (8, 100, 13, 18, 22, 24)
