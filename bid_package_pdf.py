@@ -54,7 +54,7 @@ TERMS = [
 EXCLUSIONS = [
     "Building permits, plan review and inspection fees, unless listed above.",
     "Structural repair, framing replacement or joist work not listed in scope.",
-    "Mold remediation beyond the sewage cleanup and disinfection listed above.",
+    "Mold remediation and environmental cleanup not listed in the scope of work.",
     "Asbestos or lead abatement, testing or disposal.",
     "Moving or storing the owner's furniture, appliances or personal property.",
     "Wall or ceiling paint beyond two finish coats over prepared surfaces.",
@@ -63,10 +63,12 @@ EXCLUSIONS = [
     "Work outside normal hours, or access delays caused by the owner or other trades.",
 ]
 
+# The base list must fit ANY job. Job-specific conditions are added by
+# assumptions_for(costs) below; the sewage wording used to live here and so
+# appeared on every bid in the system, including a veterinary clinic fit-out.
 ASSUMPTIONS = [
-    "All sewage-affected areas are fully cleaned, disinfected and dry before any "
-    "finish work begins. Finish work on a wet or contaminated substrate is not "
-    "covered by this price.",
+    "The work area is accessible and free of hazardous materials unless noted "
+    "in the scope of work.",
     "Pricing assumes the quantities listed in the scope of work. Concealed damage "
     "found after demolition - rot, compromised subfloor, failed plumbing - is "
     "handled as a written change order before the work proceeds.",
@@ -75,6 +77,40 @@ ASSUMPTIONS = [
     "Existing surfaces are sound and ready to receive finish unless noted.",
     "Debris haul-away covers job-generated debris only.",
 ]
+
+
+def _mentions(costs, *words: str) -> bool:
+    blob = " ".join(
+        f"{c.get('description') or ''} {c.get('category') or ''}"
+        for c in (costs or []) if isinstance(c, dict)
+    ).lower()
+    return any(w in blob for w in words)
+
+
+def assumptions_for(costs=None) -> list:
+    """The assumptions that apply to THIS job.
+
+    Global letterhead-style terms only; anything specific to one project is
+    added when its own cost lines mention it, so a sewage remediation bid
+    still warns about wet substrate while a clinic fit-out does not.
+    """
+    items = list(ASSUMPTIONS)
+    if _mentions(costs, "sewage", "contaminat", "sanitary", "biohazard"):
+        items.insert(0, (
+            "All sewage-affected areas are fully cleaned, disinfected and dry "
+            "before any finish work begins. Finish work on a wet or "
+            "contaminated substrate is not covered by this price."))
+    return items
+
+
+def exclusions_for(costs=None) -> list:
+    items = list(EXCLUSIONS)
+    if _mentions(costs, "sewage", "contaminat", "biohazard"):
+        items = [e.replace(
+            "Mold remediation and environmental cleanup not listed in the scope of work.",
+            "Mold remediation beyond the sewage cleanup and disinfection listed above.")
+            for e in items]
+    return items
 
 
 class BidPackagePDF(FPDF):
@@ -243,7 +279,7 @@ def generate_bid_package_pdf(bid: dict, costs: list[dict], markup_pct: float = 0
 
     # ---- conditions ------------------------------------------------------
     _heading(pdf, "Conditions and assumptions")
-    _bullets(pdf, ASSUMPTIONS)
+    _bullets(pdf, assumptions_for(costs))
 
     # ---- pricing ---------------------------------------------------------
     _heading(pdf, "Pricing")
@@ -280,7 +316,7 @@ def generate_bid_package_pdf(bid: dict, costs: list[dict], markup_pct: float = 0
 
     # ---- exclusions ------------------------------------------------------
     _heading(pdf, "Not included")
-    _bullets(pdf, EXCLUSIONS)
+    _bullets(pdf, exclusions_for(costs))
 
     # ---- notes -----------------------------------------------------------
     notes = (bid.get("notes") or "").strip()

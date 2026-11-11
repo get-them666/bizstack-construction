@@ -42,11 +42,11 @@ from fpdf import FPDF
 # contract end up disagreeing about the deposit.
 from bid_package_pdf import (  # noqa: F401
     ADDRESS,
-    ASSUMPTIONS,
+    assumptions_for,
     COMPANY,
     DEPOSIT_PCT,
     EMAIL,
-    EXCLUSIONS,
+    exclusions_for,
     FINAL_PCT,
     PHONE,
     PROGRESS_PCT,
@@ -366,7 +366,13 @@ def build_scope_of_work(bid: dict, costs: list[dict], photos: list[Path]) -> byt
     # the markup, the cost lines do not.
     total = float(bid.get("bid_amount") or 0) or sum(
         float(c.get("estimated") or 0) for c in costs)
-    if scope:
+    if total <= 0:
+        # An unpriced solicitation must not go out claiming a $0.00 contract.
+        _mc(pdf, 0, 4.8, _txt(
+            f"{COMPANY} will complete the work described below at the property "
+            f"named above. Pricing has not been entered on this bid yet; the "
+            f"price and payment schedule follow on the itemized quote."))
+    elif scope:
         _mc(pdf, 0, 4.8, _txt(
             f"{COMPANY} will complete the renovation described below at the "
             f"property named above for a contract price of {_money(total)}. "
@@ -395,10 +401,10 @@ def build_scope_of_work(bid: dict, costs: list[dict], photos: list[Path]) -> byt
                    if (c.get("category") or "") == "material"])
 
     _heading(pdf, "Site conditions and assumptions")
-    _bullets(pdf, ASSUMPTIONS)
+    _bullets(pdf, assumptions_for(costs))
 
     _heading(pdf, "Not included")
-    _bullets(pdf, EXCLUSIONS)
+    _bullets(pdf, exclusions_for(costs))
 
     _heading(pdf, "Change orders")
     pdf.set_font("Helvetica", "", 9)
