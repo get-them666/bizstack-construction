@@ -468,7 +468,8 @@ def trace_address(street: str, city: str, state: str, zip_code: str = "") -> dic
         # the waterfall dead: the address reported "found" with no owner, so the
         # assessor below was never asked. Treat a nameless hit as a miss.
         if (hrgeo_result is not None and hrgeo_result is not NOT_FOUND
-                and str(hrgeo_result.get("owner_of_record") or "").strip()):
+                and str(hrgeo_result.get("owner_name")
+                        or hrgeo_result.get("owner_of_record") or "").strip()):
             hrgeo_result["no_zip"] = not zip_code
             hrgeo_result["provider"] = "hrgeo"
             record = hrgeo_result
