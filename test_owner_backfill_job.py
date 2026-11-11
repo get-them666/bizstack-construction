@@ -59,3 +59,60 @@ def test_status_is_a_copy(monkeypatch):
     snap = job.status()
     snap["total"] = 999
     assert job.status()["total"] == 7
+
+
+def test_lookup_is_given_a_cursor_not_the_connection(monkeypatch):
+    """The first run passed the connection and every address failed with
+    "'Connection' object has no attribute 'fetchone'"."""
+    rows = [{"id": 1, "name": "Virginia Beach", "address": "1 A ST, Norfolk, VA 23504"}]
+    seen = []
+
+    class Cur:
+        rowcount = 1
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def execute(self, sql, params=None):
+            self.sql = sql
+
+        def fetchall(self):
+            return rows
+
+        def fetchone(self):
+            return None
+
+    class Conn:
+        def cursor(self):
+            return Cur()
+
+        def commit(self):
+            pass
+
+        def rollback(self):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://x/y")
+    monkeypatch.setattr(job.psycopg, "connect", lambda *a, **k: Conn())
+    monkeypatch.setattr(job.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(job.st, "parse_address",
+                        lambda a: {"ok": True, "street": "1 A ST", "city": "Norfolk",
+                                   "state": "VA", "zipcode": "23504"})
+    monkeypatch.setattr(job.st, "_get", lambda *a, **k: (404, None), raising=False)
+
+    def fake_lookup(cur, *a, **k):
+        seen.append(cur)
+        return {"found": True, "owner_of_record": "Jones, Brandon"}
+
+    monkeypatch.setattr(job.st, "lookup", fake_lookup)
+    job._STATE.update(running=True)
+    job._run("construction", 1)
+    assert seen, "lookup was never called"
+    assert hasattr(seen[0], "fetchone"), "lookup must receive a cursor, not a connection"
+    assert job.status()["updated"] == 1

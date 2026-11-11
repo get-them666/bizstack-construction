@@ -100,10 +100,16 @@ def _run(company: str, max_leads: int) -> None:
             with _LOCK:
                 _STATE["current"] = str(row.get("address") or "")[:60]
             try:
-                result = st.lookup(
-                    conn, parsed["street"], parsed["city"],
-                    parsed["state"], parsed["zipcode"],
-                    requested_by="owner_backfill_all")
+                # lookup() is cursor-based: it reads and writes the cache
+                # through the object it is given. Passing the connection made
+                # every address fail with "'Connection' object has no attribute
+                # 'fetchone'" and the whole run count as "no record".
+                with conn.cursor() as cur:
+                    result = st.lookup(
+                        cur, parsed["street"], parsed["city"],
+                        parsed["state"], parsed["zipcode"],
+                        requested_by="owner_backfill_all")
+                conn.commit()
                 owner = str((result or {}).get("owner_of_record") or "").strip()
                 if not owner or st.is_placeholder_name(owner):
                     with _LOCK:
@@ -137,6 +143,13 @@ def _run(company: str, max_leads: int) -> None:
                 with _LOCK:
                     _STATE["skipped"] += 1
             except Exception as exc:  # noqa: BLE001 - one bad address must not end the pass
+                # A failed statement leaves the transaction aborted; without
+                # this every later address in the run fails on "current
+                # transaction is aborted".
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
                 with _LOCK:
                     _STATE["skipped"] += 1
                     _STATE["note"] = f"last error: {str(exc)[:140]}"
