@@ -113,6 +113,8 @@ import skiptrace_service
 import skip_sherpa_service
 import pdl_contact_service
 import resimply_service
+import leads_db
+import lead_alert
 # Lead pipeline (lifecycle, intake, work queue, store). Vendored in this repo at
 # bizstack_leads/ -- it is this company's own code, not a dependency on another
 # repository. See the lead routes below for the cutover.
@@ -845,6 +847,14 @@ async def lifecycle(app: FastAPI):
         print("🎯 bid_opportunities ready.")
     except Exception as e:
         print(f"⚠️ bid_opportunities init skipped: {e}")
+
+    # SQLite lead mirror — initialized here so the admin page and alert path
+    # can always write, even if Postgres is unreachable.
+    try:
+        leads_db.ensure_schema()
+        print(f"📋 SQLite lead mirror ready ({leads_db.DB_PATH})")
+    except Exception as e:
+        print(f"⚠️ SQLite lead mirror init failed: {e}")
 
     # Lead pipeline orchestrator: auto-enrich → contact → quote flow. Quote
     # tables must exist before the leads board reads them for deposit amounts;
@@ -3210,6 +3220,26 @@ async def submit_lead(
     if not created:
         # A duplicate or merged lead: nothing new to notify, draft, or schedule.
         return JSONResponse(content={"status": "success", "lead_id": lead_id, "duplicate": True})
+    # --- SQLite mirror + instant email alert ---------------------------------
+    # Written before any downstream notification so a Postgres outage or a
+    # failing email transport can never lose the inquiry. The SQLite row is the
+    # record of truth for the admin page.
+    try:
+        client_ip = _client_ip(request)
+        sqlite_id = leads_db.insert_lead(
+            name=name, phone=phone, email=email, address=address,
+            project_type=project_type, goal=goal, budget=budget,
+            timeline=timeline, message=full_description, source=src,
+            ip=client_ip, user_agent=(request.headers.get("user-agent") or ""),
+        )
+        lead_alert.send_lead_alert(
+            lead_id=sqlite_id, name=name, phone=phone, email=email,
+            address=address, project_type=project_type, goal=goal,
+            budget=budget, timeline=timeline, message=full_description,
+            source=src,
+        )
+    except Exception as e:
+        print(f"⚠️ SQLite/alert write failed (non-fatal): {e}", flush=True)
     try:
         auto_reply.notify_owner_email(
             "construction", lead_id=lead_id, name=name, phone=phone, email=(email or "").strip(),
@@ -6819,6 +6849,37 @@ async def save_banking_settings(request: Request, pnc_account_last4: str = Form(
     return RedirectResponse(url="/settings?saved=banking#banking", status_code=status.HTTP_303_SEE_OTHER)
 
 
+# --- Admin: lead inbox (SQLite-backed) --------------------------------------
+@app.get("/admin/leads", response_class=HTMLResponse)
+async def admin_leads_page(request: Request, status: str = ""):
+    """Owner-only lead inbox. Reads from the SQLite mirror so it works even
+    when Postgres is unreachable."""
+    require_admin(request)
+    leads = leads_db.list_leads(status=status or None, limit=500)
+    counts = {
+        "total": leads_db.count_leads(),
+        "new": leads_db.count_leads(status="new"),
+        "read": leads_db.count_leads(status="read"),
+    }
+    return templates.TemplateResponse(request=request, name="admin_leads.html", context={
+        "leads": leads, "counts": counts, "status_filter": status,
+    })
+
+
+@app.post("/api/admin/leads/{lead_id}/read")
+async def admin_mark_lead_read(lead_id: int, request: Request):
+    require_admin(request)
+    leads_db.mark_read(lead_id)
+    return JSONResponse(content={"ok": True})
+
+
+@app.post("/api/admin/leads/mark-all-read")
+async def admin_mark_all_read(request: Request):
+    require_admin(request)
+    leads_db.mark_all_read()
+    return JSONResponse(content={"ok": True})
+
+
 def _actor_label(request: Request) -> str:
     """Who to record in an audit row. Best-effort; never raises.
 
@@ -9420,6 +9481,25 @@ async def instant_quote_submit(
         # use /get-started instead.
         return templates.TemplateResponse(request=request, name="instant_quote.html", context={**ctx, "error": "We hit a glitch saving your request — please try again or use the get-started form."})
 
+    # --- SQLite mirror + instant email alert ---------------------------------
+    try:
+        sqlite_id = leads_db.insert_lead(
+            name=name, phone=phone, email=email, address=address,
+            project_type=project_type, goal=rental_intent or "",
+            budget="", timeline="",
+            message=f"Instant ballpark {est['label']} on a {est['sqft']:,} sq ft property.",
+            source="instant_quote",
+            ip=_client_ip(request), user_agent=(request.headers.get("user-agent") or ""),
+        )
+        lead_alert.send_lead_alert(
+            lead_id=sqlite_id, name=name, phone=phone, email=email,
+            address=address, project_type=project_type,
+            message=f"Instant ballpark {est['label']} on a {est['sqft']:,} sq ft property.",
+            source="instant_quote",
+        )
+    except Exception as e:
+        print(f"⚠️ instant-quote SQLite/alert failed (non-fatal): {e}", flush=True)
+
     try:
         auto_reply.notify_owner_email(
             "construction", lead_id=lead_id, name=name, phone=phone, email=email,
@@ -9663,6 +9743,24 @@ async def get_started_submit(
     except Exception as e:
         print(f"⚠️ get-started lead save failed: {e}", flush=True)
         return _form_error_redirect("/get-started", "Something went wrong — please try again or call us directly", **typed)
+
+    # --- SQLite mirror + instant email alert ---------------------------------
+    try:
+        sqlite_id = leads_db.insert_lead(
+            name=name, phone=phone, email=email, address=address,
+            project_type=project_type, goal=goal, budget=budget,
+            timeline=timeline, message=full_message, source="get-started",
+            ip=_client_ip(request), user_agent=(request.headers.get("user-agent") or ""),
+        )
+        lead_alert.send_lead_alert(
+            lead_id=sqlite_id, name=name, phone=phone, email=email,
+            address=address, project_type=project_type, goal=goal,
+            budget=budget, timeline=timeline, message=full_message,
+            source="get-started",
+        )
+    except Exception as e:
+        print(f"⚠️ get-started SQLite/alert failed (non-fatal): {e}", flush=True)
+
     await asyncio.to_thread(zoho_sync.after_intake, db, lead_id)
 
     summary = (

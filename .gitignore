@@ -40,6 +40,9 @@ bids_local.json
 # Generated CA bundle (certifi + vendored DigiCert intermediate)
 .ca_bundle_vb.pem
 
+# Local SQLite lead mirror — real homeowner data, never commit
+leads.db
+
 # Unrelated subprojects that happen to live in this directory but are
 # separate codebases, not part of the Construction app.
 inventory-tracker/

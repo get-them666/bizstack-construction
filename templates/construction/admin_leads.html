@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% set co = company() %}
+{% block title %}Lead Inbox | {{ co.name }}{% endblock %}
+{% block meta %}<meta name="robots" content="noindex, nofollow">{% endblock %}
+
+{% block content %}
+<section class="min-h-screen bg-slate-50 py-8">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6">
+        <div class="flex items-center justify-between mb-6">
+            <div>
+                <h1 class="text-2xl font-black text-slate-900">Lead Inbox</h1>
+                <p class="text-sm text-slate-500 mt-1">{{ counts.new }} new · {{ counts.read }} read · {{ counts.total }} total</p>
+            </div>
+            <div class="flex gap-2">
+                <a href="/admin/leads" class="px-4 py-2 text-sm font-semibold rounded-xl {% if not status_filter %}bg-indigo-600 text-white{% else %}bg-white text-slate-700 border border-slate-200{% endif %}">All</a>
+                <a href="/admin/leads?status=new" class="px-4 py-2 text-sm font-semibold rounded-xl {% if status_filter == 'new' %}bg-indigo-600 text-white{% else %}bg-white text-slate-700 border border-slate-200{% endif %}">New ({{ counts.new }})</a>
+                <a href="/admin/leads?status=read" class="px-4 py-2 text-sm font-semibold rounded-xl {% if status_filter == 'read' %}bg-indigo-600 text-white{% else %}bg-white text-slate-700 border border-slate-200{% endif %}">Read</a>
+                {% if counts.new > 0 %}
+                <button id="mark-all-read" class="px-4 py-2 text-sm font-semibold rounded-xl bg-emerald-600 text-white hover:bg-emerald-700">Mark all read</button>
+                {% endif %}
+            </div>
+        </div>
+
+        {% if not leads %}
+        <div class="text-center py-20 bg-white rounded-3xl border border-slate-200">
+            <p class="text-4xl mb-4">📭</p>
+            <p class="text-lg font-bold text-slate-700">No leads yet</p>
+            <p class="text-sm text-slate-500 mt-1">When a homeowner submits a form, it appears here instantly.</p>
+        </div>
+        {% else %}
+        <div class="space-y-3">
+            {% for lead in leads %}
+            <div class="bg-white rounded-2xl border {% if lead.status == 'new' %}border-indigo-200 border-l-4 border-l-indigo-500{% else %}border-slate-200{% endif %} p-5 shadow-sm hover:shadow-md transition-shadow">
+                <div class="flex items-start justify-between gap-4">
+                    <div class="flex-1 min-w-0">
+                        <div class="flex items-center gap-3 flex-wrap">
+                            <h3 class="text-base font-bold text-slate-900">{{ lead.name or 'Anonymous' }}</h3>
+                            {% if lead.status == 'new' %}
+                            <span class="px-2 py-0.5 text-xs font-bold bg-indigo-100 text-indigo-700 rounded-full">NEW</span>
+                            {% endif %}
+                            <span class="text-xs text-slate-400">{{ lead.created_at[:16].replace('T', ' ') }} UTC</span>
+                        </div>
+                        <div class="mt-2 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-1 text-sm">
+                            {% if lead.phone %}<p class="text-slate-700">📞 <a href="tel:{{ lead.phone }}" class="font-semibold text-indigo-600 hover:text-indigo-700">{{ lead.phone }}</a></p>{% endif %}
+                            {% if lead.email %}<p class="text-slate-700">✉️ <a href="mailto:{{ lead.email }}" class="font-semibold text-indigo-600 hover:text-indigo-700 break-all">{{ lead.email }}</a></p>{% endif %}
+                            {% if lead.address %}<p class="text-slate-700 col-span-full">📍 {{ lead.address }}{% if lead.city %}, {{ lead.city }}{% endif %}{% if lead.state %}, {{ lead.state }}{% endif %}{% if lead.zip %} {{ lead.zip }}{% endif %}</p>{% endif %}
+                        </div>
+                        {% if lead.project_type or lead.goal %}
+                        <div class="mt-3 flex flex-wrap gap-2">
+                            {% if lead.project_type %}<span class="px-2.5 py-1 text-xs font-semibold bg-slate-100 text-slate-700 rounded-full">{{ lead.project_type }}</span>{% endif %}
+                            {% if lead.goal %}<span class="px-2.5 py-1 text-xs font-semibold bg-amber-50 text-amber-800 border border-amber-200 rounded-full">🎯 {{ lead.goal }}</span>{% endif %}
+                            {% if lead.budget %}<span class="px-2.5 py-1 text-xs font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-full">💰 {{ lead.budget }}</span>{% endif %}
+                        </div>
+                        {% endif %}
+                        {% if lead.message %}
+                        <p class="mt-3 text-sm text-slate-600 bg-slate-50 rounded-xl p-3 border border-slate-100 leading-relaxed">{{ lead.message[:300] }}{% if lead.message|length > 300 %}…{% endif %}</p>
+                        {% endif %}
+                        {% if lead.source %}<p class="mt-2 text-xs text-slate-400">Source: {{ lead.source }}</p>{% endif %}
+                    </div>
+                    <div class="flex flex-col gap-2 shrink-0">
+                        <a href="tel:{{ lead.phone }}" class="px-4 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl text-center">📞 Call</a>
+                        {% if lead.status == 'new' %}
+                        <button class="mark-read px-4 py-2 text-xs font-semibold text-slate-600 bg-white border border-slate-200 hover:border-indigo-300 rounded-xl" data-id="{{ lead.id }}">Mark read</button>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+    </div>
+</section>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    var markAllBtn = document.getElementById('mark-all-read');
+    if (markAllBtn) {
+        markAllBtn.addEventListener('click', function() {
+            fetch('/api/admin/leads/mark-all-read', { method: 'POST' }).then(function() {
+                location.reload();
+            });
+        });
+    }
+    document.querySelectorAll('.mark-read').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            var id = btn.dataset.id;
+            fetch('/api/admin/leads/' + id + '/read', { method: 'POST' }).then(function() {
+                btn.closest('.bg-white').classList.remove('border-indigo-200', 'border-l-4', 'border-l-indigo-500');
+                btn.closest('.bg-white').classList.add('border-slate-200');
+                btn.previousElementSibling && btn.remove();
+                var badge = btn.closest('.bg-white').querySelector('.bg-indigo-100');
+                if (badge) badge.remove();
+            });
+        });
+    });
+});
+</script>
+{% endblock %}
