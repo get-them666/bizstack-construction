@@ -71,5 +71,57 @@ class NextActionTests(unittest.TestCase):
         self.assertEqual(action, lifecycle.ACTION_FOLLOW_UP)
 
 
+class ActivateDueSweepTests(unittest.TestCase):
+    """next_action is stored, so time passing has to be swept in.
+
+    The queue read 70 waiting of which 69 were past their follow-up date: the
+    column was written when the row changed and nothing rewrote it as the
+    clock moved.
+    """
+
+    def _sweep(self, now):
+        from bizstack_leads import store
+
+        executed = []
+
+        class Cur:
+            rowcount = 3
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def execute(self, sql, params):
+                executed.append((" ".join(sql.split()), params))
+
+        class Conn:
+            committed = False
+
+            def cursor(self):
+                return Cur()
+
+            def commit(self):
+                Conn.committed = True
+
+        changed = store.activate_due(Conn(), "construction", now=now)
+        return changed, executed, Conn.committed
+
+    def test_promotes_only_waiting_rows_whose_date_arrived(self):
+        changed, executed, committed = self._sweep(NOW)
+        sql, params = executed[0]
+        self.assertEqual(changed, 3)
+        self.assertTrue(committed, "the sweep must persist")
+        self.assertIn("UPDATE leads SET next_action", sql)
+        self.assertIn("next_action = %s", sql)
+        self.assertIn("next_action_at <= %s", sql)
+        self.assertIn("company = %s", sql)
+        # follow_up is the new value; "waiting" and the cutoff are the filter.
+        self.assertEqual(params[0], lifecycle.ACTION_FOLLOW_UP)
+        self.assertEqual(params[1], lifecycle.ACTION_WAITING)
+        self.assertEqual(params[2], NOW)
+
+
 if __name__ == "__main__":
     unittest.main()

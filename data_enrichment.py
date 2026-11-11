@@ -149,12 +149,19 @@ def lookup_address(db, raw_address: str, cur) -> dict:
         if not zipcode:
             out["steps"].append("skip_sherpa: skipped (no ZIP — never bill a guess)")
         else:
+            failed = False
             try:
                 trace = skip_sherpa_service.trace(street, city, state, zipcode)
             except Exception as exc:
-                trace = {"ok": False, "found": False, "message": str(exc)[:120]}
-                out["steps"].append("skip_sherpa: error")
-            if trace.get("ok") or trace.get("found"):
+                # One line, not two. This used to append "error" and then fall
+                # through to "no owner (…)", so a single 429 printed twice per
+                # address and read like two separate faults.
+                failed = True
+                trace = {"ok": False, "found": False, "message": str(exc)[:160]}
+                out["steps"].append(f"skip_sherpa: {trace['message']}")
+            if failed:
+                pass
+            elif trace.get("ok") or trace.get("found"):
                 emails = trace.get("emails") or []
                 preferred = str(trace.get("preferred_phone") or trace.get("raw_phone") or "").strip()
                 owner_name = str(trace.get("owner") or "").strip()

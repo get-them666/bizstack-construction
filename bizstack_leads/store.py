@@ -173,6 +173,35 @@ def recompute(db, lead_id, now=None) -> dict:
     return lead
 
 
+def activate_due(db, company=None, now=None) -> int:
+    """Promote "waiting" leads whose follow-up date has arrived.
+
+    ``next_action`` is a stored column, written by :func:`recompute` when
+    something else changes the row. Time passing is not a write, so a lead
+    contacted ten days ago stayed in "waiting" with a due date in the past and
+    never appeared under "Follow-up due" -- the queue reported 70 waiting of
+    which 69 were already overdue.
+
+    One indexed UPDATE, run before the queue is rendered, keeps the bucket
+    honest without walking every row through :func:`recompute`. It only ever
+    moves waiting -> follow_up: a due date cannot travel backwards.
+    """
+    now = now or datetime.now(timezone.utc)
+    where = ["next_action = %s", "next_action_at IS NOT NULL", "next_action_at <= %s"]
+    params: list = [lifecycle.ACTION_WAITING, now]
+    if company:
+        where.append("company = %s")
+        params.append(company)
+    with db.cursor() as cur:
+        cur.execute(
+            f"UPDATE leads SET next_action = %s WHERE {' AND '.join(where)};",
+            (lifecycle.ACTION_FOLLOW_UP, *params),
+        )
+        changed = cur.rowcount or 0
+    db.commit()
+    return changed
+
+
 def backfill(db, company=None, batch=500) -> int:
     """Recompute every lead that has never been through the pipeline.
 

@@ -214,8 +214,17 @@ def run_once(db=None, force: bool = False, limit=None) -> dict:
                 continue
             summary["examined"] += 1
             found = data_enrichment.lookup_address(db, lead.get("address"), None)
-            if any(s.startswith("skip_sherpa:") for s in found.get("steps", [])):
+            steps = found.get("steps", [])
+            if any(s.startswith("skip_sherpa:") and "out of lookup credits" not in s
+                   for s in steps):
                 summary["sherpa_lookups"] += 1
+            elif any("out of lookup credits" in s for s in steps):
+                # Say WHY no phone or email turned up, once, instead of leaving
+                # the owner's report looking like ten silent misses.
+                summary["skipped"] = (
+                    "Skip Sherpa is out of credits, so no phone/email could be "
+                    "appended. Owner names still resolve free from the city "
+                    "assessors. Add credits to resume contact lookups.")
             merged = data_enrichment.merge(lead, found)
             if merged["changed"]:
                 with db.cursor() as cur:

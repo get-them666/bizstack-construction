@@ -4077,6 +4077,15 @@ async def leads_page(request: Request,
     if not is_authed:
         return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
 
+    # next_action is written when a row changes, not when the clock moves, so a
+    # "waiting" lead whose follow-up date passed overnight kept its old bucket
+    # and never appeared under "Follow-up due". One cheap UPDATE before the
+    # counts are read keeps the numbers honest.
+    try:
+        lead_store.activate_due(db, "construction")
+    except Exception as exc:  # noqa: BLE001 - a stale badge must not break the page
+        print(f"[leads] activate_due failed: {exc}", flush=True)
+
     # Contactable lane = the shared work queue. Leads are grouped by the one
     # thing to do with them next (reply, follow up, first contact, get contact
     # info), most urgent first, instead of a flat list the owner triages by hand.

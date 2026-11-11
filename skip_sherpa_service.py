@@ -39,6 +39,7 @@ import json
 import os
 import re
 import time
+import time
 import urllib.error
 import urllib.request
 
@@ -89,6 +90,33 @@ def api_key() -> str:
 
 def configured() -> bool:
     return bool(api_key())
+
+
+# A 429 means the month's credits are gone. Retrying the next address spends
+# another round trip and prints the identical error, so remember the block and
+# fail fast until it expires. This is a cache, not a policy: the first call
+# after the window tries again, so topping up credits starts working at once.
+_QUOTA_BLOCK_UNTIL = 0.0
+_QUOTA_BLOCK_MESSAGE = ""
+QUOTA_BLOCK_SECONDS = 900
+
+
+def quota_blocked() -> str:
+    """The message to show while Skip Sherpa is known to be out of credits."""
+    return _QUOTA_BLOCK_MESSAGE if time.time() < _QUOTA_BLOCK_UNTIL else ""
+
+
+def _note_quota_block(message: str) -> None:
+    global _QUOTA_BLOCK_UNTIL, _QUOTA_BLOCK_MESSAGE
+    _QUOTA_BLOCK_UNTIL = time.time() + QUOTA_BLOCK_SECONDS
+    _QUOTA_BLOCK_MESSAGE = message
+
+
+def reset_quota_block() -> None:
+    """Forget a block (tests, or after credits are added)."""
+    global _QUOTA_BLOCK_UNTIL, _QUOTA_BLOCK_MESSAGE
+    _QUOTA_BLOCK_UNTIL = 0.0
+    _QUOTA_BLOCK_MESSAGE = ""
 
 
 def parse_address(raw: str) -> dict:
@@ -170,6 +198,15 @@ def _put(path: str, payload: dict) -> dict:
                 return json.loads(body)
             except ValueError:
                 pass
+        if exc.code == 429:
+            _note_quota_block(
+                "Skip Sherpa is out of lookup credits (429) — owner names still "
+                "resolve from the free assessors, but no phone/email can be appended")
+            raise ProviderError(
+                "Skip Sherpa is out of lookup credits (429). Owner names still come "
+                "from the free assessors; add credits or switch providers for phones.",
+                status=429, spendable=False,
+            ) from None
         if exc.code in (401, 403):
             lowered = (detail or "").lower()
             if "1010" in lowered or "cloudflare" in lowered or "just a moment" in lowered:
@@ -291,6 +328,11 @@ def trace(street: str, city: str, state: str, zipcode: str) -> dict:
     if not api_key():
         raise ProviderError("Skip Sherpa is not configured (SKIP_SHERPA_API_KEY is not set).",
                             status=400, spendable=False)
+
+    blocked = quota_blocked()
+    if blocked:
+        # Out of credits a minute ago: do not send nine more doomed requests.
+        raise ProviderError(blocked, status=429, spendable=False)
 
     payload = {"property_lookups": [{
         "property_address_lookup": {
