@@ -515,6 +515,21 @@ def test_real_person_name_is_never_a_placeholder():
         assert svc.is_placeholder_name(name) is False, name
 
 
+def test_last_comma_first_is_a_person_not_a_city():
+    """"Last, First" is how Norfolk's assessor publishes every owner. A bare
+    comma test called all of them placeholders, so the enrichment wrote none."""
+    for name in ("Jones, Brandon",
+                 "Smith, Henry Jr & Lynette",
+                 "Jagwani, Ravi Rony Chhatani"):
+        assert svc.is_placeholder_name(name) is False, name
+
+
+def test_city_state_pair_is_still_a_placeholder():
+    for name in ("Norfolk, VA", "Virginia Beach, VA", "Chesapeake, Va.",
+                 "Chesapeake, VA 23320"):
+        assert svc.is_placeholder_name(name) is True, name
+
+
 def test_leonard_is_not_matched_by_a_short_token():
     # "na" is a substring of "Leo-nar-d". Short tokens must not be used at all.
     assert svc.is_placeholder_name("Leonard G Barlow Jr") is False

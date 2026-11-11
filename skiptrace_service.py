@@ -910,14 +910,36 @@ def is_placeholder_name(name: str) -> bool:
     # A bare ZIP, or a "City, ST" pair.
     if re.fullmatch(r"\d{5}(-\d{4})?", cleaned):
         return True
+    # A comma on its own does NOT mean "place". Norfolk's assessor publishes the
+    # owner of record as "Last, First", which is a real person -- and treating
+    # every comma as a place made every Norfolk owner look like garbage, so the
+    # enrichment reported "no usable owner" and refused to write a single one.
+    # Only a slot that ends in a state code, or begins with a known city, is a
+    # place. "Jones, Brandon" and "Smith, Henry Jr & Lynette" pass through.
     if "," in cleaned:
-        return True
+        head, _, tail = cleaned.partition(",")
+        head, tail = head.strip(), tail.strip()
+        if tail.replace(".", "").strip() in _STATE_CODES:
+            return True
+        if head in _PLACEHOLDER_EXACT:
+            return True
+        head_words = [w for w in re.split(r"[^a-z']+", head) if w]
+        if head_words and all(w in _CITY_WORDS for w in head_words):
+            return True
     # Every word is a known place word: "Virginia Beach", "Newport News".
     words = [w for w in re.split(r"[^a-z']+", cleaned) if w]
     if words and all(w in _CITY_WORDS for w in words):
         return True
     return False
 
+
+_STATE_CODES = {
+    "al", "ak", "az", "ar", "ca", "co", "ct", "de", "dc", "fl", "ga", "hi",
+    "id", "il", "in", "ia", "ks", "ky", "la", "me", "md", "ma", "mi", "mn",
+    "ms", "mo", "mt", "ne", "nv", "nh", "nj", "nm", "ny", "nc", "nd", "oh",
+    "ok", "or", "pa", "ri", "sc", "sd", "tn", "tx", "ut", "vt", "va", "wa",
+    "wv", "wi", "wy", "pr", "vi", "gu",
+}
 
 _CITY_WORDS = {
     "virginia", "beach", "chesapeake", "norfolk", "newport", "news", "hampton",
