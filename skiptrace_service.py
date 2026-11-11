@@ -477,7 +477,12 @@ def trace_address(street: str, city: str, state: str, zip_code: str = "") -> dic
             return fetch_rentcast(address)
         except ProviderError as exc:
             attempted.append(f"rentcast: unavailable ({exc.message})"[:140])
+            rentcast_blocked.append(True)
             return None
+
+    # Set when the paid layer never actually answered. A one-element list so the
+    # nested helper can flag it without a `nonlocal` declaration.
+    rentcast_blocked = []
 
     local_record = None
     city_key = (city or "").strip().upper()
@@ -565,14 +570,24 @@ def trace_address(street: str, city: str, state: str, zip_code: str = "") -> dic
             attempted.append("rentcast: no record for this address")
         else:
             attempted.append("rentcast: RENTCAST_API_KEY not set, skipped")
+            # Same reasoning as a spent budget: the last layer never ran, so
+            # this miss is provisional and must not be written to the cache.
+            rentcast_blocked.append(True)
 
     if record is None and hrgeo_error:
         raise hrgeo_error
 
     if record is None:
-        return {"found": False, "layers_tried": attempted,
+        miss = {"found": False, "layers_tried": attempted,
                 "address": address, "no_zip": not zip_code, "provider": "hrgeo",
                 "checked_at": time.strftime("%Y-%m-%d %H:%M:%S")}
+        if rentcast_blocked:
+            # The free layers missed and the paid one never ran, so "not found"
+            # is not a settled answer. Caching it would make the address
+            # permanently undiscoverable -- cache_get() treats a HRGEO miss as
+            # final. Cache the miss only when every source actually answered.
+            miss["_no_cache"] = True
+        return miss
 
     owner = record.get("owner_name")
     is_entity = looks_like_entity(owner)
@@ -683,6 +698,10 @@ def cache_put(cur, key: str, result: dict) -> None:
     Caching the miss is what stops a repeated dead address from consuming quota
     on every attempt.
     """
+    if result.get("_no_cache"):
+        # A miss recorded while a provider was unavailable is not an answer.
+        # Writing it would hide the address from every later run.
+        return
     payload = {k: v for k, v in result.items() if not k.startswith("_")}
     cur.execute(
         """INSERT INTO skiptrace_cache (address_key, found, payload, source)

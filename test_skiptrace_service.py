@@ -460,6 +460,31 @@ def test_cache_caches_misses_too():
     assert params[1] is False, "a miss must be stored with found=False"
 
 
+def test_cache_does_not_store_a_miss_made_while_a_provider_was_down():
+    """cache_get() treats a HRGEO miss as final, so a provisional one would
+    hide the address from every later run."""
+    cur = FakeCursor()
+    svc.cache_put(cur, "unknown", {"found": False, "_no_cache": True,
+                                   "layers_tried": ["rentcast: unavailable"]})
+    assert not cur.executed, "a provider-outage miss must not be written"
+
+
+def test_spent_budget_does_not_turn_the_trace_into_an_error(monkeypatch):
+    """The enrichment report used to print "RentCast monthly budget spent"
+    instead of the free sources' answer, which looked like RentCast was still
+    the thing being used."""
+    monkeypatch.setattr(svc, "fetch_hrgeo_owner", lambda *a: svc.NOT_FOUND)
+
+    def no_budget(*a, **k):
+        raise svc.ProviderError("RentCast monthly budget spent", 429, spendable=True)
+
+    monkeypatch.setattr(svc, "fetch_rentcast", no_budget)
+    result = svc.trace_address("1 Nowhere Rd", "Richmond", "VA", "23220")
+    assert result["found"] is False
+    assert result["_no_cache"] is True
+    assert any("rentcast: unavailable" in step for step in result["layers_tried"])
+
+
 # --- is_placeholder_name: the overwrite guard --------------------------------
 # The enrichment writes a traced owner onto leads.name. If this returns True for
 # a real person, that name is destroyed and replaced by an assessor inference.
