@@ -407,6 +407,41 @@ def _suppression_days() -> int:
         return 30
 
 
+def _suppression_gate(db, channel: str, recipient: str, lead_id=None) -> tuple:
+    """Absolute pre-send gate: ``(allowed, reason)``, failing closed.
+
+    ``contact_policy_allows`` only reads ``leads.opted_out_at`` and
+    ``comms_logs`` -- it never consults ``suppression_list``. The first-touch and
+    owner-send paths called only that, so a DNC/DMA/unsubscribe entry was
+    invisible to them and the message went out anyway.
+
+    ``check_outbound`` is the same gate the mail and voice paths use. The channel
+    is translated into the suppression module's vocabulary: the SMS path here
+    logs as ``text``, but suppression files telephony hits against ``sms`` --
+    passing ``text`` would miss a phone-scoped DNC entry. ``suppression_only``
+    leaves cadence/caps to the caller, which already enforces them with the
+    ``text`` channel name the comms log actually uses.
+
+    Any error -- an unreadable list, a missing table, a broken import -- is a
+    denial, never a silent allow.
+    """
+    if db is None:
+        return False, "no database: failing closed"
+    try:
+        import suppression
+    except Exception as exc:
+        return False, f"suppression guard unavailable: {exc}"
+    supp_channel = suppression.CHANNEL_SMS if (channel or "").lower() in ("text", "sms") else channel
+    try:
+        return suppression.check_outbound(
+            db, supp_channel, recipient, lead_id=lead_id, suppression_only=True,
+        )
+    except Exception as exc:
+        print(f"[auto-reply] suppression check failed for {supp_channel} {recipient}; "
+              f"withholding: {exc}", flush=True)
+        return False, f"suppression check unavailable: {exc}"
+
+
 def _max_touches() -> int:
     """Touches allowed for a lead who has never responded."""
     try:
@@ -827,7 +862,12 @@ def ensure_lead_reply(db, company_key, *, name="", phone="", email="", service="
 
     may_email = False
     if email and _smoke_recipient_email(email):
-        may_email, why_email = contact_policy_allows(db, email, "email", lead_id)
+        # Suppression is absolute and comes before cadence: contact_policy_allows
+        # never reads suppression_list, so without this gate a DNC/DMA/unsubscribe
+        # entry did not stop the first touch.
+        may_email, why_email = _suppression_gate(db, "email", email, lead_id)
+        if may_email:
+            may_email, why_email = contact_policy_allows(db, email, "email", lead_id)
         if not may_email:
             print(f"[auto-reply {company_key}] not emailing {email} — {why_email}", flush=True)
             note_withheld(db, lead_id, f"email {why_email}")
@@ -846,6 +886,10 @@ def ensure_lead_reply(db, company_key, *, name="", phone="", email="", service="
                     subject = f"Thanks for reaching out{f', {_person_first(name)}' if _person_first(name) else ''} — {co_name}"
                     delivered = run_coro(documents_service.send_email(cfg, email, subject, msg.replace("\n", "<br>")))
                     if delivered:
+                        # True = delivered. _fire_sent_effect also returns True
+                        # when only its bookkeeping write failed, because the
+                        # message is already out -- never read this as "not
+                        # sent" and re-stage or retry the other channel.
                         sent = _fire_sent_effect(db, lead_id, company_key, "email", email, msg)
                     else:
                         print(f"[auto-reply {company_key}] email to {email} not delivered (provider returned False); staging draft", flush=True)
@@ -858,7 +902,11 @@ def ensure_lead_reply(db, company_key, *, name="", phone="", email="", service="
 
     if _valid_phone(phone) and not sent:
         to = _phone_e164(phone)
-        may_text, why_text = contact_policy_allows(db, to, "text", lead_id)
+        # Same absolute gate for SMS, and before cadence for the same reason.
+        # "text" is translated to the suppression module's "sms" inside.
+        may_text, why_text = _suppression_gate(db, "text", to, lead_id)
+        if may_text:
+            may_text, why_text = contact_policy_allows(db, to, "text", lead_id)
         if not may_text:
             print(f"[auto-reply {company_key}] not texting {to} — {why_text}", flush=True)
             note_withheld(db, lead_id, f"text {why_text}")
@@ -881,6 +929,8 @@ def ensure_lead_reply(db, company_key, *, name="", phone="", email="", service="
             if ok:
                 try:
                     if sw.send_sms(to, msg):
+                        # Same contract as email above: True means delivered,
+                        # including a delivered send whose bookkeeping failed.
                         sent = _fire_sent_effect(db, lead_id, company_key, "text", to, msg)
                     else:
                         print(f"[auto-reply {company_key}] sms to {to} not delivered (provider returned False); staging draft", flush=True)
@@ -938,6 +988,17 @@ def fire_lead_draft(db, company_key, lead_id, *, force=False):
                 recipient = _phone_e164(lead.get("phone"))
                 if not _valid_phone(recipient):
                     continue
+            # Absolute suppression gate. Runs even when force=True: the owner's
+            # manual "Send this reply" overrides the cadence policy, never a
+            # DNC/DMA/STOP entry. It also runs before the cadence block so a
+            # suppressed lead is reported as suppressed, not "contacted 2x".
+            allowed, why = _suppression_gate(db, channel, recipient, lead_id)
+            if not allowed:
+                result["why"] = why
+                note_withheld(db, lead_id, f"{channel} {why}")
+                print(f"[auto-reply {company_key}] lead #{lead_id} {channel} "
+                      f"suppressed — {why}", flush=True)
+                continue
             if not force:
                 ok, why = contact_policy_allows(db, recipient, channel, lead_id)
                 if not ok:
@@ -1004,6 +1065,9 @@ def fire_lead_draft(db, company_key, lead_id, *, force=False):
                     continue
             sent = _fire_sent_effect(db, lead_id, company_key, channel, recipient, body)
             if sent:
+                # Delivered counts even when _fire_sent_effect's own write
+                # failed; the transport already accepted the message. A blocked
+                # or refused transport never reaches this line and stays False.
                 result["sent"] = True
                 result["channel"] = channel
                 result["why"] = ""

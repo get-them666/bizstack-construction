@@ -27,6 +27,7 @@ import secrets
 import threading
 import time
 import urllib.parse
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 from datetime import datetime, date, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -7573,9 +7574,22 @@ async def payments_webhook(request: Request, db=Depends(get_db)):
         payment_intent = session.get("payment_intent")
         amount_total = session.get("amount_total", 0)
         currency = session.get("currency", "usd")
+        session_id = session.get("id")
 
         if lead_id:
             with db.cursor() as cur:
+                # Stripe retries webhooks. The payments row is keyed by the
+                # checkout session, so a replay must not insert another row or
+                # post another ledger entry. Guard in code on the existing
+                # stripe_session_id column -- no schema change needed.
+                if session_id:
+                    cur.execute(
+                        "SELECT id FROM payments WHERE stripe_session_id = %s LIMIT 1;",
+                        (session_id,),
+                    )
+                    if cur.fetchone():
+                        logger.info("stripe webhook replay for session %s ignored", session_id)
+                        return Response(content='{"received": true}', media_type="application/json")
                 cur.execute(
                     "UPDATE leads SET deposit_status = 'paid', stripe_session_id = %s, deposit_cents = %s, "
                     "status = CASE WHEN status IN ('completed','in_progress') THEN status ELSE 'deposit' END "
@@ -7608,6 +7622,220 @@ async def payments_webhook(request: Request, db=Depends(get_db)):
 # records the payment locally and posts it to the ledger. Zoho Payments is
 # downstream only -- it receives a copy and never tells the site what to do.
 ZOHO_PAYMENTS_WEBHOOK_KEY = (os.getenv("ZOHO_PAYMENTS_WEBHOOK_KEY") or "").strip()
+
+# Zoho sends the amount either as a major-unit decimal ("500.00") or, on some
+# endpoints, in an explicit minor-unit field. The old code guessed by size
+# (> 100000 means cents) and got both ends wrong: $500 sent as 50000 became
+# $50,000, and $120,000 sent as 120000 became $1,200. Units now come only from
+# an explicit field; otherwise the value is treated as major units.
+_ZOHO_MINOR_AMOUNT_FIELDS = (
+    "amount_cents", "amount_in_cents", "amount_minor", "minor_units",
+    "total_cents", "total_in_cents", "total_minor",
+)
+_ZOHO_MAJOR_AMOUNT_FIELDS = ("amount", "total", "total_amount")
+
+
+def _decimal_from_money(value):
+    """Parse a money value defensively without assuming its units.
+
+    Accepts ints/floats/Decimal and strings such as "$1,234.56", "120,000.00"
+    or "1 234.56". Returns None when there is no number to be found.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, Decimal):
+        return value
+    if isinstance(value, (int, float)):
+        try:
+            return Decimal(str(value))
+        except InvalidOperation:
+            return None
+    text = str(value).strip()
+    if not text:
+        return None
+    negative = text.startswith("(") and text.endswith(")")
+    # Keep digits, the decimal point and sign; strip currency symbols, ISO
+    # codes, thin spaces and thousands separators. "$1,234.56" -> "1234.56".
+    text = re.sub(r"[^0-9.\-]", "", text.replace(",", ""))
+    if not text or text in {"-", ".", "-."}:
+        return None
+    try:
+        number = Decimal(text)
+    except InvalidOperation:
+        return None
+    return -number if negative else number
+
+
+def _zoho_amount_cents(data: dict) -> int:
+    """The payment amount in cents.
+
+    An explicit minor-unit field wins outright -- never infer units from the
+    magnitude. Otherwise the amount is major units and is scaled by exactly
+    100 with ROUND_HALF_UP.
+    """
+    for field in _ZOHO_MINOR_AMOUNT_FIELDS:
+        if data.get(field) not in (None, ""):
+            minor = _decimal_from_money(data[field])
+            if minor is not None:
+                return int(minor.to_integral_value(rounding=ROUND_HALF_UP))
+    for field in _ZOHO_MAJOR_AMOUNT_FIELDS:
+        if data.get(field) not in (None, ""):
+            major = _decimal_from_money(data[field])
+            if major is not None:
+                return int((major * 100).to_integral_value(rounding=ROUND_HALF_UP))
+    return 0
+
+
+def _lead_id_from_reference(db, reference: str) -> int | None:
+    """Resolve the customer a payment reference belongs to, or None.
+
+    DEP-##### is the reference printed on the deposit instructions and is
+    literally the lead id (see deposit_instructions.reference). Quote numbers
+    resolve through quotes.lead_id. Bids carry no lead link, so a bid
+    reference is not enough to attribute money.
+
+    A payments.id is never used as a leads.id. The old fallback
+    (SELECT id FROM payments WHERE memo LIKE %s, then lead_id = row["id"])
+    attached money to whichever customer happened to own that payment row.
+    Unattributed money is recoverable; money on the wrong customer is not.
+    """
+    ref = str(reference or "").strip()
+    if not ref:
+        return None
+
+    m = re.search(r"DEP-(\d+)", ref, re.IGNORECASE)
+    if m:
+        candidate = int(m.group(1))
+        with db.cursor() as cur:
+            cur.execute(
+                "SELECT id FROM leads WHERE id = %s AND company = 'construction';",
+                (candidate,),
+            )
+            row = cur.fetchone()
+        if row and int(row["id"]) == candidate:
+            return candidate
+        logger.warning(
+            "zoho payments: %s names lead %s, which does not exist; recording unattributed",
+            ref, candidate,
+        )
+        return None
+
+    quote_refs = [ref]
+    qm = re.search(r"Q\d{4}-\d+", ref, re.IGNORECASE)
+    if qm and qm.group(0).upper() != ref.upper():
+        quote_refs.append(qm.group(0))
+    try:
+        with db.cursor() as cur:
+            for quote_ref in quote_refs:
+                # Join leads so a quote whose lead was deleted cannot hand
+                # record_payment a lead_id that raises and makes Zoho retry
+                # this webhook forever.
+                cur.execute(
+                    "SELECT q.lead_id FROM quotes q JOIN leads l ON l.id = q.lead_id "
+                    "WHERE UPPER(q.quote_no) = UPPER(%s) LIMIT 1;",
+                    (quote_ref,),
+                )
+                row = cur.fetchone()
+                if row and row.get("lead_id"):
+                    return int(row["lead_id"])
+    except Exception as e:
+        # quotes may be absent on a very old database. Attribution is
+        # best-effort; an optional lookup must not fail the payment.
+        db.rollback()
+        logger.warning("zoho payments: quote lookup failed for %s: %s", ref, e)
+    return None
+
+
+def _zoho_dedupe_reference(event: dict, data: dict, payload: bytes) -> str:
+    """A stable id for one payment event, used to ignore Zoho retries."""
+    for field in ("payment_id", "transaction_id", "payment_reference",
+                  "transaction_reference", "event_id", "id"):
+        value = data.get(field)
+        if value in (None, ""):
+            value = event.get(field)
+        if value not in (None, ""):
+            return str(value).strip()
+    # No id in the payload: hash the exact body so an identical retry still
+    # dedupes. Two distinct payments with byte-identical bodies cannot be told
+    # apart from a retry, and double-counting money is the worse mistake.
+    return "payload:" + hashlib.sha256(payload).hexdigest()[:32]
+
+
+def _zoho_dedupe_marker(reference: str) -> str:
+    return f"[zoho-ref:{reference}]"
+
+
+def _zoho_payment_exists(db, dedupe_ref: str) -> bool:
+    """True when this payment event has already been recorded.
+
+    The marker lives at the front of the payments.memo written below, so this
+    is an exact substring test rather than a LIKE that a reference containing
+    % or _ could widen.
+    """
+    marker = _zoho_dedupe_marker(dedupe_ref)
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT id FROM payments WHERE company = 'construction' "
+            "AND strpos(COALESCE(memo, ''), %s) > 0 LIMIT 1;",
+            (marker,),
+        )
+        return cur.fetchone() is not None
+
+
+# Invoice kind -> payment kind. A deposit invoice paid through an INV- link is
+# still a held deposit, not progress revenue.
+_ZOHO_INVOICE_KINDS = {
+    "deposit": "deposit",
+    "progress": "progress",
+    "final": "final",
+    "invoice": "progress",
+}
+
+
+def _zoho_kind_from_invoice(db, reference: str, data: dict) -> str | None:
+    """The payment kind implied by the invoice the reference points at."""
+    candidates: list[str] = []
+    for field in ("invoice_number", "invoice_id", "invoice_no"):
+        value = data.get(field)
+        if value not in (None, ""):
+            candidates.append(str(value).strip())
+    m = re.search(r"INV-[A-Za-z0-9-]+", str(reference or ""), re.IGNORECASE)
+    if m:
+        candidates.append(m.group(0))
+    if reference:
+        candidates.append(str(reference).strip())
+
+    seen: set[str] = set()
+    for candidate in candidates:
+        if not candidate or candidate.lower() in seen:
+            continue
+        seen.add(candidate.lower())
+        try:
+            with db.cursor() as cur:
+                cur.execute(
+                    "SELECT kind FROM bid_invoices WHERE company = 'construction' "
+                    "AND invoice_number = %s LIMIT 1;",
+                    (candidate,),
+                )
+                row = cur.fetchone()
+                if not row and candidate.isdigit():
+                    cur.execute(
+                        "SELECT kind FROM bid_invoices WHERE company = 'construction' "
+                        "AND id = %s LIMIT 1;",
+                        (int(candidate),),
+                    )
+                    row = cur.fetchone()
+        except Exception as e:
+            # Optional lookup on an older database: fall back to the memo /
+            # reference signal rather than failing the payment.
+            db.rollback()
+            logger.warning("zoho payments: invoice lookup failed for %s: %s", candidate, e)
+            return None
+        if row and row.get("kind"):
+            mapped = _ZOHO_INVOICE_KINDS.get(str(row["kind"]).strip().lower())
+            if mapped:
+                return mapped
+    return None
 
 
 @app.post("/api/payments/zoho/webhook")
@@ -7662,18 +7890,21 @@ async def zoho_payments_webhook(request: Request, db=Depends(get_db)):
     ):
         return Response(content='{"received": true}', media_type="application/json")
 
-    amount = data.get("amount", 0) or data.get("total", 0) or 0
-    try:
-        amount = float(amount)
-    except (TypeError, ValueError):
-        amount = 0.0
-    # Zoho Payments amount may be in minor units (cents) or major units.
-    # Heuristic: if > 100,000 it's already cents; otherwise convert dollars.
-    amount_cents = int(amount) if amount > 100000 else int(round(amount * 100))
+    # Idempotency before anything is written: Zoho retries a webhook until it
+    # gets a 2xx. Without this guard every retry inserted another payments row
+    # and posted another ledger entry, minting money. A replay returns the
+    # same success body and touches nothing.
+    dedupe_ref = _zoho_dedupe_reference(event, data, payload)
+    if _zoho_payment_exists(db, dedupe_ref):
+        logger.info("zoho payments webhook replay for %s ignored", dedupe_ref)
+        return Response(content='{"received": true}', media_type="application/json")
+
+    amount_cents = _zoho_amount_cents(data)
     if amount_cents <= 0:
         return JSONResponse(content={"error": "no amount"}, status_code=400)
 
-    # Try to find the lead from reference / metadata / order id.
+    # Resolve the lead from the business reference only. A payments.id is a
+    # different table's key and must never be used as a leads.id.
     reference = (
         data.get("reference", "")
         or data.get("order_reference", "")
@@ -7681,24 +7912,20 @@ async def zoho_payments_webhook(request: Request, db=Depends(get_db)):
         or data.get("payment_id", "")
         or ""
     )
-    lead_id = None
-    if reference:
-        m = re.search(r"DEP-(\d+)", str(reference))
-        if m:
-            lead_id = int(m.group(1))
-        else:
-            # Fall back to matching the reference in an existing payment memo.
-            with db.cursor() as cur:
-                cur.execute(
-                    "SELECT id FROM payments WHERE memo LIKE %s LIMIT 1;",
-                    (f"%{reference}%",),
-                )
-                row = cur.fetchone()
-                if row:
-                    lead_id = row["id"]
+    lead_id = _lead_id_from_reference(db, reference)
+    if lead_id is None:
+        logger.warning(
+            "zoho payments: reference %r does not identify a lead; recording payment unattributed",
+            reference or dedupe_ref,
+        )
 
-    memo = f"Zoho Payments — {event_type} — {reference}".strip() or "Zoho Payments payment"
-    kind = "deposit" if ("deposit" in memo.lower() or "DEP-" in str(reference)) else "progress"
+    memo = f"{_zoho_dedupe_marker(dedupe_ref)} Zoho Payments — {event_type} — {reference}".strip()
+    # Ask the invoice when the reference points at one: a deposit paid through
+    # an INV- link must be held, not booked as progress revenue. With no
+    # invoice to ask, keep the historical memo/reference signal.
+    kind = _zoho_kind_from_invoice(db, reference, data)
+    if kind is None:
+        kind = "deposit" if ("deposit" in memo.lower() or "DEP-" in str(reference)) else "progress"
 
     try:
         res = today.record_payment(

@@ -73,6 +73,18 @@ CHANNEL_VOICE = "voice"
 # the list exists to prevent.
 TELEPHONY_CHANNELS = {"phone", "sms", "voice", "whatsapp", "tel", "mms"}
 
+
+class SuppressionUnavailable(RuntimeError):
+    """The suppression list could not be read, so "suppressed?" is unknown.
+
+    This exists because ``find()`` used to return ``[]`` on a database error,
+    which is exactly what it returns for a clean scrub. A send path that read
+    that empty list as "not suppressed" failed OPEN: a DB blip meant we emailed
+    someone who had filed DNC or unsubscribed. "Unknown" and "clean" must never
+    be the same value.
+    """
+
+
 _DDL = """
 CREATE TABLE IF NOT EXISTS suppression_list (
     id           BIGSERIAL PRIMARY KEY,
@@ -205,9 +217,14 @@ def ensure_schema(db) -> None:
 def find(db, *, email="", phone="", name="", zipcode="") -> list[dict]:
     """Active suppression entries matching any supplied identifier.
 
-    Returns ``[]`` rather than raising when the table is missing: callers are
-    send paths, and a missing table must not become a crash *or* a silent allow.
-    :func:`check_outbound` treats "could not read" as deny.
+    Returns ``[]`` only when there was nothing to look up (no identifier) or the
+    list was read successfully and held no match.
+
+    Raises :class:`SuppressionUnavailable` when the list cannot be read. It used
+    to return ``[]`` in that case too, which made an outage indistinguishable
+    from a clean scrub and let every caller fail open. ``is_suppressed`` and
+    ``check_outbound`` convert this into a denial; nothing that sends may treat
+    an unreadable list as consent.
     """
     keys = []
     e = normalize_email(email)
@@ -240,7 +257,9 @@ def find(db, *, email="", phone="", name="", zipcode="") -> list[dict]:
             db.rollback()
         except Exception:
             pass
-        return []
+        # Do not return [] here. The caller must be able to tell "no entries"
+        # from "I could not ask the question".
+        raise SuppressionUnavailable(f"suppression lookup failed: {exc}") from exc
 
 
 def is_suppressed(db, *, email="", phone="", name="", zipcode="",
@@ -256,9 +275,18 @@ def is_suppressed(db, *, email="", phone="", name="", zipcode="",
 
     ``channel='any'`` is the "is this person suppressed at all?" question, which
     is what owner-facing views want; it matches any active entry.
+
+    Fails closed at this boundary: if the list cannot be read, the answer is
+    ``(True, ...)`` -- blocked -- not an empty list read as permission. Callers
+    keep the same ``(blocked, reason)`` tuple contract they have always used.
     """
     channel = (channel or CHANNEL_ANY).strip().lower()
-    rows = find(db, email=email, phone=phone, name=name, zipcode=zipcode)
+    try:
+        rows = find(db, email=email, phone=phone, name=name, zipcode=zipcode)
+    except SuppressionUnavailable as exc:
+        # A database outage is not a clean scrub. Report it as blocked so the
+        # send path denies, with a reason the owner can act on.
+        return True, f"SUPPRESSION CHECK UNAVAILABLE: {exc}"
     for row in rows:
         entry_channel = (row.get("channel") or CHANNEL_ANY).strip().lower()
         if channel != CHANNEL_ANY and not _channel_blocked(entry_channel, channel):
@@ -392,13 +420,21 @@ def listing(db, *, kind: str = "", active_only: bool = True, limit: int = 200) -
 
 def check_outbound(db, channel: str, recipient: str, *, lead_id=None,
                    source: str = "", email: str = "", phone: str = "",
-                   name: str = "", zipcode: str = "") -> tuple:
+                   name: str = "", zipcode: str = "",
+                   suppression_only: bool = False) -> tuple:
     """``(allowed, reason)``. The only sanctioned pre-send check.
 
     Order matters. Suppression first, because it is absolute and cheap; then
     the source/federal block; then the cadence policy. A denial is always
     returned with a human-readable reason so the owner sees *why* nothing went
     out instead of a silent nothing.
+
+    ``suppression_only=True`` stops after step 1. It exists for callers such as
+    ``auto_reply`` that already enforce the cadence/cap rules with their own
+    channel vocabulary (they log SMS as ``text``, not ``sms``). Re-running those
+    checks here with the suppression channel would double-count and look for
+    rows that do not exist; the absolute list check is the piece they were
+    missing. The suppression answer is identical either way.
     """
     channel = (channel or CHANNEL_EMAIL).strip().lower()
     email = email or (recipient if channel == CHANNEL_EMAIL else "")
@@ -412,10 +448,19 @@ def check_outbound(db, channel: str, recipient: str, *, lead_id=None,
         ensure_schema(db)
     except Exception as exc:
         print(f"[suppression] ensure_schema failed: {exc}", flush=True)
-    blocked, why = is_suppressed(db, email=email, phone=phone, name=name,
-                                 zipcode=zipcode, channel=channel)
+    try:
+        blocked, why = is_suppressed(db, email=email, phone=phone, name=name,
+                                     zipcode=zipcode, channel=channel)
+    except Exception as exc:
+        # is_suppressed already turns SuppressionUnavailable into a denial; this
+        # catch also covers anything else the read can raise. Never allow.
+        print(f"[suppression] check failed; withholding: {exc}", flush=True)
+        return False, f"suppression check unavailable: {exc}"
     if blocked:
         return False, f"suppressed — {why}"
+
+    if suppression_only:
+        return True, ""
 
     # 2. Source / federal domain (existing policy, unchanged).
     try:
