@@ -170,20 +170,33 @@ def owner_for_address(address: str, session: requests.Session | None = None) -> 
     if len(term) < 4:
         return None
     s = session or _session()
-    data = _search_raw(s, term)
 
-    pin = str(data.get("id") or "").strip()
-    if not pin:
-        results = data.get("results") or []
-        if not results:
-            return None
-        first = results[0] if isinstance(results[0], dict) else {}
-        for key in ("pin", "PIN", "gpin", "id", "parcel"):
-            if first.get(key):
-                pin = str(first[key]).strip()
-                break
+    # The search keys on the street line. Given a full postal address
+    # ("1229 General St, Virginia Beach, VA 23464") it answers with a blank
+    # term and no results -- so every call from the waterfall, where addresses
+    # arrive fully formatted, looked like "no such property". Try what we were
+    # given, then the street line alone.
+    candidates = [term]
+    street_line = term.split(",")[0].strip()
+    if street_line and street_line != term:
+        candidates.append(street_line)
+
+    pin = ""
+    for candidate in candidates:
+        data = _search_raw(s, candidate)
+        pin = str(data.get("id") or "").strip()
         if not pin:
-            return None
+            results = data.get("results") or []
+            if results:
+                first = results[0] if isinstance(results[0], dict) else {}
+                for key in ("pin", "PIN", "gpin", "id", "parcel"):
+                    if first.get(key):
+                        pin = str(first[key]).strip()
+                        break
+        if pin:
+            break
+    if not pin:
+        return None
 
     card = record_card(s, pin)
     header = (card.get("parcel") or {}).get("header") or {}

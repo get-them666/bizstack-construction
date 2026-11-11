@@ -452,21 +452,91 @@ def trace_address(street: str, city: str, state: str, zip_code: str = "") -> dic
     attempted = []
     record = None
 
-    # Prefer HRGEO's free public parcel data. RentCast remains the fallback for
-    # addresses outside Hampton Roads, ambiguous parcel matches, or GIS misses.
+    # Two free sources cover Hampton Roads, and which one to trust depends on
+    # the city.
+    #
+    # Norfolk and Virginia Beach each publish the owner of record themselves,
+    # and their records are current. HRGEO is a regional snapshot that lags:
+    # 7419 Chesapeake Boulevard still showed its previous owner months after
+    # the sale, while the city already had the LLC that bought it. So a city
+    # with an assessor client is asked FIRST, and HRGEO covers the rest of
+    # Hampton Roads.
     hrgeo_error = None
     rentcast_result = None
-    try:
-        hrgeo_result = fetch_hrgeo_owner(street, city, zip_code)
-    except ProviderError as exc:
-        hrgeo_error = exc
-        attempted.append(f"hrgeo: {exc.message}")
-        rentcast_result = fetch_rentcast(address)
+
+    def _rentcast_quiet():
+        """Ask RentCast, but never let a provider outage abort the trace.
+
+        A spent budget or a rejected key is a fact about the provider, not
+        about this address. Raising here turned every unresolvable address
+        into "RentCast monthly budget spent", and the enrichment report showed
+        that INSTEAD of the free sources' answer -- which read as though
+        RentCast were still the thing being used.
+        """
+        try:
+            return fetch_rentcast(address)
+        except ProviderError as exc:
+            attempted.append(f"rentcast: unavailable ({exc.message})"[:140])
+            return None
+
+    local_record = None
+    city_key = (city or "").strip().upper()
+    if city_key in ("VIRGINIA BEACH", "NORFOLK"):
+        try:
+            if city_key == "NORFOLK":
+                import norfolk_assessor
+                assessor_hit = norfolk_assessor.owner_for_address(address)
+            else:
+                import assessor_lookup
+                assessor_hit = assessor_lookup.owner_for_address(address)
+        except Exception as exc:  # noqa: BLE001 - never break the waterfall
+            attempted.append(f"local_assessor: {exc}"[:120])
+            assessor_hit = None
+        if assessor_hit and assessor_hit.get("owner_name"):
+            klass = str(assessor_hit.get("property_class") or "").upper()
+            commercial = any(k in klass for k in
+                             ("COMMERCIAL", "HOTEL", "MOTEL", "OFFICE",
+                              "RETAIL", "INDUSTRIAL", "APARTMENT", "CONDO"))
+            source = assessor_hit.get("source") or "assessor"
+            # Virginia Beach splits joint owners across two fields, so using
+            # OwnerName1 alone lost half the names ("SAUDER OLIVIA" instead of
+            # "SAUDER OLIVIA & WILLIAMS DANIEL"). Norfolk already returns one
+            # combined string and its owner_name2 is empty.
+            full_name = str(assessor_hit["owner_name"]).strip()
+            second = str(assessor_hit.get("owner_name2") or "").strip()
+            if second and second.upper() not in full_name.upper():
+                full_name = f"{full_name} & {second}"
+            local_record = {
+                "found": True,
+                # Both keys on purpose: the waterfall compares owner_of_record,
+                # but the final return reads owner_name. Setting only one made
+                # every assessor hit come back found=True with a null owner.
+                "owner_name": full_name,
+                "owner_of_record": full_name,
+                "is_residential": not commercial,
+                "source": source,
+                "_source": source,
+                "mailing_address": assessor_hit.get("mailing_address") or "",
+                "pin": assessor_hit.get("pin") or "",
+            }
+            attempted.append(f"{source}: parcel matched")
+        else:
+            attempted.append("local_assessor: no match")
+
+    if local_record is not None:
+        local_record["no_zip"] = not zip_code
+        record = local_record
     else:
+        try:
+            hrgeo_result = fetch_hrgeo_owner(street, city, zip_code)
+        except ProviderError as exc:
+            hrgeo_error = exc
+            attempted.append(f"hrgeo: {exc.message}")
+            hrgeo_result = None
+
         # A parcel match without a name is not an answer. HRGEO returns a record
         # for some parcels with owner_of_record empty, and accepting it stopped
-        # the waterfall dead: the address reported "found" with no owner, so the
-        # assessor below was never asked. Treat a nameless hit as a miss.
+        # the waterfall dead: the address reported "found" with no owner.
         if (hrgeo_result is not None and hrgeo_result is not NOT_FOUND
                 and str(hrgeo_result.get("owner_name")
                         or hrgeo_result.get("owner_of_record") or "").strip()):
@@ -475,55 +545,9 @@ def trace_address(street: str, city: str, state: str, zip_code: str = "") -> dic
             record = hrgeo_result
             attempted.append("hrgeo: parcel matched")
         else:
-            attempted.append("hrgeo: no unique parcel match")
-            # The city assessors publish the owner of record for free. Try them
-            # before spending a metered RentCast call: its free tier is 50 a
-            # month, shared with the quote lookup and the AVM sweep, and when it
-            # runs out every address reports "no usable owner" -- which reads
-            # exactly like an owner with no contact details.
-            #
-            # Each jurisdiction is a different system, so the city picks the
-            # source. Norfolk leads were the ones still falling through to
-            # RentCast, so they always came back empty.
-            local_record = None
-            city_key = (city or "").strip().upper()
-            if city_key in ("VIRGINIA BEACH", "NORFOLK"):
-                try:
-                    if city_key == "NORFOLK":
-                        import norfolk_assessor
-                        vb = norfolk_assessor.owner_for_address(address)
-                    else:
-                        import assessor_lookup
-                        vb = assessor_lookup.owner_for_address(address)
-                except Exception as exc:  # noqa: BLE001 - never break the waterfall
-                    attempted.append(f"local_assessor: {exc}"[:120])
-                    vb = None
-                if vb and vb.get("owner_name"):
-                    klass = str(vb.get("property_class") or "").upper()
-                    commercial = any(k in klass for k in
-                                     ("COMMERCIAL", "HOTEL", "MOTEL", "OFFICE",
-                                      "RETAIL", "INDUSTRIAL", "APARTMENT", "CONDO"))
-                    local_record = {
-                        "found": True,
-                        # Both keys on purpose: the waterfall compares
-                        # owner_of_record, but the final return reads
-                        # owner_name. Setting only one made every assessor hit
-                        # come back found=True with a null owner.
-                        "owner_name": vb["owner_name"],
-                        "owner_of_record": vb["owner_name"],
-                        "is_residential": not commercial,
-                        "source": vb.get("source") or "assessor",
-                        "mailing_address": vb.get("mailing_address") or "",
-                        "pin": vb.get("pin") or "",
-                    }
-                    attempted.append(f"{local_record['source']}: parcel matched")
-                else:
-                    attempted.append("local_assessor: no match")
-            if local_record is not None:
-                local_record["no_zip"] = not zip_code
-                record = local_record
-            else:
-                rentcast_result = fetch_rentcast(address)
+            if not hrgeo_error:
+                attempted.append("hrgeo: no unique parcel match")
+            rentcast_result = _rentcast_quiet()
 
     if record is None:
         got = rentcast_result
