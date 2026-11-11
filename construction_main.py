@@ -11148,6 +11148,18 @@ async def bid_documents_from_email(bid_id: int, request: Request, db=Depends(get
         raise HTTPException(status_code=404, detail="Bid not found")
     import bid_attachments
     result = await asyncio.to_thread(bid_attachments.extract, db, bid_id, _BID_COMPANY)
+    # No email paperwork? Try the Bid Board itself. The same Autodesk sign-in
+    # that feeds the nightly sync is enough; a bid pulled from
+    # BuildingConnected has its plans behind this API even though it has no
+    # solicitation email to read.
+    if not result.get("saved"):
+        bc = await asyncio.to_thread(
+            bid_attachments.extract_buildingconnected, db, bid_id, _BID_COMPANY,
+            _owner_email())
+        if bc.get("saved"):
+            result = bc
+        elif bc.get("reason"):
+            result.setdefault("notes", []).append("Bid Board: " + str(bc["reason"])[:200])
     from urllib.parse import quote
     parts = [
         f"pulled={int(result.get('saved') or 0)}",

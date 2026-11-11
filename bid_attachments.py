@@ -437,3 +437,143 @@ def extract(db, bid_id: int, company: str = "construction") -> dict:
             result["reason"] = ("That solicitation has no email attachments and no downloadable "
                                 "document links.")
     return result
+
+
+# --- BuildingConnected Bid Board --------------------------------------------
+# The Bid Board API (APS /construction/buildingconnected/v2) is the same
+# three-legged API the nightly sync already reads opportunities from, so the
+# owner's existing sign-in is all this needs. The API does not publish a
+# single documented "files" route; the candidates below are tried in order and
+# the first one that returns rows wins, so a future API addition needs no code
+# change here and a wrong guess costs one cheap GET, not a broken button.
+_BC_FILE_PATHS = ("files", "documents", "attachments", "plans")
+_BC_NAME_KEYS = ("name", "fileName", "filename", "title", "displayName")
+_BC_URL_KEYS = ("downloadUrl", "download_url", "url", "href", "storageUrl", "signedUrl")
+
+
+def _bc_opportunity_id(bid: dict) -> str:
+    """The Bid Board opportunity id from the card's deep link or reference."""
+    text = f"{bid.get('external_url') or ''} {bid.get('reference') or ''}"
+    m = re.search(r"/opportunities/([A-Za-z0-9_-]{8,64})", text)
+    if m:
+        return m.group(1)
+    m = re.search(r"\bbc:([A-Za-z0-9_-]{8,64})", text)
+    return m.group(1) if m else ""
+
+
+def _walk_file_nodes(node, out: list, depth: int = 0) -> None:
+    """Collect {name, url} pairs from any response shape."""
+    if depth > 6 or len(out) >= MAX_FILES:
+        return
+    if isinstance(node, dict):
+        url = next((node.get(k) for k in _BC_URL_KEYS
+                    if isinstance(node.get(k), str) and node.get(k).startswith("http")), "")
+        name = next((node.get(k) for k in _BC_NAME_KEYS
+                     if isinstance(node.get(k), str) and node.get(k).strip()), "")
+        if url and name:
+            out.append({"name": name.strip(), "url": url})
+            return
+        for v in node.values():
+            _walk_file_nodes(v, out, depth + 1)
+    elif isinstance(node, list):
+        for v in node:
+            _walk_file_nodes(v, out, depth + 1)
+
+
+def extract_buildingconnected(db, bid_id: int, company: str = "construction",
+                              user_email: str = "") -> dict:
+    """Download the plans and bid documents attached to a Bid Board invitation.
+
+    Returns the same summary shape as extract(), so the route can report one
+    result whether the paperwork came by email or from the Bid Board.
+    """
+    import bid_opportunities
+    import bid_sources
+    import photo_store
+    import autodesk_oauth as ao
+
+    result = {"ok": False, "checked": 0, "saved": 0, "skipped": 0,
+              "errors": [], "notes": [], "reason": ""}
+    bid = bid_opportunities.get_bid(db, bid_id, company)
+    if not bid:
+        result["reason"] = "Bid not found."
+        return result
+    oid = _bc_opportunity_id(dict(bid))
+    if not oid:
+        result["reason"] = ("This bid has no BuildingConnected opportunity id, so there is "
+                            "nothing to pull from the Bid Board.")
+        return result
+    if not ao.configured():
+        result["reason"] = "Autodesk is not configured (" + ", ".join(ao.missing()) + ")."
+        return result
+    if not user_email:
+        result["reason"] = "No signed-in Autodesk account; sign in at /oauth/autodesk/start."
+        return result
+
+    nodes: list = []
+    tried = []
+    for leaf in _BC_FILE_PATHS:
+        path = f"{bid_sources.BC_API}/opportunities/{oid}/{leaf}"
+        tried.append(leaf)
+        try:
+            data = ao.api_get(path, user_email, 25)
+        except Exception:
+            continue
+        _walk_file_nodes(data, nodes)
+        if nodes:
+            break
+    if not nodes:
+        try:
+            detail = ao.api_get(f"{bid_sources.BC_API}/opportunities/{oid}",
+                                user_email, 25)
+            _walk_file_nodes(detail, nodes)
+        except Exception as exc:
+            result["notes"].append(f"opportunity detail: {str(exc)[:140]}")
+    if not nodes:
+        result["reason"] = ("The Bid Board returned no downloadable files for this "
+                            f"opportunity (tried: {', '.join(tried)}). Plans may be "
+                            "visible only inside Bid Board.")
+        return result
+
+    try:
+        existing = {d.get("key") for d in bid_opportunities.list_documents(db, bid_id, company)}
+    except Exception:
+        existing = set()
+
+    for node in nodes[:MAX_FILES]:
+        name = node["name"][:500]
+        ext = os.path.splitext(name)[1].lower()
+        if ext not in photo_store.ALLOWED_EXT:
+            result["skipped"] += 1
+            result["notes"].append(f"{name}: {ext or '(no extension)'} is not a type this app stores.")
+            continue
+        result["checked"] += 1
+        try:
+            raw, ctype = ao.api_get_bytes(node["url"], user_email)
+            if not raw:
+                raise ValueError("empty file")
+            stored_name = f"{_safe_stem(name)}-{hashlib.sha1(node['url'].encode()).hexdigest()[:10]}{ext}"
+            key = f"bids/{bid_id}/{photo_store.safe_key(stored_name)}"
+            if key in existing:
+                result["skipped"] += 1
+                continue
+            stored = photo_store.save(raw, stored_name, key_prefix=f"bids/{bid_id}")
+            doc_id = bid_opportunities.add_document(
+                db, bid_id, company,
+                filename=name, key=stored["key"], url=stored["url"],
+                content_type=ctype or photo_store._content_type(stored["key"]),
+                bytes_count=len(raw), uploaded_by="BuildingConnected",
+                document_type=classify(name, ctype or ""))
+        except ValueError as exc:
+            result["errors"].append(f"{name}: {str(exc)[:160]}")
+            continue
+        except Exception as exc:
+            result["errors"].append(f"{name}: {str(exc)[:160]}")
+            continue
+        if doc_id:
+            existing.add(stored["key"])
+            result["saved"] += 1
+        else:
+            result["skipped"] += 1
+    result["ok"] = bool(result["saved"] or result["skipped"])
+    return result

@@ -273,6 +273,30 @@ def api_get(path: str, user_email: str, timeout: int = 25) -> Any:
         raise AutodeskError(f"could not reach APS: {e.reason}") from e
 
 
+def api_get_bytes(url: str, user_email: str, timeout: int = 60) -> tuple[bytes, str]:
+    """Download a file with the owner's token. Returns (body, content_type).
+
+    Plan sets and attachments are served as bytes, not JSON, so api_get() is
+    the wrong tool. The project header is sent for the same reason it is on
+    every other ACC call.
+    """
+    tok = usable_token(user_email, timeout)
+    target = url if url.startswith("http") else f"{API_BASE}{url}"
+    headers = {"Authorization": f"Bearer {tok}"}
+    pid = config()["project_id"]
+    if pid:
+        headers["x-construction-project-id"] = pid
+    req = urllib.request.Request(target, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.read(), resp.headers.get("Content-Type", "")
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", "replace")[:200]
+        raise AutodeskError(f"APS download failed: HTTP {e.code} {detail}") from e
+    except urllib.error.URLError as e:
+        raise AutodeskError(f"could not reach APS: {e.reason}") from e
+
+
 def list_projects(user_email: str, timeout: int = 25) -> list[dict]:
     """Every ACC project this account can see.
 
