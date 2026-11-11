@@ -1853,8 +1853,6 @@ f"The mail transport did not accept the message. This usually means the "
         if len(digits) < 10:
             return {"ok": False, "error": "I need a valid 10-digit phone number."}
         e164 = ("+1" + digits) if not digits.startswith("1") else ("+" + digits)
-        if not vapi.is_configured():
-            return {"ok": False, "error": "Vapi is not configured (VAPI_API_KEY missing)."}
         # DNC applies to the telephone, not the transport: the same number that
         # cannot be texted must not be dialled either. This path had no check at
         # all, so the Copilot could call anyone on the suppression list.
@@ -1864,8 +1862,19 @@ f"The mail transport did not accept the message. This usually means the "
             return {"ok": False, "error": f"Could not verify do-not-call status: {exc}"}
         if not allowed:
             return {"ok": False, "error": f"Not calling {e164}: {why}"}
+        # SignalWire carries the call now, not Vapi.
+        #
+        # Vapi's free number is INBOUND ONLY -- its docs say so outright -- so
+        # every outbound attempt died with "outbound-daily-limit" regardless of
+        # account credit, and buying a number needed a card. The app already
+        # serves its own SWML agent at /comms/outbound-voice.swml, which greets
+        # the lead by name and runs on the SignalWire number we already pay for.
+        if not signalwire.is_configured():
+            return {"ok": False, "error": "The phone line is not configured (SignalWire credentials missing)."}
+        base = (os.getenv("APP_BASE_URL") or f"https://{company()['domain']}").rstrip("/")
+        swml_url = f"{base}/comms/outbound-voice.swml?to={urllib.parse.quote(e164)}"
         try:
-            sid = vapi.create_ai_outbound_call(e164, notes or "")
+            sid = signalwire.create_ai_outbound_call(e164, swml_url)
         except Exception as e:
             return {"ok": False, "error": f"Call could not be placed: {e}"}
         if not sid:
@@ -7880,14 +7889,16 @@ def _follow_up_new_lead(lead_id: int) -> None:
                 print(f"📞[followup] lead {lead_id} not called ({why})", flush=True)
                 return
             try:
-                # Use the module-level client: it defaults to this app's domain
-                # (construction.bizstackperks.com). A bare VapiService() falls
-                # back to the hosts domain, which would point the voice brain
-                # at the wrong app.
-                if not vapi.is_configured():
-                    print(f"📞[followup] Vapi not configured, skipping dial for lead {lead_id}", flush=True)
+                # SignalWire, not Vapi: Vapi's free number cannot dial out at
+                # all, and its import path cannot carry the SIP auth SignalWire
+                # requires. This app already serves its own SWML agent, and the
+                # outbound SWML route greets the lead by name from the number.
+                if not signalwire.is_configured():
+                    print(f"📞[followup] SignalWire not configured, skipping dial for lead {lead_id}", flush=True)
                     return
-                sid = vapi.create_ai_outbound_call(to, f"AI immediate callback for new lead {lead_id}")
+                base = (os.getenv("APP_BASE_URL") or f"https://{company()['domain']}").rstrip("/")
+                swml_url = f"{base}/comms/outbound-voice.swml?to={urllib.parse.quote(to)}&lead_id={lead_id}"
+                sid = signalwire.create_ai_outbound_call(to, swml_url)
             except Exception as e:
                 print(f"📞[followup] dial failed for lead {lead_id}: {e}", flush=True)
                 return
