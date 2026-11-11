@@ -60,6 +60,61 @@ class RentCastError(Exception):
         self.reached_api = reached_api
 
 
+def _check_skiptrace_cache(address: str, key: str):
+    """Check the skip-trace cache for property data already collected for this address.
+
+    The skip trace caches every RentCast/HRGEO lookup forever (misses included),
+    so a repeat visit from the instant-quote page can reuse that data without
+    spending another RentCast call from the 50/month budget.
+
+    Returns a normalized property dict or None."""
+    import psycopg
+    db_url = os.getenv("DATABASE_URL", "")
+    if not db_url:
+        return None
+    try:
+        conn = psycopg.connect(db_url, autocommit=True)
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT to_regclass('skiptrace_cache') AS t;"
+            )
+            row = cur.fetchone()
+            if not (row and (row.get("t") if isinstance(row, dict) else (row[0] if row else None))):
+                conn.close()
+                return None
+            cur.execute(
+                "SELECT payload FROM skiptrace_cache WHERE address_key = %s AND found = TRUE LIMIT 1;",
+                (key,),
+            )
+            row = cur.fetchone()
+        conn.close()
+        if not row:
+            return None
+        payload = row[0] if not isinstance(row, dict) else row.get("payload")
+        if isinstance(payload, str):
+            payload = json.loads(payload)
+        if not isinstance(payload, dict) or not payload.get("sqft"):
+            return None
+        return {
+            "address": payload.get("address") or address,
+            "city": payload.get("city", ""),
+            "state": payload.get("state", "VA"),
+            "zip": payload.get("zip", ""),
+            "sqft": _num(payload.get("sqft")),
+            "beds": payload.get("beds"),
+            "baths": payload.get("baths"),
+            "year_built": payload.get("year_built"),
+            "stories": payload.get("stories"),
+            "property_type": payload.get("property_type", ""),
+            "lot_sqft": _num(payload.get("lot_sqft")),
+            "success": True,
+            "source": "skiptrace_cache",
+            "raw": payload,
+        }
+    except Exception:
+        return None
+
+
 def _num(val):
     if isinstance(val, dict):
         v = val.get("value")
@@ -384,6 +439,19 @@ def lookup_address(address: str):
                 return result
         except Exception:
             pass
+
+    # Cross-check the skip-trace cache before spending a RentCast call.
+    # Addresses that were already looked up via skip-trace (HRGEO parcels,
+    # RentCast, etc.) have their property data cached forever in skiptrace_cache.
+    # Reusing that data saves the 50-call monthly RentCast budget for addresses
+    # that have never been seen before.
+    try:
+        st_result = _check_skiptrace_cache(addr, key)
+        if st_result:
+            _cache_put(key, st_result)
+            return st_result
+    except Exception:
+        pass
 
     if not is_configured():
         return None

@@ -1,147 +1,211 @@
 {% extends "base.html" %}
 {% set co = company() %}
-{% block title %}Rental Make-Ready Package | {{ co.name }}{% endblock %}
-{% block meta %}<meta name="description" content="Rental make-ready packages for investors and Airbnb hosts in {{ co.service_area }}. Cosmetic turn and full rehab, fixed price, with Broom Service division turnover cleaning and co-hosting. Free on-site walkthrough.">{% endblock %}
+{% block title %}What We Do | {{ co.name }} — Renovations, Repairs & Investor Properties{% endblock %}
+{% block meta %}<meta name="description" content="Homeowner renovations, emergency repairs, and investor property make-readies in {{ co.service_area }}. Fixed pricing, licensed crew, one point of contact from demo to final walkthrough.">{% endblock %}
 
 {% block content %}
-<section class="bg-gradient-to-br from-indigo-700 to-indigo-900 text-white">
+<section class="bg-gradient-to-br from-slate-900 to-indigo-900 text-white">
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16 lg:py-24">
-        <p class="text-sm font-bold text-indigo-200 uppercase tracking-widest">Investor package</p>
-        <h1 class="text-4xl sm:text-5xl font-black tracking-tight mt-3 max-w-3xl">Rough to revenue, one fixed price.</h1>
-        <p class="mt-6 text-lg text-indigo-100 max-w-2xl">
-            We turn investor properties into stay-ready rentals — cosmetic make-readies and full rehabs scoped in
-            writing, priced per square foot from the public record, and backed by our fixed-price guarantee.
+        <p class="text-sm font-bold text-indigo-300 uppercase tracking-widest">How we help</p>
+        <h1 class="text-4xl sm:text-5xl font-black tracking-tight mt-3 max-w-3xl">Three kinds of projects. One licensed crew. Fixed pricing on all of them.</h1>
+        <p class="mt-6 text-lg text-slate-300 max-w-2xl">
+            Whether you're a homeowner fixing storm damage, updating your kitchen, or an investor prepping a rental property — we scope it in writing, price it fixed, and handle the whole job with one crew and one point of contact.
         </p>
         <div class="mt-10 flex flex-wrap gap-4">
-            <a href="/instant-quote?project_type=Rental%20Make-Ready%20(cosmetic)" class="px-8 py-4 text-base font-bold text-white bg-indigo-600 hover:bg-indigo-500 rounded-2xl transition-all shadow-lg shadow-indigo-200">Get an Instant Ballpark →</a>
+            <a href="/get-started" class="px-8 py-4 text-base font-bold text-white bg-indigo-600 hover:bg-indigo-500 rounded-2xl transition-all shadow-lg shadow-indigo-200">Get a Free Estimate →</a>
             <a href="tel:{{ co.phone_e164 }}" class="px-8 py-4 text-base font-bold text-indigo-100 bg-white/10 border border-white/20 hover:bg-white/20 rounded-2xl transition-all">📞 {{ co.phone }}</a>
         </div>
     </div>
 </section>
 
+<!-- Three service tracks -->
 <section class="py-16 bg-white">
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div class="text-center mb-14">
-            <h2 class="text-3xl sm:text-4xl font-black tracking-tight text-slate-900 mb-4">Two paths to revenue</h2>
-            <p class="text-lg text-slate-600 max-w-2xl mx-auto">Tell us your goal — we scope to it. A flip gets investor-grade finishes built to sell. A long-term rental gets durable, tenant-ready work. An Airbnb gets stay-ready, guest-proofed spaces.</p>
-        </div>
-
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
-            {% set paths = [
-                ("Fix-and-flip", "Buy it, fix it, sell it fast.", "Investor-grade scope — cabinets, counters, floors, paint. Built to list, not to linger.", "🔄"),
-                ("Long-term rental", "Tenant-ready, turn-key.", "Durable LVP, neutral paint, updated fixtures. Built for years of tenancy, not one season.", "🏠"),
-                ("Airbnb / short-term", "Stay-ready, revenue-producing.", "Guest-proofed finishes, co-hosting ready. Pairs with our Broom Service division turnovers.", "✨"),
-            ] %}
-            {% for title, subtitle, desc, icon in paths %}
+            <!-- Homeowner renovations -->
             <div class="bg-slate-50 rounded-3xl border border-slate-200 p-8">
-                <div class="text-4xl mb-6">{{ icon }}</div>
-                <h3 class="text-xl font-black text-slate-900 mb-2">{{ title }}</h3>
-                <p class="text-sm font-semibold text-indigo-600 mb-3">{{ subtitle }}</p>
-                <p class="text-sm text-slate-600 leading-relaxed">{{ desc }}</p>
+                <div class="text-4xl mb-6">🏠</div>
+                <h3 class="text-xl font-black text-slate-900 mb-2">Homeowner Renovations</h3>
+                <p class="text-sm font-semibold text-indigo-600 mb-3">You live here. We make it better.</p>
+                <p class="text-sm text-slate-600 leading-relaxed mb-4">Kitchens, baths, whole-home remodels, additions, and updates — scoped in writing, priced fixed, and built to last. We handle permits, inspections, and every trade. You get one crew, one schedule, and a clean jobsite.</p>
+                <ul class="text-xs text-slate-500 space-y-1.5">
+                    <li>✓ Kitchen & bath remodels</li>
+                    <li>✓ Whole-home renovations</li>
+                    <li>✓ Additions & structural work</li>
+                    <li>✓ Drywall, paint, flooring, tile</li>
+                </ul>
+                <a href="/get-started?project_type=Whole-Home+Renovation" class="mt-6 inline-block text-sm font-bold text-indigo-600 hover:text-indigo-700">Get a free estimate →</a>
             </div>
-            {% endfor %}
+
+            <!-- Repairs & service calls -->
+            <div class="bg-slate-50 rounded-3xl border border-slate-200 p-8">
+                <div class="text-4xl mb-6">🔧</div>
+                <h3 class="text-xl font-black text-slate-900 mb-2">Repairs & Service Calls</h3>
+                <p class="text-sm font-semibold text-indigo-600 mb-3">Something broke. We fix it.</p>
+                <p class="text-sm text-slate-600 leading-relaxed mb-4">Storm damage, leaks, structural issues, code violations — we diagnose it, scope the repair, and fix it right the first time. Insurance work welcome. Fast response, written pricing, and we show up when we say we will.</p>
+                <ul class="text-xs text-slate-500 space-y-1.5">
+                    <li>✓ Storm & water damage repair</li>
+                    <li>✓ Roofing & siding fixes</li>
+                    <li>✓ Structural & foundation repairs</li>
+                    <li>✓ Code compliance & permit fixes</li>
+                </ul>
+                <a href="tel:{{ co.phone_e164 }}" class="mt-6 inline-block text-sm font-bold text-indigo-600 hover:text-indigo-700">Call now — we answer 24/7 →</a>
+            </div>
+
+            <!-- Investor properties -->
+            <div class="bg-gradient-to-br from-indigo-50 to-slate-50 rounded-3xl border-2 border-indigo-200 p-8 relative">
+                <span class="absolute top-4 right-4 px-2.5 py-1 text-xs font-bold text-indigo-700 bg-indigo-100 rounded-full">Investors</span>
+                <div class="text-4xl mb-6">✨</div>
+                <h3 class="text-xl font-black text-slate-900 mb-2">Investor & STR Make-Ready</h3>
+                <p class="text-sm font-semibold text-indigo-600 mb-3">Buy it. We fix it. We run it.</p>
+                <p class="text-sm text-slate-600 leading-relaxed mb-4">Fix-and-flip, long-term rental, or Airbnb — we renovate to a stay-ready standard, then our in-house <strong>Broom Service</strong> division stages, lists, cleans, and co-hosts every turnover. One contract covers the whole loop from closing to first guest.</p>
+                <ul class="text-xs text-slate-500 space-y-1.5">
+                    <li>✓ Cosmetic make-ready ($25–$45/sqft)</li>
+                    <li>✓ Full rehab ($75–$120/sqft)</li>
+                    <li>✓ Broom Service staging & listing</li>
+                    <li>✓ Ongoing cleaning & co-hosting</li>
+                </ul>
+                <a href="#investor-details" class="mt-6 inline-block text-sm font-bold text-indigo-600 hover:text-indigo-700">See the full investor package →</a>
+            </div>
         </div>
     </div>
 </section>
 
-<section class="py-16 bg-indigo-600">
+<!-- Investor package details -->
+<section id="investor-details" class="py-16 bg-indigo-600">
     <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
         <div class="bg-white/5 backdrop-blur-sm rounded-3xl border border-white/10 p-8 sm:p-12 text-center">
-            <h2 class="text-3xl sm:text-4xl font-black text-white mb-6">The scope, in writing — no surprises.</h2>
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-8 mb-10">
-                <div class="text-left">
-                    <h3 class="font-bold text-white mb-4">Included in every rental make-ready</h3>
-                    <ul class="text-sm text-indigo-100 space-y-3 text-left">
-                        <li class="flex items-start gap-3">✅ <span class="font-medium">Durable LVP flooring</span> — built for tenants and short-term guests</li>
-                        <li class="flex items-start gap-3">✅ <span class="font-medium">Full interior paint</span> — agreeable gray / white throughout</li>
-                        <li class="flex items-start gap-3">✅ <span class="font-medium">Updated light fixtures &amp; outlets</span></li>
-                        <li class="flex items-start gap-3">✅ <span class="font-medium">Rental-grade kitchen cabinet refresh</span></li>
-                        <li class="flex items-start gap-3">✅ <span class="font-medium">Certified code-compliance check</span> — permits pass the first time</li>
+            <h2 class="text-3xl sm:text-4xl font-black text-white mb-6">The investor package — renovation through management, one company.</h2>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-8 mb-10 text-left">
+                <div>
+                    <h3 class="font-bold text-white mb-4">What BuildStack handles</h3>
+                    <ul class="text-sm text-indigo-100 space-y-3">
+                        <li class="flex items-start gap-3">✅ <span class="font-medium">Full renovation</span> — floors, paint, fixtures, code compliance</li>
+                        <li class="flex items-start gap-3">✅ <span class="font-medium">Permits & inspections</span> — we pull them, we pass them</li>
+                        <li class="flex items-start gap-3">✅ <span class="font-medium">Fixed-price guarantee</span> — the scope is the invoice</li>
                     </ul>
                 </div>
-                <div class="text-left">
-                    <h3 class="font-bold text-white mb-4">The fixed-price guarantee</h3>
-                    <p class="text-sm text-indigo-100 leading-relaxed mb-4">
-                        <span class="font-bold text-white">The price on the scope is the price on the invoice.</span>
-                        No unexpected change orders unless you add to the project.
-                    </p>
-                    <p class="text-xs text-indigo-200">Final pricing confirmed after your free on-site walkthrough and written scope.</p>
+                <div>
+                    <h3 class="font-bold text-white mb-4">What Broom Service handles</h3>
+                    <ul class="text-sm text-indigo-100 space-y-3">
+                        <li class="flex items-start gap-3">✅ <span class="font-medium">Staging & photography</span> — professional listing photos</li>
+                        <li class="flex items-start gap-3">✅ <span class="font-medium">Airbnb/Vrbo listing</span> — pricing, calendar, guest messaging</li>
+                        <li class="flex items-start gap-3">✅ <span class="font-medium">Turnover cleaning</span> — every checkout, photo-verified</li>
+                        <li class="flex items-start gap-3">✅ <span class="font-medium">Co-hosting</span> — reviews, pricing optimization, maintenance coordination</li>
+                    </ul>
                 </div>
             </div>
             <div class="mt-10 px-4 py-6 rounded-2xl border border-white/20 bg-white/5">
-                <p class="text-sm font-bold text-indigo-100 uppercase tracking-wider mb-2">Pricing from public records</p>
+                <p class="text-sm font-bold text-indigo-100 uppercase tracking-wider mb-2">Investor pricing from public records</p>
                 <div class="text-2xl sm:text-3xl font-black text-white mb-2">Sq ft × $25–$45</div>
-                <p class="text-sm text-indigo-200 mb-4">Cosmetic rental make-ready, per interior square foot, from the city/county property record.</p>
+                <p class="text-sm text-indigo-200 mb-4">Cosmetic make-ready — LVP, paint, fixtures, code check.</p>
                 <div class="text-2xl sm:text-3xl font-black text-white mb-2">Sq ft × $75–$120</div>
-                <p class="text-sm text-indigo-200">Full rehab, per interior square foot — age of the home adjusts toward the high end (pre-1970 stock carries structural/upgrade risk).</p>
+                <p class="text-sm text-indigo-200">Full rehab — structural, systems, finishes. Age of home adjusts toward high end.</p>
                 <p class="mt-4 text-xs text-indigo-300">Ballpark from public data — not a bid. Your true fixed price comes from the free on-site walkthrough.</p>
             </div>
+            <div class="mt-8 flex flex-wrap justify-center gap-4">
+                <a href="/instant-quote?project_type=Rental%20Make-Ready%20(cosmetic)" class="px-6 py-3.5 text-sm font-bold text-white bg-indigo-700 hover:bg-indigo-800 rounded-2xl transition-all">Get an Instant Ballpark →</a>
+                <a href="tel:{{ co.phone_e164 }}" class="px-6 py-3.5 text-sm font-bold text-indigo-100 bg-white/10 border border-white/20 hover:bg-white/20 rounded-2xl transition-all">📞 {{ co.phone }}</a>
+            </div>
         </div>
     </div>
 </section>
 
+<!-- Timeline -->
 <section class="py-16 bg-slate-50">
-    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+    <div class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
         <div class="text-center mb-12">
-            <h2 class="text-3xl sm:text-4xl font-black tracking-tight text-slate-900 mb-4">From rough to revenue — under one roof.</h2>
-            <p class="text-lg text-slate-600 max-w-2xl mx-auto">We renovate. Our in-house Broom Service division cleans, co-hosts, and manages the turnovers. One company, one contract, one point of contact.</p>
+            <h2 class="text-3xl sm:text-4xl font-black tracking-tight text-slate-900 mb-4">From first call to final walkthrough — here's how it works.</h2>
+            <p class="text-lg text-slate-600 max-w-2xl mx-auto">Same process whether you're a homeowner fixing your kitchen or an investor prepping a rental. One crew, one schedule, one point of contact.</p>
         </div>
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
-            <div>
-                <h3 class="text-2xl font-black text-slate-900 mb-6">1. You find the property.</h3>
-                <p class="text-slate-600 mb-6 leading-relaxed">Fix-and-flip, long-term rental, or Airbnb — send us the address. We pull the square footage and build year from the public record and ballpark the cost in minutes.</p>
-                <h3 class="text-2xl font-black text-slate-900 mb-6">2. We walk it and lock the price.</h3>
-                <p class="text-slate-600 mb-6 leading-relaxed">Free on-site walkthrough. Written scope. Fixed price in writing — no surprise change orders unless you add to the project.</p>
-                <h3 class="text-2xl font-black text-slate-900 mb-6">3. We build it. Broom Service runs it.</h3>
-                <p class="text-slate-600 mb-6 leading-relaxed">Our licensed crew does the renovation. When it's done, our Broom Service division handles turnover cleaning, linen restock, and Airbnb co-hosting — so your property starts earning from day one.</p>
+        <div class="grid grid-cols-1 md:grid-cols-5 gap-6">
+            <div class="relative">
+                <div class="w-10 h-10 rounded-full bg-indigo-600 text-white font-black flex items-center justify-center">1</div>
+                <h3 class="mt-4 font-bold text-slate-900">Call or form</h3>
+                <p class="text-sm text-slate-600 mt-2">Tell us about the project. We ask the right questions.</p>
             </div>
-            <div class="bg-white rounded-3xl border border-slate-200 p-8 sm:p-12 shadow-xl">
-                <h3 class="font-black text-slate-900 mb-6 text-center">Start your rental make-ready</h3>
-                <form action="/get-started" method="POST" class="space-y-4">
-                    <input type="hidden" name="project_type" value="Rental Make-Ready">
-                    <input type="hidden" name="message" id="rmr-message" value="Rental make-ready inquiry">
-                    <div>
-                        <label class="block text-sm font-semibold text-slate-700 mb-1.5">Property address *</label>
-                        <input type="text" name="address" placeholder="123 Main St, Norfolk, VA" required class="w-full px-4 py-3 rounded-xl bg-slate-100 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
-                    </div>
-                    <div>
-                        <label class="block text-sm font-semibold text-slate-700 mb-1.5">Your name *</label>
-                        <input type="text" name="full_name" required class="w-full px-4 py-3 rounded-xl bg-slate-100 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
-                    </div>
-                    <div>
-                        <label class="block text-sm font-semibold text-slate-700 mb-1.5">Phone *</label>
-                        <input type="tel" name="phone" required class="w-full px-4 py-3 rounded-xl bg-slate-100 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
-                    </div>
-                    <div>
-                        <label class="block text-sm font-semibold text-slate-700 mb-1.5">Email *</label>
-                        <input type="email" name="email" required class="w-full px-4 py-3 rounded-xl bg-slate-100 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
-                    </div>
-                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        <label class="text-sm font-semibold text-slate-700 mb-1.5">Goal</label>
-                        <select name="budget" class="w-full px-4 py-3 rounded-xl bg-slate-100 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
-                            <option value="fix_and_flip">Fix-and-flip</option>
-                            <option value="long_term_rental">Long-term rental</option>
-                            <option value="airbnb">Airbnb / short-term</option>
-                        </select>
-                    </div>
-                    <button type="submit" class="w-full py-4 text-base font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-2xl transition-all shadow-lg shadow-indigo-200">Request Free Walkthrough →</button>
-                </form>
-                <p class="mt-4 text-xs text-slate-500 text-center">Serving {{ co.service_area }}. Call or text {{ co.phone }}.</p>
+            <div class="relative">
+                <div class="w-10 h-10 rounded-full bg-indigo-600 text-white font-black flex items-center justify-center">2</div>
+                <h3 class="mt-4 font-bold text-slate-900">Free walkthrough</h3>
+                <p class="text-sm text-slate-600 mt-2">We walk the property and give you a written, fixed-price scope.</p>
+            </div>
+            <div class="relative">
+                <div class="w-10 h-10 rounded-full bg-indigo-600 text-white font-black flex items-center justify-center">3</div>
+                <h3 class="mt-4 font-bold text-slate-900">Deposit & schedule</h3>
+                <p class="text-sm text-slate-600 mt-2">A small deposit reserves your slot and orders materials.</p>
+            </div>
+            <div class="relative">
+                <div class="w-10 h-10 rounded-full bg-indigo-600 text-white font-black flex items-center justify-center">4</div>
+                <h3 class="mt-4 font-bold text-slate-900">We build</h3>
+                <p class="text-sm text-slate-600 mt-2">Our licensed crew does the work, with photo updates.</p>
+            </div>
+            <div class="relative">
+                <div class="w-10 h-10 rounded-full bg-indigo-600 text-white font-black flex items-center justify-center">5</div>
+                <h3 class="mt-4 font-bold text-slate-900">Walkthrough & done</h3>
+                <p class="text-sm text-slate-600 mt-2">We inspect together, punch-list anything, and hand it back.</p>
             </div>
         </div>
     </div>
 </section>
 
-<script>
-(function(){
-    var sel = document.querySelector('select[name="budget"]');
-    var hidden = document.getElementById('rmr-message');
-    if (!sel || !hidden) return;
-    function update(){
-        hidden.value = 'Rental make-ready inquiry — goal: ' + sel.value.replace(/_/g, ' ');
-    }
-    sel.addEventListener('change', update);
-    update();
-})();
-</script>
+<!-- CTA with form -->
+<section class="py-16 bg-white">
+    <div class="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="text-center mb-10">
+            <h2 class="text-3xl sm:text-4xl font-black tracking-tight text-slate-900 mb-4">Ready to get started?</h2>
+            <p class="text-lg text-slate-600">Tell us about your project. We'll call you within the hour to schedule your free walkthrough.</p>
+        </div>
+        <form action="/get-started" method="POST" class="bg-slate-50 rounded-3xl border border-slate-200 p-6 sm:p-8 space-y-5">
+            <div class="hidden" aria-hidden="true"><label>Company website<input type="text" name="company_website" tabindex="-1" autocomplete="off"></label></div>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-5">
+                <div>
+                    <label class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Your name *</label>
+                    <input type="text" name="full_name" required class="w-full px-4 py-3 rounded-xl bg-white border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                </div>
+                <div>
+                    <label class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Phone *</label>
+                    <input type="tel" name="phone" required data-phone-format class="w-full px-4 py-3 rounded-xl bg-white border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                </div>
+                <div>
+                    <label class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Email *</label>
+                    <input type="email" name="email" required class="w-full px-4 py-3 rounded-xl bg-white border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                </div>
+                <div>
+                    <label class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Property address *</label>
+                    <input type="text" name="address" required placeholder="123 Main St, Virginia Beach, VA" class="w-full px-4 py-3 rounded-xl bg-white border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                </div>
+            </div>
+            <div>
+                <label class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">What type of project? *</label>
+                <select name="project_type" required class="w-full px-4 py-3 rounded-xl bg-white border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                    <option value="">Select…</option>
+                    <option>Homeowner renovation (kitchen, bath, whole-home)</option>
+                    <option>Repair or service call (something broke)</option>
+                    <option>Storm or water damage</option>
+                    <option>Investor property — fix-and-flip</option>
+                    <option>Investor property — long-term rental</option>
+                    <option>Investor property — Airbnb / short-term</option>
+                </select>
+            </div>
+            <div>
+                <label class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">What's the goal? *</label>
+                <select name="goal" required class="w-full px-4 py-3 rounded-xl bg-white border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                    <option value="">Select…</option>
+                    <option>Something broke — needs repair</option>
+                    <option>Storm, water, or emergency damage</option>
+                    <option>Remodeling / updating a room or the whole house</option>
+                    <option>Getting ready to sell</option>
+                    <option>Investor property — prepping to rent or list</option>
+                    <option>Just getting a price — not ready yet</option>
+                </select>
+            </div>
+            <div>
+                <label class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Project details</label>
+                <textarea name="message" rows="4" placeholder="What needs to be done? Any photos or details welcome." class="w-full px-4 py-3 rounded-xl bg-white border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"></textarea>
+            </div>
+            <button type="submit" class="w-full py-4 text-base font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-2xl transition-all shadow-lg shadow-indigo-100">Request My Free Walkthrough →</button>
+            <p class="text-xs text-center text-slate-500">Prefer to talk? Call or text <a href="tel:{{ co.phone_e164 }}" class="font-semibold text-indigo-600">{{ co.phone }}</a> — we answer 24/7.</p>
+        </form>
+    </div>
+</section>
 {% endblock %}

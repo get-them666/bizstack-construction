@@ -42,7 +42,7 @@
     <link rel="stylesheet" href="/static/css/tailwind.css?v={{ asset_version }}">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
     {# tojson, not autoescape: HTML entities are not decoded inside a script
        tag, so the "&" in the service area was reaching crawlers as a literal
        "&amp;". #}
@@ -282,21 +282,20 @@
                     <li><a href="/services" class="hover:text-slate-200">Services</a></li>
                     <li><a href="/get-started" class="hover:text-slate-200">Get Started</a></li>
                     <li><a href="/instant-quote" class="hover:text-slate-200">Instant Quote</a></li>
-                    <li><a href="/rental-make-ready" class="hover:text-slate-200">Rental Make-Ready</a></li>
+                    <li><a href="/rental-make-ready" class="hover:text-slate-200">Investors</a></li>
                     <li><a href="/portfolio" class="hover:text-slate-200">Projects</a></li>
                     <li><a href="/about" class="hover:text-slate-200">About</a></li>
                     <li><a href="/quote" class="hover:text-slate-200">Free Quote</a></li>
-                    <li><a href="/finance" class="hover:text-slate-200">Financing</a></li>
                     <li><a href="/contact" class="hover:text-slate-200">Contact</a></li>
                 </ul>
             </div>
             <div>
-                <p class="text-white font-semibold mb-3 uppercase tracking-wider text-xs">Also under BuildStack Construction LLC</p>
-                <ul class="space-y-2">
-                    <li><a href="https://bizstackperks.com" class="hover:text-slate-200">Broom Service — Airbnb cleaning &amp; co-hosting</a></li>
+                <p class="text-white font-semibold mb-3 uppercase tracking-wider text-xs">Investors &amp; Hosts</p>
+                <p class="text-xs text-slate-400 leading-relaxed">One company, full loop: we renovate the property, our in-house Broom Service division stages and lists it, then cleans and co-hosts every turnover. You find the deal — we handle everything after the closing table.</p>
+                <ul class="space-y-2 mt-3">
+                    <li><a href="/rental-make-ready" class="hover:text-slate-200 text-xs">Scope a renovation →</a></li>
+                    <li><a href="https://bizstackperks.com" class="hover:text-slate-200 text-xs">Broom Service — STR management</a></li>
                 </ul>
-                <p class="mt-3 text-xs text-slate-500">Need a rental turned over or managed? Our Broom Service division handles STR operations end to end.</p>
-                <p class="mt-3 text-xs text-slate-500">Broom Service is a division of BuildStack Construction LLC.</p>
             </div>
         </div>
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-10 pt-6 border-t border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-slate-500">
@@ -348,7 +347,12 @@
     {% block scripts %}{% endblock %}
     {% include "_addr_autocomplete.html" %}
     {% if not owner_view %}
-    {% include "chat_widget.html" %}
+    {# Sticky call/text bar for mobile — replaces the old chat widget.
+       Same conversion path (call us), zero API cost, always visible. #}
+    <a href="tel:{{ co.phone_e164 }}" class="lg:hidden fixed bottom-4 right-4 z-50 flex items-center gap-2 px-5 py-3.5 rounded-full bg-emerald-600 text-white font-bold text-sm shadow-lg shadow-emerald-900/30 hover:bg-emerald-500 transition-all active:scale-95" aria-label="Call {{ co.phone }}">
+        <span class="text-lg">📞</span>
+        <span>Call Now — Free Estimate</span>
+    </a>
     {{ site_theme_state().decor | safe }}
     {% if site_theme_state().emoji %}
     <div aria-hidden="true" style="position:fixed;right:18px;bottom:14px;font-size:2rem;opacity:.35;pointer-events:none;z-index:40;transform:rotate(-8deg);">{{ site_theme_state().emoji }}</div>

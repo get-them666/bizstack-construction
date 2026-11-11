@@ -61,7 +61,7 @@ def _owner_targets():
 
 
 def notify_owner_email(company_key, *, lead_id, name="", phone="", email="", service="", address="",
-                       budget="", timeline="", message="", source=""):
+                       budget="", timeline="", message="", source="", goal=""):
     """Email the owner/admin whenever a new lead is captured.
 
     Target is NOTIFY_EMAIL (comma-separated list allowed); falls back to
@@ -108,7 +108,45 @@ def notify_owner_email(company_key, *, lead_id, name="", phone="", email="", ser
             print(f"[notify-owner] email to {to} failed: {exc}", flush=True)
         if delay > 0:
             time.sleep(delay)
+    # SMS alert to the owner's mobile — the first GC to call back wins the job.
+    # OWNER_MOBILE is separate from the business line so the text goes to a
+    # phone the owner actually carries on the job site.
+    try:
+        _notify_owner_sms(lead_id=lead_id, name=name, phone=phone, service=service, address=address, goal=goal)
+    except Exception as exc:
+        print(f"[notify-owner] SMS alert failed (non-fatal): {exc}", flush=True)
     return ok
+
+
+def _notify_owner_sms(*, lead_id, name="", phone="", service="", address="", goal=""):
+    """Text the owner immediately when a new lead arrives.
+
+    Email is easy to miss on a job site. An SMS with the lead's name, phone,
+    project type, and goal is the nudge that gets a callback within minutes —
+    which is the difference between booking the walkthrough and losing the job
+    to the next contractor who picks up first."""
+    mobile = (os.getenv("OWNER_MOBILE") or "").strip()
+    if not mobile:
+        return
+    import signalwire_service
+    sw = signalwire_service.SignalWireService()
+    if not sw.is_configured():
+        return
+    lines = [f"🔨 New lead #{lead_id}"]
+    if name:
+        lines.append(f"Name: {name}")
+    if phone:
+        lines.append(f"Phone: {phone}")
+    if goal:
+        lines.append(f"Goal: {goal}")
+    if service:
+        lines.append(f"Project: {service}")
+    if address:
+        lines.append(f"Address: {address}")
+    lines.append("Call them now — first GC to respond wins.")
+    body = "\n".join(lines)
+    sw.send_sms(mobile, body)
+    print(f"[notify-owner] SMS alert sent to owner (lead #{lead_id})", flush=True)
 
 COMPANIES = {
     "construction": {"name": brand.short_name(), "legal_name": brand.name(), "cta": "Call or text us at (757) 908-7121 anytime."},
@@ -186,7 +224,7 @@ def _build_message(company_key, co_name, quote=None, **ctx):
             + (f" for a {service} project" if service else "")
             + (f" (~{budget})" if budget else "")
             + ".",
-            "A financing specialist and estimator will reach out within one business day to walk you through your options."
+            "A financing specialist and estimator will reach out within the hour to walk you through your options."
             + quote_line
             + " No credit impact, no obligation.",
         ]
@@ -235,7 +273,7 @@ def _build_message(company_key, co_name, quote=None, **ctx):
             else "We received your request."
         )
         + quote_line + ".",
-        "A project estimator will text you within one business day with next steps and a free walkthrough.",
+        "Shaun or the estimator will call you within the hour with next steps and to schedule your free walkthrough.",
     ]
     if ctx.get("booking_link"):
         lines.append(f"Want to skip the phone tag? Pick a walkthrough time here: {ctx['booking_link']}")

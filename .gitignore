@@ -39,3 +39,14 @@ bids_local.json
 
 # Generated CA bundle (certifi + vendored DigiCert intermediate)
 .ca_bundle_vb.pem
+
+# Unrelated subprojects that happen to live in this directory but are
+# separate codebases, not part of the Construction app.
+inventory-tracker/
+weather/
+my_agent/
+
+# One-off tools and artifacts that don't belong in the repo
+zmail-cli.jar
+stale/
+railway.json

@@ -20,8 +20,8 @@
             <p class="mt-1 text-sm font-semibold text-slate-900">Free estimate</p>
         </div>
         <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-            <p class="text-2xl">🔧</p>
-            <p class="mt-1 text-sm font-semibold text-slate-900">Financing options</p>
+            <p class="text-2xl">📋</p>
+            <p class="mt-1 text-sm font-semibold text-slate-900">Written, fixed price</p>
         </div>
     </div>
 
@@ -96,6 +96,17 @@
         <div>
             <label for="message" class="block text-sm font-semibold text-slate-700 mb-1.5">Describe your project</label>
             <textarea id="message" name="message" rows="4" placeholder="What needs to be done, when, and anything we should know about the space?" class="w-full px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">{{ request.query_params.get('message','') }}</textarea>
+        </div>
+        <div>
+            <label for="goal" class="block text-sm font-semibold text-slate-700 mb-1.5">What's the goal? *</label>
+            <select id="goal" name="goal" required class="w-full px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                <option value="">Select…</option>
+                <option>Something broke — needs repair</option>
+                <option>Storm, water, or emergency damage</option>
+                <option>Remodeling / updating a room or the whole house</option>
+                <option>Getting ready to sell</option>
+                <option>Just getting a price — not ready yet</option>
+            </select>
         </div>
         <input type="hidden" name="ref" value="{{ ref }}">
         <button type="submit" class="w-full inline-flex items-center justify-center px-6 py-4 text-base font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition-all shadow-sm shadow-indigo-200">Request my free estimate</button>

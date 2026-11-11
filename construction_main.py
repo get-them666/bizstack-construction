@@ -88,7 +88,6 @@ import ledger_bridge
 import funding_referrals
 import bid_opportunities
 import bid_sources
-import enrichment
 from signalwire_service import SignalWireService
 import vapi_service
 import zoho_sync
@@ -3187,6 +3186,7 @@ async def submit_lead(
     budget: str = Form(""),
     timeline: str = Form(""),
     description: str = Form(""),
+    goal: str = Form(""),
     source: str = Form("website"),
     company_website: str = Form(""),
     db=Depends(get_db),
@@ -3194,11 +3194,16 @@ async def submit_lead(
     src = (source or "").strip().lower() or "website"
     if _is_form_bot(company_website, src):
         return JSONResponse(content={"status": "success", "lead_id": 0})
+    # Prepend the goal to the description so it's visible in the lead detail
+    # and the owner notification without needing a new column.
+    full_description = description
+    if goal:
+        full_description = f"Goal: {goal}. {description}".strip()
     res = lead_intake.intake_lead(
         db, company="construction", source=src, name=name, phone=phone,
-        email=(email or "").strip(), address=address, description=description,
+        email=(email or "").strip(), address=address, description=full_description,
         project_type=project_type,
-        extra={"budget": budget, "timeline": timeline},
+        extra={"budget": budget, "timeline": timeline, "goal": goal},
     )
     lead_id = res["lead_id"]
     created = res["created"]
@@ -3209,7 +3214,7 @@ async def submit_lead(
         auto_reply.notify_owner_email(
             "construction", lead_id=lead_id, name=name, phone=phone, email=(email or "").strip(),
             service=(project_type or ""), address=address,
-            budget=budget, timeline=timeline, message=description, source=src,
+            budget=budget, timeline=timeline, message=description, source=src, goal=goal,
         )
     except Exception as e:
         print(f"⚠️ submit-lead owner notify failed: {e}", flush=True)
@@ -7212,46 +7217,6 @@ def run_with_cursor(db, fn):
         return fn(cur)
 
 
-@app.post("/api/enrich/pdl")
-async def enrich_pdl(request: Request, limit: int = Form(10),
-                     dry_run: str = Form("1"), db=Depends(get_db)):
-    """Reverse-address permit leads to owner email/phone via People Data Labs.
-
-    DRY RUN by default. Every lookup is a billable PDL record, so the response
-    reports the hit list, the miss list and the projected spend BEFORE any
-    write happens. Pass dry_run=0 to actually write.
-
-    Requires PDL_API_KEY on the service. Returns a clear 400 explaining that
-    when it is absent, rather than reporting zero hits -- which would be
-    indistinguishable from "PDL found nobody".
-    """
-    require_admin(request)
-    if not enrichment.pdl_enabled():
-        return JSONResponse(status_code=400, content={
-            "ok": False,
-            "error": "PDL_API_KEY is not set on this service.",
-            "how_to": "Sign up at peopledatalabs.com, then: "
-                      "railway variable set PDL_API_KEY=<key> --service BizStack-Construction "
-                      "--skip-deploys",
-        })
-    is_dry = (dry_run or "").strip().lower() not in ("0", "false", "no", "off")
-    capped = max(1, min(int(limit or 10), 100))
-
-    # enrichment opens its own psycopg connection from DATABASE_URL and blocks
-    # on HTTP per record, so it cannot share this route's connection (psycopg is
-    # not thread-safe) and must not run on the event loop.
-    try:
-        await asyncio.to_thread(enrichment.enrich_pending_leads, capped, is_dry)
-    except Exception as exc:
-        return JSONResponse(status_code=502, content={
-            "ok": False, "error": f"{type(exc).__name__}: {exc}"})
-
-    if is_dry:
-        summary = {"ok": True, **dict(enrichment.LAST_RUN)}
-        return JSONResponse(content=summary)
-    return JSONResponse(content={"ok": True, "dry_run": False, "note": "see service logs"})
-
-
 @app.post("/api/email/fetch")
 async def email_fetch(request: Request, cap: int = Form(0),
                       commit: str = Form(""), db=Depends(get_db)):
@@ -9643,6 +9608,7 @@ async def get_started_submit(
     budget: str = Form(""),
     timeline: str = Form(""),
     message: str = Form(""),
+    goal: str = Form(""),
     ref: str = Form(""),
     company_website: str = Form(""),
     db=Depends(get_db),
@@ -9657,6 +9623,10 @@ async def get_started_submit(
         return _form_error_redirect("/get-started", "Please add your name and phone", **typed)
     if not email:
         return _form_error_redirect("/get-started", "Please add your email — we'll send your quote there", **typed)
+    # Prepend the goal to the message so it shows in the lead detail and notifications.
+    full_message = message
+    if goal:
+        full_message = f"Goal: {goal}. {message}".strip()
 
     ref_code = (ref or "").strip().lower()[:50]
     partner_id = None
@@ -9679,10 +9649,11 @@ async def get_started_submit(
         res = lead_intake.intake_lead(
             db, company="construction", source="acquisition", name=name,
             phone=phone, email=(email or "").strip(), address=(address or "").strip(),
-            description=(message or "").strip()[:2000], project_type=project_type,
+            description=(full_message or "").strip()[:2000], project_type=project_type,
             extra={
                 "budget": (budget or "").strip(),
                 "timeline": (timeline or "").strip(),
+                "goal": (goal or "").strip(),
                 "referral_code": ref_code or None,
                 "partner_id": partner_id,
                 "campaign": "get-started",
@@ -9698,10 +9669,11 @@ async def get_started_submit(
         f"🛠 New acquisition lead (#{lead_id}) — {name}, {phone}"
         + (f", {email.strip()}" if (email or "").strip() else "")
         + (f"\nProject: {project_type}" if project_type else "")
+        + (f"\nGoal: {goal}" if goal else "")
         + (f"\nAddress: {address}" if address else "")
         + (f"\nBudget: {budget}" if budget else "")
         + (f"\nTimeline: {timeline}" if timeline else "")
-        + (f"\n{message[:200]}" if (message or "").strip() else "")
+        + (f"\n{full_message[:200]}" if (full_message or "").strip() else "")
         + (f"\nRef: {ref_code}" if ref_code else "")
     )
     if os.getenv("OWNER_SMS_ENABLED", "0").lower() in ("1", "true", "yes"):

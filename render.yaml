@@ -1,26 +1,18 @@
-# Render Blueprint — BuildStack Construction
+# Render Blueprint — BuildStack Construction LLC (production)
 #
-# Staging first, on purpose. This service exists to prove the app runs on
-# Render before anything moves off Railway. It gets its OWN Postgres, and every
-# background worker and outbound side effect is switched off, because staging
-# is seeded from a copy of the production database: without these flags the
-# permit importer, lead scanner and bid autopilot would immediately start
-# spending real RentCast/PDL calls (RentCast's free tier is 50 calls per
-# MONTH, shared across every consumer) and the bid-inquiry loop would email
-# real general contractors.
+# This is the live production deploy. Background workers (permit importer,
+# lead scanner, loan outreach, enrichment, bid autopilot) are all ON.
+# Auto-reply sends directly to leads through the Gmail transport.
 #
-# The flags matter in this direction: the code reads them as
-# `if not os.getenv("DISABLE_X")`, so ANY non-empty value disables the worker.
-# Render also stores booleans as the strings "true"/"false", and "false" is
-# truthy in Python — so these must be "true", never "false".
+# DISABLE_* flags: the code reads them as `if not os.getenv("DISABLE_X")`,
+# so ANY non-empty value disables the worker. Render stores booleans as
+# the strings "true"/"false", and "false" is truthy in Python — so to
+# disable a worker, set these to "true", never "false".
 #
-# Once staging is verified, production is a second service in this file with
-# its own database and the DISABLE_* flags removed.
+# All secrets use `sync: false` — Render asks for the value in the
+# dashboard on first deploy and never stores it in git.
 
 envVarGroups:
-  # Secrets. `sync: false` means Render asks for the value in the dashboard on
-  # first deploy and never stores it in git. Values are copied from the Railway
-  # service, not invented.
   - name: construction-secrets
     envVars:
       - key: ADMIN_PASSWORD
@@ -28,7 +20,7 @@ envVarGroups:
       - key: OPENAI_API_KEY
         sync: false
 
-      # Outbound email. Gmail is the only supported lead transport.
+      # Outbound email. Gmail is the lead transport.
       - key: SMTP_HOST
         sync: false
       - key: SMTP_USER
@@ -36,9 +28,8 @@ envVarGroups:
       - key: SMTP_PASS
         sync: false
 
-      # Uploads. Without R2 the app silently falls back to local disk, and
-      # Render's filesystem is ephemeral — every deploy would delete crew
-      # photos. R2 is required, not optional.
+      # Uploads. Render's filesystem is ephemeral — without R2 every
+      # deploy deletes crew photos. R2 is required.
       - key: R2_ACCOUNT_ID
         sync: false
       - key: R2_ACCESS_KEY_ID
@@ -50,7 +41,7 @@ envVarGroups:
       - key: R2_PUBLIC_URL
         sync: false
 
-      # Voice/SMS. Left blank on staging so no text can reach a real phone.
+      # Voice/SMS.
       - key: SIGNALWIRE_PROJECT_ID
         sync: false
       - key: SIGNALWIRE_API_TOKEN
@@ -60,24 +51,36 @@ envVarGroups:
       - key: SIGNALWIRE_PHONE
         sync: false
 
+      # Vapi voice bot.
+      - key: VAPI_API_KEY
+        sync: false
+
       # Lead enrichment / skip trace.
       - key: RENTCAST_API_KEY
         sync: false
       - key: SHOVELS_API_KEY
         sync: false
-      - key: PDL_API_KEY
-        sync: false
       - key: SKIP_SHERPA_API_KEY
         sync: false
       - key: SCRAP_IO_API_KEY
         sync: false
-      - key: ACCURATE_APPEND_API_KEY
+
+      # Zoho CRM/Books/Mail/Campaigns.
+      - key: ZOHO_CLIENT_ID
+        sync: false
+      - key: ZOHO_CLIENT_SECRET
+        sync: false
+      - key: ZOHO_REFRESH_TOKEN
         sync: false
 
-      # Analytics — must never be able to break a page.
-      - key: RUDDERSTACK_WRITE_KEY
+      # Stripe (legacy deposit links still work; primary path is PNC Zelle/ACH).
+      - key: STRIPE_SECRET_KEY
         sync: false
-      - key: RUDDERSTACK_DATA_PLANE_URL
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+
+      # Bank encryption key for crew direct deposit details.
+      - key: BANK_ENCRYPTION_KEY
         sync: false
 
 databases:
@@ -85,12 +88,8 @@ databases:
     databaseName: construction
     user: construction
     region: virginia
-    # NOT `free`: Render deletes free Postgres 30 days after creation, which
-    # would take staging down mid-cutover. This is the paid 256 MB tier.
+    # Paid tier — Render deletes free Postgres 30 days after creation.
     plan: 0.1c-256mb
-    # Must match the source or the dump will not restore: production on Railway
-    # runs PostgreSQL 18.6, and pg_dump output from a newer major version is
-    # not guaranteed to load into an older one.
     postgresMajorVersion: "18"
 
 services:
@@ -100,16 +99,11 @@ services:
     dockerfilePath: ./Dockerfile
     dockerContext: .
     region: virginia
-    # `free` spins down after 15 minutes idle and kills the daemon threads in
-    # lifecycle() — the app would look fine and quietly stop importing permits.
-    # 2 GB rather than 512 MB: this app imports ~190 flat modules and starts
-    # eight background threads at boot, and an OOM kill mid-verification looks
-    # exactly like a code bug.
+    # 2 GB: the app imports ~190 modules and starts eight background
+    # threads at boot. 512 MB OOM-kills mid-startup.
     plan: 1c-2g
     healthCheckPath: /health
     autoDeployTrigger: commit
-    # Let in-flight requests and background threads finish on deploy instead of
-    # being cut off at the default 30s.
     maxShutdownDelaySeconds: 60
 
     envVars:
@@ -126,21 +120,31 @@ services:
       - key: ADMIN_NAME
         value: Owner
       - key: COMPANY_NAME
-        value: Buildstack Construction Co.
+        value: BuildStack Construction LLC
       # Customer-facing number only. 252-665-5891 is Shaun's personal mobile
       # and belongs on lending material alone.
       - key: COMPANY_PHONE
         value: +1 (757) 908-7121
       - key: COMPANY_EMAIL
         value: hello@bizstackperks.com
-      # The real customer-facing domain. The onrender.com subdomain is only a
-      # pre-cutover testing address and must never be advertised.
       - key: COMPANY_DOMAIN
         value: construction.bizstackperks.com
       - key: SERVICE_AREA
         value: Williamsburg–Hampton Roads, VA · Currituck County & Elizabeth City, NC
       - key: APP_TIMEZONE
         value: America/New_York
+
+      # --- owner mobile for SMS lead alerts ---------------------------------
+      # Set this to the phone the owner carries on job sites. When a lead
+      # arrives, auto_reply texts this number with the lead's name, phone,
+      # and project type so the owner can call back immediately.
+      # Format: +1XXXXXXXXXX
+      - key: OWNER_MOBILE
+        sync: false
+
+      # --- contractor license (shown in footer, hero badge, About page) -----
+      - key: CONTRACTOR_LICENSE
+        sync: false
 
       # --- auth -------------------------------------------------------------
       - key: APP_SECRET
@@ -150,26 +154,25 @@ services:
       - key: OTP_ENABLED
         value: "true"
 
-      # --- safety switches: staging must not move money or send anything ----
-      - key: DISABLE_PERMIT_IMPORT
-        value: "true"
-      - key: DISABLE_LEAD_SCAN
-        value: "true"
-      - key: DISABLE_LOAN_OUTREACH
-        value: "true"
-      - key: DISABLE_LEAD_ENRICH
-        value: "true"
-      - key: DISABLE_BID_AUTOPILOT
-        value: "true"
-      # auto_reply.py: anything but 1/true/yes/on stages a draft for owner
-      # review instead of sending. This is the guardrail layer — leave it on.
+      # --- background workers: ALL ON for production ------------------------
+      # To temporarily disable a worker, add the flag with value "true".
+      # DISABLE_PERMIT_IMPORT, DISABLE_LEAD_SCAN, DISABLE_LOAN_OUTREACH,
+      # DISABLE_LEAD_ENRICH, DISABLE_BID_AUTOPILOT are all intentionally
+      # absent — their absence means the workers run.
+
+      # --- auto-reply: production sends directly ----------------------------
       - key: LEAD_AUTO_SEND
-        value: "0"
-      # Skip trace is the one owner-approved exception to the
-      # business-contacts-only rule, and every lookup is audited. Zero here
-      # means staging never traces a homeowner even if the key is present.
+        value: "1"
+
+      # --- skip trace enrichment: limited to avoid burning RentCast budget --
       - key: SKIPTRACE_ENRICH_MAX
-        value: "0"
+        value: "10"
+
+      # --- outbound volume caps ---------------------------------------------
+      - key: EMAIL_DAILY_CAP
+        value: "150"
+      - key: TEXT_DAILY_CAP
+        value: "30"
 
       # --- model ------------------------------------------------------------
       - key: OPENAI_MODEL
@@ -181,10 +184,32 @@ services:
       - key: SMTP_FROM
         value: hello@bizstackperks.com
       - key: SMTP_NAME
-        value: Buildstack Construction
+        value: BuildStack Construction
       - key: SMTP_TLS
         value: "true"
       - key: SENDER_PHYSICAL_ADDRESS
-        value: Buildstack Construction Co., 701 Dana Dr, Chesapeake, VA 23321. To stop receiving email from us, reply "unsubscribe" and we will remove your address.
+        value: BuildStack Construction LLC, 701 Dana Dr, Chesapeake, VA 23321. To stop receiving email from us, reply "unsubscribe" and we will remove your address.
+
+      # --- letter brand -----------------------------------------------------
+      - key: LETTER_BRAND_NAME
+        value: BuildStack Construction
+      - key: LETTER_BRAND_LEGAL
+        value: BuildStack Construction LLC
       - key: LETTER_BRAND_PHONE
         value: 252-665-5891
+      - key: LETTER_BRAND_EMAIL
+        value: hello@bizstackperks.com
+      - key: LETTER_BRAND_WEB
+        value: construction.bizstackperks.com
+      - key: LETTER_BRAND_STREET
+        value: 701 Dana Dr
+      - key: LETTER_BRAND_CITYSTATEZIP
+        value: Chesapeake, VA 23321
+
+      # --- rentcast budget --------------------------------------------------
+      - key: RENTCAST_MONTHLY_LIMIT
+        value: "50"
+
+      # --- email transport --------------------------------------------------
+      - key: EMAIL_TRANSPORT
+        value: gmail

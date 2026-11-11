@@ -83,6 +83,17 @@
                 <label class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Project Details</label>
                 <textarea name="description" rows="5" placeholder="What needs to be done? Rough dimensions and any details help us scope faster. Photos welcome by text or email." class="w-full px-4 py-3 rounded-xl bg-white border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"></textarea>
             </div>
+            <div>
+                <label class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">What's the goal? *</label>
+                <select name="goal" required class="w-full px-4 py-3 rounded-xl bg-white border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                    <option value="">Select…</option>
+                    <option>Something broke — needs repair</option>
+                    <option>Storm, water, or emergency damage</option>
+                    <option>Remodeling / updating a room or the whole house</option>
+                    <option>Getting ready to sell</option>
+                    <option>Just getting a price — not ready yet</option>
+                </select>
+            </div>
             <div id="lead-result" class="hidden rounded-2xl p-4 text-sm"></div>
             <button type="submit" class="w-full py-4 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-2xl transition-all uppercase tracking-wider shadow-lg shadow-indigo-100">
                 Request My Free Estimate
