@@ -202,3 +202,68 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 });
 </script>
+<script>
+// One-button owner backfill. The lookup is free (city assessors, then HRGEO),
+// so there is no reason to make the owner press a 10-at-a-time button: the
+// server runs the whole queue in a background thread and this polls progress.
+document.addEventListener('DOMContentLoaded', function () {
+    const btn = document.getElementById('owners-all-btn');
+    if (!btn) return;
+    const out = document.getElementById('owners-all-out');
+    let timer = null;
+
+    function render(s) {
+        out.classList.remove('hidden');
+        const total = s.total || 0;
+        const done = s.examined || 0;
+        const pct = total ? Math.min(100, Math.round((done * 100) / total)) : 0;
+        const bar = '<div class="mt-1 h-1.5 w-full bg-slate-100 rounded-full overflow-hidden">'
+            + '<div class="h-full bg-indigo-600 transition-all" style="width:' + pct + '%"></div></div>';
+        let html = '<p><b>' + done + '</b> of <b>' + total + '</b> examined · '
+            + '<b>' + (s.updated || 0) + '</b> names filled · '
+            + (s.skipped || 0) + ' without a free record</p>' + bar;
+        if (s.current) {
+            html += '<p class="text-slate-500 mt-1 truncate">' + s.current + '</p>';
+        }
+        if (s.running) {
+            html += '<p class="text-slate-500 mt-1">Working… you can leave this page; the run continues on the server.</p>';
+        } else {
+            if (s.note) html += '<p class="text-slate-500 mt-1">' + s.note + '</p>';
+            html += '<button type="button" id="owners-reload" class="mt-2 px-3 py-1.5 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg">Refresh the list</button>';
+        }
+        out.innerHTML = html;
+        const reload = document.getElementById('owners-reload');
+        if (reload) reload.addEventListener('click', function () { window.location.reload(); });
+    }
+
+    async function poll() {
+        try {
+            const res = await fetch('/api/leads/find-owners-status', { headers: { 'Accept': 'application/json' } });
+            if (!res.ok) return;
+            const s = await res.json();
+            render(s);
+            if (!s.running && timer) { clearInterval(timer); timer = null; btn.disabled = false; btn.textContent = 'Find owners for all leads'; }
+        } catch (e) { /* transient; next tick retries */ }
+    }
+
+    btn.addEventListener('click', async function () {
+        btn.disabled = true;
+        btn.textContent = 'Finding owners…';
+        out.classList.remove('hidden');
+        out.innerHTML = '<p class="text-slate-500">Starting…</p>';
+        try {
+            const res = await fetch('/api/leads/find-owners-all', { method: 'POST' });
+            const s = await res.json();
+            render(s);
+            if (!timer) timer = setInterval(poll, 2500);
+        } catch (e) {
+            out.innerHTML = '<p class="text-rose-700">Could not start the run.</p>';
+            btn.disabled = false;
+            btn.textContent = 'Find owners for all leads';
+        }
+    });
+
+    // If a run is already going when the page opens, show it.
+    poll();
+});
+</script>

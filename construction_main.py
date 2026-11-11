@@ -7463,6 +7463,21 @@ async def enrich_leads_batch(request: Request, limit: int = Form(10), db=Depends
     return JSONResponse(content=result)
 
 
+@app.post("/api/leads/find-owners-all")
+async def find_owners_all(request: Request):
+    """Start a background owner lookup for every named-placeholder lead."""
+    require_admin(request)
+    import owner_backfill_job
+    return JSONResponse(content=owner_backfill_job.start("construction"))
+
+
+@app.get("/api/leads/find-owners-status")
+async def find_owners_status(request: Request):
+    require_admin(request)
+    import owner_backfill_job
+    return JSONResponse(content=owner_backfill_job.status())
+
+
 @app.post("/api/leads/{lead_id}/delete")
 async def delete_lead(lead_id: int, request: Request, db=Depends(get_db)):
     require_admin(request)
