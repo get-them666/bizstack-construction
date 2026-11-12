@@ -23,6 +23,7 @@ Two deliberate rules:
 
 from __future__ import annotations
 
+import re
 from datetime import date, timedelta
 
 from fpdf import FPDF
@@ -44,6 +45,22 @@ from bid_package_pdf import (  # noqa: F401
 # Net 15, matching the invoice terms the bid package prints. The deposit is
 # what schedules the work, so it is due sooner than a progress bill.
 DEPOSIT_DAYS = 15
+
+# Defence in depth. A deposit email and its PDF are forwarded, archived and
+# indexed; the routing/account pair must never be rendered into either. The
+# signed /pay/deposit page is the only surface allowed to decrypt the account.
+_BANK_DETAIL_RE = re.compile(r"\brouting\b|\baccount\s*(?:number|#|no\.?)?\b", re.I)
+_DIGITS_RE = re.compile(r"\d{4,}")
+
+
+def _reject_bank_details(lines) -> None:
+    for line in lines:
+        text = line or ""
+        if _BANK_DETAIL_RE.search(text) and _DIGITS_RE.search(text):
+            raise ValueError(
+                "Refusing to render bank details in an emailed deposit document. "
+                "Send the client to the signed deposit page instead."
+            )
 
 
 def _mc(pdf: FPDF, w: float, h: float, text: str, **kw) -> None:
@@ -168,13 +185,18 @@ def build_deposit_pdf(bid: dict, invoice: dict, pay_lines: list[str] | None = No
     """Render the deposit request. Regenerated per send, never stored.
 
     ``pay_lines`` is ``deposit_instructions.payment_lines()``: the Zelle handle
-    and the ACH routing/account the client should pay into. With none supplied
-    the generic "reply and we will send details" paragraph is printed, because
-    a PDF quoting bank details nobody configured would be wrong on paper.
+    only. ACH routing/account details are deliberately refused here because this
+    PDF is emailed; the signed deposit page is the only place they may appear.
+    With no lines supplied the generic "reply and we will send details"
+    paragraph is printed.
     """
     bid = dict(bid or {})
     invoice = dict(invoice or {})
     amount = float(invoice.get("amount") or deposit_amount(bid) or 0)
+    lines = list(pay_lines or [
+        f"Payment by check, ACH or Zelle. Reply to this email or call {PHONE} "
+        "to arrange it, and quote the invoice number above."])
+    _reject_bank_details(lines)
 
     pdf = DepositRequestPDF(format="letter")
     pdf.set_auto_page_break(auto=True, margin=18)
@@ -233,9 +255,6 @@ def build_deposit_pdf(bid: dict, invoice: dict, pay_lines: list[str] | None = No
 
     _heading(pdf, "Payment")
     pdf.set_font("Helvetica", "", 9)
-    lines = list(pay_lines or [
-        f"Payment by check, ACH or Zelle. Reply to this email or call {PHONE} "
-        "to arrange it, and quote the invoice number above."])
     for line in lines:
         _mc(pdf, 0, 4.8, line)
     pdf.ln(1.5)
@@ -263,7 +282,12 @@ def build_deposit_pdf(bid: dict, invoice: dict, pay_lines: list[str] | None = No
 
 
 def build_deposit_email(bid: dict, invoice: dict, pay_lines: list[str] | None = None) -> tuple[str, str]:
-    """Plain-text covering email. The PDF carries the detail."""
+    """Plain-text covering email. The PDF carries the detail.
+
+    Neither this body nor the attached PDF may contain a routing or account
+    number. ``_reject_bank_details`` enforces that even if a caller passes the
+    old ACH lines by mistake.
+    """
     amount = float((invoice or {}).get("amount") or deposit_amount(bid) or 0)
     number = (invoice or {}).get("invoice_number") or ""
     due = (invoice or {}).get("due_date") or deposit_due_date().isoformat()
@@ -273,8 +297,9 @@ def build_deposit_email(bid: dict, invoice: dict, pay_lines: list[str] | None = 
     if pay_lines:
         payment = " ".join(pay_lines)
     else:
-        payment = ("Payment can be made by check, ACH or Zelle. Reply to this email or "
+        payment = ("Payment can be made by Zelle, check or bank transfer. Reply to this email or "
                    f"call {PHONE} and we will send the details.")
+    _reject_bank_details([payment])
     body = (
         f"Hello,\n\n"
         f"Thank you for awarding us {bid.get('name') or 'this project'}"

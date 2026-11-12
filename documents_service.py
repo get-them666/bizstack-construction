@@ -20,6 +20,29 @@ except ImportError:  # pragma: no cover
     aiosmtplib = None
 
 
+# A routing/account pair must never leave in an email body. This is a hard stop
+# in the shared transport, not just the deposit builder, because an agent or a
+# one-off script can call send_email directly and bypass every app-level guard.
+_BANK_DETAIL_PATTERNS = (
+    re.compile(
+        r"\brouting\s*(?:number|no\.?|#|:)?\s*\d{9}\b[\s\S]{0,160}?"
+        r"\baccount\s*(?:number|no\.?|#|:)?\s*\d{6,17}\b",
+        re.I,
+    ),
+    re.compile(
+        r"\baccount\s*(?:number|no\.?|#|:)?\s*\d{6,17}\b[\s\S]{0,160}?"
+        r"\brouting\s*(?:number|no\.?|#|:)?\s*\d{9}\b",
+        re.I,
+    ),
+)
+
+
+def contains_bank_details(text: str) -> bool:
+    """True when text looks like it is printing a bank routing/account pair."""
+    value = text or ""
+    return any(pattern.search(value) for pattern in _BANK_DETAIL_PATTERNS)
+
+
 # ---------------------------------------------------------------------------
 # Money helpers
 # ---------------------------------------------------------------------------
@@ -693,6 +716,9 @@ def _send_via_ses(cfg: dict, to: str, raw: bytes, cc: str = "") -> bool:
 
 async def send_email(cfg: dict, to: str, subject: str, body: str, attachment: bytes = None, filename: str = "",
                      cc: str = "", attachments: list | None = None):
+    if contains_bank_details(subject) or contains_bank_details(body):
+        print("[EMAIL] blocked: routing/account details in the message body", flush=True)
+        return False
     msg = EmailMessage()
     msg["Subject"] = subject
     msg["From"] = formataddr((cfg.get("SMTP_NAME", ""), cfg.get("SMTP_FROM", "")))

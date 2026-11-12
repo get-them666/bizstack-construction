@@ -135,19 +135,26 @@ def lead_from_token(token: str):
 
 # --- printed instructions ----------------------------------------------------
 def payment_lines(company_name: str, get, *, phone: str = "",
-                  reference: str = "the invoice number above") -> list[str]:
+                  reference: str = "the invoice number above",
+                  include_ach: bool = False) -> list[str]:
     """Payment paragraph for the deposit PDF and email.
 
-    Zelle first because it is what the client can do in two minutes; ACH is the
-    fallback for a bank that caps Zelle, not a second-class option. Returns a
-    single "we will send details" line when nothing is configured.
+    Zelle first because it is what the client can do in two minutes. ACH bank
+    details are deliberately **not** included by default: an emailed PDF and an
+    email body are forwarded, archived and indexed, and a routing/account pair
+    must never travel that way. The authenticated ``/pay/deposit`` page is the
+    only surface that may decrypt and show the account.
+
+    ``include_ach=True`` exists for a future non-email surface. Callers that
+    render email or attach a PDF must leave it false. Returns a single "we will
+    send details" line when nothing is configured.
     """
-    d = ach_details(get)
+    d = ach_details(get) if include_ach else details(get)
     ref = reference
     lines = []
     if d["zelle"]:
         lines.append(f"Zelle the deposit to {d['zelle_display']} and put {ref} in the memo.")
-    if d["ach_ready"]:
+    if include_ach and d.get("ach_ready"):
         lines.append(f"Or send an ACH credit to {company_name}: PNC Bank, routing {d['routing']}, "
                      f"account {d['account']}. Put {ref} in the memo.")
     if not lines:

@@ -355,8 +355,10 @@
                     <button class="text-xs font-bold text-indigo-600 hover:text-indigo-700 px-1.5">✓ Record payment</button>
                   </form>
                   {% if b.contact_email %}
-                  <form method="post" action="/api/bids/{{ b.id }}/deposit" class="inline">
+                  <form method="post" action="/api/bids/{{ b.id }}/deposit" class="inline"
+                        onsubmit="return confirm('Send this deposit request again?');">
                     <input type="hidden" name="to_email" value="{{ b.contact_email }}">
+                    <input type="hidden" name="force" value="1">
                     <button class="text-xs font-semibold text-slate-400 hover:text-indigo-600 px-1.5" title="Email the deposit request again">Email again</button>
                   </form>
                   {% endif %}

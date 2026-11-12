@@ -2,10 +2,10 @@
 
     venv/bin/python -m pytest test_deposit_instructions.py -v
 
-The important properties: the client sees the Zelle handle first and the ACH
-details second, the full account number is encrypted at rest and never
-rendered by ``details()``, and an unconfigured account says so instead of
-printing a blank or a guess.
+The important properties: the client sees the Zelle handle first, emailed
+deposit documents never contain ACH routing/account numbers, the full account
+number is encrypted at rest and never rendered by ``details()``, and an
+unconfigured account says so instead of printing a blank or a guess.
 """
 from cryptography.fernet import Fernet
 
@@ -47,10 +47,24 @@ def test_nothing_configured_reads_as_not_ready():
     assert "routing" not in lines[0].lower()
 
 
-def test_payment_lines_put_zelle_first_then_ach(monkeypatch):
+def test_payment_lines_never_include_bank_details_by_default(monkeypatch):
+    """These lines go into an email and an attached PDF. No routing/account."""
     _, get, put = _store(monkeypatch)
     di.save(put, "7579087121", "051000017", "000123456789")
     lines = di.payment_lines("BuildStack Construction LLC", get, reference="invoice 1042")
+    assert lines[0].startswith("Zelle")
+    assert len(lines) == 1
+    joined = " ".join(lines)
+    assert "051000017" not in joined and "000123456789" not in joined
+    assert "routing" not in joined.lower() and "account" not in joined.lower()
+    assert "invoice 1042" in joined
+
+
+def test_payment_lines_can_still_render_ach_on_a_non_email_surface(monkeypatch):
+    _, get, put = _store(monkeypatch)
+    di.save(put, "7579087121", "051000017", "000123456789")
+    lines = di.payment_lines("BuildStack Construction LLC", get,
+                             reference="invoice 1042", include_ach=True)
     assert lines[0].startswith("Zelle")
     assert "051000017" in lines[1] and "000123456789" in lines[1]
     assert "BuildStack Construction LLC" in lines[1]

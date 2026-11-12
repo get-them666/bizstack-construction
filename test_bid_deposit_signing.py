@@ -87,6 +87,23 @@ def test_deposit_email_is_plain_ascii():
     (subject + body).encode("ascii")
 
 
+def test_deposit_email_refuses_bank_details():
+    """Routing/account numbers must never leave in an email body."""
+    with pytest.raises(ValueError):
+        bid_deposit.build_deposit_email(
+            BID, INVOICE,
+            pay_lines=["Zelle the deposit to (757) 908-7121.",
+                       "Or send an ACH credit: routing 051000017, account 000123456789."])
+
+
+def test_deposit_pdf_refuses_bank_details():
+    """The PDF is attached to the email, so it gets the same hard block."""
+    with pytest.raises(ValueError):
+        bid_deposit.build_deposit_pdf(
+            BID, INVOICE,
+            pay_lines=["Or send an ACH credit: routing 051000017, account 000123456789."])
+
+
 # --- signature ---------------------------------------------------------------
 def _stroke_png(padding: int = 40) -> bytes:
     """A transparent canvas with one diagonal stroke, like the signature pad."""

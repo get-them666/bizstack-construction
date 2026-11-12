@@ -14515,7 +14515,7 @@ async def bid_signature_save(bid_id: int, request: Request,
 
 @app.post("/api/bids/{bid_id}/deposit")
 async def bid_deposit_request(bid_id: int, request: Request, to_email: str = Form(""),
-                              db=Depends(get_db)):
+                              force: str = Form(""), db=Depends(get_db)):
     """Ask the client for the 30% deposit, as an invoice and an email.
 
     The invoice is raised as a draft and only marked sent once the email has
@@ -14540,8 +14540,27 @@ async def bid_deposit_request(bid_id: int, request: Request, to_email: str = For
     if not invoice:
         raise HTTPException(status_code=500, detail="Could not raise the deposit invoice")
 
+    number = (invoice.get("invoice_number") or str(bid_id))
+    # A double-click, a refresh or a retried POST must not send the same
+    # invoice twice. The explicit "Email again" button sends force=1; every
+    # send, forced or not, is written to comms_logs below.
+    if not force:
+        with db.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM comms_logs WHERE direction = 'outbound' AND channel = 'email' "
+                "AND LOWER(recipient) = LOWER(%s) AND message_body LIKE %s "
+                "AND created_at > now() - interval '1 day' LIMIT 1;",
+                (recipient, f"%invoice {number}%"),
+            )
+            already_sent = cur.fetchone()
+        if already_sent:
+            return RedirectResponse(
+                url=(f"/bids/{bid_id}?error=Already+emailed+"
+                     f"{urllib.parse.quote(number)}+in+the+last+24h"),
+                status_code=status.HTTP_303_SEE_OTHER,
+            )
+
     try:
-        number = (invoice.get("invoice_number") or str(bid_id))
         pay_lines = deposit_instructions.payment_lines(
             company()["name"], lambda k: _get_setting(db, k),
             phone=company()["phone"], reference=f"invoice {number}")
@@ -14561,6 +14580,20 @@ async def bid_deposit_request(bid_id: int, request: Request, to_email: str = For
         raise
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Email send failed: {e}")
+
+    # The old route sent mail without writing anything down, so repeats were
+    # invisible and the Copilot guard could not see them. Log every delivery.
+    try:
+        with db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO comms_logs (direction, channel, sender, recipient, message_body) "
+                "VALUES ('outbound', 'email', %s, %s, %s);",
+                (cfg.get("SMTP_FROM") or "", recipient, body),
+            )
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        logger.warning("deposit email was sent but could not be logged for bid %s: %s", bid_id, e)
 
     bid_costing.set_invoice_status(db, invoice["id"], "sent", _BID_COMPANY)
     try:
