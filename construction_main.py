@@ -14754,6 +14754,18 @@ async def bid_submit(bid_id: int, request: Request, markup_pct: str = Form("0"),
         raise
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Email send failed: {e}")
+
+    try:
+        with db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO comms_logs (direction, channel, sender, recipient, message_body) "
+                "VALUES ('outbound', 'email', %s, %s, %s);",
+                (cfg.get("SMTP_FROM") or "", recipient, body),
+            )
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        logger.warning("bid submit email was sent but not logged for bid %s: %s", bid_id, exc)
     
     try:
         bid_opportunities.set_status(db, bid_id, "sent", _BID_COMPANY)

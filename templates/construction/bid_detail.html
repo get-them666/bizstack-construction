@@ -855,7 +855,8 @@
           <button class="text-sm font-semibold px-4 py-2 bg-white border border-slate-200 rounded-lg hover:border-emerald-300 col-span-2">Update Price</button>
           <p class="text-[11px] text-slate-400 col-span-2">Leave <b>Final bid $</b> blank to set it from the cost lines plus this markup.</p>
         </form>
-        <form method="post" action="/api/bids/{{ b.id }}/submit" class="space-y-2">
+        <form method="post" action="/api/bids/{{ b.id }}/submit" class="space-y-2"
+              onsubmit="return confirm('Send this bid package to the GC? This marks the bid sent.');">
           <input type="hidden" name="back" value="/bids/{{ b.id }}">
           <input type="hidden" name="markup_pct" value="{{ b.markup_pct or 0 }}">
           <input name="to_email" value="{{ b.contact_email or '' }}" placeholder="GC email" class="w-full text-sm border border-slate-200 rounded-lg px-3 py-2">
