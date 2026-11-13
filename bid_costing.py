@@ -256,7 +256,8 @@ def add_cost_line(conn, bid_id: int, category: str = "material", description: st
 
 def update_cost_line(conn, line_id: int, bid_id: int, company: str = "construction",
                      category: str = "", description: str = "", vendor: str = "",
-                     estimated=None, actual=None) -> bool:
+                     estimated=None, actual=None, qty=None, unit_cost=None,
+                     unit: str = "") -> bool:
     """Correct one line in place. A revision is the same job, not a new bid."""
     sets = ["updated_at = now()"]
     params: list = []
@@ -269,6 +270,17 @@ def update_cost_line(conn, line_id: int, bid_id: int, company: str = "constructi
     params.append(description.strip() if description else None)
     sets.append("vendor = %s")
     params.append(vendor.strip() if vendor else None)
+    # Only touch the takeoff columns when the caller supplied them, so the old
+    # simple "update the price" callers do not wipe quantities.
+    if qty is not None:
+        sets.append("qty = %s")
+        params.append(qty)
+    if unit_cost is not None:
+        sets.append("unit_cost = %s")
+        params.append(unit_cost)
+    if unit:
+        sets.append("unit = %s")
+        params.append(unit.strip() or None)
     sets.append("estimated = %s")
     params.append(_money(estimated))
     sets.append("actual = %s")

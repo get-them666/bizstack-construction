@@ -5024,17 +5024,29 @@ def _recalc_bid_amount(db, bid_id: int):
     return total
 
 
+def _cost_number(raw):
+    value = (raw or "").strip().replace(",", "").replace("$", "")
+    return float(value) if value else None
+
+
 @app.post("/api/bids/{bid_id}/costs")
 async def bid_cost_create(bid_id: int, request: Request, description: str = Form(...),
                           category: str = Form("material"), vendor: str = Form(""),
                           estimated: str = Form(""), actual: str = Form(""),
+                          qty: str = Form(""), unit: str = Form(""), unit_cost: str = Form(""),
                           back: str = Form(""),
                           db=Depends(get_db)):
     require_admin(request)
     try:
+        qty_f = _cost_number(qty)
+        rate_f = _cost_number(unit_cost)
+        est_f = _cost_number(estimated)
+        if qty_f is not None and rate_f is not None:
+            est_f = round(qty_f * rate_f, 2)
         lid = bid_costing.add_cost_line(db, bid_id, category, description, vendor,
-                                        estimated=estimated or None, actual=actual or None,
-                                        company=_BID_COMPANY)
+                                        qty=qty_f, unit_cost=rate_f,
+                                        estimated=est_f, actual=actual or None,
+                                        unit=unit, company=_BID_COMPANY)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     ledger_sync.ensure_schema(db)
@@ -5052,15 +5064,22 @@ async def bid_cost_create(bid_id: int, request: Request, description: str = Form
 async def bid_cost_update(bid_id: int, line_id: int, request: Request,
                           description: str = Form(""), category: str = Form(""),
                           vendor: str = Form(""), estimated: str = Form(""),
-                          actual: str = Form(""), back: str = Form(""),
-                          db=Depends(get_db)):
+                          actual: str = Form(""), qty: str = Form(""),
+                          unit: str = Form(""), unit_cost: str = Form(""),
+                          back: str = Form(""), db=Depends(get_db)):
     """Correct a line in place: a changed quantity, a new find, a dropped item."""
     require_admin(request)
     try:
+        qty_f = _cost_number(qty)
+        rate_f = _cost_number(unit_cost)
+        est_f = _cost_number(estimated)
+        if qty_f is not None and rate_f is not None:
+            est_f = round(qty_f * rate_f, 2)
         ok = bid_costing.update_cost_line(
             db, line_id, bid_id, _BID_COMPANY, category=category,
             description=description, vendor=vendor,
-            estimated=estimated or None, actual=actual or None)
+            estimated=est_f, actual=actual or None,
+            qty=qty_f, unit_cost=rate_f, unit=unit)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     if not ok:
@@ -14683,13 +14702,44 @@ async def bid_submit(bid_id: int, request: Request, markup_pct: str = Form("0"),
     
     try:
         import bid_proposal
-        pdf = bid_proposal.generate_proposal_pdf(
-            bid, costs, summary, mp, signature=_package_signature(db, bid_id))
+        docs = bid_opportunities.list_documents(db, bid_id, _BID_COMPANY)
+        active = [d for d in docs if not d.get("superseded_at")]
+        quote = next((d for d in active if (d.get("document_type") or "") == "quote"), None)
+        rfi = next((d for d in active
+                    if (d.get("document_type") or "") == "other"
+                    and "rfi" in (d.get("filename") or "").lower()), None)
+        plans = [d for d in active if (d.get("document_type") or "") == "plans"]
+
+        attachments = []
+        if quote and quote.get("key"):
+            try:
+                raw, _ = photo_store.read(quote["key"])
+                attachments.append((raw, quote.get("filename") or f"Bid-{bid_id}.pdf"))
+            except Exception as exc:
+                logger.warning("uploaded quote unreadable for bid %s: %s", bid_id, exc)
+        if not attachments:
+            pdf = bid_proposal.generate_proposal_pdf(
+                bid, costs, summary, mp, signature=_package_signature(db, bid_id))
+            attachments.append((pdf, f"BuildStack_Proposal_{bid_id}.pdf"))
+        if rfi and rfi.get("key"):
+            try:
+                raw, _ = photo_store.read(rfi["key"])
+                attachments.append((raw, rfi.get("filename") or f"RFI-{bid_id}.pdf"))
+            except Exception as exc:
+                logger.warning("uploaded RFI unreadable for bid %s: %s", bid_id, exc)
+
         subject, body = bid_proposal.build_proposal_email(bid, total)
         if message.strip():
             body = message + "\n\n" + body
+        if plans:
+            links = [f"- {p.get('filename')}: https://{company()['domain']}{photo_store.url_for(p.get('key') or '')}"
+                     for p in plans if p.get("key")]
+            if links:
+                body += "\n\nPlan set:\n" + "\n".join(links)
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to generate proposal: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to build the bid package: {e}")
     
     recipient = (to_email or bid.get("contact_email") or "").strip()
     if not recipient:
@@ -14697,8 +14747,7 @@ async def bid_submit(bid_id: int, request: Request, markup_pct: str = Form("0"),
     
     try:
         cfg = documents_service.smtp_config_from_env()
-        import asyncio
-        ok = await documents_service.send_email(cfg, recipient, subject, body, attachment=pdf, filename=f"BuildStack_Proposal_{bid_id}.pdf")
+        ok = await documents_service.send_email(cfg, recipient, subject, body, attachments=attachments)
         if not ok:
             raise HTTPException(status_code=502, detail="Email send failed")
     except HTTPException:

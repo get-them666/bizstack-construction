@@ -238,6 +238,12 @@
                 {# Documents are generated from this bid's lines, so they are one
                    click from the board instead of only inside the detail page. #}
                 <div class="flex items-center gap-1 mr-1">
+                    <a href="/bids/{{ b.id }}#takeoff"
+                       class="px-2.5 py-1.5 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-500 rounded-lg">Takeoff</a>
+                    <a href="/bids/{{ b.id }}#job-docs"
+                       class="px-2.5 py-1.5 text-xs font-semibold text-indigo-700 bg-indigo-50 border border-indigo-200 hover:bg-indigo-100 rounded-lg">Plans &amp; docs</a>
+                    <a href="/bids/{{ b.id }}#send-bid"
+                       class="px-2.5 py-1.5 text-xs font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 rounded-lg">Send bid</a>
                     <a href="/bids/{{ b.id }}/sow.pdf" target="_blank" rel="noopener"
                        class="px-2.5 py-1.5 text-xs font-semibold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 rounded-lg">SOW</a>
                     <a href="/bids/{{ b.id }}/itemized.pdf" target="_blank" rel="noopener"

@@ -122,20 +122,21 @@
       </section>
       {% endif %}
 
-      {# ── Cost lines ──────────────────────────────────── #}
-      <section class="bg-white rounded-2xl border border-slate-200 p-5">
+      {# ── Takeoff & pricing ──────────────────────────── #}
+      <section id="takeoff" class="bg-white rounded-2xl border border-slate-200 p-5">
         <div class="flex items-center justify-between mb-3">
-          <h2 class="text-sm font-bold uppercase tracking-wide text-slate-500">Cost lines</h2>
+          <h2 class="text-sm font-bold uppercase tracking-wide text-slate-500">Takeoff &amp; pricing</h2>
           {% if cost_summary and not cost_summary.get('complete', True) %}
           <span class="text-[11px] font-bold uppercase tracking-wide bg-amber-100 text-amber-800 rounded px-2 py-0.5">Incomplete</span>
           {% endif %}
         </div>
-        <p class="text-[11px] text-slate-400 mb-3">This is the app's internal build-up and what the generated documents price from. An uploaded <b>Itemized Pricing</b> or <b>Quote</b> in Job documents is the file actually sent to the GC and does not rewrite these lines.</p>
+        <p class="text-[11px] text-slate-400 mb-3">Enter <b>quantity × unit cost</b> and the line total calculates automatically. The bid amount and generated documents price from these lines; an uploaded <b>Itemized Pricing</b> or <b>Quote</b> in Job documents is the file actually sent to the GC.</p>
 
         {% if costs %}
         <table class="w-full text-sm">
           <thead><tr class="text-left text-xs uppercase tracking-wide text-slate-400 border-b border-slate-100">
             <th class="pb-2">Category</th><th class="pb-2">Description</th>
+            <th class="pb-2 text-right">Qty / unit</th><th class="pb-2 text-right">Rate</th>
             <th class="pb-2 text-right">Estimated</th><th class="pb-2 text-right">Actual</th>
             <th></th></tr></thead>
           <tbody>
@@ -148,6 +149,8 @@
                 <span class="block text-xs font-semibold text-red-500 mt-0.5">Removed {{ c.removed_at.strftime('%b %d, %Y') }} — kept as history, not in the total</span>
                 {% endif %}
               </td>
+              <td class="py-2 text-right text-slate-500 {% if c.removed_at %}line-through{% endif %}">{{ c.qty or '—' }}{% if c.unit %} <span class="text-slate-400">{{ c.unit }}</span>{% endif %}</td>
+              <td class="py-2 text-right text-slate-500 {% if c.removed_at %}line-through{% endif %}">{% if c.unit_cost %}{{ "${:,.2f}".format(c.unit_cost) }}{% else %}—{% endif %}</td>
               <td class="py-2 text-right {% if c.removed_at %}text-slate-400 line-through{% endif %}">{{ "${:,.0f}".format(c.estimated or 0) }}</td>
               <td class="py-2 text-right {% if c.removed_at %}text-slate-400 line-through{% endif %}">{{ "${:,.0f}".format(c.actual or 0) }}</td>
               <td class="py-2 text-right">
@@ -159,14 +162,19 @@
                 {% else %}
                 <details class="inline-block text-left">
                   <summary class="cursor-pointer text-xs font-semibold text-indigo-600 hover:text-indigo-700">Update cost</summary>
-                  <form method="post" action="/api/bids/{{ b.id }}/costs/{{ c.id }}/update" class="mt-2 space-y-1.5 w-52">
+                  <form method="post" action="/api/bids/{{ b.id }}/costs/{{ c.id }}/update" class="mt-2 space-y-1.5 w-60">
                     <input type="hidden" name="back" value="/bids/{{ b.id }}">
                     <select name="category" class="block w-full text-xs border border-slate-200 rounded-lg px-2 py-1.5 bg-white">
                       {% for cat in cost_categories %}<option value="{{ cat }}" {% if cat == c.category %}selected{% endif %}>{{ cat }}</option>{% endfor %}
                     </select>
                     <input name="description" value="{{ c.description or '' }}" placeholder="what it's for" class="block w-full text-xs border border-slate-200 rounded-lg px-2 py-1.5">
                     <input name="vendor" value="{{ c.vendor or '' }}" placeholder="vendor" class="block w-full text-xs border border-slate-200 rounded-lg px-2 py-1.5">
-                    <input name="estimated" value="{{ c.estimated or '' }}" placeholder="estimated" inputmode="decimal" class="block w-full text-xs border border-slate-200 rounded-lg px-2 py-1.5">
+                    <div class="grid grid-cols-2 gap-1.5">
+                      <input name="qty" value="{{ c.qty or '' }}" placeholder="qty" inputmode="decimal" class="block w-full text-xs border border-slate-200 rounded-lg px-2 py-1.5">
+                      <input name="unit" value="{{ c.unit or '' }}" placeholder="unit" class="block w-full text-xs border border-slate-200 rounded-lg px-2 py-1.5">
+                    </div>
+                    <input name="unit_cost" value="{{ c.unit_cost or '' }}" placeholder="unit cost" inputmode="decimal" class="block w-full text-xs border border-slate-200 rounded-lg px-2 py-1.5">
+                    <input name="estimated" value="{{ c.estimated or '' }}" placeholder="line total (auto)" inputmode="decimal" class="block w-full text-xs border border-slate-200 rounded-lg px-2 py-1.5">
                     <input name="actual" value="{{ c.actual or '' }}" placeholder="actual" inputmode="decimal" class="block w-full text-xs border border-slate-200 rounded-lg px-2 py-1.5">
                     <button class="w-full text-xs font-bold px-2 py-1.5 bg-slate-900 text-white rounded-lg hover:bg-slate-700">Save line</button>
                   </form>
@@ -181,14 +189,14 @@
             {% endfor %}
           </tbody>
           <tfoot><tr class="font-bold">
-            <td colspan="2" class="pt-3">Total</td>
+            <td colspan="4" class="pt-3">Total</td>
             <td class="pt-3 text-right">{{ "${:,.0f}".format(cost_summary.get('estimated', 0)) }}</td>
             <td class="pt-3 text-right">{{ "${:,.0f}".format(cost_summary.get('actual', 0)) }}</td>
             <td></td>
           </tr>
           {% if cost_summary.get('removed_count') %}
           <tr class="text-xs text-slate-400">
-            <td colspan="2" class="pt-2">Kept on the card as history — not in the total</td>
+            <td colspan="4" class="pt-2">Kept on the card as history — not in the total</td>
             <td class="pt-2 text-right line-through">{{ "${:,.2f}".format(cost_summary.get('removed_cost', 0)) }}</td>
             <td colspan="2"></td>
           </tr>
@@ -218,15 +226,18 @@
         </div>
         {% endif %}
 
-        <form method="post" action="/api/bids/{{ b.id }}/costs" class="mt-4 pt-4 border-t border-slate-100 grid grid-cols-1 sm:grid-cols-5 gap-2">
+        <form method="post" action="/api/bids/{{ b.id }}/costs" class="mt-4 pt-4 border-t border-slate-100 grid grid-cols-2 sm:grid-cols-4 gap-2">
           <select name="category" class="text-sm border border-slate-200 rounded-lg px-2 py-2 bg-white">
             {% for c in cost_categories %}<option value="{{ c }}">{{ c }}</option>{% endfor %}
           </select>
           <input name="description" placeholder="what it's for" class="text-sm border border-slate-200 rounded-lg px-3 py-2 sm:col-span-2">
-          <input name="estimated" placeholder="estimated" inputmode="decimal" class="text-sm border border-slate-200 rounded-lg px-3 py-2">
+          <input name="qty" placeholder="qty" inputmode="decimal" class="text-sm border border-slate-200 rounded-lg px-3 py-2">
+          <input name="unit" placeholder="unit (sf, lf, hr, ea)" class="text-sm border border-slate-200 rounded-lg px-3 py-2">
+          <input name="unit_cost" placeholder="unit cost" inputmode="decimal" class="text-sm border border-slate-200 rounded-lg px-3 py-2">
+          <input name="estimated" placeholder="line total (auto)" inputmode="decimal" class="text-sm border border-slate-200 rounded-lg px-3 py-2">
           <input name="actual" placeholder="actual" inputmode="decimal" class="text-sm border border-slate-200 rounded-lg px-3 py-2">
           <input type="hidden" name="back" value="/bids/{{ b.id }}">
-          <button class="text-sm font-semibold px-4 py-2 bg-slate-900 text-white rounded-lg hover:bg-slate-700">Add</button>
+          <button class="text-sm font-semibold px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-500 sm:col-span-2">Add takeoff line</button>
         </form>
       </section>
 
@@ -828,9 +839,10 @@
       })();
       </script>
 
-      <section class="bg-white rounded-2xl border border-emerald-200 p-5">
+      <section id="send-bid" class="bg-white rounded-2xl border border-emerald-200 p-5">
         <h2 class="text-sm font-bold uppercase tracking-wide text-emerald-700 mb-2" id="bid-job">Bid This Job</h2>
-        <p class="text-xs text-slate-500 mb-3">Price it, apply markup, generate a proposal PDF, and email the GC.</p>
+        <p class="text-xs text-slate-500 mb-3">Price it, apply markup, and email the bid package to the GC.</p>
+        <p class="text-[11px] text-slate-400 mb-3">Sends the uploaded <b>Quote/Bid PDF</b> and <b>RFI</b> when they exist; plan sets are linked in the email. Otherwise it generates the proposal from this card.</p>
         <a href="/bids/{{ b.id }}/package.pdf" target="_blank" rel="noopener"
            class="block w-full text-center text-sm font-semibold px-4 py-2.5 bg-slate-900 text-white rounded-lg hover:bg-slate-700 mb-3">
           Download bid package (PDF)
@@ -848,7 +860,8 @@
           <input type="hidden" name="markup_pct" value="{{ b.markup_pct or 0 }}">
           <input name="to_email" value="{{ b.contact_email or '' }}" placeholder="GC email" class="w-full text-sm border border-slate-200 rounded-lg px-3 py-2">
           <textarea name="message" placeholder="Optional message to GC..." rows="2" class="w-full text-sm border border-slate-200 rounded-lg px-3 py-2"></textarea>
-          <button class="w-full text-sm font-semibold px-4 py-2.5 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700">Generate Proposal & Email GC</button>
+          <button class="w-full text-sm font-semibold px-4 py-2.5 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700">Send bid package to GC</button>
+          <p class="text-[11px] text-slate-400">Sends to the email above. Review the recipient before clicking; this marks the bid sent.</p>
         </form>
       </section>
 
