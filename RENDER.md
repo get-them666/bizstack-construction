@@ -20,7 +20,7 @@ Verified 2026-11-13 with the Render CLI (`render services list`,
 | Plan | web `1c-2g`; Postgres `free` (created 2026-11-08, **expires 2026-12-08**) |
 | Health check | `/health` |
 | Auto-deploy | `autoDeployTrigger: commit` — **push to `main` deploys** |
-| Live commit (2026-11-13) | `9a3e1b6` |
+| Live commit (2026-11-13) | `5b34bf4` (portal/signing/payments deploy verified) |
 | Hosts web service | `bizstack-hosts` — `srv-dbps9p0ae00c73chdqs0` (separate business) |
 
 ## The database trap — this is the important part
