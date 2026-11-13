@@ -75,10 +75,14 @@ def account(sender: str = "") -> tuple:
 
 
 def send(to: str, subject: str, body_text: str, *, sender: str = "", sender_name: str = "",
-         cc: str = "", attachment: Optional[bytes] = None, filename: str = "") -> bool:
+         cc: str = "", attachment: Optional[bytes] = None, filename: str = "",
+         attachments: Optional[list] = None) -> bool:
     """Deliver one message. Returns True only when Zoho accepted it."""
     if not zoho_client or not zoho_client.is_configured():
         return False
+    files = [(raw, name) for raw, name in (attachments or []) if raw and name]
+    if attachment and filename:
+        files.insert(0, (attachment, filename))
     account_id, from_addr = _account(sender)
     from_addr = sender or from_addr
     payload = {
@@ -91,17 +95,20 @@ def send(to: str, subject: str, body_text: str, *, sender: str = "", sender_name
     }
     if cc:
         payload["ccAddress"] = cc
-    if attachment and filename:
-        up = zoho_client.api_request(
-            "POST", f"{MAIL_BASE}/accounts/{account_id}/messages/attachments",
-            params={"fileName": filename, "isInline": "false"},
-            data=attachment, headers={"Content-Type": "application/octet-stream"})
-        if up is None or up.status_code not in (200, 201):
-            raise RuntimeError(f"Zoho Mail attachment upload failed: {getattr(up, 'status_code', '?')}")
-        info = (up.json().get("data") or [{}])
-        info = info[0] if isinstance(info, list) else info
-        payload["attachments"] = [{"storeName": info.get("storeName"), "attachmentPath": info.get("attachmentPath"),
-                                   "attachmentName": info.get("attachmentName") or filename}]
+    if files:
+        uploaded = []
+        for raw, name in files:
+            up = zoho_client.api_request(
+                "POST", f"{MAIL_BASE}/accounts/{account_id}/messages/attachments",
+                params={"fileName": name, "isInline": "false"},
+                data=raw, headers={"Content-Type": "application/octet-stream"})
+            if up is None or up.status_code not in (200, 201):
+                raise RuntimeError(f"Zoho Mail attachment upload failed: {getattr(up, 'status_code', '?')}")
+            info = (up.json().get("data") or [{}])
+            info = info[0] if isinstance(info, list) else info
+            uploaded.append({"storeName": info.get("storeName"), "attachmentPath": info.get("attachmentPath"),
+                             "attachmentName": info.get("attachmentName") or name})
+        payload["attachments"] = uploaded
     resp = zoho_client.api_request("POST", f"{MAIL_BASE}/accounts/{account_id}/messages", json=payload)
     if resp is None:
         return False

@@ -14754,12 +14754,21 @@ async def bid_submit(bid_id: int, request: Request, markup_pct: str = Form("0"),
         plans = [d for d in active if (d.get("document_type") or "") == "plans"]
 
         attachments = []
+        quote_error = ""
         if quote and quote.get("key"):
             try:
                 raw, _ = photo_store.read(quote["key"])
                 attachments.append((raw, quote.get("filename") or f"Bid-{bid_id}.pdf"))
             except Exception as exc:
+                quote_error = str(exc)
                 logger.warning("uploaded quote unreadable for bid %s: %s", bid_id, exc)
+        if quote and not attachments:
+            # Never send a bid email that says "attached" with no bid attached.
+            raise HTTPException(
+                status_code=502,
+                detail=("The uploaded bid PDF could not be attached"
+                        + (f": {quote_error}" if quote_error else " (no file on the card)")
+                        + ". Nothing was sent. Re-upload the bid PDF and try again."))
         if not attachments:
             pdf = bid_proposal.generate_proposal_pdf(
                 bid, costs, summary, mp, signature=_package_signature(db, bid_id))
@@ -14770,6 +14779,10 @@ async def bid_submit(bid_id: int, request: Request, markup_pct: str = Form("0"),
                 attachments.append((raw, rfi.get("filename") or f"RFI-{bid_id}.pdf"))
             except Exception as exc:
                 logger.warning("uploaded RFI unreadable for bid %s: %s", bid_id, exc)
+                raise HTTPException(
+                    status_code=502,
+                    detail=(f"The uploaded RFI could not be attached: {exc}. "
+                            "Nothing was sent. Re-upload the RFI and try again."))
 
         subject, body = bid_proposal.build_proposal_email(bid, total)
         if message.strip():

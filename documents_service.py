@@ -644,6 +644,7 @@ def ses_configured() -> bool:
 async def _send_via_gmail(
     cfg: dict, to: str, subject: str, body: str,
     cc: str = "", attachment: bytes = None, filename: str = "", physical: str = "",
+    attachments: list | None = None,
 ) -> bool:
     """Send through the Gmail API using the stored OAuth token.
 
@@ -679,6 +680,7 @@ async def _send_via_gmail(
                 service, owner, to, subject, full_body,
                 None, cc, "", None,
                 from_addr=sender,
+                attachments=list(attachments or []),
             )
             if resp and (resp.get("id") or resp.get("messageId")):
                 print(f"[EMAIL] sent via Gmail ({service}) to {to}", flush=True)
@@ -806,7 +808,8 @@ async def send_email(cfg: dict, to: str, subject: str, body: str, attachment: by
                 if await asyncio.to_thread(
                         zoho_mail.send, to, subject, body + (("\n\n" + physical) if physical else ""),
                         sender=cfg.get("SMTP_FROM") or "", sender_name=cfg.get("SMTP_NAME") or "",
-                        cc=cc, attachment=attachment, filename=filename):
+                        cc=cc, attachment=attachment, filename=filename,
+                        attachments=attachments):
                     print(f"[EMAIL] sent via Zoho Mail to {to}", flush=True)
                     return True
                 print("[EMAIL] Zoho Mail refused; falling through", flush=True)
@@ -817,6 +820,7 @@ async def send_email(cfg: dict, to: str, subject: str, body: str, attachment: by
     if transport != "legacy":
         sent_ok = await _send_via_gmail(cfg, to, subject, body, cc=cc,
                                         attachment=attachment, filename=filename,
+                                        attachments=attachments,
                                         physical=physical)
         if sent_ok:
             return True

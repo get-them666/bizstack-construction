@@ -46,12 +46,11 @@ def _api_request(
         return json.loads(resp.read().decode())
 
 
-def _send_with_attachment(
+def _send_with_attachments(
     service, user_email, to, subject, body_text, body_html,
-    cc, bcc, thread_id, attachment: bytes, filename: str,
-    from_addr: Optional[str] = None,
+    cc, bcc, thread_id, files, from_addr: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Send with one file attached, built as a real MIME multipart message.
+    """Send with one or more files attached, as a real MIME multipart message.
 
     Gmail's raw endpoint takes full RFC-822 bytes, so this assembles the
     multipart/mixed structure by hand (with a stable boundary) rather than
@@ -91,15 +90,17 @@ def _send_with_attachment(
         parts.append("Content-Type: text/plain; charset=UTF-8\r\n\r\n")
         parts.append(text_block + "\r\n")
 
-    ctype, _mimetype = mimetypes.guess_type(filename)
-    maintype, _, subtype = (ctype or "application/octet-stream").partition("/")
-    parts.append("--" + boundary + "\r\n")
-    parts.append(f'Content-Type: {maintype}/{subtype or "octet-stream"}; name="{filename}"\r\n')
-    parts.append("Content-Transfer-Encoding: base64\r\n")
-    parts.append(f'Content-Disposition: attachment; filename="{filename}"\r\n\r\n')
-    encoded = base64.b64encode(attachment).decode()
-    parts.append("\r\n".join(encoded[i:i + 76] for i in range(0, len(encoded), 76)))
-    parts.append("\r\n--" + boundary + "--\r\n")
+    for attachment, filename in files:
+        ctype, _mimetype = mimetypes.guess_type(filename)
+        maintype, _, subtype = (ctype or "application/octet-stream").partition("/")
+        parts.append("--" + boundary + "\r\n")
+        parts.append(f'Content-Type: {maintype}/{subtype or "octet-stream"}; name="{filename}"\r\n')
+        parts.append("Content-Transfer-Encoding: base64\r\n")
+        parts.append(f'Content-Disposition: attachment; filename="{filename}"\r\n\r\n')
+        encoded = base64.b64encode(attachment).decode()
+        parts.append("\r\n".join(encoded[i:i + 76] for i in range(0, len(encoded), 76)))
+        parts.append("\r\n")
+    parts.append("--" + boundary + "--\r\n")
 
     raw = "".join(parts)
     raw_b64 = base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
@@ -107,6 +108,18 @@ def _send_with_attachment(
     if thread_id:
         payload["threadId"] = thread_id
     return _api_request(service, user_email, "POST", "/users/me/messages/send", body=payload)
+
+
+def _send_with_attachment(
+    service, user_email, to, subject, body_text, body_html,
+    cc, bcc, thread_id, attachment: bytes, filename: str,
+    from_addr: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Backward-compatible single-file wrapper."""
+    return _send_with_attachments(
+        service, user_email, to, subject, body_text, body_html,
+        cc, bcc, thread_id, [(attachment, filename)], from_addr=from_addr,
+    )
 
 
 def send_email(
@@ -122,22 +135,27 @@ def send_email(
     attachment: Optional[bytes] = None,
     filename: str = "document.pdf",
     from_addr: Optional[str] = None,
+    attachments: Optional[List] = None,
 ) -> Dict[str, Any]:
     """Send an email via Gmail API.
 
     attachment/filename are optional; the lender sequence attaches a one-page
     pitch PDF, which plain RFC-822 building in this function could not express.
+    attachments is a list of ``(bytes, filename)`` for multi-document sends
+    such as a bid proposal plus its RFI.
 
     `user_email` is the account whose stored OAuth token authorises the call
     (usually GMAIL_OWNER). `from_addr` is the address written into the From
     header, which may be a send-as alias on that account; it defaults to
     user_email when they are the same.
     """
+    files: List = [(raw, name) for raw, name in (attachments or []) if raw and name]
     if attachment:
-        return _send_with_attachment(
+        files.insert(0, (attachment, filename))
+    if files:
+        return _send_with_attachments(
             service, user_email, to, subject, body_text, body_html,
-            cc, bcc, thread_id, attachment, filename,
-            from_addr=from_addr,
+            cc, bcc, thread_id, files, from_addr=from_addr,
         )
     # Build MIME message
     lines = [
