@@ -83,7 +83,16 @@ def api_request(method: str, url: str, **kwargs) -> Optional[Dict[Any, Any]]:
     if not headers:
         return None
     
-    kwargs.setdefault('headers', {}).update(headers)
+    kwargs.setdefault('headers', {})
+    caller_types = {k.lower() for k in kwargs['headers']}
+    for key, value in headers.items():
+        # A caller that supplies Content-Type (raw upload) or passes files (the
+        # multipart encoder sets its own boundary) must not have it replaced by
+        # the JSON default. That is what made Zoho reject every attachment with
+        # 415 Unsupported Media Type.
+        if key.lower() == 'content-type' and (kwargs.get('files') or 'content-type' in caller_types):
+            continue
+        kwargs['headers'].setdefault(key, value)
     kwargs.setdefault('timeout', 60)
     
     try:

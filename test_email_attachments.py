@@ -90,14 +90,14 @@ def test_zoho_uploads_every_attachment(monkeypatch):
             return True
 
         def api_request(self, method, path, params=None, data=None,
-                        headers=None, json=None):
+                        headers=None, json=None, files=None):
             if path.endswith("/messages/attachments"):
-                name = params["fileName"]
+                assert params["uploadType"] == "multipart"
                 return Response({"data": [{
                     "storeName": "store-" + name,
                     "attachmentPath": "/path/" + name,
                     "attachmentName": name,
-                }]})
+                } for _field, (name, _raw, _ctype) in files]})
             sent["payload"] = json
             return Response({"data": {}})
 
@@ -109,6 +109,51 @@ def test_zoho_uploads_every_attachment(monkeypatch):
     assert ok is True
     names = [a["attachmentName"] for a in sent["payload"]["attachments"]]
     assert names == ["Bid.pdf", "RFI.pdf"]
+
+
+def test_zoho_client_lets_multipart_set_its_own_content_type(monkeypatch):
+    import zoho_client
+
+    captured = {}
+
+    class Response:
+        status_code = 200
+
+    def fake_request(method, url, **kwargs):
+        captured.update(kwargs)
+        return Response()
+
+    monkeypatch.setattr(zoho_client, "get_headers",
+                        lambda: {"Authorization": "Zoho-oauthtoken x",
+                                 "Content-Type": "application/json"})
+    monkeypatch.setattr(zoho_client.requests, "request", fake_request)
+    zoho_client.api_request(
+        "POST", "https://mail.zoho.com/api/x",
+        files=[("attach", ("Bid.pdf", b"pdf", "application/pdf"))])
+    assert "Content-Type" not in captured["headers"]
+    assert captured["headers"]["Authorization"] == "Zoho-oauthtoken x"
+
+
+def test_zoho_client_keeps_a_callers_raw_content_type(monkeypatch):
+    import zoho_client
+
+    captured = {}
+
+    class Response:
+        status_code = 200
+
+    def fake_request(method, url, **kwargs):
+        captured.update(kwargs)
+        return Response()
+
+    monkeypatch.setattr(zoho_client, "get_headers",
+                        lambda: {"Authorization": "Zoho-oauthtoken x",
+                                 "Content-Type": "application/json"})
+    monkeypatch.setattr(zoho_client.requests, "request", fake_request)
+    zoho_client.api_request(
+        "POST", "https://mail.zoho.com/api/x", data=b"pdf",
+        headers={"Content-Type": "application/octet-stream"})
+    assert captured["headers"]["Content-Type"] == "application/octet-stream"
 
 
 if __name__ == "__main__":

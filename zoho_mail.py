@@ -96,19 +96,26 @@ def send(to: str, subject: str, body_text: str, *, sender: str = "", sender_name
     if cc:
         payload["ccAddress"] = cc
     if files:
-        uploaded = []
-        for raw, name in files:
-            up = zoho_client.api_request(
-                "POST", f"{MAIL_BASE}/accounts/{account_id}/messages/attachments",
-                params={"fileName": name, "isInline": "false"},
-                data=raw, headers={"Content-Type": "application/octet-stream"})
-            if up is None or up.status_code not in (200, 201):
-                raise RuntimeError(f"Zoho Mail attachment upload failed: {getattr(up, 'status_code', '?')}")
-            info = (up.json().get("data") or [{}])
-            info = info[0] if isinstance(info, list) else info
-            uploaded.append({"storeName": info.get("storeName"), "attachmentPath": info.get("attachmentPath"),
-                             "attachmentName": info.get("attachmentName") or name})
-        payload["attachments"] = uploaded
+        up = zoho_client.api_request(
+            "POST", f"{MAIL_BASE}/accounts/{account_id}/messages/attachments",
+            params={"uploadType": "multipart", "isInline": "false"},
+            files=[("attach", (name, raw, "application/octet-stream"))
+                   for raw, name in files],
+            headers={"Accept": "application/json"})
+        if up is None or up.status_code not in (200, 201):
+            raise RuntimeError(f"Zoho Mail attachment upload failed: {getattr(up, 'status_code', '?')}")
+        info = up.json().get("data") or []
+        if isinstance(info, dict):
+            info = [info]
+        if len(info) != len(files):
+            raise RuntimeError(
+                f"Zoho Mail accepted {len(info)} of {len(files)} attachments")
+        payload["attachments"] = [
+            {"storeName": item.get("storeName"),
+             "attachmentPath": item.get("attachmentPath"),
+             "attachmentName": item.get("attachmentName") or files[i][1]}
+            for i, item in enumerate(info)
+        ]
     resp = zoho_client.api_request("POST", f"{MAIL_BASE}/accounts/{account_id}/messages", json=payload)
     if resp is None:
         return False
