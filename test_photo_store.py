@@ -45,6 +45,11 @@ class _FakeR2:
         return {"Body": io.BytesIO(self.objects[Key]),
                 "ContentType": "image/jpeg"}
 
+    def head_object(self, Bucket, Key):
+        if Key not in self.objects:
+            raise FileNotFoundError(Key)
+        return {}
+
 
 def _r2(monkeypatch, fail=False):
     """One instance for the whole test: _client() is called on every save/read,

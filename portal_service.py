@@ -206,6 +206,17 @@ def portal_data(conn, bid_id: int, client_id: int) -> dict:
         """, (int(bid_id),))
         messages = cur.fetchall()
 
+    # Old local-disk uploads were deleted by deploys. The bid card keeps those
+    # rows as history, but the client portal must not show a 404 as a document.
+    documents = [
+        d for d in documents
+        if (not d.get("key") and (d.get("url") or "").startswith("http"))
+        or (d.get("key") and photo_store.exists(d["key"]))
+    ]
+    photos = [
+        p for p in photos
+        if not p.get("filename") or photo_store.exists(p["filename"])
+    ]
     for doc in documents:
         doc["href"] = photo_store.url_for(doc.get("key") or doc.get("url") or "")
     for photo in photos:

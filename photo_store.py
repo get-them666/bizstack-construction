@@ -191,12 +191,23 @@ def read(key: str) -> tuple[bytes, str]:
     raise FileNotFoundError(key)
 
 
+def head(key: str) -> bool:
+    """Cheap existence check: HEAD on R2, os.path.exists locally."""
+    safe = str(key or "").replace("\\", "/").lstrip("/")
+    if not safe or ".." in safe.split("/"):
+        return False
+    if configured():
+        try:
+            _client().head_object(Bucket=config()["bucket"], Key=safe)
+            return True
+        except Exception:
+            pass
+    return os.path.exists(os.path.join(DEFAULT_LOCAL_DIR, safe.replace("/", "_")))
+
+
 def exists(key: str) -> bool:
     try:
-        read(key)
-        return True
-    except FileNotFoundError:
-        return False
+        return head(key)
     except Exception:
         return False
 
