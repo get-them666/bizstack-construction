@@ -69,6 +69,7 @@ import permit_enricher
 import permit_stats
 import email_fetcher
 import bid_costing
+import bid_contact
 import bid_notes
 import direct_deposit
 import letter_batches
@@ -11181,6 +11182,46 @@ async def bid_add_note(bid_id: int, request: Request, note: str = Form(...),
         raise HTTPException(status_code=404, detail="Bid not found")
     back = request.headers.get("referer") or "/bids"
     return RedirectResponse(url=back, status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/api/bids/{bid_id}/contact/find")
+async def bid_find_contact(bid_id: int, request: Request, db=Depends(get_db)):
+    """Fill the Send box recipient from the bid or its solicitation.
+
+    Reads only: the bid card, the stored solicitation body and the linked
+    source-email sender. It never invents an address and never sends anything.
+    The owner still reviews the recipient and presses Send.
+    """
+    require_admin(request)
+    bid = bid_opportunities.get_bid(db, bid_id, _BID_COMPANY)
+    if not bid:
+        raise HTTPException(status_code=404, detail="Bid not found")
+    senders = []
+    try:
+        with db.cursor() as cur:
+            cur.execute(
+                "SELECT sender FROM bid_source_emails "
+                "WHERE bid_id = %s AND company = %s ORDER BY id DESC LIMIT 10;",
+                (bid_id, _BID_COMPANY))
+            senders = [row["sender"] for row in cur.fetchall() if row.get("sender")]
+    except Exception:
+        db.rollback()
+    result = bid_contact.find_gc_email(dict(bid), senders)
+    if not result.get("ok"):
+        return result
+    try:
+        with db.cursor() as cur:
+            cur.execute(
+                "UPDATE bid_opportunities SET contact_email = %s, "
+                "contact_name = COALESCE(NULLIF(%s, ''), contact_name), "
+                "updated_at = now() WHERE id = %s AND company = %s;",
+                (result["email"], result.get("name") or "", bid_id, _BID_COMPANY))
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=500,
+                            detail=f"Could not save the contact: {exc}")
+    return result
 
 
 @app.post("/api/bids/{bid_id}/delete")

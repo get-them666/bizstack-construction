@@ -866,11 +866,50 @@
               onsubmit="return confirm('Send this bid package to the GC? This marks the bid sent.');">
           <input type="hidden" name="back" value="/bids/{{ b.id }}">
           <input type="hidden" name="markup_pct" value="{{ b.markup_pct or 0 }}">
-          <input name="to_email" value="{{ b.contact_email or '' }}" placeholder="GC email" class="w-full text-sm border border-slate-200 rounded-lg px-3 py-2">
+          <div class="flex gap-2">
+            <input id="gc-email-{{ b.id }}" name="to_email" value="{{ b.contact_email or '' }}" placeholder="GC email" class="min-w-0 flex-1 text-sm border border-slate-200 rounded-lg px-3 py-2">
+            <button type="button" id="find-gc-email-{{ b.id }}"
+                    class="shrink-0 text-xs font-bold px-3 py-2 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-lg hover:bg-indigo-100">Find GC email</button>
+          </div>
+          <p id="find-gc-status-{{ b.id }}" class="text-[11px] text-slate-400"></p>
           <textarea name="message" placeholder="Optional message to GC..." rows="2" class="w-full text-sm border border-slate-200 rounded-lg px-3 py-2"></textarea>
           <button class="w-full text-sm font-semibold px-4 py-2.5 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700">Send bid package to GC</button>
-          <p class="text-[11px] text-slate-400">Sends to the email above. Review the recipient before clicking; this marks the bid sent.</p>
+          <p class="text-[11px] text-slate-400">Sends to the email above. Use <b>Find GC email</b> to fill it from the solicitation, then review before clicking; this marks the bid sent.</p>
         </form>
+        <script>
+        (function () {
+          var btn = document.getElementById('find-gc-email-{{ b.id }}');
+          var input = document.getElementById('gc-email-{{ b.id }}');
+          var out = document.getElementById('find-gc-status-{{ b.id }}');
+          if (!btn || !input || !out) return;
+          btn.addEventListener('click', async function () {
+            var old = btn.textContent;
+            btn.disabled = true;
+            btn.textContent = 'Looking...';
+            out.className = 'text-[11px] text-slate-400';
+            out.textContent = '';
+            try {
+              var res = await fetch('/api/bids/{{ b.id }}/contact/find', {
+                method: 'POST', headers: { 'Accept': 'application/json' }
+              });
+              var json = await res.json();
+              if (json.ok) {
+                input.value = json.email;
+                out.className = 'text-[11px] text-emerald-700';
+                out.textContent = 'Found ' + json.email + ' (' + (json.source || 'enrichment') + ')';
+              } else {
+                out.className = 'text-[11px] text-amber-700';
+                out.textContent = json.error || 'No GC email found. Type the recipient.';
+              }
+            } catch (e) {
+              out.className = 'text-[11px] text-red-600';
+              out.textContent = 'Lookup failed. Type the recipient.';
+            }
+            btn.disabled = false;
+            btn.textContent = old;
+          });
+        })();
+        </script>
       </section>
 
       <section class="bg-white rounded-2xl border border-slate-200 p-5">
