@@ -578,15 +578,8 @@ def build_itemized_pricing(bid: dict, costs: list[dict]) -> bytes:
     _heading(pdf, "Terms")
     _bullets(pdf, TERMS)
 
-    notes = (bid.get("notes") or "").strip()
-    if notes:
-        _heading(pdf, "Notes")
-        pdf.set_font("Helvetica", "", 8.5)
-        for line in notes.splitlines():
-            line = line.strip()
-            if line:
-                _mc(pdf, 0, 4.6, _txt(line))
-                pdf.ln(0.4)
+    # Imported solicitation notes stay on the internal bid card. Printing them
+    # here put raw Zoho CSS and the bid-board digest into a client document.
 
     return bytes(pdf.output())
 

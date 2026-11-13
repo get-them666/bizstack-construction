@@ -318,16 +318,10 @@ def generate_bid_package_pdf(bid: dict, costs: list[dict], markup_pct: float = 0
     _heading(pdf, "Not included")
     _bullets(pdf, exclusions_for(costs))
 
-    # ---- notes -----------------------------------------------------------
-    notes = (bid.get("notes") or "").strip()
-    if notes:
-        _heading(pdf, "Notes")
-        pdf.set_font("Helvetica", "", 8.5)
-        for line in notes.splitlines():
-            line = line.strip()
-            if line:
-                pdf.multi_cell(0, 4.6, _txt(line))
-                pdf.ln(0.4)
+    # Imported solicitation notes are internal. They used to be printed here
+    # verbatim, which put the Zoho stylesheet, the bid-board digest and the GC's
+    # own email chain into a client-facing proposal. Keep them on the card; do
+    # not put them in the signed package.
 
     # ---- acceptance ------------------------------------------------------
     if pdf.get_y() > 225:
