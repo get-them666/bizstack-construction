@@ -49,7 +49,7 @@
     <p class="mt-1 text-sm text-slate-500">Secure card form by Zoho Payments. You stay on this page; card details are entered in Zoho's
       encrypted widget and never reach our server.</p>
     <div id="card-status" class="hidden mt-4 rounded-xl px-4 py-3 text-sm font-semibold"></div>
-    {% if zoho_widget %}
+    {% if zoho_widget and zoho_ready %}
     <button type="button" id="card-pay-btn" data-bid="{{ bid.id }}" data-invoice="{{ invoice.id }}"
             class="mt-4 w-full sm:w-auto px-6 py-3 rounded-xl bg-indigo-600 text-white text-sm font-bold hover:bg-indigo-500 shadow-lg shadow-indigo-200">
       Pay ${{ "{:,.2f}".format(due) }} by card
@@ -99,7 +99,7 @@
 {% endblock %}
 
 {% block scripts %}
-{% if zoho_widget and due > 0 and not paid %}
+{% if zoho_widget and zoho_ready and due > 0 and not paid %}
 <script src="https://static.zohocdn.com/zpay/zpay-js/v1/zpayments.js"></script>
 <script>
 (function () {

@@ -71,7 +71,19 @@ def domain(setting=None) -> str:
 
 def configured(setting=None) -> bool:
     """Enough configuration to create a session and render the widget."""
-    return bool(account_id(setting) and api_key(setting) and zoho_client.is_configured())
+    if not (account_id(setting) and api_key(setting) and zoho_client.is_configured()):
+        return False
+    # A reconnect is required after the ZohoPay scopes are added. Without this
+    # check the portal would show a Pay button that can only fail with
+    # INVALID_OAUTHSCOPE. Empty scopes mean we cannot tell (env-token setup).
+    if setting:
+        try:
+            scopes = (setting("zoho_scopes") or "").lower()
+        except Exception:
+            scopes = ""
+        if scopes and "zohopay." not in scopes:
+            return False
+    return True
 
 
 def widget_configured(setting=None) -> bool:
