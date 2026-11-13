@@ -67,7 +67,7 @@
         </p>
         {% if not openai.ok %}
         <div class="mt-3 rounded-xl bg-red-50 border border-red-200 p-3 text-xs text-red-800">
-            Until this is fixed callers to {{ phone.business_line }} hear an apology and are asked to call back, the website chat says it is offline, and the Copilot returns an error. Create a key at platform.openai.com and set <code class="bg-red-100 px-1 rounded">OPENAI_API_KEY</code> in Railway.
+            Until this is fixed callers to {{ phone.business_line }} hear an apology and are asked to call back, the website chat says it is offline, and the Copilot returns an error. Create a key at platform.openai.com and set <code class="bg-red-100 px-1 rounded">OPENAI_API_KEY</code> in Render.
         </div>
         {% endif %}
     </div>
@@ -107,7 +107,7 @@
         </dl>
         {% if email.legacy_warning %}
         <div class="mt-3 rounded-xl bg-red-50 border border-red-200 p-3 text-xs text-red-800">
-            <code>EMAIL_TRANSPORT=legacy</code> forces Zoho SMTP, which times out from Railway on every port. Set it to <code>gmail</code>.
+            <code>EMAIL_TRANSPORT=legacy</code> forces Zoho SMTP, which times out from Render on every port. Set it to <code>gmail</code>.
         </div>
         {% endif %}
     </div>
@@ -149,7 +149,7 @@
         <div class="mt-3 rounded-xl bg-amber-50 border border-amber-200 p-3 text-xs text-amber-800">
             <code class="bg-amber-100 px-1 rounded">BANK_ENCRYPTION_KEY</code> is not set, so crew cannot save bank details in the phone app and direct deposit stays off.
             Generate one with <code class="bg-amber-100 px-1 rounded">python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"</code>
-            and set it in Railway.
+            and set it in Render.
         </div>
         {% endif %}
         {% if not banking.pay_ready %}
@@ -205,7 +205,7 @@
             <strong>Zoho is refusing these credentials.</strong> Everything below is disconnected until you reconnect —
             leads stop syncing to the CRM and nobody is added to Campaigns. This happens when the Client Secret is
             regenerated in api-console.zoho.com. Paste a fresh grant code below (fastest), or update
-            <code>ZOHO_CLIENT_SECRET</code> in Railway with the current secret.
+            <code>ZOHO_CLIENT_SECRET</code> in Render with the current secret.
         </div>
         {% endif %}
         <div class="mt-3 grid grid-cols-2 sm:grid-cols-5 gap-2 text-xs">
@@ -242,7 +242,7 @@
             <span class="text-xs text-slate-500">Signs in as the Zoho user who owns the mailbox and CRM.{% if zoho.email %} Connected as {{ zoho.email }}.{% endif %}</span>
             {% endif %}
             {% else %}
-            <span class="text-xs text-red-700">Set <code>ZOHO_CLIENT_ID</code> and <code>ZOHO_CLIENT_SECRET</code> in Railway first.</span>
+            <span class="text-xs text-red-700">Set <code>ZOHO_CLIENT_ID</code> and <code>ZOHO_CLIENT_SECRET</code> in Render first.</span>
             {% endif %}
         </div>
 
@@ -257,7 +257,7 @@
                 <button type="button" data-copy="zoho-redirect-uri" class="px-2 py-1 text-[11px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-lg">Copy</button>
             </div>
             <p class="mt-2"><strong>Server-based client:</strong> <a class="font-semibold text-indigo-600" href="https://api-console.zoho.com" target="_blank" rel="noopener">api-console.zoho.com</a> → your client → <strong>Client Secret</strong> tab → <strong>Authorized Redirect URIs</strong> → paste it → <strong>Update</strong>. Then click Reconnect.</p>
-            <p class="mt-1"><strong>Self Client:</strong> that client type has no redirect-URI field at all, so Reconnect can never work with it. Either create a <em>Server-based</em> client (then update <code>ZOHO_CLIENT_ID</code> and <code>ZOHO_CLIENT_SECRET</code> in Railway), or use the grant-code box below, which needs no redirect.</p>
+            <p class="mt-1"><strong>Self Client:</strong> that client type has no redirect-URI field at all, so Reconnect can never work with it. Either create a <em>Server-based</em> client (then update <code>ZOHO_CLIENT_ID</code> and <code>ZOHO_CLIENT_SECRET</code> in Render), or use the grant-code box below, which needs no redirect.</p>
         </div>
         <script>
           document.querySelectorAll('[data-copy]').forEach(function (btn) {
@@ -286,7 +286,7 @@
                 <input name="grant_code" required placeholder="1000.xxxxxxxx.xxxxxxxx" class="flex-1 min-w-[18rem] px-3 py-2 rounded-xl border border-slate-200 text-sm font-mono">
                 <button class="px-4 py-2 text-xs font-bold text-white bg-red-600 hover:bg-red-700 rounded-xl">Connect with code</button>
             </form>
-            <p class="mt-3 text-slate-500">Until Mail is connected, email still goes out through the old Google mailbox. If Zoho already has a different redirect address saved, set <code class="bg-slate-100 px-1 rounded">ZOHO_REDIRECT_URI</code> in Railway to that exact value instead of changing Zoho.</p>
+            <p class="mt-3 text-slate-500">Until Mail is connected, email still goes out through the old Google mailbox. If Zoho already has a different redirect address saved, set <code class="bg-slate-100 px-1 rounded">ZOHO_REDIRECT_URI</code> in Render to that exact value instead of changing Zoho.</p>
         </div>
         {% endif %}
         <form method="post" action="/api/settings/zoho" class="mt-4 flex flex-wrap items-end gap-3">
@@ -319,11 +319,11 @@
         </div>
         <dl class="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2 text-xs">
             <div class="flex justify-between border-b border-slate-100 py-1"><dt class="text-slate-500">Zoho connected</dt><dd class="font-semibold">{{ 'yes' if zoho_books_status.configured else 'no — connect Zoho on Settings' }}</dd></div>
-            <div class="flex justify-between border-b border-slate-100 py-1"><dt class="text-slate-500">Organization ID</dt><dd class="font-semibold">{{ 'set' if zoho_books_status.org_id else 'not set — add ZOHO_BOOKS_ORG_ID in Railway' }}</dd></div>
+            <div class="flex justify-between border-b border-slate-100 py-1"><dt class="text-slate-500">Organization ID</dt><dd class="font-semibold">{{ 'set' if zoho_books_status.org_id else 'not set — add ZOHO_BOOKS_ORG_ID in Render' }}</dd></div>
         </dl>
         {% if not zoho_books_status.connected %}
         <div class="mt-3 rounded-xl bg-amber-50 border border-amber-200 p-3 text-xs text-amber-800">
-            Invoices raised on <code>/bids/{id}</code> still post to the local ledger, but they won't appear in Zoho Books until Zoho is connected and <code>ZOHO_BOOKS_ORG_ID</code> is set in Railway.
+            Invoices raised on <code>/bids/{id}</code> still post to the local ledger, but they won't appear in Zoho Books until Zoho is connected and <code>ZOHO_BOOKS_ORG_ID</code> is set in Render.
         </div>
         {% endif %}
     </div>
@@ -344,11 +344,11 @@
         </div>
         <dl class="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2 text-xs">
             <div class="flex justify-between border-b border-slate-100 py-1"><dt class="text-slate-500">Webhook URL</dt><dd class="font-semibold text-left break-all text-[10px]">{{ zoho_payments_status.webhook_url }}</dd></div>
-            <div class="flex justify-between border-b border-slate-100 py-1"><dt class="text-slate-500">Configured</dt><dd class="font-semibold">{{ 'Yes' if zoho_payments_status.configured else 'No — set ZOHO_PAYMENTS_WEBHOOK_KEY in Railway' }}</dd></div>
+            <div class="flex justify-between border-b border-slate-100 py-1"><dt class="text-slate-500">Configured</dt><dd class="font-semibold">{{ 'Yes' if zoho_payments_status.configured else 'No — set ZOHO_PAYMENTS_WEBHOOK_KEY in Render' }}</dd></div>
         </dl>
         {% if not zoho_payments_status.configured %}
         <div class="mt-3 rounded-xl bg-amber-50 border border-amber-200 p-3 text-xs text-amber-800">
-            Card payments through Zoho Payments won't be recorded automatically until <code>ZOHO_PAYMENTS_WEBHOOK_KEY</code> is set in Railway and the webhook URL is registered in your Zoho Payments Developer Space.
+            Card payments through Zoho Payments won't be recorded automatically until <code>ZOHO_PAYMENTS_WEBHOOK_KEY</code> is set in Render and the webhook URL is registered in your Zoho Payments Developer Space.
         </div>
         {% endif %}
     </div>
@@ -369,7 +369,7 @@
                 Require a code for owner login
             </label>
             {% if otp_env_locked %}
-            <span class="text-xs text-slate-400">Locked by <code>OTP_ENABLED</code> in Railway — change it there.</span>
+            <span class="text-xs text-slate-400">Locked by <code>OTP_ENABLED</code> in Render — change it there.</span>
             {% else %}
             <button class="px-4 py-2 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl">Save</button>
             {% endif %}
@@ -383,7 +383,7 @@
             <div class="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center font-bold">⚙️</div>
             <div>
                 <p class="text-base font-bold text-slate-900">Background jobs</p>
-                <p class="text-xs text-slate-500">Loops that run on their own. Switched in Railway, shown here.</p>
+                <p class="text-xs text-slate-500">Loops that run on their own. Switched in Render, shown here.</p>
             </div>
         </div>
         <ul class="mt-3 divide-y divide-slate-100 text-xs">
@@ -402,7 +402,7 @@
             <div class="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center font-bold">🛡️</div>
             <div>
                 <p class="text-base font-bold text-slate-900">Outbound limits</p>
-                <p class="text-xs text-slate-500">What stops the lead bot from over-contacting anyone. Set in Railway; these fail closed.</p>
+                <p class="text-xs text-slate-500">What stops the lead bot from over-contacting anyone. Set in Render; these fail closed.</p>
             </div>
         </div>
         <dl class="mt-3 text-xs divide-y divide-slate-100">
