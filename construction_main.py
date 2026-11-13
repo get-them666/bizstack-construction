@@ -69,6 +69,7 @@ import permit_enricher
 import permit_stats
 import email_fetcher
 import bid_costing
+import bid_notes
 import direct_deposit
 import letter_batches
 import deposit_instructions
@@ -365,6 +366,7 @@ def _money(value):
 
 
 templates.env.filters["money"] = _money
+templates.env.filters["bid_notes"] = bid_notes.format_notes
 
 
 

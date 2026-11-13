@@ -117,8 +117,15 @@
 
       {% if b.notes %}
       <section class="bg-white rounded-2xl border border-slate-200 p-5">
-        <h2 class="text-sm font-bold uppercase tracking-wide text-slate-500 mb-3">Notes</h2>
-        <p class="text-sm text-slate-700 whitespace-pre-wrap">{{ b.notes }}</p>
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="text-sm font-bold uppercase tracking-wide text-slate-500">Notes</h2>
+          <span class="text-[11px] text-slate-400">From the solicitation email</span>
+        </div>
+        <div class="space-y-1">{{ b.notes | bid_notes | safe }}</div>
+        <details class="mt-4">
+          <summary class="cursor-pointer text-[11px] font-semibold text-slate-400 hover:text-slate-600">Raw email text</summary>
+          <pre class="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-slate-50 p-3 text-[11px] leading-5 text-slate-500">{{ b.notes }}</pre>
+        </details>
       </section>
       {% endif %}
 
