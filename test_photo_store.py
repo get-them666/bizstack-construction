@@ -24,6 +24,7 @@ def _local_only(tmp_path, monkeypatch):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setattr(ps, "DEFAULT_LOCAL_DIR", str(tmp_path / "uploads"))
     monkeypatch.setattr(ps, "_client", None, raising=False)
+    monkeypatch.setattr(ps, "_s3_client", None, raising=False)
     monkeypatch.setattr(ps, "_warned_local", False)
 
 
@@ -191,6 +192,17 @@ def test_key_prefix_is_applied(monkeypatch):
     _r2(monkeypatch)
     out = ps.save(b"x", "a.jpg", key_prefix="quotes/2026")
     assert out["key"] == "quotes/2026/a.jpg"
+
+
+def test_prefixed_key_round_trips(monkeypatch):
+    """Bid documents live under bids/<id>/...; read must not strip the prefix."""
+    _configure(monkeypatch)
+    fake = _r2(monkeypatch)
+    out = ps.save(b"contract bytes", "contract.pdf", key_prefix="bids/123")
+    assert out["key"] == "bids/123/contract.pdf"
+    assert fake.objects[out["key"]] == b"contract bytes"
+    body, _ = ps.read(out["key"])
+    assert body == b"contract bytes"
 
 
 # --- urls --------------------------------------------------------------------

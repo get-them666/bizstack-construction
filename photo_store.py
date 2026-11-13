@@ -80,15 +80,18 @@ def missing() -> list[str]:
             if not c[key]]
 
 
+_s3_client = None
+
+
 def _client():
     """Lazy so an unconfigured deployment never imports boto3."""
-    global _client
-    if _client is not None:
-        return _client
+    global _s3_client
+    if _s3_client is not None:
+        return _s3_client
     c = config()
     import boto3
     from botocore.config import Config
-    _client = boto3.client(
+    _s3_client = boto3.client(
         "s3",
         endpoint_url=f"https://{c['account_id']}.r2.cloudflarestorage.com",
         aws_access_key_id=c["access_key"],
@@ -96,7 +99,7 @@ def _client():
         region_name="auto",
         config=Config(signature_version="s3v4", retries={"max_attempts": 3}),
     )
-    return _client
+    return _s3_client
 
 
 def safe_key(filename: str) -> str:
@@ -167,8 +170,14 @@ def read(key: str) -> tuple[bytes, str]:
     R2 first, then local. A key uploaded before R2 was configured is only on
     disk; one uploaded after is only in R2. Both have to work for links that
     were already handed out.
+
+    The full key must be used, not just its basename: bid documents are stored
+    under ``bids/<id>/...`` and stripping the prefix made every one of them
+    unreadable once R2 was enabled.
     """
-    safe = os.path.basename(str(key or "")).replace("..", "")
+    safe = str(key or "").replace("\\", "/").lstrip("/")
+    if not safe or ".." in safe.split("/"):
+        raise FileNotFoundError(key)
     if configured():
         try:
             obj = _client().get_object(Bucket=config()["bucket"], Key=safe)
