@@ -1,0 +1,177 @@
+{% extends "base.html" %}
+{% block title %}Sign your agreement | {{ co.name }}{% endblock %}
+{% block meta %}<meta name="robots" content="noindex, nofollow">{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl mx-auto px-4 sm:px-6 py-10">
+  {% if expired %}
+  <div class="bg-white rounded-3xl border border-slate-200 shadow-sm p-8 text-center">
+    <div class="text-4xl">⌛</div>
+    <h1 class="mt-4 text-2xl font-black text-slate-900">This signing link has expired</h1>
+    <p class="mt-3 text-sm text-slate-600">Links are private and time-limited. Call or text
+      <a href="tel:{{ co.phone_e164 }}" class="font-bold text-indigo-600">{{ co.phone }}</a>
+      and we will send you a new one.</p>
+    <a href="/" class="mt-6 inline-flex px-5 py-2.5 rounded-xl bg-slate-900 text-white text-sm font-bold">Back to the website</a>
+  </div>
+  {% else %}
+
+  <div class="text-center">
+    <span class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-50 border border-indigo-100 text-xs font-bold uppercase tracking-widest text-indigo-700">Renovation agreement</span>
+    <h1 class="mt-4 text-3xl font-black tracking-tight text-slate-900">Review and sign</h1>
+    <p class="mt-2 text-sm text-slate-600">For <b>{{ bid.name }}</b>{% if bid.location %} at {{ bid.location }}{% endif %}</p>
+  </div>
+
+  {% if error %}
+  <div class="mt-5 rounded-xl bg-red-50 border border-red-200 px-4 py-3 text-sm font-semibold text-red-700" role="alert">{{ error }}</div>
+  {% endif %}
+
+  <div class="mt-6 bg-white rounded-2xl border border-slate-200 shadow-sm p-6">
+    <div class="flex flex-wrap items-center justify-between gap-3">
+      <div>
+        <p class="text-[11px] font-bold uppercase tracking-wide text-slate-400">Contract total</p>
+        <p class="text-3xl font-black text-slate-900">${{ "{:,.2f}".format(total) }}</p>
+      </div>
+      <a href="/sign/{{ token }}/contract.pdf" target="_blank" rel="noopener"
+         class="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-slate-900 text-white text-sm font-bold hover:bg-slate-700">
+        📄 Read the full agreement
+      </a>
+    </div>
+    <div class="mt-5 grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm">
+      <div class="rounded-xl bg-slate-50 border border-slate-200 p-3">
+        <p class="text-[11px] uppercase tracking-wide text-slate-400">Deposit on signing</p>
+        <p class="font-black text-slate-900">${{ "{:,.2f}".format(deposit) }}</p>
+        <p class="text-[11px] text-slate-500">30%</p>
+      </div>
+      <div class="rounded-xl bg-slate-50 border border-slate-200 p-3">
+        <p class="text-[11px] uppercase tracking-wide text-slate-400">At midpoint</p>
+        <p class="font-black text-slate-900">${{ "{:,.2f}".format(progress) }}</p>
+        <p class="text-[11px] text-slate-500">40%</p>
+      </div>
+      <div class="rounded-xl bg-slate-50 border border-slate-200 p-3">
+        <p class="text-[11px] uppercase tracking-wide text-slate-400">At final walkthrough</p>
+        <p class="font-black text-slate-900">${{ "{:,.2f}".format(final) }}</p>
+        <p class="text-[11px] text-slate-500">30%</p>
+      </div>
+    </div>
+    <p class="mt-4 text-xs text-slate-500">The agreement PDF is the authoritative document. This page summarises it so you know
+      what you are signing before you sign.{% if expires_at %} This private link expires {{ expires_at.strftime("%B %d, %Y") }}.{% endif %}</p>
+  </div>
+
+  <div class="mt-6 bg-white rounded-2xl border border-slate-200 shadow-sm p-6">
+    <h2 class="text-lg font-black text-slate-900">How to sign — about two minutes</h2>
+    <ol class="mt-3 space-y-2 text-sm text-slate-600 list-decimal pl-5">
+      <li>Read the agreement above (it opens in a new tab).</li>
+      <li>Type your full name below.</li>
+      <li>Draw your signature in the box with your finger, stylus or mouse.</li>
+      <li>Tick the box confirming you accept the terms, then press <b>Sign and accept</b>.</li>
+    </ol>
+    <p class="mt-3 text-xs text-slate-500">When you press the button you get a confirmation here, the office gets the signed copy,
+      and your client portal login is emailed to you.</p>
+
+    <form method="post" action="/sign/{{ token }}" id="sign-form" class="mt-6 space-y-4">
+      <label class="block">
+        <span class="text-sm font-semibold text-slate-700">Full legal name</span>
+        <input name="signer_name" required value="{{ contact_name }}"
+               class="mt-1 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 outline-none">
+      </label>
+      <label class="block">
+        <span class="text-sm font-semibold text-slate-700">Email for your copy and portal login</span>
+        <input name="signer_email" type="email" required value="{{ contact_email }}"
+               class="mt-1 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 outline-none">
+      </label>
+
+      <div>
+        <div class="flex items-center justify-between">
+          <span class="text-sm font-semibold text-slate-700">Signature</span>
+          <button type="button" id="sig-clear" class="text-xs font-bold text-slate-500 hover:text-indigo-600">Clear</button>
+        </div>
+        <div class="mt-1 rounded-2xl border-2 border-dashed border-slate-300 bg-slate-50 relative">
+          <canvas id="sig-pad" width="900" height="300"
+                  class="w-full h-44 touch-none cursor-crosshair"></canvas>
+          <span id="sig-hint" class="pointer-events-none absolute inset-0 flex items-center justify-center text-sm text-slate-400">Sign here</span>
+        </div>
+        <p class="mt-1 text-[11px] text-slate-400">Your drawn signature and the exact document you signed are stored with a timestamp and IP address.</p>
+      </div>
+
+      <input type="hidden" name="signature" id="sig-data">
+      <label class="flex items-start gap-3 rounded-xl bg-indigo-50/60 border border-indigo-100 p-3 text-sm text-slate-700">
+        <input type="checkbox" name="agree" required class="mt-0.5 w-5 h-5 rounded accent-indigo-600">
+        <span>I have read and accept the Renovation Agreement, including the scope, price and 30/40/30 payment schedule.</span>
+      </label>
+      <div id="sign-error" class="hidden rounded-xl bg-red-50 border border-red-200 px-4 py-3 text-sm font-semibold text-red-700"></div>
+      <button type="submit" id="sign-btn"
+              class="w-full py-3.5 rounded-2xl bg-indigo-600 text-white text-base font-bold hover:bg-indigo-500 shadow-lg shadow-indigo-200">
+        Sign and accept
+      </button>
+    </form>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+{% if not expired %}
+<script>
+(function () {
+  "use strict";
+  var canvas = document.getElementById("sig-pad");
+  var ctx = canvas.getContext("2d");
+  var hint = document.getElementById("sig-hint");
+  var data = document.getElementById("sig-data");
+  var drawing = false, dirty = false, last = null;
+
+  function pos(e) {
+    var r = canvas.getBoundingClientRect();
+    var p = e.touches ? e.touches[0] : e;
+    return { x: (p.clientX - r.left) * (canvas.width / r.width),
+             y: (p.clientY - r.top) * (canvas.height / r.height) };
+  }
+  function start(e) {
+    e.preventDefault();
+    drawing = true;
+    last = pos(e);
+    if (!dirty) { ctx.clearRect(0, 0, canvas.width, canvas.height); dirty = true; hint.style.display = "none"; }
+  }
+  function move(e) {
+    if (!drawing) return;
+    e.preventDefault();
+    var p = pos(e);
+    ctx.strokeStyle = "#0f172a";
+    ctx.lineWidth = 3.2;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.beginPath();
+    ctx.moveTo(last.x, last.y);
+    ctx.lineTo(p.x, p.y);
+    ctx.stroke();
+    last = p;
+  }
+  function end(e) { drawing = false; }
+  canvas.addEventListener("mousedown", start);
+  canvas.addEventListener("mousemove", move);
+  window.addEventListener("mouseup", end);
+  canvas.addEventListener("touchstart", start, { passive: false });
+  canvas.addEventListener("touchmove", move, { passive: false });
+  canvas.addEventListener("touchend", end);
+  document.getElementById("sig-clear").addEventListener("click", function () {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    dirty = false;
+    hint.style.display = "flex";
+  });
+  document.getElementById("sign-form").addEventListener("submit", function (e) {
+    var err = document.getElementById("sign-error");
+    if (!dirty) {
+      e.preventDefault();
+      err.textContent = "Please draw your signature in the box first.";
+      err.classList.remove("hidden");
+      return;
+    }
+    data.value = canvas.toDataURL("image/png");
+    var btn = document.getElementById("sign-btn");
+    btn.disabled = true;
+    btn.textContent = "Signing…";
+  });
+})();
+</script>
+{% endif %}
+{% endblock %}

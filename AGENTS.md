@@ -1,7 +1,14 @@
 # AGENTS.md
 
 BuildStack Construction — a small construction-business back office and public site.
-FastAPI + Postgres + Jinja, deployed to Railway. ~190 flat Python modules at the repo root.
+FastAPI + Postgres + Jinja, deployed to **Render**. ~190 flat Python modules at the repo root.
+
+> **Production is Render, not Railway.** `RENDER.md` is the deployment truth:
+> service `bizstack-construction` (`srv-dbo1a53m8hqs73f9humg`), Postgres
+> `bizstack-construction-db`, **live database `construction_live`**. The live
+> app does *not* use the datastore default `construction_mv91`, and must never
+> touch the `hosts` database in the same cluster. The Railway rows later in this
+> file are historical.
 
 **Read `MEMORY.md` before touching business logic.** It documents decisions that are not
 recoverable from the code: phone numbers, the business-contacts-only boundary, Stripe
@@ -13,16 +20,16 @@ Treat it as authoritative and keep it current.
 ## This is ONE of TWO separate companies — do not merge them
 
 BuildStack Construction and BuildStack Hosts (`../bizstack-hosts`) are **separate businesses
-with separate domains, separate Railway projects and separate databases.** Not a monorepo,
+with separate domains, separate Render services and separate databases.** Not a monorepo,
 not a shared package, not two services over one database.
 
 | | Construction (this repo) | Hosts |
 |---|---|---|
-| Railway project | **BuildStack Construction** `281375d7-2f13-43bb-813d-c6f048ead3f3` | **BuildStack Hosts** `d5ed0396-4729-442c-b38e-cdeedb2fe815` |
-| App service | `Construction` `f0831991-898a-46a2-8b96-35bf89af912f` | `Hosts` `9ff95d24-ad4c-41c1-a217-a5d1d663aae3` |
-| Postgres | `86bda89f-4620-44ef-b450-612ca2de6f11`, db `construction` | `5027eac7-620c-4cc0-a331-e99263bef206`, db `hosts` |
+| Render web service | **`bizstack-construction`** `srv-dbo1a53m8hqs73f9humg` | **`bizstack-hosts`** `srv-dbps9p0ae00c73chdqs0` |
+| Postgres | `bizstack-construction-db`; live db **`construction_live`** | same cluster, db **`hosts`** |
 | Domain | `construction.bizstackperks.com` | `bizstackperks.com` |
 | Repo | `get-them666/bizstack-construction` | `get-them666/bizstack-hosts` |
+| Historical (Railway, retired) | project `281375d7-…`, service `f0831991-…` | project `d5ed0396-…`, service `9ff95d24-…` |
 
 - **Never add a dependency on another repository.** `requirements.txt` must not name a git
   URL. `bizstack_leads/` is a vendored copy of the old shared lead package and **is live** —
@@ -30,8 +37,8 @@ not a shared package, not two services over one database.
   Edit it here; never re-point it at a git URL or at `../bizstack-hosts`.
 - **Never point this app at the hosts database, or vice versa.**
 - **Never assume a file exists in both repos because it used to.** They diverge on purpose.
-- **`railway up` from this directory deploys to BuildStack Construction.** Confirm with
-  `railway status` before deploying.
+- **A push to `main` deploys this service on Render.** Confirm the target with
+  `render deploys list srv-dbo1a53m8hqs73f9humg -o text`. Railway is retired.
 - The crew app (`/app`, timesheets, payroll) is **this company's** crew tooling. Broom Service
   has its own separate installable app in the hosts repo — do not touch it from here.
 
@@ -273,12 +280,23 @@ Much of this repo is real money and real people's data and is **not reproducible
 
 ## Deploy
 
-Railway, Dockerfile build (`python:3.12-slim`, `uvicorn construction_main:app`) despite
-`railway.json` saying `RAILPACK`; push to `main` deploys. After a push, confirm with
-`railway deployment list --json` that the newest deployment is `SUCCESS`, not `SKIPPED`:
+**Render. See `RENDER.md` for the full runbook.** Do not use Railway.
 
-- `build.watchPatterns` is deliberately broad globs (`**/*.py`, `templates/**`, `static/**`…).
-  **Keep it broad** — a narrower list once silently dropped commits.
-- "Wait for CI" is on, so any red GitHub check makes Railway skip the commit
-  (`meta.skippedReason: "CI check suite failed"`). That is why the Cloud Run workflow must
-  stay `workflow_dispatch`-only. Read `skippedReason` before blaming `watchPatterns`.
+- Web service `bizstack-construction` — `srv-dbo1a53m8hqs73f9humg`, Docker build,
+  region `virginia`, health check `/health`, `autoDeployTrigger: commit`.
+  Push to `main` deploys; confirm with `render deploys list <service> -o text`.
+- Postgres `bizstack-construction-db` — `dpg-dbo168bm8hqs73f97b8g-a`. The live
+  database is **`construction_live`**. `render psql <db>` connects to the
+  datastore default `construction_mv91` and will look like the app is missing
+  tables — it is the wrong database. The `hosts` database in the same cluster
+  belongs to the other company and must never be touched.
+- Schema is created at boot by `lifecycle()`; there is no migration command.
+  After a deploy, the log line `🎯 bid_opportunities ready.` means the startup
+  DDL block (including `portal_service.ensure_schema` and
+  `contract_signing.ensure_schema`) committed.
+- Before/after any Blueprint sync, check that the service's `DATABASE_URL`
+  still ends in `/construction_live`. `render.yaml`'s `fromDatabase` resolves to
+  the datastore default (`construction_mv91`) and would silently move the app.
+
+Historical Railway notes: `railway.json` is stale; push-to-`main` used to deploy
+there. The `workflow_dispatch`-only Cloud Run workflow must stay manual-only.

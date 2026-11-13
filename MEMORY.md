@@ -1157,3 +1157,70 @@ first means two systems emailing the same leads.
 - `mail_letters.py` is offline by design: it never writes `comms_logs`. Marking
   a letter as mailed is deliberate, via `record_manual_touch` (the four buttons
   on each lead card) or `lob_send.py` doing it automatically.
+
+## 2026-11-13: client portal — signing, card payments, credentials
+
+The owner asked for one closed loop: send a contract from the bid board, have
+the homeowner click and sign without a login, return a signed copy, create the
+job in the crew portal with nobody assigned, post the money side to the books,
+and hand the client a portal login. Then let them pay an invoice inside the
+portal and change/recover their own credentials.
+
+**What was built**
+
+- `contract_signing.py` + `/sign/{token}` — a single-use, 30-day DB-backed
+  token. The client draws their signature (`bid_signing.save`, the same trim
+  and audit path as the owner's), ticks the acceptance box, and the link is
+  claimed atomically. Acceptance is idempotent: a second submit finds
+  `signed_at` set and changes nothing.
+- On acceptance: bid → `won`, `bid_costing.convert_bid_to_project` creates an
+  **active job with zero `project_assignments`** (that is the "unassigned"
+  state the crew admin assigns from), the 30% deposit invoice is raised and
+  posted through `ledger_sync.sync_invoice`, `zoho_books_sync` pushes the
+  invoice, and the portal account is created and linked.
+- The client's temporary password is emailed **only when the account is new**
+  (or the owner explicitly presses "New temporary password"). Resending a
+  login never silently resets a password the client already chose.
+  `portal_clients.must_change_password` forces the change on first sign-in.
+- Card payments are **inside** the portal, not a redirect to a Zoho invoice
+  page. `zoho_payments.py` creates a 15-minute Zoho payment session server-side;
+  the page renders Zoho's Embedded Checkout widget (`zpayments.js`). Card data
+  never touches this server (PCI SAQ-A). The browser callback is untrusted:
+  the server re-retrieves the payment from Zoho before marking anything paid.
+- Every captured payment is recorded once in `portal_payments` (unique on
+  Zoho's `payment_id`), updates `bid_invoices.collected`, posts through
+  `ledger_sync.sync_invoice_status`, and is pushed to Zoho Books. The Zoho
+  webhook uses the same path, so a closed browser tab still lands the money and
+  a webhook replay cannot double-post.
+- Confirmation numbers: `PAY-######` for a captured card payment,
+  `SENT-######` for a client's Zelle/ACH notice. Both are shown to the client,
+  emailed to the client, and emailed to the owner. A Zelle/ACH notice is **not**
+  a payment and never marks an invoice paid.
+- Client login: password + emailed 6-digit code (on by default, separate
+  `portal_otp_enabled` switch in Settings → Sign-in verification; forced by
+  `PORTAL_OTP_ENABLED` if set). Forgot password issues a reset-purpose code.
+- Crew: `/crew/account` and a PIN panel in the phone app change the PIN after
+  re-entering the current one. `/crew/forgot` emails a reset code to the email
+  on the crew row (crew with no email must call the office). Reset codes live in
+  `login_otps` with `purpose`, so a reset code cannot be used as a login code.
+
+**Configuration that is not in code**
+
+- Zoho Payments: `ZOHO_PAYMENTS_ACCOUNT_ID`, `ZOHO_PAYMENTS_API_KEY` (Developer
+  Space widget key), optional `ZOHO_PAYMENTS_DOMAIN=US`. The connected Zoho
+  account must be re-authorized after `ZohoPay.payments.CREATE/READ` was added
+  to `zoho_oauth.SCOPES`; an old refresh token answers INVALID_OAUTHSCOPE.
+  Register `https://<domain>/api/payments/zoho/webhook` with
+  `ZOHO_PAYMENTS_WEBHOOK_KEY`.
+- Zelle/bank details remain in Settings → Banking (`deposit_instructions`).
+  The **business checking account was closed after account numbers leaked in
+  emails**; the owner is supplying replacement details. The portal shows Zelle
+  and only the last four digits of any account. It never prints a routing +
+  account pair, and email is blocked from carrying one (`documents_service`
+  guard). Do not "helpfully" add the full account number to a page or email.
+
+**Where the three-place rule applies**: the bid card button
+(`bid_detail.html#signing`), the admin routes
+(`/api/bids/{id}/signing/send|revoke|credentials`), and the public sign routes
+must stay in step. The portal invoice buttons and `/portal/pay/{bid}/{invoice}`
+are the only client-facing payment surface.

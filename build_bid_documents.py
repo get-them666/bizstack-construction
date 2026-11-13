@@ -589,7 +589,8 @@ def build_itemized_pricing(bid: dict, costs: list[dict]) -> bytes:
 # --------------------------------------------------------------------------
 
 def build_contract(bid: dict, costs: list[dict], photos: list[Path],
-                   signature: dict | None = None) -> bytes:
+                   signature: dict | None = None,
+                   client_signature: dict | None = None) -> bytes:
     pdf = _new_pdf("Renovation agreement")
     # bill the CUSTOMER the bid amount, not the raw cost lines. bid_amount is
     # base x (1 + markup), which is what the bid card and the deposit invoice
@@ -671,18 +672,19 @@ def build_contract(bid: dict, costs: list[dict], photos: list[Path],
     pdf.ln(10)
 
     for label in ("Owner", f"For {COMPANY}"):
+        stamp = client_signature if label == "Owner" else signature
         pdf.set_font("Helvetica", "B", 9)
         pdf.cell(90, 5, label)
         pdf.cell(90, 5, "Date", new_x="LMARGIN", new_y="NEXT")
         pdf.ln(9)
         y = pdf.get_y()
-        if signature and label.startswith("For "):
+        if stamp:
             # Strokes sit above the rule, printed name and date below it.
-            pdf.image(signature["png"], x=pdf.l_margin + 2, y=y - 13,
+            pdf.image(stamp["png"], x=pdf.l_margin + 2, y=y - 13,
                       w=62, h=12, keep_aspect_ratio=True)
             pdf.set_font("Helvetica", "", 8)
             pdf.set_text_color(90, 90, 90)
-            pdf.text(pdf.l_margin + 92, y - 1.5, _txt(signature.get("date") or ""))
+            pdf.text(pdf.l_margin + 92, y - 1.5, _txt(stamp.get("date") or ""))
             pdf.set_text_color(0, 0, 0)
             pdf.set_font("Helvetica", "B", 9)
         pdf.set_draw_color(0, 0, 0)
@@ -692,14 +694,14 @@ def build_contract(bid: dict, costs: list[dict], photos: list[Path],
         pdf.set_font("Helvetica", "", 7.5)
         pdf.set_text_color(110, 110, 110)
         pdf.cell(90, 4, "Signature")
-        if signature and label.startswith("For "):
-            pdf.cell(90, 4, _txt(f"{signature.get('name') or ''} (electronic)"))
+        if stamp:
+            pdf.cell(90, 4, _txt(f"{stamp.get('name') or ''} (electronic)"))
         else:
             pdf.cell(90, 4, "Printed name and date")
         pdf.set_text_color(0, 0, 0)
         pdf.ln(10)
 
-    if signature:
+    if signature or client_signature:
         pdf.set_font("Helvetica", "I", 7.5)
         pdf.set_text_color(110, 110, 110)
         _mc(pdf, 0, 4, _txt(

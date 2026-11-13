@@ -101,6 +101,8 @@ import permit_service
 import site_theme
 import auth_service
 import portal_service
+import contract_signing
+import zoho_payments
 import construction_radar
 import materials_service
 import supplier_adapters
@@ -834,6 +836,7 @@ async def lifecycle(app: FastAPI):
             letter_batches.ensure_schema(conn)
             login_throttle.ensure_schema(conn)
             portal_service.ensure_schema(conn)
+            contract_signing.ensure_schema(conn)
             # Order matters and is not arbitrary: costing extends
             # bid_opportunities with outcome columns and a projects FK, so it
             # runs after. takeoff and supplier_prices are independent of each
@@ -5011,7 +5014,8 @@ async def bid_contract_pdf(bid_id: int, request: Request, db=Depends(get_db)):
            "date": signature.get("signed_at") or ""} if sig_png else None
     pdf = build_bid_documents.build_contract(dict(bid), costs,
                                              [p for p, _ in photos],
-                                             signature=sig)
+                                             signature=sig,
+                                             client_signature=_client_signature(db, bid_id))
     name = f"BuildStack-Contract-Bid-{bid_id}.pdf"
     return Response(content=pdf, media_type="application/pdf",
                     headers={"Content-Disposition": f'inline; filename="{name}"',
@@ -6610,6 +6614,9 @@ async def settings_page(request: Request, db=Depends(get_db)):
     zoho_payments_status = {
         "configured": bool(ZOHO_PAYMENTS_WEBHOOK_KEY),
         "webhook_url": f"https://{os.getenv('COMPANY_DOMAIN', 'construction.bizstackperks.com')}/api/payments/zoho/webhook",
+        "card_ready": zoho_payments.configured(),
+        "account_id": bool(zoho_payments.account_id()),
+        "widget_key": bool(zoho_payments.api_key()),
     }
     return templates.TemplateResponse(
         request=request,
@@ -6630,6 +6637,7 @@ async def settings_page(request: Request, db=Depends(get_db)):
             "jobs": settings_status.background_jobs(),
             "guardrails": settings_status.outbound_guardrails(),
             "otp_on": _otp_enabled(db),
+            "portal_otp_on": portal_service.otp_enabled(db),
             "otp_env_locked": otp_env in ("0", "false", "no", "off", "1", "true", "yes", "on"),
             "zoho": zoho_oauth.status(),
             "zoho_scope_string": ",".join(zoho_oauth.SCOPES),
@@ -6796,15 +6804,18 @@ async def monitor_page(request: Request, db=Depends(get_db)):
 
 
 @app.post("/api/settings/security")
-async def settings_security(request: Request, otp_enabled: str = Form(""), db=Depends(get_db)):
-    """Master switch for emailed sign-in codes on the owner login.
+async def settings_security(request: Request, otp_enabled: str = Form(""),
+                            portal_otp_enabled: str = Form(""),
+                            db=Depends(get_db)):
+    """Master switches for emailed sign-in codes.
 
-    Stored in app_settings; the OTP_ENABLED environment variable, when set,
-    overrides it (so a deploy can force it either way). Only the master switch
-    is exposed: per-role toggles would be buttons nothing reads yet.
+    Owner login and the client portal are separate switches: the portal needs
+    its code on by default even if the owner's own login is handled another way.
     """
     require_admin(request)
     _set_setting(db, "otp_enabled", "true" if otp_enabled.lower() in ("on", "1", "true", "yes") else "false")
+    _set_setting(db, "portal_otp_enabled",
+                 "true" if portal_otp_enabled.lower() in ("on", "1", "true", "yes") else "false")
     return RedirectResponse(url="/settings?saved=security#security", status_code=status.HTTP_303_SEE_OTHER)
 
 
@@ -8025,12 +8036,46 @@ async def zoho_payments_webhook(request: Request, db=Depends(get_db)):
     # Resolve the lead from the business reference only. A payments.id is a
     # different table's key and must never be used as a leads.id.
     reference = (
-        data.get("reference", "")
+        data.get("reference_number", "")
+        or data.get("reference", "")
         or data.get("order_reference", "")
+        or data.get("invoice_number", "")
         or data.get("invoice_id", "")
         or data.get("payment_id", "")
         or ""
     )
+    zoho_payment_id = str(data.get("payment_id") or data.get("id") or dedupe_ref).strip()
+
+    # A portal card payment carries BID-<bid>-INV-<invoice>. If the browser
+    # closed before its confirm call, this webhook still lands the money in the
+    # invoice, the ledger and Zoho Books -- once, because portal_payments is
+    # keyed on Zoho's payment id.
+    parsed = _parse_payment_reference(reference)
+    if parsed:
+        bid_id, invoice_id = parsed
+        try:
+            if portal_service.existing_payment(db, zoho_payment_id):
+                return Response(content='{"received": true}', media_type="application/json")
+            applied = _apply_card_payment(
+                db, bid_id=bid_id, invoice_id=invoice_id, payment_id=zoho_payment_id,
+                amount_cents=amount_cents, raw=str(data)[:4000])
+            logger.info("zoho webhook recorded portal card payment %s on invoice %s",
+                        zoho_payment_id, invoice_id)
+            client = portal_service.linked_client_for_bid(db, bid_id) or {}
+            invoice_number = ""
+            for candidate in bid_costing.list_invoices(db, bid_id, _BID_COMPANY):
+                if int(candidate["id"]) == int(invoice_id):
+                    invoice_number = candidate.get("invoice_number") or ""
+                    break
+            await _notify_card_payment(
+                db, bid_id, invoice_id, float(applied.get("paid") or 0),
+                zoho_payment_id, client, invoice_number or f"INV-{invoice_id}")
+        except Exception as e:
+            logger.warning("zoho webhook could not apply portal payment %s: %s",
+                           zoho_payment_id, e)
+            return JSONResponse(content={"error": "record failed"}, status_code=500)
+        return Response(content='{"received": true}', media_type="application/json")
+
     lead_id = _lead_id_from_reference(db, reference)
     if lead_id is None:
         logger.warning(
@@ -10978,6 +11023,15 @@ async def bid_detail_page(bid_id: int, request: Request, db=Depends(get_db)):
             bid_signing.latest(db, bid_id, _BID_COMPANY))
     except Exception as exc:
         print(f"[bids] signature unavailable for bid {bid_id}: {exc}", flush=True)
+    signing_request: dict = {"sent": False}
+    sign_link = ""
+    try:
+        contract_signing.ensure_schema(db)
+        signing_request = contract_signing.describe(db, bid_id, _BID_COMPANY)
+        if signing_request.get("token"):
+            sign_link = f"https://{company()['domain']}/sign/{signing_request['token']}"
+    except Exception as exc:
+        print(f"[bids] signing request unavailable for bid {bid_id}: {exc}", flush=True)
     try:
         bid_opportunities.ensure_schema(db)
         docs = bid_opportunities.list_documents(db, bid_id, _BID_COMPANY)
@@ -11063,6 +11117,10 @@ async def bid_detail_page(bid_id: int, request: Request, db=Depends(get_db)):
             "deposit_pct": bid_package_pdf.DEPOSIT_PCT,
             "project": project,
             "signature": signature,
+            "signing_request": signing_request,
+            "sign_link": sign_link,
+            "sign_sent": request.query_params.get("sign_sent", ""),
+            "portal_sent": request.query_params.get("portal_sent", ""),
             "statuses": ["new", "drafting", "sent", "shortlist",
                          "won", "lost", "withdrawn"],
             "cost_categories": ["material", "labor", "sub", "equipment", "other"],
@@ -11410,7 +11468,8 @@ def _bid_email_attachments(db, bid: dict, bid_id: int, costs: list) -> list:
          lambda: build_bid_documents.build_itemized_pricing(dict(bid), costs),
          f"BuildStack-Itemized-Bid-{bid_id}.pdf"),
         (uploaded("contract"),
-         lambda: build_bid_documents.build_contract(dict(bid), costs, photos, signature=signature),
+         lambda: build_bid_documents.build_contract(dict(bid), costs, photos, signature=signature,
+                                                    client_signature=_client_signature(db, bid_id)),
          f"BuildStack-Contract-Bid-{bid_id}.pdf"),
     ):
         if doc:
@@ -14865,6 +14924,7 @@ async def portal_login_page(request: Request):
         return RedirectResponse(url="/portal", status_code=status.HTTP_303_SEE_OTHER)
     return templates.TemplateResponse(request=request, name="portal_login.html", context={
         "error": request.query_params.get("error", ""),
+        "ok": request.query_params.get("ok", ""),
         "email": request.query_params.get("email", ""),
     })
 
@@ -14890,8 +14950,32 @@ async def portal_login_submit(request: Request, email: str = Form(""), password:
                 + "&email=" + urllib.parse.quote(email),
             status_code=status.HTTP_303_SEE_OTHER)
     login_throttle.clear(db, *keys)
+
+    # Every client login gets an emailed code. A stolen password on its own
+    # must not open a page that lists a customer's invoices and documents.
+    if portal_service.otp_enabled(db):
+        code = portal_service.issue_login_code(db, row)
+        ok, err = await _deliver_portal_code(row, code, "login")
+        if not ok:
+            return RedirectResponse(
+                url="/portal/login?error=" + urllib.parse.quote(err)
+                    + "&email=" + urllib.parse.quote(email),
+                status_code=status.HTTP_303_SEE_OTHER)
+        resp = RedirectResponse(url="/portal/verify", status_code=status.HTTP_303_SEE_OTHER)
+        resp.set_cookie(
+            key=portal_service.PENDING_COOKIE,
+            value=auth_service.issue_pending(
+                portal_service.ROLE, row["id"], row["email"], row.get("name") or ""),
+            httponly=True, samesite="lax", secure=_secure_cookies(),
+            max_age=auth_service.OTP_TTL_SECONDS)
+        return resp
+
     portal_service.touch_login(db, row["id"])
-    resp = RedirectResponse(url="/portal", status_code=status.HTTP_303_SEE_OTHER)
+    return _finish_portal_login(row)
+
+def _finish_portal_login(row: dict) -> RedirectResponse:
+    target = "/portal/account?first=1" if row.get("must_change_password") else "/portal"
+    resp = RedirectResponse(url=target, status_code=status.HTTP_303_SEE_OTHER)
     resp.set_cookie(
         key=portal_service.COOKIE,
         value=auth_service.issue_session(
@@ -14913,15 +14997,19 @@ async def portal_home(request: Request, bid: int = 0, db=Depends(get_db)):
     client = _require_portal_client(request, db)
     if not client:
         return RedirectResponse(url="/portal/login", status_code=status.HTTP_303_SEE_OTHER)
+    if client.get("must_change_password"):
+        return RedirectResponse(url="/portal/account?first=1", status_code=status.HTTP_303_SEE_OTHER)
     bids = portal_service.accessible_bids(db, client["id"], client["email"])
     selected = None
     data = None
     if bids:
         selected = next((b for b in bids if int(b["id"]) == int(bid)), bids[0])
-        data = portal_service.portal_data(db, selected["id"], client["id"])
+        data = _decorate_portal_data(portal_service.portal_data(db, selected["id"], client["id"]))
     return templates.TemplateResponse(request=request, name="portal.html", context={
         "client": client, "bids": bids, "selected": selected, "data": data,
         "portal_client": client, "preview": False,
+        "notice": request.query_params.get("notice", ""),
+        "error": request.query_params.get("error", ""),
     })
 
 
@@ -14932,11 +15020,11 @@ async def portal_preview(bid_id: int, request: Request, db=Depends(get_db)):
     bid = bid_opportunities.get_bid(db, bid_id, _BID_COMPANY)
     if not bid:
         raise HTTPException(status_code=404, detail="Bid not found")
-    data = portal_service.portal_data(db, bid_id, 0)
+    data = _decorate_portal_data(portal_service.portal_data(db, bid_id, 0))
     return templates.TemplateResponse(request=request, name="portal.html", context={
         "client": {"name": "Owner preview", "email": "", "id": 0},
         "bids": [bid], "selected": bid, "data": data,
-        "preview": True,
+        "preview": True, "notice": "", "error": "",
     })
 
 
@@ -15035,3 +15123,1166 @@ async def portal_client_create(request: Request, bid_id: int = Form(...), email:
     portal_service.link_project(db, client_id, bid_id)
     return RedirectResponse(url=f"/bids/{bid_id}?portal=1",
                             status_code=status.HTTP_303_SEE_OTHER)
+
+
+# --- Client portal: verification codes, password reset, account ----------------
+def _portal_link() -> str:
+    return f"https://{company()['domain']}/portal/login"
+
+
+def _mask_email_addr(email: str) -> str:
+    text = (email or "").strip()
+    if "@" not in text:
+        return text
+    name, domain = text.split("@", 1)
+    shown = name[:1] + ("•" * max(0, min(4, len(name) - 1)))
+    return f"{shown}@{domain}"
+
+
+async def _deliver_portal_code(client: dict, code: str, purpose: str = "login") -> tuple[bool, str]:
+    """Email a one-time code to a portal client. Never includes payment details."""
+    cfg = _smtp_cfg()
+    if not (cfg.get("from") or "").strip():
+        print(f"[portal OTP] email not configured — code for {client.get('email')}: {code}", flush=True)
+        return False, "Email delivery is not set up yet. Call or text the office."
+    name = (client.get("name") or "there").split()[0]
+    if purpose == portal_service.OTP_RESET:
+        subject = f"Reset your {cfg['name']} client portal password"
+        lead = "Use this code to choose a new password:"
+    else:
+        subject = f"Your {cfg['name']} client portal sign-in code"
+        lead = "Use this code to finish signing in:"
+    body = (
+        f"Hi {name},\n\n{lead}\n\n    {code}\n\n"
+        f"It expires in 10 minutes and can be used once.\n\n"
+        f"Sign in at {_portal_link()}\n\n"
+        f"If you did not ask for this, ignore this email — your password has not changed.\n\n"
+        f"— {cfg['name']}\n")
+    try:
+        await documents_service.send_email(
+            {"SMTP_FROM": cfg["from"], "SMTP_NAME": cfg["name"]},
+            client.get("email") or "", subject, body)
+        return True, ""
+    except Exception as e:
+        logger.warning("portal code email failed for %s: %s", client.get("email"), e)
+        return False, "We could not send the email. Call or text the office."
+
+
+def _portal_pending(request: Request):
+    return auth_service.pending_from_token(
+        request.cookies.get(portal_service.PENDING_COOKIE))
+
+
+@app.get("/portal/verify", response_class=HTMLResponse)
+async def portal_verify_page(request: Request, db=Depends(get_db)):
+    pending = _portal_pending(request)
+    if not pending or pending.get("role") != portal_service.ROLE:
+        return RedirectResponse(url="/portal/login", status_code=status.HTTP_303_SEE_OTHER)
+    return templates.TemplateResponse(request=request, name="portal_verify.html", context={
+        "email": pending.get("email") or "",
+        "masked_email": _mask_email_addr(pending.get("email") or ""),
+        "error": request.query_params.get("error", ""),
+        "resent": request.query_params.get("resent", ""),
+    })
+
+
+@app.post("/portal/verify")
+async def portal_verify_submit(request: Request, code: str = Form(""), db=Depends(get_db)):
+    pending = _portal_pending(request)
+    if not pending or pending.get("role") != portal_service.ROLE:
+        return RedirectResponse(url="/portal/login", status_code=status.HTTP_303_SEE_OTHER)
+    ok, reason = portal_service.verify_otp_code(
+        db, int(pending["id"]), portal_service.OTP_LOGIN, code)
+    if not ok:
+        return RedirectResponse(
+            url="/portal/verify?error=" + urllib.parse.quote(reason),
+            status_code=status.HTTP_303_SEE_OTHER)
+    client = portal_service.client_by_id(db, int(pending["id"]))
+    if not client:
+        return RedirectResponse(url="/portal/login", status_code=status.HTTP_303_SEE_OTHER)
+    portal_service.touch_login(db, int(client["id"]))
+    resp = _finish_portal_login(client)
+    resp.delete_cookie(portal_service.PENDING_COOKIE)
+    return resp
+
+
+@app.post("/portal/resend-code")
+async def portal_resend_code(request: Request, db=Depends(get_db)):
+    pending = _portal_pending(request)
+    if not pending or pending.get("role") != portal_service.ROLE:
+        return RedirectResponse(url="/portal/login", status_code=status.HTTP_303_SEE_OTHER)
+    client = portal_service.client_by_id(db, int(pending["id"]))
+    if not client:
+        return RedirectResponse(url="/portal/login", status_code=status.HTTP_303_SEE_OTHER)
+    keys = (f"portal-otp:{client['id']}", f"portal-otp-ip:{request.client.host if request.client else ''}")
+    login_throttle.ensure_schema(db)
+    wait = login_throttle.locked(db, *keys)
+    if wait:
+        return RedirectResponse(
+            url="/portal/verify?error=" + urllib.parse.quote(
+                f"Too many codes requested. Try again in {login_throttle.human(wait)}."),
+            status_code=status.HTTP_303_SEE_OTHER)
+    login_throttle.fail(db, *keys)
+    code = portal_service.issue_login_code(db, client)
+    ok, err = await _deliver_portal_code(client, code, "login")
+    if not ok:
+        return RedirectResponse(url="/portal/verify?error=" + urllib.parse.quote(err),
+                                status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(url="/portal/verify?resent=1", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.get("/portal/forgot", response_class=HTMLResponse)
+async def portal_forgot_page(request: Request):
+    return templates.TemplateResponse(request=request, name="portal_forgot.html", context={
+        "error": request.query_params.get("error", ""),
+        "sent": request.query_params.get("sent", ""),
+        "email": request.query_params.get("email", ""),
+    })
+
+
+@app.post("/portal/forgot")
+async def portal_forgot_submit(request: Request, email: str = Form(""), db=Depends(get_db)):
+    email = portal_service.normalize_email(email)
+    ip = request.client.host if request.client else ""
+    keys = (f"portal-forgot:{email}", f"portal-forgot-ip:{ip}")
+    login_throttle.ensure_schema(db)
+    if login_throttle.locked(db, *keys):
+        return RedirectResponse(
+            url="/portal/forgot?error=" + urllib.parse.quote(
+                "Too many reset requests. Try again later."),
+            status_code=status.HTTP_303_SEE_OTHER)
+    login_throttle.fail(db, *keys)
+    client = portal_service.client_by_email(db, email)
+    # The page says the same thing whether or not the address exists: a public
+    # form must not double as a customer list. Only a delivery failure differs,
+    # because a real client needs to know to call instead.
+    if client:
+        code = auth_service.generate_otp()
+        portal_service.store_otp(db, int(client["id"]), email, code, portal_service.OTP_RESET)
+        ok, err = await _deliver_portal_code(client, code, portal_service.OTP_RESET)
+        if not ok:
+            return RedirectResponse(url="/portal/forgot?error=" + urllib.parse.quote(err),
+                                    status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(
+        url="/portal/forgot?sent=1&email=" + urllib.parse.quote(email),
+        status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.get("/portal/reset", response_class=HTMLResponse)
+async def portal_reset_page(request: Request):
+    return templates.TemplateResponse(request=request, name="portal_reset.html", context={
+        "error": request.query_params.get("error", ""),
+        "email": request.query_params.get("email", ""),
+    })
+
+
+@app.post("/portal/reset")
+async def portal_reset_submit(request: Request, email: str = Form(""), code: str = Form(""),
+                              password: str = Form(""), confirm: str = Form(""),
+                              db=Depends(get_db)):
+    email = portal_service.normalize_email(email)
+    back = "/portal/reset?email=" + urllib.parse.quote(email)
+    if (password or "") != (confirm or ""):
+        return RedirectResponse(url=back + "&error=" + urllib.parse.quote("The passwords do not match."),
+                                status_code=status.HTTP_303_SEE_OTHER)
+    client = portal_service.client_by_email(db, email)
+    if not client:
+        return RedirectResponse(url=back + "&error=" + urllib.parse.quote("That code is not valid."),
+                                status_code=status.HTTP_303_SEE_OTHER)
+    ok, reason = portal_service.verify_otp_code(
+        db, int(client["id"]), portal_service.OTP_RESET, code)
+    if not ok:
+        return RedirectResponse(url=back + "&error=" + urllib.parse.quote(reason),
+                                status_code=status.HTTP_303_SEE_OTHER)
+    try:
+        portal_service.set_password(db, int(client["id"]), password, must_change=False)
+    except ValueError as e:
+        return RedirectResponse(url=back + "&error=" + urllib.parse.quote(str(e)),
+                                status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(
+        url="/portal/login?email=" + urllib.parse.quote(email)
+            + "&ok=" + urllib.parse.quote("Password changed. Sign in with your new password."),
+        status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.get("/portal/account", response_class=HTMLResponse)
+async def portal_account_page(request: Request, db=Depends(get_db)):
+    client = _require_portal_client(request, db)
+    if not client:
+        return RedirectResponse(url="/portal/login", status_code=status.HTTP_303_SEE_OTHER)
+    return templates.TemplateResponse(request=request, name="portal_account.html", context={
+        "client": client,
+        "first": request.query_params.get("first", ""),
+        "error": request.query_params.get("error", ""),
+        "ok": request.query_params.get("ok", ""),
+        "otp_on": portal_service.otp_enabled(db),
+    })
+
+
+@app.post("/portal/account/password")
+async def portal_account_password(request: Request, current: str = Form(""),
+                                  password: str = Form(""), confirm: str = Form(""),
+                                  db=Depends(get_db)):
+    client = _require_portal_client(request, db)
+    if not client:
+        return RedirectResponse(url="/portal/login", status_code=status.HTTP_303_SEE_OTHER)
+    back = "/portal/account"
+    if not portal_service.verify_password(current or "", client.get("password_hash") or ""):
+        return RedirectResponse(url=back + "?error=" + urllib.parse.quote("Current password is incorrect."),
+                                status_code=status.HTTP_303_SEE_OTHER)
+    if (password or "") != (confirm or ""):
+        return RedirectResponse(url=back + "?error=" + urllib.parse.quote("The new passwords do not match."),
+                                status_code=status.HTTP_303_SEE_OTHER)
+    try:
+        portal_service.set_password(db, int(client["id"]), password, must_change=False)
+    except ValueError as e:
+        return RedirectResponse(url=back + "?error=" + urllib.parse.quote(str(e)),
+                                status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(url=back + "?ok=1", status_code=status.HTTP_303_SEE_OTHER)
+
+
+# --- Client portal: pay an invoice ---------------------------------------------
+def _decorate_portal_data(data: dict) -> dict:
+    """Add per-invoice amount due so the template does not do money maths."""
+    if not data:
+        return data
+    for inv in data.get("invoices") or []:
+        inv["due"] = portal_service.amount_due(inv)
+    data["payable"] = portal_service.open_invoices(data.get("invoices") or [])
+    return data
+
+
+def _payment_reference(bid_id: int, invoice_id: int) -> str:
+    """The reference Zoho echoes back, and the one we trust on the webhook."""
+    return f"BID-{int(bid_id)}-INV-{int(invoice_id)}"
+
+
+def _parse_payment_reference(reference: str):
+    match = re.match(r"BID-(\d+)-INV-(\d+)", str(reference or ""))
+    if not match:
+        return None
+    return int(match.group(1)), int(match.group(2))
+
+
+def _apply_card_payment(db, *, bid_id: int, invoice_id: int, payment_id: str,
+                        amount_cents: int, payments_session_id: str = "",
+                        raw: str = "") -> dict:
+    """Record one verified card payment and post it everywhere exactly once.
+
+    The money reaches three places: the bid invoice (what the client and the
+    office see), the local ledger through ledger_sync, and Zoho Books through
+    zoho_books_sync. portal_payments.payment_id is the idempotency key, so a
+    browser retry and the Zoho webhook cannot both post the same money.
+    """
+    row, created = portal_service.record_payment(
+        db, bid_id=bid_id, invoice_id=invoice_id, payment_id=payment_id,
+        amount_cents=amount_cents, payments_session_id=payments_session_id, raw=raw)
+    if not created:
+        return {"ok": True, "duplicate": True, "payment": row}
+
+    bid_costing.ensure_accounting_schema(db)
+    inv = None
+    for candidate in bid_costing.list_invoices(db, bid_id, _BID_COMPANY):
+        if int(candidate["id"]) == int(invoice_id):
+            inv = candidate
+            break
+    if not inv:
+        raise ValueError("Invoice not found")
+
+    inv_amount = float(inv.get("amount") or 0)
+    already = float(inv.get("collected") or 0)
+    pay = min(amount_cents / 100.0, max(0.0, inv_amount - already))
+    new_collected = round(min(inv_amount, already + pay), 2)
+    status = "paid" if new_collected >= inv_amount - 0.005 else "partial"
+    bid_costing.set_invoice_status(db, invoice_id, status, _BID_COMPANY, new_collected)
+
+    try:
+        ledger_sync.ensure_schema(db)
+        ledger_sync.sync_invoice_status(db, invoice_id, _BID_COMPANY)
+    except Exception as exc:
+        logger.warning("ledger sync failed for card payment on invoice %s: %s", invoice_id, exc)
+
+    # Zoho Books is downstream, exactly like the rest of the money flow. A
+    # failure leaves zoho_pushed_at NULL so it is visibly not reconciled yet.
+    try:
+        zoho_books_sync.record_payment_in_zoho(
+            db, dict(inv), round(pay, 2), "card",
+            reference=f"Zoho Payments {payment_id}")
+        portal_service.mark_zoho_pushed(db, payment_id)
+    except Exception as exc:
+        logger.warning("zoho books payment push failed for invoice %s: %s", invoice_id, exc)
+
+    return {"ok": True, "duplicate": False, "paid": round(pay, 2),
+            "invoice_status": status, "collected": new_collected}
+
+
+async def _notify_card_payment(db, bid_id: int, invoice_id: int, amount: float,
+                               payment_id: str, client: dict, invoice_number: str) -> str:
+    """Tell the owner and the client, both with the same confirmation number."""
+    confirmation = portal_service.confirmation_number(payment_id)
+    bid = bid_opportunities.get_bid(db, bid_id, _BID_COMPANY) or {}
+    project = bid.get("name") or f"Bid #{bid_id}"
+    note = (f"Card payment ${amount:,.2f} received on invoice {invoice_number} for "
+            f"{project}. Confirmation {confirmation}. Posted to the invoice, the ledger "
+            f"and Zoho Books. Zoho payment {payment_id}.")
+    try:
+        portal_service.post_message(db, bid_id, None, note, role="office")
+    except Exception:
+        pass
+    try:
+        cfg = documents_service.smtp_config_from_env()
+        await documents_service.send_email(
+            cfg, admin_email(),
+            f"💰 Payment received — ${amount:,.2f} — {confirmation}",
+            (f"{client.get('name') or client.get('email')} paid by card.\n\n"
+             f"Confirmation: {confirmation}\n"
+             f"Invoice: {invoice_number}\n"
+             f"Amount: ${amount:,.2f}\n"
+             f"Project: {project}\n"
+             f"Zoho payment id: {payment_id}\n\n"
+             f"Open https://{company()['domain']}/bids/{bid_id} to see the invoice."))
+    except Exception as exc:
+        logger.warning("owner payment alert failed for %s: %s", payment_id, exc)
+    try:
+        cfg = documents_service.smtp_config_from_env()
+        await documents_service.send_email(
+            cfg, client.get("email") or "",
+            f"Payment received — {confirmation}",
+            (f"Hi {(client.get('name') or 'there').split(' ')[0]},\n\n"
+             f"We received your card payment of ${amount:,.2f} for invoice "
+             f"{invoice_number}.\n\nConfirmation number: {confirmation}\n\n"
+             "Keep this number for your records. It is also on your portal.\n\n"
+             f"— {company()['name']}\n{company()['phone']}\n"))
+    except Exception as exc:
+        logger.warning("client receipt failed for %s: %s", payment_id, exc)
+    try:
+        with db.cursor() as cur:
+            cur.execute("""
+                INSERT INTO comms_logs (direction, channel, sender, recipient, message_body)
+                VALUES ('outbound', 'email', %s, %s, %s);
+            """, ("", admin_email(), note[:4000]))
+        db.commit()
+    except Exception:
+        db.rollback()
+    return confirmation
+
+
+@app.get("/portal/pay/{bid_id}/{invoice_id}", response_class=HTMLResponse)
+async def portal_pay_page(bid_id: int, invoice_id: int, request: Request,
+                          db=Depends(get_db)):
+    client = _require_portal_client(request, db)
+    if not client:
+        return RedirectResponse(url="/portal/login", status_code=status.HTTP_303_SEE_OTHER)
+    inv = portal_service.invoice_for_client(
+        db, int(client["id"]), client["email"], bid_id, invoice_id)
+    if not inv:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    try:
+        pay = deposit_instructions.ach_details(lambda k: _get_setting(db, k))
+    except deposit_instructions.NotConfigured as exc:
+        logger.warning("[portal pay] payment details unavailable: %s", exc)
+        pay = {"zelle": "", "zelle_display": "", "account": "", "routing": "",
+               "ach_ready": False, "ready": False}
+    return templates.TemplateResponse(request=request, name="portal_pay.html", context={
+        "client": client,
+        "bid": bid_opportunities.get_bid(db, bid_id, _BID_COMPANY) or {"id": bid_id},
+        "invoice": inv,
+        "due": portal_service.amount_due(inv),
+        "pay": pay,
+        "reference": (inv.get("invoice_number") or f"INV-{invoice_id}"),
+        "zoho_ready": zoho_payments.configured(),
+        "zoho_widget": zoho_payments.widget_configured(),
+        "zoho_account_id": zoho_payments.account_id(),
+        "zoho_api_key": zoho_payments.api_key(),
+        "zoho_domain": zoho_payments.domain(),
+        "paid": request.query_params.get("paid", ""),
+        "claimed": request.query_params.get("claimed", ""),
+        "confirmation": request.query_params.get("confirmation", ""),
+        "error": request.query_params.get("error", ""),
+    })
+
+
+@app.post("/portal/pay/{bid_id}/{invoice_id}/session")
+async def portal_pay_session(bid_id: int, invoice_id: int, request: Request,
+                             db=Depends(get_db)):
+    client = _require_portal_client(request, db)
+    if not client:
+        return JSONResponse(status_code=401, content={"ok": False, "error": "Sign in again."})
+    inv = portal_service.invoice_for_client(
+        db, int(client["id"]), client["email"], bid_id, invoice_id)
+    if not inv:
+        return JSONResponse(status_code=404, content={"ok": False, "error": "Invoice not found"})
+    due = portal_service.amount_due(inv)
+    if due <= 0:
+        return JSONResponse(status_code=400, content={"ok": False, "error": "This invoice is already paid."})
+    try:
+        session = await asyncio.to_thread(
+            zoho_payments.create_session, due,
+            description=(f"{company()['name']} — {inv.get('description') or 'Project payment'}"),
+            invoice_number=(inv.get("invoice_number") or f"INV-{invoice_id}"),
+            reference=_payment_reference(bid_id, invoice_id),
+            email=client.get("email") or "", name=client.get("name") or "")
+    except zoho_payments.ZohoPaymentsError as exc:
+        return JSONResponse(status_code=502, content={"ok": False, "error": str(exc)})
+    except Exception as exc:
+        logger.warning("zoho payment session failed for invoice %s: %s", invoice_id, exc)
+        return JSONResponse(status_code=502, content={"ok": False,
+                            "error": "Card payments are unavailable right now."})
+    try:
+        portal_service.record_session(
+            db, session_id=session.get("payments_session_id") or "",
+            bid_id=bid_id, invoice_id=invoice_id, amount_cents=int(round(due * 100)))
+    except Exception as exc:
+        logger.warning("could not store payment session for invoice %s: %s", invoice_id, exc)
+        return JSONResponse(status_code=500, content={"ok": False,
+                            "error": "Card payments are unavailable right now."})
+    return JSONResponse(content={"ok": True,
+                                 "session_id": session.get("payments_session_id"),
+                                 "amount": f"{due:.2f}"})
+
+
+@app.post("/portal/pay/{bid_id}/{invoice_id}/confirm")
+async def portal_pay_confirm(bid_id: int, invoice_id: int, request: Request,
+                             payment_id: str = Form(""), session_id: str = Form(""),
+                             db=Depends(get_db)):
+    client = _require_portal_client(request, db)
+    if not client:
+        return JSONResponse(status_code=401, content={"ok": False, "error": "Sign in again."})
+    inv = portal_service.invoice_for_client(
+        db, int(client["id"]), client["email"], bid_id, invoice_id)
+    if not inv:
+        return JSONResponse(status_code=404, content={"ok": False, "error": "Invoice not found"})
+    session_row = portal_service.session_for_invoice(db, session_id, bid_id, invoice_id)
+    if not session_row:
+        return JSONResponse(status_code=400, content={"ok": False,
+                            "error": "This card form has expired. Start the payment again."})
+    try:
+        payment = await asyncio.to_thread(zoho_payments.retrieve_payment, payment_id)
+    except zoho_payments.ZohoPaymentsError as exc:
+        return JSONResponse(status_code=502, content={"ok": False, "error": str(exc)})
+    except Exception as exc:
+        logger.warning("zoho payment verify failed for %s: %s", payment_id, exc)
+        return JSONResponse(status_code=502, content={"ok": False,
+                            "error": "We could not verify that payment yet."})
+
+    if not zoho_payments.payment_succeeded(payment):
+        return JSONResponse(status_code=400, content={"ok": False,
+                            "error": "That payment did not complete. No money was taken."})
+    zoho_session = str(payment.get("payments_session_id") or "").strip()
+    if zoho_session and zoho_session != str(session_id).strip():
+        logger.warning("zoho payment %s belongs to session %s, not %s",
+                       payment_id, zoho_session, session_id)
+        return JSONResponse(status_code=400, content={"ok": False,
+                            "error": "That payment does not match this invoice."})
+    reference = str(payment.get("reference_number") or payment.get("reference") or "")
+    parsed = _parse_payment_reference(reference)
+    if parsed and parsed != (int(bid_id), int(invoice_id)):
+        logger.warning("zoho payment %s reference %r does not match invoice %s/%s",
+                       payment_id, reference, bid_id, invoice_id)
+        return JSONResponse(status_code=400, content={"ok": False,
+                            "error": "That payment belongs to a different invoice."})
+
+    paid = zoho_payments.paid_amount(payment)
+    due = portal_service.amount_due(inv)
+    if paid + 0.01 < due:
+        return JSONResponse(status_code=400, content={"ok": False,
+                            "error": f"Zoho recorded ${paid:,.2f} but ${due:,.2f} is due. "
+                                     "Nothing has been marked paid — call the office."})
+    try:
+        result = _apply_card_payment(
+            db, bid_id=bid_id, invoice_id=invoice_id, payment_id=payment_id,
+            amount_cents=int(round(paid * 100)), payments_session_id=session_id,
+            raw=str(payment)[:4000])
+    except Exception as exc:
+        logger.warning("recording card payment %s failed: %s", payment_id, exc)
+        return JSONResponse(status_code=500, content={"ok": False,
+                            "error": "The payment succeeded but could not be recorded. Call the office."})
+    if result.get("duplicate"):
+        confirmation = portal_service.confirmation_number(payment_id)
+        return JSONResponse(content={"ok": True, "confirmation": confirmation,
+                                     "redirect": f"/portal/pay/{bid_id}/{invoice_id}"
+                                                 f"?paid=1&confirmation={urllib.parse.quote(confirmation)}"})
+    portal_service.mark_session_used(db, session_id)
+    confirmation = await _notify_card_payment(
+        db, bid_id, invoice_id, float(result.get("paid") or paid), payment_id,
+        client, inv.get("invoice_number") or f"INV-{invoice_id}")
+    return JSONResponse(content={"ok": True, "confirmation": confirmation,
+                                 "redirect": f"/portal/pay/{bid_id}/{invoice_id}"
+                                             f"?paid=1&confirmation={urllib.parse.quote(confirmation)}"})
+
+
+@app.post("/portal/pay/{bid_id}/{invoice_id}/claim")
+async def portal_pay_claim(bid_id: int, invoice_id: int, request: Request,
+                           method: str = Form("zelle"), db=Depends(get_db)):
+    """The client says they sent Zelle/ACH. Nothing is marked paid."""
+    client = _require_portal_client(request, db)
+    if not client:
+        return RedirectResponse(url="/portal/login", status_code=status.HTTP_303_SEE_OTHER)
+    inv = portal_service.invoice_for_client(
+        db, int(client["id"]), client["email"], bid_id, invoice_id)
+    if not inv:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    method = "zelle" if (method or "").lower() == "zelle" else "ach"
+    due = portal_service.amount_due(inv)
+    invoice_number = inv.get("invoice_number") or f"INV-{invoice_id}"
+    claim = portal_service.record_claim(
+        db, bid_id=bid_id, invoice_id=invoice_id, method=method,
+        amount_cents=int(round(due * 100)))
+    ref = claim["reference"]
+    note = (f"{client.get('name') or client.get('email')} says they sent ${due:,.2f} by "
+            f"{method.upper()} for invoice {invoice_number}. Confirmation {ref}. "
+            "The office has not confirmed it yet — record it under /pipeline when it lands.")
+    try:
+        portal_service.post_message(db, bid_id, client["id"], note, role="client")
+    except Exception:
+        pass
+    try:
+        cfg = documents_service.smtp_config_from_env()
+        await documents_service.send_email(
+            cfg, admin_email(),
+            f"Payment sent — {ref} — {invoice_number}",
+            note + f"\n\nOpen https://{company()['domain']}/bids/{bid_id} to record it.")
+        await documents_service.send_email(
+            cfg, client.get("email") or "",
+            f"Payment notice received — {ref}",
+            (f"Hi {(client.get('name') or 'there').split(' ')[0]},\n\n"
+             f"We have your notice that ${due:,.2f} was sent by {method.upper()} for "
+             f"invoice {invoice_number}.\n\nConfirmation number: {ref}\n\n"
+             "This confirms we received your notice, not that the money has landed yet. "
+             "The office will mark the invoice paid once it clears.\n\n"
+             f"— {company()['name']}\n{company()['phone']}\n"))
+    except Exception as exc:
+        logger.warning("payment claim email failed for invoice %s: %s", invoice_id, exc)
+    return RedirectResponse(
+        url=f"/portal/pay/{bid_id}/{invoice_id}?claimed=1&confirmation="
+            + urllib.parse.quote(ref),
+        status_code=status.HTTP_303_SEE_OTHER)
+
+
+# --- Click-and-sign contract ---------------------------------------------------
+def _sign_contract_pdf(db, bid_id: int) -> tuple[bytes, str]:
+    """The unsigned agreement the client is being asked to sign, and its hash."""
+    bid = bid_opportunities.get_bid(db, bid_id, _BID_COMPANY)
+    if not bid:
+        raise ValueError("Bid not found")
+    try:
+        bid_costing.ensure_accounting_schema(db)
+        costs = bid_costing.cost_lines(db, bid_id, _BID_COMPANY)
+    except Exception:
+        costs = []
+    try:
+        photos = [p for p, _ in _project_photo_paths(db, bid_id)]
+    except Exception:
+        photos = []
+    pdf = build_bid_documents.build_contract(
+        dict(bid), costs, photos,
+        signature=_package_signature(db, bid_id), client_signature=None)
+    return pdf, bid_signing.sha256_of(pdf)
+
+
+def _sign_link(token: str) -> str:
+    return f"https://{company()['domain']}/sign/{token}"
+
+
+def _client_signature(db, bid_id: int) -> dict | None:
+    """The homeowner's drawn acceptance signature, ready for the PDF."""
+    try:
+        bid_signing.ensure_schema(db)
+        row = bid_signing.latest_client(db, bid_id, _BID_COMPANY)
+        if not row:
+            return None
+        png = bid_signing.image_png(db, int(row["id"]))
+        if not png:
+            return None
+        when = row.get("signed_at")
+        return {"png": png, "name": row.get("signer_name") or "",
+                "date": when.strftime("%Y-%m-%d %H:%M UTC") if hasattr(when, "strftime")
+                        else str(when or "")}
+    except Exception:
+        return None
+
+
+def _sign_email_body(bid: dict, link: str, expires, contact_name: str) -> str:
+    total = _contract_amount(dict(bid))
+    when = expires.strftime("%B %d, %Y") if hasattr(expires, "strftime") else str(expires or "")
+    return (
+        f"Hi {contact_name or 'there'},\n\n"
+        f"{company()['name']} has prepared the Renovation Agreement for "
+        f"{bid.get('name') or 'your project'} at {bid.get('location') or 'the property'}.\n\n"
+        f"Contract total: ${total:,.2f}\n\n"
+        "How to sign — it takes about two minutes:\n"
+        f"  1. Open this private link: {link}\n"
+        "  2. Read the agreement on the page (or download the attached PDF).\n"
+        "  3. Type your full name, draw your signature with your finger or mouse,\n"
+        "     tick the box confirming you accept the terms, and press Sign.\n"
+        "  4. You will get a signed copy and your client portal login straight away.\n\n"
+        f"The link is for you and expires on {when}. If it has expired, call or text "
+        f"{company()['phone']} and we will send a new one.\n\n"
+        f"— {company()['name']}\n{company()['phone']}\n")
+
+
+async def _send_sign_request(db, bid: dict, to_email: str) -> dict:
+    bid_id = int(bid["id"])
+    pdf, digest = _sign_contract_pdf(db, bid_id)
+    contract_signing.ensure_schema(db)
+    row = contract_signing.create_request(
+        db, bid_id, sent_to=to_email, document_sha256=digest, company=_BID_COMPANY)
+    link = _sign_link(row["token"])
+    cfg = documents_service.smtp_config_from_env()
+    body = _sign_email_body(dict(bid), link, row["expires_at"],
+                            bid.get("contact_name") or "")
+    subject = f"Sign your agreement — {bid.get('name') or ('Bid #' + str(bid_id))}"
+    sent = await documents_service.send_email(
+        cfg, to_email, subject, body, attachment=pdf,
+        filename=f"BuildStack-Contract-Bid-{bid_id}.pdf")
+    if not sent:
+        raise RuntimeError("The signing email could not be sent.")
+    try:
+        with db.cursor() as cur:
+            cur.execute("""
+                INSERT INTO comms_logs (direction, channel, sender, recipient, message_body)
+                VALUES ('outbound', 'email', %s, %s, %s);
+            """, (cfg.get("SMTP_FROM") or "", to_email, body[:4000]))
+        db.commit()
+    except Exception:
+        db.rollback()
+    return {"token": row["token"], "link": link, "expires_at": row["expires_at"],
+            "sent_to": to_email}
+
+
+@app.post("/api/bids/{bid_id}/signing/send")
+async def bid_signing_send(bid_id: int, request: Request, to_email: str = Form(""),
+                           db=Depends(get_db)):
+    """Email the client a private click-and-sign link for the agreement."""
+    require_admin(request)
+    bid = bid_opportunities.get_bid(db, bid_id, _BID_COMPANY)
+    if not bid:
+        raise HTTPException(status_code=404, detail="Bid not found")
+    recipient = (to_email or bid.get("contact_email") or "").strip()
+    if "@" not in recipient or " " in recipient:
+        return RedirectResponse(
+            url=f"/bids/{bid_id}?error=Add+a+contact+email+before+sending+for+signature",
+            status_code=status.HTTP_303_SEE_OTHER)
+    try:
+        sent = await _send_sign_request(db, dict(bid), recipient)
+    except Exception as exc:
+        logger.warning("signing link send failed for bid %s: %s", bid_id, exc)
+        return RedirectResponse(
+            url=f"/bids/{bid_id}?error=" + urllib.parse.quote(
+                f"Could not send the signing link: {exc}"[:200]),
+            status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(
+        url=f"/bids/{bid_id}?sign_sent=" + urllib.parse.quote(sent["sent_to"]),
+        status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/api/bids/{bid_id}/signing/revoke")
+async def bid_signing_revoke(bid_id: int, request: Request, db=Depends(get_db)):
+    require_admin(request)
+    contract_signing.ensure_schema(db)
+    contract_signing.revoke(db, bid_id, _BID_COMPANY)
+    return RedirectResponse(url=f"/bids/{bid_id}?sign_revoked=1",
+                            status_code=status.HTTP_303_SEE_OTHER)
+
+
+async def _send_portal_credentials(db, bid: dict, *, force: bool = False,
+                                  password_override: str = "") -> dict:
+    """Create the client account if needed and email the login + portal link."""
+    cred = portal_service.ensure_client_for_bid(db, dict(bid))
+    portal_service.link_bid(db, int(cred["client_id"]), int(bid["id"]))
+    temp = (password_override or cred.get("password") or "").strip()
+    email = cred["email"]
+    link = f"https://{company()['domain']}/portal/login"
+    if temp:
+        body = (
+            f"Hi {(bid.get('contact_name') or 'there').split(' ')[0]},\n\n"
+            f"Thank you — the agreement for {bid.get('name') or 'your project'} is signed.\n\n"
+            f"Your {company()['name']} client portal is ready. It shows the contract, "
+            "invoices, progress photos and messages with the office, and it lets you "
+            "pay an invoice by card.\n\n"
+            f"  Sign in: {link}\n"
+            f"  Email: {email}\n"
+            f"  Temporary password: {temp}\n\n"
+            "You will be asked to choose your own password the first time you sign in. "
+            "If you forget it later, use “Forgot password?” on the sign-in page.\n\n"
+            f"— {company()['name']}\n{company()['phone']}\n")
+        subject = "Your client portal login — signed agreement"
+    else:
+        body = (
+            f"Hi {(bid.get('contact_name') or 'there').split(' ')[0]},\n\n"
+            f"Thank you — the agreement for {bid.get('name') or 'your project'} is signed.\n\n"
+            f"Your client portal is at {link}. Sign in with {email} and your existing "
+            "password. If you have forgotten it, use “Forgot password?” on that page.\n\n"
+            f"— {company()['name']}\n{company()['phone']}\n")
+        subject = "Your signed agreement and client portal"
+    cfg = documents_service.smtp_config_from_env()
+    sent = await documents_service.send_email(cfg, email, subject, body)
+    if not sent:
+        raise RuntimeError("The portal email could not be sent.")
+    try:
+        with db.cursor() as cur:
+            cur.execute("""
+                INSERT INTO comms_logs (direction, channel, sender, recipient, message_body)
+                VALUES ('outbound', 'email', %s, %s, %s);
+            """, (cfg.get("SMTP_FROM") or "", email, body[:4000]))
+        db.commit()
+    except Exception:
+        db.rollback()
+    return {"email": email, "created": cred.get("created"),
+            "temporary": bool(temp)}
+
+
+@app.post("/api/bids/{bid_id}/signing/credentials")
+async def bid_signing_credentials(bid_id: int, request: Request, reset: str = Form(""),
+                                  db=Depends(get_db)):
+    """Resend the client's portal login. With reset=1, issue a new temporary password."""
+    require_admin(request)
+    bid = bid_opportunities.get_bid(db, bid_id, _BID_COMPANY)
+    if not bid:
+        raise HTTPException(status_code=404, detail="Bid not found")
+    try:
+        if (reset or "").strip().lower() in ("1", "on", "true", "yes"):
+            cred = portal_service.ensure_client_for_bid(db, dict(bid))
+            password = portal_service.temporary_password()
+            portal_service.set_password(db, int(cred["client_id"]), password, must_change=True)
+            result = await _send_portal_credentials(
+                db, dict(bid), password_override=password)
+        else:
+            result = await _send_portal_credentials(db, dict(bid))
+    except Exception as exc:
+        logger.warning("portal credentials send failed for bid %s: %s", bid_id, exc)
+        return RedirectResponse(
+            url=f"/bids/{bid_id}?error=" + urllib.parse.quote(
+                f"Could not send the login: {exc}"[:200]),
+            status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(
+        url=f"/bids/{bid_id}?portal_sent=" + urllib.parse.quote(result["email"]),
+        status_code=status.HTTP_303_SEE_OTHER)
+
+
+def _complete_signed_contract(db, bid_id: int, *, signer_name: str, signer_email: str,
+                              request_id: int) -> dict:
+    """Everything that must happen once, after the client accepts.
+
+    Won bid -> job card (active, deliberately with no crew assigned) -> 30%
+    deposit invoice -> ledger -> Zoho Books -> portal account. Each step is
+    individually guarded so one downstream failure cannot leave the bid
+    unsigned on the board.
+    """
+    bid = bid_opportunities.get_bid(db, bid_id, _BID_COMPANY)
+    if not bid:
+        raise ValueError("Bid not found")
+    out = {"bid_id": bid_id, "project_id": None, "invoice_id": None,
+           "portal_email": None, "errors": []}
+
+    try:
+        bid_opportunities.set_status(db, bid_id, "won", _BID_COMPANY)
+    except Exception as exc:
+        out["errors"].append(f"status: {exc}")
+
+    # The crew portal lists jobs from project_assignments. Creating the project
+    # with no assignment is exactly "unassigned until the owner assigns it".
+    try:
+        bid_costing.ensure_accounting_schema(db)
+        out["project_id"] = bid_costing.convert_bid_to_project(db, bid_id, _BID_COMPANY)
+    except Exception as exc:
+        out["errors"].append(f"project: {exc}")
+
+    # A signed contract is a 30% deposit receivable. Under the accrual model
+    # the deposit invoice is what reaches the books; the whole contract is not
+    # recognised as revenue until billed.
+    try:
+        invoice = bid_deposit.ensure_deposit_invoice(db, dict(bid), _BID_COMPANY)
+        if invoice:
+            out["invoice_id"] = int(invoice["id"])
+            if str(invoice.get("status") or "") in ("draft", ""):
+                bid_costing.set_invoice_status(db, invoice["id"], "sent", _BID_COMPANY)
+            ledger_sync.ensure_schema(db)
+            ledger_sync.sync_invoice(db, invoice["id"], _BID_COMPANY)
+            try:
+                zoho_books_sync.push_invoice_to_zoho(db, bid_id, dict(invoice))
+            except Exception as exc:
+                logger.warning("zoho books push failed for signed bid %s: %s", bid_id, exc)
+    except Exception as exc:
+        out["errors"].append(f"deposit invoice: {exc}")
+
+    try:
+        cred = portal_service.ensure_client_for_bid(db, dict(bid))
+        portal_service.link_bid(db, int(cred["client_id"]), bid_id)
+        out["portal_email"] = cred["email"]
+        out["portal_created"] = cred.get("created")
+        out["temporary_password"] = cred.get("password")
+    except Exception as exc:
+        out["errors"].append(f"portal account: {exc}")
+    return out
+
+
+async def _email_signed_contract(db, bid: dict, result: dict, *, signer_name: str,
+                                 signer_email: str) -> bool:
+    """A copy of the signed agreement back to the owner, with what happened."""
+    bid_id = int(bid["id"])
+    try:
+        pdf = build_bid_documents.build_contract(
+            dict(bid),
+            bid_costing.cost_lines(db, bid_id, _BID_COMPANY),
+            [p for p, _ in _project_photo_paths(db, bid_id)],
+            signature=_package_signature(db, bid_id),
+            client_signature=_client_signature(db, bid_id))
+    except Exception as exc:
+        logger.warning("signed contract PDF build failed for bid %s: %s", bid_id, exc)
+        pdf = None
+    lines = [
+        f"{signer_name} signed and accepted the agreement for "
+        f"{bid.get('name') or ('Bid #' + str(bid_id))}.",
+        f"Signer: {signer_name} <{signer_email}>",
+        f"Project: #{result.get('project_id')} (active, no crew assigned yet)",
+        f"Deposit invoice: #{result.get('invoice_id')} raised and posted to the ledger",
+        f"Portal login: {result.get('portal_email') or 'not created'}",
+    ]
+    if result.get("errors"):
+        lines.append("Needs attention: " + "; ".join(result["errors"]))
+    lines.append(f"Open https://{company()['domain']}/bids/{bid_id}")
+    body = "\n".join(lines)
+    try:
+        cfg = documents_service.smtp_config_from_env()
+        await documents_service.send_email(
+            cfg, admin_email(),
+            f"Signed: {bid.get('name') or ('Bid #' + str(bid_id))} — {signer_name}",
+            body, attachment=pdf,
+            filename=f"BuildStack-Contract-Signed-Bid-{bid_id}.pdf")
+        return True
+    except Exception as exc:
+        logger.warning("signed contract email failed for bid %s: %s", bid_id, exc)
+        return False
+
+
+@app.get("/sign/{token}", response_class=HTMLResponse)
+async def sign_contract_page(token: str, request: Request, db=Depends(get_db)):
+    contract_signing.ensure_schema(db)
+    row = contract_signing.by_token(db, token)
+    if not row:
+        return templates.TemplateResponse(request=request, name="sign_contract.html", context={
+            "expired": True, "token": token})
+    if row.get("signed_at"):
+        return RedirectResponse(url=f"/sign/{token}/done", status_code=status.HTTP_303_SEE_OTHER)
+    bid = bid_opportunities.get_bid(db, row["bid_id"], row["company"])
+    if not bid:
+        return templates.TemplateResponse(request=request, name="sign_contract.html", context={
+            "expired": True, "token": token})
+    total = _contract_amount(dict(bid))
+    return templates.TemplateResponse(request=request, name="sign_contract.html", context={
+        "expired": False, "token": token, "bid": bid, "total": total,
+        "deposit": round(total * bid_package_pdf.DEPOSIT_PCT / 100.0, 2),
+        "progress": round(total * bid_package_pdf.PROGRESS_PCT / 100.0, 2),
+        "final": round(total - round(total * bid_package_pdf.DEPOSIT_PCT / 100.0, 2)
+                       - round(total * bid_package_pdf.PROGRESS_PCT / 100.0, 2), 2),
+        "expires_at": row.get("expires_at"),
+        "contact_name": bid.get("contact_name") or "",
+        "contact_email": bid.get("contact_email") or "",
+        "error": request.query_params.get("error", ""),
+    })
+
+
+@app.get("/sign/{token}/contract.pdf")
+async def sign_contract_pdf(token: str, request: Request, db=Depends(get_db)):
+    contract_signing.ensure_schema(db)
+    row = contract_signing.by_token(db, token)
+    if not row:
+        raise HTTPException(status_code=404, detail="This signing link has expired")
+    pdf, _digest = _sign_contract_pdf(db, row["bid_id"])
+    return Response(content=pdf, media_type="application/pdf",
+                    headers={"Content-Disposition":
+                             f'inline; filename="BuildStack-Contract-Bid-{row["bid_id"]}.pdf"',
+                             "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"})
+
+
+@app.post("/sign/{token}")
+async def sign_contract_submit(token: str, request: Request, signature: str = Form(""),
+                               signer_name: str = Form(""), signer_email: str = Form(""),
+                               agree: str = Form(""), db=Depends(get_db)):
+    contract_signing.ensure_schema(db)
+    row = contract_signing.by_token(db, token)
+    if not row:
+        return RedirectResponse(url=f"/sign/{token}?error=" + urllib.parse.quote(
+            "This signing link has expired. Ask the office for a new one."),
+            status_code=status.HTTP_303_SEE_OTHER)
+    if row.get("signed_at"):
+        return RedirectResponse(url=f"/sign/{token}/done", status_code=status.HTTP_303_SEE_OTHER)
+    if not (agree or "").strip():
+        return RedirectResponse(url=f"/sign/{token}?error=" + urllib.parse.quote(
+            "Tick the box confirming you accept the agreement."),
+            status_code=status.HTTP_303_SEE_OTHER)
+    bid = bid_opportunities.get_bid(db, row["bid_id"], row["company"])
+    if not bid:
+        raise HTTPException(status_code=404, detail="Bid not found")
+    email = (signer_email or bid.get("contact_email") or "").strip()
+    ip = request.client.host if request.client else ""
+    agent = request.headers.get("user-agent", "")
+    try:
+        saved = bid_signing.save(
+            db, row["bid_id"], signature_data=signature, signer_name=signer_name,
+            signer_email=email, document_sha256=row.get("document_sha256") or "",
+            ip=ip, user_agent=agent, company=row["company"], signer_role="client")
+    except ValueError as exc:
+        return RedirectResponse(url=f"/sign/{token}?error=" + urllib.parse.quote(str(exc)),
+                                status_code=status.HTTP_303_SEE_OTHER)
+    claimed = contract_signing.mark_signed(
+        db, int(row["id"]), signature_id=int(saved["id"]), signer_name=signer_name,
+        signer_email=email, ip=ip, user_agent=agent)
+    if not claimed:
+        return RedirectResponse(url=f"/sign/{token}/done", status_code=status.HTTP_303_SEE_OTHER)
+
+    try:
+        result = _complete_signed_contract(
+            db, int(row["bid_id"]), signer_name=signer_name,
+            signer_email=email, request_id=int(row["id"]))
+    except Exception as exc:
+        logger.warning("post-signature work failed for bid %s: %s", row["bid_id"], exc)
+        result = {"project_id": None, "invoice_id": None, "portal_email": None,
+                  "errors": [str(exc)]}
+
+    try:
+        await _email_signed_contract(db, dict(bid), result,
+                                     signer_name=signer_name, signer_email=email)
+    except Exception as exc:
+        logger.warning("owner signed-copy email failed for bid %s: %s", row["bid_id"], exc)
+    try:
+        await _send_portal_credentials(
+            db, dict(bid),
+            password_override=(result.get("temporary_password") or ""))
+    except Exception as exc:
+        logger.warning("client portal credentials failed for bid %s: %s", row["bid_id"], exc)
+    return RedirectResponse(url=f"/sign/{token}/done", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.get("/sign/{token}/done", response_class=HTMLResponse)
+async def sign_contract_done(token: str, request: Request, db=Depends(get_db)):
+    return templates.TemplateResponse(request=request, name="sign_done.html", context={
+        "token": token,
+        "portal_link": f"https://{company()['domain']}/portal/login",
+        "phone": company()["phone"],
+    })
+
+
+# --- Crew: change and recover a PIN --------------------------------------------
+CREW_RESET_PURPOSE = "crew_reset"
+
+
+def _crew_by_identifier(db, identifier: str):
+    ident = (identifier or "").strip()
+    if not ident:
+        return None
+    with db.cursor() as cur:
+        if "@" in ident:
+            cur.execute("SELECT * FROM crew WHERE LOWER(email) = LOWER(%s) AND is_active = TRUE "
+                        "ORDER BY id DESC LIMIT 1;", (ident,))
+        else:
+            digits = "".join(ch for ch in ident if ch.isdigit())
+            cur.execute("SELECT * FROM crew WHERE REGEXP_REPLACE(phone, '[^0-9]', '', 'g') = %s "
+                        "AND is_active = TRUE ORDER BY id DESC LIMIT 1;", (digits,))
+        return cur.fetchone()
+
+
+def _crew_store_otp(db, crew_id: int, email: str, code: str) -> None:
+    with db.cursor() as cur:
+        cur.execute("""
+            UPDATE login_otps SET consumed = TRUE
+             WHERE role = 'worker' AND actor_id = %s AND purpose = %s AND consumed = FALSE;
+        """, (int(crew_id), CREW_RESET_PURPOSE))
+        cur.execute("""
+            INSERT INTO login_otps (role, actor_id, email, code_hash, purpose, expires_at)
+            VALUES ('worker', %s, %s, %s, %s, now() + interval '10 minutes');
+        """, (int(crew_id), (email or "")[:255], auth_service.hash_otp(code), CREW_RESET_PURPOSE))
+    db.commit()
+
+
+def _crew_verify_otp(db, crew_id: int, code: str) -> tuple[bool, str]:
+    with db.cursor() as cur:
+        cur.execute("""
+            SELECT * FROM login_otps
+             WHERE role = 'worker' AND actor_id = %s AND purpose = %s AND consumed = FALSE
+             ORDER BY id DESC LIMIT 1;
+        """, (int(crew_id), CREW_RESET_PURPOSE))
+        row = cur.fetchone()
+        if not row:
+            return False, "That code has expired. Request a new one."
+        expires = row.get("expires_at")
+        if expires is not None and getattr(expires, "tzinfo", None) is None:
+            expires = expires.replace(tzinfo=timezone.utc)
+        if expires and expires < datetime.now(timezone.utc):
+            return False, "That code has expired. Request a new one."
+        if int(row.get("attempts") or 0) >= auth_service.MAX_OTP_ATTEMPTS:
+            return False, "Too many attempts. Request a new code."
+        if not auth_service.verify_otp((code or "").strip(), row.get("code_hash") or ""):
+            cur.execute("UPDATE login_otps SET attempts = attempts + 1 WHERE id = %s;", (row["id"],))
+            db.commit()
+            return False, "That code is not correct."
+        cur.execute("UPDATE login_otps SET consumed = TRUE WHERE id = %s;", (row["id"],))
+    db.commit()
+    return True, ""
+
+
+async def _deliver_crew_code(row: dict, code: str) -> tuple[bool, str]:
+    cfg = _smtp_cfg()
+    to = (row.get("email") or "").strip()
+    if not to:
+        return False, "There is no email on file for you. Call the office to reset your PIN."
+    if not (cfg.get("from") or "").strip():
+        print(f"[crew OTP] email not configured — code for {to}: {code}", flush=True)
+        return False, "Email delivery is not set up. Call the office."
+    name = (row.get("name") or "there").split()[0]
+    body = (
+        f"Hi {name},\n\nUse this code to choose a new PIN:\n\n    {code}\n\n"
+        "It expires in 10 minutes and works once. If you did not ask for this, ignore it — "
+        "your PIN has not changed.\n\n"
+        f"— {company()['name']}\n{company()['phone']}\n")
+    try:
+        await documents_service.send_email(
+            {"SMTP_FROM": cfg["from"], "SMTP_NAME": cfg["name"]},
+            to, f"Your {cfg['name']} crew PIN reset code", body)
+        return True, ""
+    except Exception as e:
+        logger.warning("crew reset code email failed for %s: %s", to, e)
+        return False, "We could not send the email. Call the office."
+
+
+def _valid_pin(pin: str) -> bool:
+    return 4 <= len((pin or "").strip()) <= 6 and (pin or "").strip().isdigit()
+
+
+@app.get("/crew/account", response_class=HTMLResponse)
+async def crew_account_page(request: Request, db=Depends(get_db)):
+    worker = current_worker(request)
+    if not worker:
+        return RedirectResponse(url="/crew", status_code=status.HTTP_303_SEE_OTHER)
+    with db.cursor() as cur:
+        cur.execute("SELECT id, name, phone, email, role FROM crew WHERE id = %s;",
+                    (worker.get("id"),))
+        row = cur.fetchone()
+    return templates.TemplateResponse(request=request, name="crew_account.html", context={
+        "worker": row or worker,
+        "error": request.query_params.get("error", ""),
+        "ok": request.query_params.get("ok", ""),
+        "has_email": bool((row or {}).get("email")),
+    })
+
+
+@app.post("/crew/account/pin")
+async def crew_account_pin(request: Request, current: str = Form(""), pin: str = Form(""),
+                           confirm: str = Form(""), db=Depends(get_db)):
+    worker = require_worker(request)
+    back = "/crew/account"
+    with db.cursor() as cur:
+        cur.execute("SELECT id, name, pin_hash FROM crew WHERE id = %s AND is_active = TRUE;",
+                    (worker.get("id"),))
+        row = cur.fetchone()
+    if not row or not _verify_pin((current or "").strip(), row.get("pin_hash") or ""):
+        return RedirectResponse(url=back + "?error=" + urllib.parse.quote("Current PIN is incorrect."),
+                                status_code=status.HTTP_303_SEE_OTHER)
+    if (pin or "").strip() != (confirm or "").strip():
+        return RedirectResponse(url=back + "?error=" + urllib.parse.quote("The new PINs do not match."),
+                                status_code=status.HTTP_303_SEE_OTHER)
+    if not _valid_pin(pin):
+        return RedirectResponse(url=back + "?error=" + urllib.parse.quote("PIN must be 4-6 digits."),
+                                status_code=status.HTTP_303_SEE_OTHER)
+    with db.cursor() as cur:
+        cur.execute("UPDATE crew SET pin_hash = %s WHERE id = %s;",
+                    (_hash_pin(pin.strip()), int(row["id"])))
+        db.commit()
+    return RedirectResponse(url=back + "?ok=1", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.get("/crew/forgot", response_class=HTMLResponse)
+async def crew_forgot_page(request: Request):
+    return templates.TemplateResponse(request=request, name="crew_forgot.html", context={
+        "error": request.query_params.get("error", ""),
+        "sent": request.query_params.get("sent", ""),
+        "identifier": request.query_params.get("identifier", ""),
+    })
+
+
+@app.post("/crew/forgot")
+async def crew_forgot_submit(request: Request, identifier: str = Form(""), db=Depends(get_db)):
+    ident = (identifier or "").strip()
+    keys = (f"crew-forgot:{ident.lower()}", f"crew-forgot-ip:{request.client.host if request.client else ''}")
+    login_throttle.ensure_schema(db)
+    if login_throttle.locked(db, *keys):
+        return RedirectResponse(
+            url="/crew/forgot?error=" + urllib.parse.quote("Too many requests. Try again later."),
+            status_code=status.HTTP_303_SEE_OTHER)
+    login_throttle.fail(db, *keys)
+    row = _crew_by_identifier(db, ident)
+    if row:
+        code = auth_service.generate_otp()
+        _crew_store_otp(db, int(row["id"]), row.get("email") or "", code)
+        ok, err = await _deliver_crew_code(row, code)
+        if not ok:
+            return RedirectResponse(url="/crew/forgot?error=" + urllib.parse.quote(err),
+                                    status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(
+        url="/crew/forgot?sent=1&identifier=" + urllib.parse.quote(ident),
+        status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.get("/crew/reset", response_class=HTMLResponse)
+async def crew_reset_page(request: Request):
+    return templates.TemplateResponse(request=request, name="crew_reset.html", context={
+        "error": request.query_params.get("error", ""),
+        "identifier": request.query_params.get("identifier", ""),
+    })
+
+
+@app.post("/crew/reset")
+async def crew_reset_submit(request: Request, identifier: str = Form(""), code: str = Form(""),
+                            pin: str = Form(""), confirm: str = Form(""),
+                            db=Depends(get_db)):
+    ident = (identifier or "").strip()
+    back = "/crew/reset?identifier=" + urllib.parse.quote(ident)
+    row = _crew_by_identifier(db, ident)
+    if not row:
+        return RedirectResponse(url=back + "&error=" + urllib.parse.quote("That code is not valid."),
+                                status_code=status.HTTP_303_SEE_OTHER)
+    if (pin or "").strip() != (confirm or "").strip():
+        return RedirectResponse(url=back + "&error=" + urllib.parse.quote("The new PINs do not match."),
+                                status_code=status.HTTP_303_SEE_OTHER)
+    if not _valid_pin(pin):
+        return RedirectResponse(url=back + "&error=" + urllib.parse.quote("PIN must be 4-6 digits."),
+                                status_code=status.HTTP_303_SEE_OTHER)
+    ok, reason = _crew_verify_otp(db, int(row["id"]), code)
+    if not ok:
+        return RedirectResponse(url=back + "&error=" + urllib.parse.quote(reason),
+                                status_code=status.HTTP_303_SEE_OTHER)
+    with db.cursor() as cur:
+        cur.execute("UPDATE crew SET pin_hash = %s WHERE id = %s;",
+                    (_hash_pin(pin.strip()), int(row["id"])))
+        db.commit()
+    return RedirectResponse(url="/crew?error=" + urllib.parse.quote(
+        "PIN changed. Sign in with your new PIN."), status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/api/crew/app/pin")
+async def crew_app_pin(request: Request, db=Depends(get_db)):
+    """Change the PIN from inside the installable app."""
+    worker = require_worker(request)
+    body = await request.json()
+    current = (body.get("current_pin") or "").strip()
+    pin = (body.get("new_pin") or "").strip()
+    confirm = (body.get("confirm_pin") or pin).strip()
+    with db.cursor() as cur:
+        cur.execute("SELECT id, pin_hash FROM crew WHERE id = %s AND is_active = TRUE;",
+                    (worker.get("id"),))
+        row = cur.fetchone()
+    if not row or not _verify_pin(current, row.get("pin_hash") or ""):
+        return JSONResponse(status_code=403, content={"status": "error",
+                            "message": "Current PIN is incorrect."})
+    if pin != confirm:
+        return JSONResponse(status_code=400, content={"status": "error",
+                            "message": "The new PINs do not match."})
+    if not _valid_pin(pin):
+        return JSONResponse(status_code=400, content={"status": "error",
+                            "message": "PIN must be 4-6 digits."})
+    with db.cursor() as cur:
+        cur.execute("UPDATE crew SET pin_hash = %s WHERE id = %s;",
+                    (_hash_pin(pin), int(row["id"])))
+        db.commit()
+    return JSONResponse(content={"status": "ok", "message": "PIN updated."})

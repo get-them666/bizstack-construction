@@ -36,6 +36,9 @@ SCOPES = [
     "ZohoCampaigns.contact.ALL", "ZohoCampaigns.campaign.READ",
     "ZohoMail.accounts.READ", "ZohoMail.messages.CREATE", "ZohoMail.messages.READ",
     "ZohoCalendar.calendar.ALL", "ZohoCalendar.event.ALL",
+    # Embedded card checkout in the client portal. Creating a payment session
+    # needs CREATE; verifying the captured payment needs READ.
+    "ZohoPay.payments.CREATE", "ZohoPay.payments.READ",
 ]
 
 TOKEN_KEY = "zoho_refresh_token"

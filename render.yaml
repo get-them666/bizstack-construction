@@ -73,6 +73,17 @@ envVarGroups:
       - key: ZOHO_REFRESH_TOKEN
         sync: false
 
+      # Zoho Payments — embedded card checkout in the client portal.
+      # Account id is on the Zoho Payments dashboard; the widget key is from
+      # Settings > Developer Space and is public by design. The webhook key
+      # verifies /api/payments/zoho/webhook.
+      - key: ZOHO_PAYMENTS_ACCOUNT_ID
+        sync: false
+      - key: ZOHO_PAYMENTS_API_KEY
+        sync: false
+      - key: ZOHO_PAYMENTS_WEBHOOK_KEY
+        sync: false
+
       # Stripe (legacy deposit links still work; primary path is PNC Zelle/ACH).
       - key: STRIPE_SECRET_KEY
         sync: false
@@ -107,6 +118,13 @@ services:
     maxShutdownDelaySeconds: 60
 
     envVars:
+      # ⚠️ The LIVE database is `construction_live`, NOT this datastore's
+      # default `construction_mv91`. The running service carries an explicit
+      # DATABASE_URL ending in /construction_live. A Blueprint sync that
+      # applies the fromDatabase value below can silently repoint the app at
+      # the wrong database (and the cluster also contains the unrelated
+      # `hosts` database). Check Dashboard → bizstack-construction →
+      # Environment before and after every Blueprint sync.
       - key: DATABASE_URL
         fromDatabase:
           name: bizstack-construction-db
@@ -153,6 +171,14 @@ services:
         value: "true"
       - key: OTP_ENABLED
         value: "true"
+      # Client portal signs in with a password + emailed 6-digit code.
+      # Set to "false" only to turn the client code off.
+      - key: PORTAL_OTP_ENABLED
+        value: "true"
+
+      # --- Zoho Payments (embedded card checkout in the portal) --------------
+      - key: ZOHO_PAYMENTS_DOMAIN
+        value: US
 
       # --- background workers: ALL ON for production ------------------------
       # To temporarily disable a worker, add the flag with value "true".

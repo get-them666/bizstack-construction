@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}Your account | {{ co.name }}{% endblock %}
+{% block meta %}<meta name="robots" content="noindex, nofollow">{% endblock %}
+
+{% block content %}
+<div class="max-w-2xl mx-auto px-4 sm:px-6 py-10">
+  <div class="flex items-center justify-between gap-3">
+    <div>
+      <p class="text-xs font-bold uppercase tracking-widest text-indigo-600">Client portal</p>
+      <h1 class="mt-1 text-2xl font-black tracking-tight text-slate-900">Your account</h1>
+    </div>
+    <a href="/portal" class="px-4 py-2 rounded-xl border border-slate-200 text-sm font-bold text-slate-600 hover:bg-slate-50">Back to portal</a>
+  </div>
+
+  {% if first %}<div class="mt-4 rounded-xl bg-amber-50 border border-amber-200 px-4 py-3 text-sm font-semibold text-amber-900">
+    Choose your own password now — the temporary one in your email stops working after this.
+  </div>{% endif %}
+  {% if ok %}<div class="mt-4 rounded-xl bg-emerald-50 border border-emerald-200 px-4 py-3 text-sm font-semibold text-emerald-700">Password updated.</div>{% endif %}
+  {% if error %}<div class="mt-4 rounded-xl bg-red-50 border border-red-200 px-4 py-3 text-sm font-semibold text-red-700" role="alert">{{ error }}</div>{% endif %}
+
+  <div class="mt-5 bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+    <p class="text-sm font-bold text-slate-900">{{ client.name or 'Client' }}</p>
+    <p class="text-sm text-slate-500">{{ client.email }}</p>
+    <p class="mt-2 text-xs text-slate-500">Sign-in codes are {% if otp_on %}on — we email a 6-digit code after your password{% else %}off{% endif %}.</p>
+  </div>
+
+  <div class="mt-5 bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+    <h2 class="text-base font-black text-slate-900">Change password</h2>
+    <form method="post" action="/portal/account/password" class="mt-4 space-y-3">
+      <label class="block">
+        <span class="text-sm font-semibold text-slate-700">Current password</span>
+        <input name="current" type="password" required autocomplete="current-password"
+               class="mt-1 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 outline-none">
+      </label>
+      <label class="block">
+        <span class="text-sm font-semibold text-slate-700">New password</span>
+        <input name="password" type="password" required minlength="8" autocomplete="new-password"
+               class="mt-1 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 outline-none">
+      </label>
+      <label class="block">
+        <span class="text-sm font-semibold text-slate-700">New password again</span>
+        <input name="confirm" type="password" required minlength="8" autocomplete="new-password"
+               class="mt-1 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 outline-none">
+      </label>
+      <button type="submit" class="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-bold hover:bg-indigo-500">Update password</button>
+    </form>
+    <p class="mt-3 text-xs text-slate-500">Forgot the current one? <a href="/portal/forgot" class="font-bold text-indigo-600">Email yourself a reset code</a>.</p>
+  </div>
+
+  <div class="mt-5 rounded-2xl bg-slate-50 border border-slate-200 p-4 text-xs text-slate-500">
+    Never share your password. {{ co.name }} will never ask for it by phone, text or email.
+  </div>
+</div>
+{% endblock %}

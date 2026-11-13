@@ -31,6 +31,9 @@
         {% if error %}
         <div class="mt-5 rounded-xl bg-red-50 border border-red-200 px-4 py-3 text-sm font-semibold text-red-700" role="alert">{{ error }}</div>
         {% endif %}
+        {% if ok %}
+        <div class="mt-5 rounded-xl bg-emerald-50 border border-emerald-200 px-4 py-3 text-sm font-semibold text-emerald-700">{{ ok }}</div>
+        {% endif %}
 
         <form method="post" action="/portal/login" class="mt-6 space-y-4">
           <label class="block">
@@ -56,7 +59,9 @@
 
         <p class="mt-6 text-xs leading-relaxed text-slate-500">
           Your project manager sets up your login when the contract is signed.<br>
-          Need help? Call or text <a href="tel:{{ co.phone_e164 }}" class="font-bold text-indigo-600">{{ co.phone }}</a>.
+          <a href="/portal/forgot" class="font-bold text-indigo-600">Forgot your password?</a>
+          &nbsp;·&nbsp; Need help? Call or text
+          <a href="tel:{{ co.phone_e164 }}" class="font-bold text-indigo-600">{{ co.phone }}</a>.
         </p>
       </div>
     </div>

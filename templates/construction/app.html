@@ -73,7 +73,8 @@
                     Sign In
                 </button>
             </form>
-            <p class="mt-6 mb-10 text-center text-xs text-slate-400">🔒 GPS location is only used when you are clocked in at a job site. Off the clock = not tracked.</p>
+            <p class="mt-6 mb-10 text-center text-xs text-slate-400">🔒 GPS location is only used when you are clocked in at a job site. Off the clock = not tracked.<br>
+                <a href="/crew/forgot" class="font-bold text-blue-500">Forgot your PIN?</a></p>
         </div>
 
         <!-- Home view -->
@@ -84,7 +85,10 @@
                         <p class="text-xs font-semibold text-blue-300 uppercase tracking-wider">BuildStack Crew</p>
                         <h1 class="text-2xl font-extrabold tracking-tight">Hi, <span id="h-name"></span></h1>
                     </div>
-                    <button id="logout-btn" class="px-4 py-2 text-xs font-bold text-slate-300 bg-slate-800 hover:bg-slate-700 rounded-xl">Log Out</button>
+                    <div class="flex items-center gap-2">
+                        <button id="pin-btn" class="px-3 py-2 text-xs font-bold text-slate-300 bg-slate-800 hover:bg-slate-700 rounded-xl">PIN</button>
+                        <button id="logout-btn" class="px-4 py-2 text-xs font-bold text-slate-300 bg-slate-800 hover:bg-slate-700 rounded-xl">Log Out</button>
+                    </div>
                 </div>
                 <div class="mt-5 bg-white/10 rounded-2xl px-5 py-4 flex items-center justify-between">
                     <div>
@@ -259,6 +263,28 @@
                 </button>
                 <p id="photo-status" class="hidden mt-3 text-center text-sm font-bold text-emerald-600"></p>
             </form>
+        </div>
+    </div>
+
+    <!-- Change PIN -->
+    <div id="pin-modal" class="hidden fixed inset-0 z-50 bg-black/60 items-center justify-center p-4">
+        <div class="w-full max-w-sm bg-white rounded-3xl p-6 shadow-2xl">
+            <div class="flex items-center justify-between">
+                <h2 class="text-lg font-extrabold text-slate-900">Change your PIN</h2>
+                <button id="pin-close" type="button" class="text-slate-400 hover:text-slate-700 text-xl leading-none">×</button>
+            </div>
+            <p class="mt-1 text-xs text-slate-500">This is the 4-6 digit PIN you sign in with.</p>
+            <form id="pin-form" class="mt-4 space-y-3">
+                <input id="pin-current" type="password" inputmode="numeric" maxlength="6" required autocomplete="current-password" placeholder="Current PIN"
+                    class="w-full px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 text-lg tracking-[0.4em] text-center">
+                <input id="pin-new" type="password" inputmode="numeric" maxlength="6" required autocomplete="new-password" placeholder="New PIN"
+                    class="w-full px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 text-lg tracking-[0.4em] text-center">
+                <input id="pin-confirm" type="password" inputmode="numeric" maxlength="6" required autocomplete="new-password" placeholder="New PIN again"
+                    class="w-full px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 text-lg tracking-[0.4em] text-center">
+                <p id="pin-status" class="hidden text-sm font-semibold"></p>
+                <button type="submit" class="w-full py-3 rounded-xl bg-blue-700 text-white text-sm font-bold uppercase tracking-wider">Save new PIN</button>
+            </form>
+            <a href="/crew/forgot" class="mt-3 block text-center text-xs font-bold text-blue-600">Forgot your PIN?</a>
         </div>
     </div>
 
@@ -1143,6 +1169,33 @@
                 state.chatStarted = false; state.chatWs = null; state.chatLastId = 0; state.chatSeen.clear();
                 await api('/api/crew/app/logout', { method: 'POST' });
                 show('login');
+            });
+
+            $('pin-btn').addEventListener('click', () => {
+                $('pin-status').classList.add('hidden');
+                $('pin-form').reset();
+                $('pin-modal').classList.remove('hidden');
+                $('pin-modal').classList.add('flex');
+            });
+            $('pin-close').addEventListener('click', () => {
+                $('pin-modal').classList.add('hidden');
+                $('pin-modal').classList.remove('flex');
+            });
+            $('pin-form').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const st = $('pin-status');
+                const { res, data } = await api('/api/crew/app/pin', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        current_pin: $('pin-current').value,
+                        new_pin: $('pin-new').value,
+                        confirm_pin: $('pin-confirm').value
+                    })
+                });
+                st.textContent = res.ok ? '✅ PIN updated.' : (data.message || 'Could not update the PIN.');
+                st.style.color = res.ok ? '' : 'red';
+                st.classList.remove('hidden');
+                if (res.ok) { $('pin-form').reset(); setTimeout(() => { $('pin-modal').classList.add('hidden'); $('pin-modal').classList.remove('flex'); }, 1200); }
             });
 
             document.addEventListener('click', (e) => {

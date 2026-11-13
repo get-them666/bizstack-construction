@@ -29,6 +29,13 @@
   </div>
   {% endif %}
 
+  {% if notice %}
+  <div class="mb-4 rounded-2xl bg-emerald-50 border border-emerald-200 px-4 py-3 text-sm font-semibold text-emerald-800">{{ notice }}</div>
+  {% endif %}
+  {% if error %}
+  <div class="mb-4 rounded-2xl bg-red-50 border border-red-200 px-4 py-3 text-sm font-semibold text-red-700" role="alert">{{ error }}</div>
+  {% endif %}
+
   {% if not d %}
   <div class="max-w-2xl mx-auto bg-white rounded-3xl border border-slate-200 shadow-sm p-8">
     <p class="text-xs font-bold uppercase tracking-widest text-indigo-600">Client portal</p>
@@ -38,6 +45,7 @@
     <form method="post" action="/portal/logout" class="mt-6">
       <button type="submit" class="inline-flex items-center px-4 py-2 rounded-xl border border-slate-200 text-sm font-bold text-slate-700 hover:bg-slate-50">Sign out</button>
     </form>
+    <a href="/portal/account" class="mt-3 inline-flex items-center px-4 py-2 rounded-xl border border-slate-200 text-sm font-bold text-slate-700 hover:bg-slate-50">Account &amp; password</a>
   </div>
   {% else %}
 
@@ -99,6 +107,7 @@
     <a href="#invoices" data-panel-link="invoices" class="portal-tab inline-flex items-center px-4 py-2 rounded-xl border border-slate-200 bg-white text-sm font-semibold text-slate-600 hover:bg-slate-50">Invoices</a>
     <a href="#messages" data-panel-link="messages" class="portal-tab inline-flex items-center px-4 py-2 rounded-xl border border-slate-200 bg-white text-sm font-semibold text-slate-600 hover:bg-slate-50">Messages {% if d.messages %}<span class="ml-2 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-black text-slate-600">{{ d.messages|length }}</span>{% endif %}</a>
     {% if not is_preview %}
+    <a href="/portal/account" class="inline-flex items-center px-4 py-2 rounded-xl border border-slate-200 bg-white text-sm font-semibold text-slate-600 hover:bg-slate-50">Account</a>
     <form method="post" action="/portal/logout" class="ml-auto">
       <button type="submit" class="inline-flex items-center px-4 py-2 rounded-xl border border-slate-200 bg-white text-sm font-semibold text-slate-500 hover:bg-slate-50">Sign out</button>
     </form>
@@ -123,6 +132,9 @@
               <div class="text-right shrink-0">
                 <p class="text-sm font-bold text-slate-900">${{ "{:,.2f}".format(i.amount or 0) }}</p>
                 {{ pill(i.status) }}
+                {% if not is_preview and i.due and i.due > 0 %}
+                <a href="/portal/pay/{{ d.bid.id }}/{{ i.id }}" class="mt-1 inline-flex px-2.5 py-1 rounded-lg bg-indigo-600 text-white text-[11px] font-bold hover:bg-indigo-500">Pay</a>
+                {% endif %}
               </div>
             </div>
             {% else %}
@@ -134,6 +146,9 @@
         <div class="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
           <h2 class="text-base font-black text-slate-900">Quick actions</h2>
           <div class="mt-4 grid gap-2">
+            {% if d.payable and not is_preview %}
+            <a href="/portal/pay/{{ d.bid.id }}/{{ d.payable[0].id }}" class="flex items-center justify-between gap-3 rounded-xl border border-indigo-200 bg-indigo-50/60 px-4 py-3 text-sm font-bold text-indigo-800 hover:border-indigo-300 hover:bg-indigo-50"><span>💳 Pay {{ d.payable[0].invoice_number or 'your invoice' }}</span><span class="text-xs font-black">${{ "{:,.2f}".format(d.payable[0].due) }}</span></a>
+            {% endif %}
             <a href="#invoices" data-panel-link="invoices" class="flex items-center justify-between gap-3 rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 hover:border-indigo-300 hover:bg-indigo-50/40"><span>View invoices &amp; payments</span><span class="text-xs text-slate-400">{{ d.invoices|length }} total</span></a>
             <a href="#documents" data-panel-link="documents" class="flex items-center justify-between gap-3 rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 hover:border-indigo-300 hover:bg-indigo-50/40"><span>Open project documents</span><span class="text-xs text-slate-400">{{ d.documents|length }} files</span></a>
             <a href="#photos" data-panel-link="photos" class="flex items-center justify-between gap-3 rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 hover:border-indigo-300 hover:bg-indigo-50/40"><span>View project photos</span><span class="text-xs text-slate-400">{{ d.photos|length }} photos</span></a>
@@ -224,7 +239,7 @@
       </div>
       <div class="mt-6 bg-white rounded-2xl border border-slate-200 shadow-sm overflow-x-auto">
         <table class="w-full text-sm min-w-[640px]">
-          <thead><tr class="text-left text-[11px] uppercase tracking-wide text-slate-400 border-b border-slate-100"><th class="px-5 py-3">Invoice</th><th class="px-5 py-3">Description</th><th class="px-5 py-3">Due</th><th class="px-5 py-3 text-right">Amount</th><th class="px-5 py-3">Status</th></tr></thead>
+          <thead><tr class="text-left text-[11px] uppercase tracking-wide text-slate-400 border-b border-slate-100"><th class="px-5 py-3">Invoice</th><th class="px-5 py-3">Description</th><th class="px-5 py-3">Due</th><th class="px-5 py-3 text-right">Amount</th><th class="px-5 py-3">Status</th><th class="px-5 py-3"></th></tr></thead>
           <tbody>
             {% for i in d.invoices %}
             <tr class="border-b border-slate-50 last:border-0">
@@ -233,15 +248,22 @@
               <td class="px-5 py-3 text-slate-500">{{ i.due_date or '—' }}</td>
               <td class="px-5 py-3 text-right font-bold text-slate-900">${{ "{:,.2f}".format(i.amount or 0) }}</td>
               <td class="px-5 py-3">{{ pill(i.status) }}</td>
+              <td class="px-5 py-3 text-right">
+                {% if not is_preview and i.due and i.due > 0 %}
+                <a href="/portal/pay/{{ d.bid.id }}/{{ i.id }}" class="inline-flex px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-500">Pay ${{ "{:,.2f}".format(i.due) }}</a>
+                {% endif %}
+              </td>
             </tr>
             {% else %}
-            <tr><td colspan="5" class="px-5 py-6 text-sm text-slate-500">No invoices have been issued yet.</td></tr>
+            <tr><td colspan="6" class="px-5 py-6 text-sm text-slate-500">No invoices have been issued yet.</td></tr>
             {% endfor %}
           </tbody>
         </table>
       </div>
-      <div class="mt-4 rounded-2xl bg-amber-50 border border-amber-200 p-4 text-sm text-amber-900">
-        <strong>Before sending a payment:</strong> call or text <a href="tel:{{ co.phone_e164 }}" class="font-bold underline">{{ co.phone }}</a> and we will confirm the invoice and current payment details directly with you. Never send funds to an account from an old email.
+      <div class="mt-4 rounded-2xl bg-indigo-50 border border-indigo-200 p-4 text-sm text-indigo-900">
+        <strong>Pay online:</strong> open any invoice with a <b>Pay</b> button to pay by card or Zelle.
+        Card payments are recorded, receipted and posted to the books automatically.
+        If anything looks wrong, call or text <a href="tel:{{ co.phone_e164 }}" class="font-bold underline">{{ co.phone }}</a> before sending money.
       </div>
     </section>
 

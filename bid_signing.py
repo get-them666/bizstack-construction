@@ -49,15 +49,22 @@ def ensure_schema(conn) -> None:
                 method VARCHAR(20) DEFAULT 'drawn',
                 image_png BYTEA,
                 document_sha256 CHAR(64),
-                company VARCHAR(40) DEFAULT 'construction'
+                company VARCHAR(40) DEFAULT 'construction',
+                signer_role VARCHAR(20) NOT NULL DEFAULT 'owner'
             )
         """)
+        # The homeowner signs through a link now. Both signatures live in this
+        # table, but only the owner's belongs on the contractor line of a
+        # generated PDF -- separating them stops a client signature replacing
+        # the owner's on every document built afterwards.
+        cur.execute("ALTER TABLE bid_signatures ADD COLUMN IF NOT EXISTS "
+                    "signer_role VARCHAR(20) NOT NULL DEFAULT 'owner';")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_bid_signatures_bid "
                     "ON bid_signatures(bid_id, company);")
     conn.commit()
 
 
-def latest(conn, bid_id: int, company: str = "construction"):
+def latest(conn, bid_id: int, company: str = "construction", role: str = "owner"):
     """The signature currently in force for this bid, or None.
 
     History is kept rather than overwritten: if a signature is replaced, the
@@ -66,11 +73,17 @@ def latest(conn, bid_id: int, company: str = "construction"):
     with conn.cursor() as cur:
         cur.execute(
             "SELECT id, bid_id, signer_name, signer_email, signed_at, ip, "
-            "       user_agent, method, document_sha256, company, "
+            "       user_agent, method, document_sha256, company, signer_role, "
             "       octet_length(image_png) AS png_bytes "
             "FROM bid_signatures WHERE bid_id = %s AND company = %s "
-            "ORDER BY id DESC LIMIT 1", (bid_id, company))
+            "AND signer_role = %s ORDER BY id DESC LIMIT 1",
+            (bid_id, company, role))
         return cur.fetchone()
+
+
+def latest_client(conn, bid_id: int, company: str = "construction"):
+    """The homeowner's acceptance signature, which is not the owner's."""
+    return latest(conn, bid_id, company, role="client")
 
 
 def _decode_png(data: str) -> bytes:
@@ -116,7 +129,8 @@ def _trim(png: bytes) -> bytes:
 
 def save(conn, bid_id: int, *, signature_data: str, signer_name: str,
          signer_email: str = "", document_sha256: str = "", ip: str = "",
-         user_agent: str = "", company: str = "construction") -> dict:
+         user_agent: str = "", company: str = "construction",
+         signer_role: str = "owner") -> dict:
     """Validate, trim and store one signature. Raises ValueError with a message
     that can be shown to the owner as-is."""
     name = (signer_name or "").strip()
@@ -128,11 +142,12 @@ def save(conn, bid_id: int, *, signature_data: str, signer_name: str,
         cur.execute("""
             INSERT INTO bid_signatures
                 (bid_id, signer_name, signer_email, ip, user_agent, method,
-                 image_png, document_sha256, company)
-            VALUES (%s,%s,%s,%s,%s,'drawn',%s,%s,%s) RETURNING id, signed_at
+                 image_png, document_sha256, company, signer_role)
+            VALUES (%s,%s,%s,%s,%s,'drawn',%s,%s,%s,%s) RETURNING id, signed_at
         """, (bid_id, name[:160], (signer_email or "")[:255] or None,
               (ip or "")[:64] or None, (user_agent or "")[:400] or None,
-              png, (document_sha256 or "")[:64] or None, company))
+              png, (document_sha256 or "")[:64] or None, company,
+              "client" if signer_role == "client" else "owner"))
         row = cur.fetchone()
     conn.commit()
     return {"id": row["id"], "signed_at": row["signed_at"], "signer_name": name}

@@ -1,0 +1,179 @@
+{% extends "base.html" %}
+{% block title %}Pay invoice {{ invoice.invoice_number or invoice.id }} | {{ co.name }}{% endblock %}
+{% block meta %}<meta name="robots" content="noindex, nofollow">{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl mx-auto px-4 sm:px-6 py-10">
+  <div class="flex items-center justify-between gap-3">
+    <div>
+      <p class="text-xs font-bold uppercase tracking-widest text-indigo-600">Client portal</p>
+      <h1 class="mt-1 text-2xl font-black tracking-tight text-slate-900">Pay your invoice</h1>
+    </div>
+    <a href="/portal#invoices" class="px-4 py-2 rounded-xl border border-slate-200 text-sm font-bold text-slate-600 hover:bg-slate-50">Back to portal</a>
+  </div>
+
+  {% if paid %}
+  <div class="mt-5 rounded-2xl bg-emerald-50 border border-emerald-200 p-5">
+    <p class="text-lg font-black text-emerald-800">✓ Payment received</p>
+    {% if confirmation %}<p class="mt-1 text-sm text-emerald-900">Confirmation number: <b class="font-mono">{{ confirmation }}</b></p>{% endif %}
+    <p class="mt-1 text-sm text-emerald-800">Thank you. A receipt is on its way to your email and the office has been notified.</p>
+  </div>
+  {% elif claimed %}
+  <div class="mt-5 rounded-2xl bg-amber-50 border border-amber-200 p-5">
+    <p class="text-lg font-black text-amber-900">Payment notice received</p>
+    {% if confirmation %}<p class="mt-1 text-sm text-amber-900">Confirmation number: <b class="font-mono">{{ confirmation }}</b></p>{% endif %}
+    <p class="mt-1 text-sm text-amber-800">This confirms we got your notice. The invoice is marked paid only after the money clears.</p>
+  </div>
+  {% elif error %}
+  <div class="mt-5 rounded-xl bg-red-50 border border-red-200 px-4 py-3 text-sm font-semibold text-red-700" role="alert">{{ error }}</div>
+  {% endif %}
+
+  <div class="mt-5 bg-white rounded-2xl border border-slate-200 shadow-sm p-6">
+    <div class="flex flex-wrap items-start justify-between gap-4">
+      <div>
+        <p class="text-[11px] font-bold uppercase tracking-wide text-slate-400">Amount due</p>
+        <p class="text-4xl font-black text-slate-900">${{ "{:,.2f}".format(due) }}</p>
+        <p class="mt-1 text-sm text-slate-500">Invoice {{ invoice.invoice_number or invoice.id }}{% if invoice.description %} · {{ invoice.description }}{% endif %}</p>
+        {% if invoice.due_date %}<p class="text-xs text-slate-500">Due {{ invoice.due_date }}</p>{% endif %}
+      </div>
+      <div class="text-right text-xs text-slate-500">
+        <p class="font-bold text-slate-700">{{ bid.name or 'Your project' }}</p>
+        <p>Reference: <span class="font-mono">{{ reference }}</span></p>
+      </div>
+    </div>
+  </div>
+
+  {% if due > 0 %}
+  <div class="mt-5 bg-white rounded-2xl border border-slate-200 shadow-sm p-6">
+    <h2 class="text-base font-black text-slate-900">Pay by card</h2>
+    <p class="mt-1 text-sm text-slate-500">Secure card form by Zoho Payments. You stay on this page; card details are entered in Zoho's
+      encrypted widget and never reach our server.</p>
+    <div id="card-status" class="hidden mt-4 rounded-xl px-4 py-3 text-sm font-semibold"></div>
+    {% if zoho_widget %}
+    <button type="button" id="card-pay-btn" data-bid="{{ bid.id }}" data-invoice="{{ invoice.id }}"
+            class="mt-4 w-full sm:w-auto px-6 py-3 rounded-xl bg-indigo-600 text-white text-sm font-bold hover:bg-indigo-500 shadow-lg shadow-indigo-200">
+      Pay ${{ "{:,.2f}".format(due) }} by card
+    </button>
+    <p class="mt-2 text-[11px] text-slate-400">Visa, Mastercard, American Express and Discover. The office is alerted the moment it succeeds.</p>
+    {% else %}
+    <p class="mt-3 rounded-xl bg-amber-50 border border-amber-200 px-4 py-3 text-sm text-amber-800">
+      Card payments are not switched on yet. Use Zelle below or call
+      <a href="tel:{{ co.phone_e164 }}" class="font-bold underline">{{ co.phone }}</a>.
+    </p>
+    {% endif %}
+  </div>
+
+  {% if pay.zelle or pay.ach_ready %}
+  <div class="mt-5 bg-white rounded-2xl border border-slate-200 shadow-sm p-6">
+    <h2 class="text-base font-black text-slate-900">Pay by Zelle{% if pay.ach_ready %} or bank transfer{% endif %}</h2>
+    <div class="mt-3 space-y-3 text-sm text-slate-700">
+      {% if pay.zelle %}
+      <p><b>Zelle:</b> {{ pay.zelle_display }}<br><span class="text-xs text-slate-500">Put <span class="font-mono">{{ reference }}</span> in the memo.</span></p>
+      {% endif %}
+      {% if pay.ach_ready %}
+      <div class="rounded-xl bg-slate-50 border border-slate-200 p-3 text-xs">
+        <p class="font-bold text-slate-800">Bank transfer (ACH)</p>
+        <p>Routing: <span class="font-mono">{{ pay.routing }}</span></p>
+        <p>Account: <span class="font-mono">••••{{ pay.account_last4 }}</span></p>
+        <p class="mt-1 text-slate-500">The full account number is read to you by the office. Put <span class="font-mono">{{ reference }}</span> in the memo.</p>
+      </div>
+      {% endif %}
+    </div>
+    <form method="post" action="/portal/pay/{{ bid.id }}/{{ invoice.id }}/claim" class="mt-4 flex flex-wrap items-center gap-3">
+      <select name="method" class="rounded-xl border border-slate-200 px-3 py-2.5 text-sm">
+        {% if pay.zelle %}<option value="zelle">Zelle</option>{% endif %}
+        {% if pay.ach_ready %}<option value="ach">Bank transfer</option>{% endif %}
+      </select>
+      <button type="submit" class="px-5 py-2.5 rounded-xl border border-slate-300 text-sm font-bold text-slate-700 hover:bg-slate-50">
+        I sent this payment
+      </button>
+      <span class="text-xs text-slate-500">You get a confirmation number, and the office is alerted.</span>
+    </form>
+  </div>
+  {% endif %}
+  {% endif %}
+
+  <p class="mt-6 text-center text-xs text-slate-500">Never send money to an account from an old email. If anything looks wrong, call
+    <a href="tel:{{ co.phone_e164 }}" class="font-bold text-indigo-600">{{ co.phone }}</a> first.</p>
+</div>
+{% endblock %}
+
+{% block scripts %}
+{% if zoho_widget and due > 0 and not paid %}
+<script src="https://static.zohocdn.com/zpay/zpay-js/v1/zpayments.js"></script>
+<script>
+(function () {
+  "use strict";
+  var btn = document.getElementById("card-pay-btn");
+  if (!btn) return;
+  var status = document.getElementById("card-status");
+  var cfg = {
+    account_id: {{ zoho_account_id | tojson }},
+    domain: {{ zoho_domain | tojson }},
+    otherOptions: { api_key: {{ zoho_api_key | tojson }} }
+  };
+
+  function say(kind, text) {
+    status.className = "mt-4 rounded-xl px-4 py-3 text-sm font-semibold " +
+      (kind === "ok" ? "bg-emerald-50 border border-emerald-200 text-emerald-800"
+       : kind === "warn" ? "bg-amber-50 border border-amber-200 text-amber-900"
+       : "bg-red-50 border border-red-200 text-red-700");
+    status.textContent = text;
+    status.classList.remove("hidden");
+  }
+
+  btn.addEventListener("click", async function () {
+    btn.disabled = true;
+    var original = btn.textContent;
+    btn.textContent = "Opening secure card form…";
+    try {
+      var sres = await fetch("/portal/pay/" + btn.dataset.bid + "/" + btn.dataset.invoice + "/session", {
+        method: "POST", headers: { "Accept": "application/json" }
+      });
+      var session = await sres.json();
+      if (!sres.ok || !session.ok) throw new Error(session.error || "Card payments are unavailable right now.");
+
+      var instance = new window.ZPayments(cfg);
+      var result;
+      try {
+        result = await instance.requestPaymentMethod({
+          amount: session.amount,
+          transaction_type: "payment",
+          currency_code: "USD",
+          payments_session_id: session.session_id,
+          currency_symbol: "$",
+          business: {{ co.name | tojson }},
+          description: "Invoice {{ reference }} — " + {{ (bid.name or 'Project') | tojson }},
+          invoice_number: {{ reference | tojson }},
+          address: {
+            name: {{ (client.name or '') | tojson }},
+            email: {{ (client.email or '') | tojson }}
+          }
+        });
+      } finally {
+        try { await instance.close(); } catch (e) {}
+      }
+
+      if (!result || !result.payment_id) throw new Error("The card payment did not complete. No money was taken.");
+      say("warn", "Payment captured — recording it now…");
+
+      var body = new URLSearchParams({ payment_id: result.payment_id, session_id: session.session_id });
+      var cres = await fetch("/portal/pay/" + btn.dataset.bid + "/" + btn.dataset.invoice + "/confirm", {
+        method: "POST", headers: { "Accept": "application/json" }, body: body
+      });
+      var confirmed = await cres.json();
+      if (!cres.ok || !confirmed.ok) throw new Error(confirmed.error || "The payment succeeded but could not be recorded.");
+      say("ok", "Payment received. Confirmation " + confirmed.confirmation + ". Redirecting…");
+      window.location.href = confirmed.redirect;
+    } catch (err) {
+      var message = (err && err.message) ? err.message : "The payment did not complete.";
+      if (err && err.code === "widget_closed") message = "The card form was closed before payment. Nothing was charged.";
+      say("err", message + " You can try again, or call {{ co.phone }}.");
+      btn.disabled = false;
+      btn.textContent = original;
+    }
+  });
+})();
+</script>
+{% endif %}
+{% endblock %}
