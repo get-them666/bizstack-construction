@@ -15559,6 +15559,9 @@ async def portal_pay_session(bid_id: int, invoice_id: int, request: Request,
             invoice_number=(inv.get("invoice_number") or f"INV-{invoice_id}"),
             reference=_payment_reference(bid_id, invoice_id),
             email=client.get("email") or "", name=client.get("name") or "",
+            success_url=f"https://{company()['domain']}/portal/pay/{bid_id}/{invoice_id}?paid=1",
+            failure_url=f"https://{company()['domain']}/portal/pay/{bid_id}/{invoice_id}"
+                        "?error=The+card+payment+did+not+complete",
             setting=_setting_getter(db))
     except zoho_payments.ZohoPaymentsError as exc:
         return JSONResponse(status_code=502, content={"ok": False, "error": str(exc)})

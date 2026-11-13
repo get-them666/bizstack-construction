@@ -119,6 +119,7 @@ def _call(method: str, path: str, *, account_id_value: str = "", **kwargs) -> di
 
 def create_session(amount, *, description: str, invoice_number: str = "",
                    reference: str = "", email: str = "", name: str = "",
+                   success_url: str = "", failure_url: str = "",
                    setting=None) -> dict:
     """Create a 15-minute payment session for one invoice.
 
@@ -143,6 +144,10 @@ def create_session(amount, *, description: str, invoice_number: str = "",
                 "name": (name or "")[:120],
                 "email": (email or "")[:200],
                 "description": (description or "")[:500],
+                # Zoho rejects a session without a valid success_url even when
+                # the embedded widget is what is actually used.
+                **({"success_url": success_url[:500]} if success_url else {}),
+                **({"failure_url": failure_url[:500]} if failure_url else {}),
             },
         },
     }
