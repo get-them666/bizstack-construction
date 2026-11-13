@@ -98,6 +98,7 @@ import auto_reply
 import permit_service
 import site_theme
 import auth_service
+import portal_service
 import construction_radar
 import materials_service
 import supplier_adapters
@@ -829,6 +830,7 @@ async def lifecycle(app: FastAPI):
             direct_deposit.ensure_schema(conn)
             letter_batches.ensure_schema(conn)
             login_throttle.ensure_schema(conn)
+            portal_service.ensure_schema(conn)
             # Order matters and is not arbitrary: costing extends
             # bid_opportunities with outcome columns and a projects FK, so it
             # runs after. takeoff and supplier_prices are independent of each
@@ -14702,3 +14704,118 @@ async def bid_submit(bid_id: int, request: Request, markup_pct: str = Form("0"),
     if back.startswith("/bids/"):
         return RedirectResponse(url=back + "?sent=1", status_code=status.HTTP_303_SEE_OTHER)
     return RedirectResponse(url=f"/bids/{bid_id}?sent=1", status_code=status.HTTP_303_SEE_OTHER)
+
+
+# --- Client portal -----------------------------------------------------------
+def _portal_actor(request: Request):
+    return auth_service.actor_from_token(request.cookies.get(portal_service.COOKIE))
+
+
+def _require_portal_client(request: Request, db):
+    actor = _portal_actor(request)
+    if not actor or actor.get("role") != portal_service.ROLE:
+        return None
+    return portal_service.client_by_id(db, actor.get("id"))
+
+
+@app.get("/portal/login", response_class=HTMLResponse)
+async def portal_login_page(request: Request):
+    if _portal_actor(request):
+        return RedirectResponse(url="/portal", status_code=status.HTTP_303_SEE_OTHER)
+    return templates.TemplateResponse(request=request, name="portal_login.html", context={
+        "error": request.query_params.get("error", ""),
+        "email": request.query_params.get("email", ""),
+    })
+
+
+@app.post("/portal/login")
+async def portal_login_submit(request: Request, email: str = Form(""), password: str = Form(""),
+                              db=Depends(get_db)):
+    email = portal_service.normalize_email(email)
+    ip = request.client.host if request.client else ""
+    keys = (f"portal:{email}", f"portal-ip:{ip}")
+    login_throttle.ensure_schema(db)
+    wait = login_throttle.locked(db, *keys)
+    if wait:
+        return RedirectResponse(
+            url="/portal/login?error=" + urllib.parse.quote(
+                f"Too many attempts. Try again in {login_throttle.human(wait)}."),
+            status_code=status.HTTP_303_SEE_OTHER)
+    row = portal_service.client_by_email(db, email)
+    if not row or not portal_service.verify_password(password, row.get("password_hash") or ""):
+        login_throttle.fail(db, *keys)
+        return RedirectResponse(
+            url="/portal/login?error=" + urllib.parse.quote("Email or password is incorrect.")
+                + "&email=" + urllib.parse.quote(email),
+            status_code=status.HTTP_303_SEE_OTHER)
+    login_throttle.clear(db, *keys)
+    portal_service.touch_login(db, row["id"])
+    resp = RedirectResponse(url="/portal", status_code=status.HTTP_303_SEE_OTHER)
+    resp.set_cookie(
+        key=portal_service.COOKIE,
+        value=auth_service.issue_session(
+            portal_service.ROLE, row["id"], row["email"], row.get("name") or ""),
+        httponly=True, samesite="lax", secure=_secure_cookies(),
+        max_age=auth_service.SESSION_TTL_SECONDS)
+    return resp
+
+
+@app.post("/portal/logout")
+async def portal_logout():
+    resp = RedirectResponse(url="/portal/login", status_code=status.HTTP_303_SEE_OTHER)
+    resp.delete_cookie(portal_service.COOKIE)
+    return resp
+
+
+@app.get("/portal", response_class=HTMLResponse)
+async def portal_home(request: Request, bid: int = 0, db=Depends(get_db)):
+    client = _require_portal_client(request, db)
+    if not client:
+        return RedirectResponse(url="/portal/login", status_code=status.HTTP_303_SEE_OTHER)
+    bids = portal_service.accessible_bids(db, client["id"], client["email"])
+    selected = None
+    data = None
+    if bids:
+        selected = next((b for b in bids if int(b["id"]) == int(bid)), bids[0])
+        data = portal_service.portal_data(db, selected["id"], client["id"])
+    return templates.TemplateResponse(request=request, name="portal.html", context={
+        "client": client, "bids": bids, "selected": selected, "data": data,
+    })
+
+
+@app.post("/portal/messages")
+async def portal_message(request: Request, bid_id: str = Form(""), message: str = Form(""),
+                         db=Depends(get_db)):
+    client = _require_portal_client(request, db)
+    if not client:
+        return RedirectResponse(url="/portal/login", status_code=status.HTTP_303_SEE_OTHER)
+    try:
+        bid_id = int(bid_id)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid project")
+    if not portal_service.can_view_bid(db, client["id"], client["email"], bid_id):
+        raise HTTPException(status_code=403, detail="Not your project")
+    try:
+        portal_service.post_message(db, bid_id, client["id"], message)
+    except ValueError:
+        pass
+    return RedirectResponse(url=f"/portal?bid={bid_id}#messages",
+                            status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/api/portal/clients")
+async def portal_client_create(request: Request, bid_id: int = Form(...), email: str = Form(""),
+                               name: str = Form(""), password: str = Form(""),
+                               db=Depends(get_db)):
+    """Owner-only: create or reset the client login for one bid."""
+    require_admin(request)
+    portal_service.ensure_schema(db)
+    try:
+        client_id = portal_service.create_client(db, email, name, password)
+    except ValueError as e:
+        return RedirectResponse(
+            url=f"/bids/{bid_id}?portal_error=" + urllib.parse.quote(str(e)),
+            status_code=status.HTTP_303_SEE_OTHER)
+    portal_service.link_project(db, client_id, bid_id)
+    return RedirectResponse(url=f"/bids/{bid_id}?portal=1",
+                            status_code=status.HTTP_303_SEE_OTHER)

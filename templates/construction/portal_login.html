@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Client portal sign in | BuildStack Construction</title>
+  <meta name="robots" content="noindex, nofollow">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/portal-site.css">
+  <link rel="stylesheet" href="/static/css/portal.css">
+</head>
+<body class="portal-body">
+  <main class="portal-auth">
+    <section class="auth-visual" aria-label="BuildStack client portal"
+             style="background: linear-gradient(145deg, #101512 0%, #22352b 55%, #3f5b49 100%);">
+      <a class="brand" href="/" aria-label="BuildStack Construction — home">
+        <svg class="brand__mark" viewBox="0 0 40 40" aria-hidden="true">
+          <rect width="40" height="40" fill="#f3efe5"/>
+          <rect x="7" y="8" width="26" height="4" fill="#101512"/>
+          <rect x="7" y="17" width="17" height="4" fill="#101512"/>
+          <rect x="7" y="26" width="26" height="4" fill="#e4562d"/>
+        </svg>
+        <span class="brand__text">
+          <span class="brand__name" style="color: var(--paper);">BuildStack</span>
+          <span class="brand__sub">Construction LLC</span>
+        </span>
+      </a>
+
+      <div class="auth-visual__copy">
+        <h1>Your project,<br><em>in one place.</em></h1>
+        <p>Schedule, photos, documents, invoices and messages — updated by the crew working on your project.</p>
+        <div class="auth-visual__list">
+          <span>Project photos</span>
+          <span>Live schedule</span>
+          <span>Invoices &amp; documents</span>
+          <span>Direct messages</span>
+        </div>
+      </div>
+
+      <p class="auth-visual__foot">BuildStack Construction LLC · Licensed, bonded &amp; insured<br>Serving Hampton Roads, VA &amp; northeast NC</p>
+    </section>
+
+    <section class="auth-panel">
+      <div class="auth-card">
+        <a class="auth-mobile-brand" href="/" aria-label="BuildStack Construction — website">
+          <svg class="brand__mark" viewBox="0 0 40 40" aria-hidden="true">
+            <rect width="40" height="40" fill="#101512"/>
+            <rect x="7" y="8" width="26" height="4" fill="#f3efe5"/>
+            <rect x="7" y="17" width="17" height="4" fill="#f3efe5"/>
+            <rect x="7" y="26" width="26" height="4" fill="#e4562d"/>
+          </svg>
+          <span class="brand__text">
+            <span class="brand__name">BuildStack</span>
+            <span class="brand__sub">Construction LLC</span>
+          </span>
+        </a>
+
+        <div class="auth-card__top">
+          <p class="eyebrow">Client portal</p>
+          <h2>Welcome back.</h2>
+          <p class="auth-card__sub">Sign in to follow your project, review documents and message the crew.</p>
+        </div>
+
+        {% if error %}<div class="auth-error" role="alert">{{ error }}</div>{% endif %}
+
+        <form class="auth-form" method="post" action="/portal/login">
+          <div class="field">
+            <label for="portal-email">Email address</label>
+            <input id="portal-email" name="email" type="email" autocomplete="email" required
+                   placeholder="you@example.com" value="{{ email or '' }}">
+          </div>
+          <div class="field">
+            <label for="portal-password">Password</label>
+            <div class="password-wrap">
+              <input id="portal-password" name="password" type="password"
+                     autocomplete="current-password" required placeholder="Enter your password">
+              <button class="password-toggle" type="button" onclick="
+                var p=document.getElementById('portal-password');
+                var show=p.type==='password';
+                p.type=show?'text':'password';
+                this.textContent=show?'Hide':'Show';" aria-label="Show password">Show</button>
+            </div>
+          </div>
+          <button class="btn btn--primary" type="submit" style="width: 100%; margin-top: 4px;">Sign in <span class="arrow">→</span></button>
+        </form>
+
+        <p class="auth-card__foot">
+          Your project manager sets up your login when the contract is signed.<br>
+          Need help? Call or text <a href="tel:+17579087121">(757) 908-7121</a>.<br>
+          <a href="/">← Back to the website</a>
+        </p>
+      </div>
+    </section>
+  </main>
+</body>
+</html>
