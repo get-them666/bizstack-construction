@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Client Portal Inbox | {{ co.name }}{% endblock %}
+{% block meta %}<meta name="robots" content="noindex, nofollow">{% endblock %}
+
+{% block content %}
+<div class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
+  <div class="flex flex-wrap items-end justify-between gap-3">
+    <div>
+      <p class="text-xs font-bold uppercase tracking-widest text-indigo-600">Client portal</p>
+      <h1 class="mt-1 text-3xl font-black tracking-tight text-slate-900">Portal inbox</h1>
+      <p class="mt-1 text-sm text-slate-500">Every project with a client message thread. Open a card to reply.</p>
+    </div>
+    <a href="/bids" class="inline-flex items-center px-4 py-2 rounded-xl border border-slate-200 bg-white text-sm font-bold text-slate-700 hover:bg-slate-50">Back to bids</a>
+  </div>
+
+  <div class="mt-6 bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden divide-y divide-slate-100">
+    {% for t in threads %}
+    <a href="/bids/{{ t.bid_id }}#client-messages" class="block px-5 py-4 hover:bg-indigo-50/40 transition-colors">
+      <div class="flex flex-wrap items-start justify-between gap-3">
+        <div class="min-w-0">
+          <p class="text-sm font-black text-slate-900 truncate">{{ t.name or ('Bid #' ~ t.bid_id) }}</p>
+          <p class="mt-0.5 text-xs text-slate-500 truncate">{{ t.contact_name or 'Client' }}{% if t.contact_email %} · {{ t.contact_email }}{% endif %}</p>
+        </div>
+        <div class="text-right shrink-0">
+          <p class="text-xs font-bold text-slate-600">{{ t.message_count }} message{% if t.message_count != 1 %}s{% endif %}</p>
+          <p class="text-[11px] text-slate-400">{{ t.last_at or '' }}</p>
+        </div>
+      </div>
+      {% if t.last_body %}
+      <p class="mt-2 text-sm text-slate-600 truncate">{{ t.last_body }}</p>
+      {% endif %}
+    </a>
+    {% else %}
+    <div class="px-5 py-10 text-center">
+      <p class="text-sm font-semibold text-slate-600">No client messages yet.</p>
+      <p class="mt-1 text-xs text-slate-500">Create a client login on a bid card, then send the first message from that card.</p>
+      <a href="/bids" class="mt-4 inline-flex items-center px-4 py-2 rounded-xl bg-indigo-600 text-white text-sm font-bold hover:bg-indigo-500">Open bids</a>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endblock %}

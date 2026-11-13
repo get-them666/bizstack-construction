@@ -1,416 +1,305 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{{ (data.bid.name if data else 'Client portal') }} | BuildStack Construction</title>
-  <meta name="robots" content="noindex, nofollow">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/css/portal-site.css">
-  <link rel="stylesheet" href="/static/css/portal.css">
-</head>
-<body class="portal-body">
-  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
-    <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></symbol>
-    <symbol id="i-calendar" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="1"/><path d="M3 10h18M8 3v4M16 3v4"/></symbol>
-    <symbol id="i-camera" viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="14" rx="1"/><path d="M8 6l1.5-3h5L16 6"/><circle cx="12" cy="13" r="4"/></symbol>
-    <symbol id="i-file" viewBox="0 0 24 24"><path d="M6 3h9l3 3v15H6z"/><path d="M15 3v4h4"/></symbol>
-    <symbol id="i-card" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="1"/><path d="M3 10h18M7 15h4"/></symbol>
-    <symbol id="i-message" viewBox="0 0 24 24"><path d="M21 12a8 8 0 01-8 8H4l2-4a8 8 0 1115-4z"/></symbol>
-    <symbol id="i-bell" viewBox="0 0 24 24"><path d="M18 9a6 6 0 10-12 0c0 6-2 7-2 7h16s-2-1-2-7M10 20a2 2 0 004 0"/></symbol>
-    <symbol id="i-logout" viewBox="0 0 24 24"><path d="M10 4H5v16h5M14 8l4 4-4 4M8 12h10"/></symbol>
-    <symbol id="i-menu" viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18"/></symbol>
-    <symbol id="i-check" viewBox="0 0 24 24"><path d="M4 12l5 5L20 6"/></symbol>
-    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
-    <symbol id="i-circle" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/></symbol>
-    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M4 21h16"/></symbol>
-    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M4 12h16M14 6l6 6-6 6"/></symbol>
-    <symbol id="i-phone" viewBox="0 0 24 24"><path d="M6 3h4l2 5-3 2a14 14 0 006 6l2-3 5 2v4a2 2 0 01-2 2A18 18 0 014 5a2 2 0 012-2z"/></symbol>
-    <symbol id="i-mail" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="1"/><path d="M3 6l9 7 9-7"/></symbol>
-  </svg>
+{% extends "base.html" %}
+{% block title %}{{ (data.bid.name if data else 'Client portal') }} | {{ co.name }}{% endblock %}
+{% block meta %}
+<meta name="robots" content="noindex, nofollow">
+<style>
+  .portal-panel { display: none; }
+  .portal-panel.is-active { display: block; }
+  .portal-tab.is-active { background: #4f46e5; border-color: #4f46e5; color: #fff; }
+</style>
+{% endblock %}
 
-  {% set cname = client.name or client.email %}
-  {% set d = data %}
-  <div class="portal-shell">
-    <aside class="portal-sidebar" data-sidebar>
-      <a class="portal-brand" href="/" aria-label="BuildStack Construction — website">
-        <svg class="brand__mark" viewBox="0 0 40 40" aria-hidden="true">
-          <rect width="40" height="40" fill="#f3efe5"/>
-          <rect x="7" y="8" width="26" height="4" fill="#101512"/>
-          <rect x="7" y="17" width="17" height="4" fill="#101512"/>
-          <rect x="7" y="26" width="26" height="4" fill="#e4562d"/>
-        </svg>
-        <span class="brand__text">
-          <span class="brand__name">BuildStack</span>
-          <span class="brand__sub">Construction LLC</span>
-        </span>
-        <span class="portal-brand__tag">Portal</span>
-      </a>
+{% macro pill(status) %}
+  {% set st = (status or 'open')|lower %}
+  <span class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold border
+    {% if st == 'paid' %}bg-emerald-50 text-emerald-700 border-emerald-200
+    {% elif st in ('sent', 'due', 'partial') %}bg-amber-50 text-amber-700 border-amber-200
+    {% elif st == 'void' %}bg-slate-100 text-slate-500 border-slate-200
+    {% else %}bg-slate-100 text-slate-600 border-slate-200{% endif %}">{{ st|capitalize }}</span>
+{% endmacro %}
 
-      {% if d %}
-      <div class="portal-project">
-        <span class="portal-project__label">Current project</span>
-        {% if bids|length > 1 %}
-        <form method="get" action="/portal">
-          <select name="bid" onchange="this.form.submit()" aria-label="Choose project">
-            {% for b in bids %}
-            <option value="{{ b.id }}" {% if b.id == d.bid.id %}selected{% endif %}>{{ b.name or ('Bid #' ~ b.id) }}</option>
-            {% endfor %}
-          </select>
-        </form>
-        {% else %}
-        <strong>{{ d.bid.name or ('Bid #' ~ d.bid.id) }}</strong>
-        <span>{{ d.bid.location or '' }}</span>
-        {% endif %}
-      </div>
+{% block content %}
+{% set d = data %}
+{% set is_preview = preview if preview is defined else false %}
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 lg:py-10">
 
-      <nav class="portal-nav" aria-label="Client portal">
-        <a class="portal-nav__link is-active" href="#overview" data-panel-link="overview" data-title="Overview">
-          <svg><use href="#i-grid"></use></svg> Overview
-        </a>
-        <a class="portal-nav__link" href="#schedule" data-panel-link="schedule" data-title="Schedule">
-          <svg><use href="#i-calendar"></use></svg> Schedule
-        </a>
-        <a class="portal-nav__link" href="#photos" data-panel-link="photos" data-title="Photos">
-          <svg><use href="#i-camera"></use></svg> Photos
-          {% if d.photos %}<span class="portal-nav__badge">{{ d.photos|length }}</span>{% endif %}
-        </a>
-        <a class="portal-nav__link" href="#documents" data-panel-link="documents" data-title="Documents">
-          <svg><use href="#i-file"></use></svg> Documents
-          {% if d.documents %}<span class="portal-nav__badge">{{ d.documents|length }}</span>{% endif %}
-        </a>
-        <a class="portal-nav__link" href="#invoices" data-panel-link="invoices" data-title="Invoices">
-          <svg><use href="#i-card"></use></svg> Invoices
-          {% if d.invoices %}<span class="portal-nav__badge">{{ d.invoices|length }}</span>{% endif %}
-        </a>
-        <a class="portal-nav__link" href="#messages" data-panel-link="messages" data-title="Messages">
-          <svg><use href="#i-message"></use></svg> Messages
-          {% if d.messages %}<span class="portal-nav__badge">{{ d.messages|length }}</span>{% endif %}
-        </a>
-      </nav>
-      {% endif %}
+  {% if is_preview %}
+  <div class="mb-4 rounded-2xl bg-amber-50 border border-amber-200 px-4 py-3 text-sm font-semibold text-amber-900">
+    Owner preview — this is what the client sees. Read-only; the message form is disabled.
+  </div>
+  {% endif %}
 
-      <div class="portal-sidebar__foot">
-        <a class="portal-back" href="/"><svg class="icon" style="width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.8;"><use href="#i-arrow"></use></svg> Back to website</a>
-        <div class="portal-user">
-          <span class="portal-user__avatar">{{ cname[:2]|upper }}</span>
-          <div>
-            <strong>{{ cname }}</strong>
-            <span>Client</span>
-          </div>
-          <form method="post" action="/portal/logout" style="margin:0;">
-            <button type="submit" aria-label="Sign out" title="Sign out">
-              <svg><use href="#i-logout"></use></svg>
-            </button>
+  {% if not d %}
+  <div class="max-w-2xl mx-auto bg-white rounded-3xl border border-slate-200 shadow-sm p-8">
+    <p class="text-xs font-bold uppercase tracking-widest text-indigo-600">Client portal</p>
+    <h1 class="mt-2 text-2xl font-black text-slate-900">No project linked yet</h1>
+    <p class="mt-3 text-sm text-slate-600">Your login is active, but no project is attached to it yet. Call or text
+      <a href="tel:{{ co.phone_e164 }}" class="font-bold text-indigo-600">{{ co.phone }}</a> and we’ll link your project.</p>
+    <form method="post" action="/portal/logout" class="mt-6">
+      <button type="submit" class="inline-flex items-center px-4 py-2 rounded-xl border border-slate-200 text-sm font-bold text-slate-700 hover:bg-slate-50">Sign out</button>
+    </form>
+  </div>
+  {% else %}
+
+  <section class="rounded-3xl bg-gradient-to-br from-slate-900 via-slate-800 to-indigo-900 text-white overflow-hidden shadow-xl shadow-indigo-900/20">
+    <div class="p-6 sm:p-8 lg:p-10 grid grid-cols-1 lg:grid-cols-3 gap-8 items-start">
+      <div class="lg:col-span-2">
+        <div class="flex flex-wrap items-center gap-2">
+          <span class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/10 border border-white/20 text-xs font-semibold tracking-wide uppercase">Client portal</span>
+          <span class="inline-flex items-center px-3 py-1 rounded-full bg-white/10 border border-white/20 text-xs font-semibold">Bid #{{ d.bid.id }}</span>
+          {% if bids|length > 1 %}
+          <form method="get" action="/portal" class="ml-auto">
+            <select name="bid" onchange="this.form.submit()" aria-label="Choose project"
+                    class="rounded-xl bg-white/10 border border-white/20 text-white text-xs font-semibold px-3 py-1.5">
+              {% for b in bids %}<option value="{{ b.id }}" class="text-slate-900" {% if b.id == d.bid.id %}selected{% endif %}>{{ b.name or ('Bid #' ~ b.id) }}</option>{% endfor %}
+            </select>
           </form>
+          {% endif %}
+        </div>
+        <h1 class="mt-4 text-3xl sm:text-4xl font-black tracking-tight leading-tight">{{ d.bid.name or 'Your project' }}</h1>
+        <p class="mt-2 text-slate-300">{{ d.bid.location or '' }}</p>
+        <div class="mt-5">
+          <div class="h-2 rounded-full bg-white/10 overflow-hidden">
+            <div class="h-full rounded-full bg-indigo-400" style="width: {{ d.progress }}%;"></div>
+          </div>
+          <p class="mt-2 text-xs text-slate-300">{{ d.progress }}% complete based on recorded payments</p>
+        </div>
+        <div class="mt-6 grid grid-cols-2 sm:grid-cols-3 gap-4 text-sm">
+          <div><p class="text-[11px] uppercase tracking-wide text-slate-400">Started</p><p class="font-bold">{{ d.project.start_date if d.project and d.project.start_date else '—' }}</p></div>
+          <div><p class="text-[11px] uppercase tracking-wide text-slate-400">Target completion</p><p class="font-bold">{{ d.project.end_date if d.project and d.project.end_date else '—' }}</p></div>
+          <div><p class="text-[11px] uppercase tracking-wide text-slate-400">Project lead</p><p class="font-bold">Shaun O’Leary</p></div>
         </div>
       </div>
-    </aside>
-
-    <div class="portal-overlay" data-sidebar-overlay></div>
-
-    <div class="portal-main">
-      <header class="portal-topbar">
-        <button class="portal-menu-btn" type="button" data-portal-menu aria-expanded="false" aria-label="Open menu">
-          <svg fill="none" stroke="currentColor" stroke-width="1.8"><use href="#i-menu"></use></svg>
-        </button>
-        <div class="portal-topbar__title">
-          <span class="portal-crumb">{{ d.bid.name if d else 'Client portal' }}</span>
-          <h1 data-panel-title>Overview</h1>
+      <div class="grid grid-cols-2 gap-3 w-full">
+        <div class="rounded-2xl bg-white/10 border border-white/10 p-4">
+          <p class="text-[11px] uppercase tracking-wide text-slate-300">Contract</p>
+          <p class="mt-1 text-2xl font-black">${{ "{:,.0f}".format(d.contract) }}</p>
         </div>
-        <div class="portal-topbar__actions">
-          <a class="portal-icon-btn" href="tel:+17579087121" aria-label="Call the office">
-            <svg fill="none" stroke="currentColor" stroke-width="1.8"><use href="#i-phone"></use></svg>
-          </a>
-          <span class="portal-topbar__avatar">{{ cname[:2]|upper }}</span>
+        <div class="rounded-2xl bg-white/10 border border-white/10 p-4">
+          <p class="text-[11px] uppercase tracking-wide text-slate-300">Paid</p>
+          <p class="mt-1 text-2xl font-black">${{ "{:,.0f}".format(d.paid) }}</p>
         </div>
-      </header>
-
-      <main class="portal-content">
-        {% if not d %}
-        <section class="portal-panel is-active" data-panel="overview" id="overview">
-          <div class="portal-card">
-            <div class="portal-card__head"><h3>No project linked yet</h3></div>
-            <p>Your login is active, but no project is attached to it yet. Call or text <a href="tel:+17579087121">(757) 908-7121</a> and we’ll link your project.</p>
-            <form method="post" action="/portal/logout" style="margin-top:16px;"><button class="btn btn--outline btn--sm" type="submit">Sign out</button></form>
-          </div>
-        </section>
-        {% else %}
-
-        <section class="portal-panel is-active" data-panel="overview" id="overview">
-          <div class="project-hero">
-            <div class="project-hero__media" {% if not d.photos %}style="background: linear-gradient(145deg, #101512, #3f5b49);"{% endif %}>
-              {% if d.photos %}<img src="{{ d.photos[0].href }}" alt="{{ d.bid.name }}">{% endif %}
-            </div>
-            <div class="project-hero__body">
-              <div class="project-hero__top">
-                <span class="status-pill status-pill--active">{{ (d.bid.status or 'active')|capitalize }}</span>
-                <span class="project-id">Bid #{{ d.bid.id }}</span>
-              </div>
-              <h2>{{ d.bid.name or 'Your project' }}</h2>
-              <p class="project-hero__address">{{ d.bid.location or '' }}</p>
-              <div class="progress-row">
-                <div class="progress" role="progressbar" aria-label="Project progress" aria-valuenow="{{ d.progress }}" aria-valuemin="0" aria-valuemax="100"><span style="width: {{ d.progress }}%;"></span></div>
-                <strong>{{ d.progress }}% complete</strong>
-              </div>
-              <div class="project-hero__meta">
-                <div><span>Started</span><strong>{{ d.project.start_date if d.project and d.project.start_date else '—' }}</strong></div>
-                <div><span>Target completion</span><strong>{{ d.project.end_date if d.project and d.project.end_date else '—' }}</strong></div>
-                <div><span>Project lead</span><strong>Shaun O’Leary</strong></div>
-              </div>
-            </div>
-          </div>
-
-          <div class="portal-stats">
-            <div class="portal-stat">
-              <span class="portal-stat__label">Contract</span>
-              <strong>${{ "{:,.2f}".format(d.contract) }}</strong>
-              <small>Fixed-price scope</small>
-            </div>
-            <div class="portal-stat">
-              <span class="portal-stat__label">Paid to date</span>
-              <strong>${{ "{:,.2f}".format(d.paid) }}</strong>
-              <small>Recorded payments</small>
-            </div>
-            <div class="portal-stat portal-stat--accent">
-              <span class="portal-stat__label">Balance</span>
-              <strong>${{ "{:,.2f}".format(d.balance) }}</strong>
-              <small>{% if d.next_invoice %}Next {{ d.next_invoice.invoice_number or 'invoice' }}{% else %}No open invoice{% endif %}</small>
-            </div>
-            <div class="portal-stat">
-              <span class="portal-stat__label">Next invoice</span>
-              <strong>{{ d.next_invoice.invoice_number if d.next_invoice else '—' }}</strong>
-              <small>{% if d.next_invoice %}Due {{ d.next_invoice.due_date or '—' }}{% else %}All current invoices settled{% endif %}</small>
-            </div>
-          </div>
-
-          <div class="portal-grid portal-grid--2">
-            <section class="portal-card">
-              <div class="portal-card__head">
-                <h3>Payment schedule</h3>
-                <a class="portal-card__link" href="#invoices" data-panel-link="invoices">Full invoices →</a>
-              </div>
-              <div class="mini-phases">
-                {% for i in d.invoices %}
-                {% set st = (i.status or '')|lower %}
-                <div class="mini-phase {% if st == 'paid' %}mini-phase--complete{% elif st in ('sent','due','partial') %}mini-phase--active{% endif %}">
-                  <span class="mini-phase__dot">{% if st == 'paid' %}✓{% elif st in ('sent','due','partial') %}●{% else %}{{ loop.index }}{% endif %}</span>
-                  <span class="mini-phase__body">
-                    <strong>{{ i.invoice_number or 'Invoice' }}{% if i.kind %} · {{ i.kind|capitalize }}{% endif %}</strong>
-                    <span>{{ i.description or 'Payment' }}</span>
-                  </span>
-                  <span class="mini-phase__date">{{ i.due_date or '—' }}</span>
-                </div>
-                {% else %}
-                <p class="portal-card__note">No invoices have been issued yet.</p>
-                {% endfor %}
-              </div>
-            </section>
-
-            <section class="portal-card">
-              <div class="portal-card__head"><h3>Quick actions</h3></div>
-              <div class="quick-actions">
-                <a class="quick-action" href="#invoices" data-panel-link="invoices">
-                  <span><svg fill="none" stroke="currentColor" stroke-width="1.7"><use href="#i-card"></use></svg> View invoices</span><b>{{ d.invoices|length }} total</b>
-                </a>
-                <a class="quick-action" href="#documents" data-panel-link="documents">
-                  <span><svg fill="none" stroke="currentColor" stroke-width="1.7"><use href="#i-file"></use></svg> Open documents</span><b>{{ d.documents|length }} files</b>
-                </a>
-                <a class="quick-action" href="#photos" data-panel-link="photos">
-                  <span><svg fill="none" stroke="currentColor" stroke-width="1.7"><use href="#i-camera"></use></svg> Project photos</span><b>{{ d.photos|length }} photos</b>
-                </a>
-                <a class="quick-action" href="#messages" data-panel-link="messages">
-                  <span><svg fill="none" stroke="currentColor" stroke-width="1.7"><use href="#i-message"></use></svg> Message the office</span><b>{{ d.messages|length }} messages</b>
-                </a>
-              </div>
-            </section>
-          </div>
-
-          {% if d.photos %}
-          <section class="portal-card" style="margin-top:18px;">
-            <div class="portal-card__head"><h3>Recent photos</h3><a class="portal-card__link" href="#photos" data-panel-link="photos">View all →</a></div>
-            <div class="photos-grid">
-              {% for p in d.photos[:3] %}
-              <a class="photo-card" href="{{ p.href }}" target="_blank" rel="noopener">
-                <span class="photo-card__media"><img src="{{ p.href }}" alt="{{ p.caption or 'Project photo' }}"></span>
-                <span class="photo-card__body"><strong>{{ p.caption or 'Project photo' }}</strong><span>{{ p.uploaded_at or '' }}</span></span>
-              </a>
-              {% endfor %}
-            </div>
-          </section>
-          {% endif %}
-        </section>
-
-        <section class="portal-panel" data-panel="schedule" id="schedule">
-          <div class="panel-intro">
-            <div class="panel-intro__row">
-              <div><h2>Schedule</h2><p>Project dates and the payment milestones from your contract.</p></div>
-            </div>
-          </div>
-          <div class="portal-card">
-            <div class="doc-list">
-              {% if d.project %}
-              <div class="doc-row"><span class="doc-icon"><svg fill="none" stroke="currentColor" stroke-width="1.7"><use href="#i-calendar"></use></svg></span><div class="doc-body"><strong>Project start</strong><span>{{ d.project.start_date or 'To be confirmed' }}</span></div><span class="doc-status">Planned</span></div>
-              <div class="doc-row"><span class="doc-icon"><svg fill="none" stroke="currentColor" stroke-width="1.7"><use href="#i-calendar"></use></svg></span><div class="doc-body"><strong>Target completion</strong><span>{{ d.project.end_date or 'To be confirmed' }}</span></div><span class="doc-status">Planned</span></div>
-              {% endif %}
-              {% for i in d.invoices %}
-              {% set st = (i.status or '')|lower %}
-              <div class="doc-row">
-                <span class="doc-icon"><svg fill="none" stroke="currentColor" stroke-width="1.7"><use href="#i-card"></use></svg></span>
-                <div class="doc-body"><strong>{{ i.invoice_number or 'Invoice' }}{% if i.kind %} · {{ i.kind|capitalize }}{% endif %}</strong><span>{{ i.description or 'Payment' }} · due {{ i.due_date or '—' }}</span></div>
-                <span class="doc-status">{{ (i.status or 'open')|capitalize }}</span>
-              </div>
-              {% endfor %}
-            </div>
-          </div>
-        </section>
-
-        <section class="portal-panel" data-panel="photos" id="photos">
-          <div class="panel-intro"><div class="panel-intro__row"><div><h2>Photos</h2><p>Progress and selection photos from the job.</p></div></div></div>
-          {% if d.photos %}
-          <div class="photos-grid">
-            {% for p in d.photos %}
-            <a class="photo-card" href="{{ p.href }}" target="_blank" rel="noopener">
-              <span class="photo-card__media"><img src="{{ p.href }}" alt="{{ p.caption or 'Project photo' }}"></span>
-              <span class="photo-card__body"><strong>{{ p.caption or 'Project photo' }}</strong><span>{{ p.uploaded_at or '' }}</span></span>
-            </a>
-            {% endfor %}
-          </div>
-          {% else %}
-          <div class="portal-card"><p>No photos have been posted yet.</p></div>
-          {% endif %}
-        </section>
-
-        <section class="portal-panel" data-panel="documents" id="documents">
-          <div class="panel-intro"><div class="panel-intro__row"><div><h2>Documents</h2><p>Contracts, scope, plans and other project files.</p></div></div></div>
-          {% if d.documents %}
-          <div class="doc-list">
-            {% for doc in d.documents %}
-            <div class="doc-row">
-              <span class="doc-icon"><svg fill="none" stroke="currentColor" stroke-width="1.7"><use href="#i-file"></use></svg></span>
-              <div class="doc-body"><strong>{{ doc.filename }}</strong><span>{{ (doc.document_type or 'document')|capitalize }}{% if doc.bytes %} · {{ (doc.bytes / 1024)|round|int }} KB{% endif %}</span></div>
-              <span class="doc-status">{{ (doc.document_type or 'file')|capitalize }}</span>
-              {% if doc.href %}<a class="doc-action" href="{{ doc.href }}" target="_blank" rel="noopener">Download</a>{% endif %}
-            </div>
-            {% endfor %}
-          </div>
-          {% else %}
-          <div class="portal-card"><p>No documents have been shared yet.</p></div>
-          {% endif %}
-        </section>
-
-        <section class="portal-panel" data-panel="invoices" id="invoices">
-          <div class="panel-intro"><div class="panel-intro__row"><div><h2>Invoices &amp; payments</h2><p>Your payment schedule: 30% deposit, 40% at midpoint, 30% at final walkthrough.</p></div></div></div>
-          <div class="invoice-summary">
-            <div class="invoice-stat"><span>Contract total</span><strong>${{ "{:,.2f}".format(d.contract) }}</strong><small>Fixed-price scope</small></div>
-            <div class="invoice-stat"><span>Paid to date</span><strong>${{ "{:,.2f}".format(d.paid) }}</strong><small>Recorded payments</small></div>
-            <div class="invoice-stat"><span>Balance</span><strong>${{ "{:,.2f}".format(d.balance) }}</strong><small>{% if d.next_invoice %}Next {{ d.next_invoice.invoice_number or 'invoice' }}{% else %}No open invoice{% endif %}</small></div>
-          </div>
-          <div class="invoice-table-wrap">
-            <table class="invoice-table">
-              <thead><tr><th>Invoice</th><th>Description</th><th>Due</th><th class="num">Amount</th><th>Status</th></tr></thead>
-              <tbody>
-                {% for i in d.invoices %}
-                {% set st = (i.status or '')|lower %}
-                <tr>
-                  <td>{{ i.invoice_number or '—' }}</td>
-                  <td>{{ i.description or (i.kind or 'Payment')|capitalize }}</td>
-                  <td>{{ i.due_date or '—' }}</td>
-                  <td class="num">${{ "{:,.2f}".format(i.amount or 0) }}</td>
-                  <td><span class="status-pill status-pill--{% if st == 'paid' %}paid{% elif st in ('sent','due','partial') %}due{% else %}upcoming{% endif %}">{{ (st or 'open')|capitalize }}</span></td>
-                </tr>
-                {% else %}
-                <tr><td colspan="5">No invoices have been issued yet.</td></tr>
-                {% endfor %}
-              </tbody>
-            </table>
-          </div>
-          <div class="portal-card" style="margin-top:18px;">
-            <div class="portal-card__head"><h3>How to pay</h3></div>
-            <p style="font-size:0.86rem;color:var(--steel);max-width:70ch;">Call or text <a href="tel:+17579087121">(757) 908-7121</a> before sending a payment. We will confirm the invoice and the current payment details directly with you. Never send funds to an account from an old email.</p>
-          </div>
-        </section>
-
-        <section class="portal-panel" data-panel="messages" id="messages">
-          <div class="panel-intro"><div class="panel-intro__row"><div><h2>Messages</h2><p>Direct line to the office and the project team.</p></div></div></div>
-          <div class="messages-layout">
-            <div class="thread-list">
-              <div class="thread-list__head"><h3>Project thread</h3></div>
-              <button class="thread-item is-active" type="button">
-                <strong>{{ d.bid.name or 'Project' }}</strong>
-                <span>{% if d.messages %}{{ d.messages[-1].body[:90] }}{% else %}No messages yet — start the conversation.{% endif %}</span>
-                <small>{% if d.messages %}{{ d.messages[-1].created_at }}{% endif %}</small>
-              </button>
-            </div>
-            <div class="chat">
-              <div class="chat__head">
-                <span class="chat__avatar">SO</span>
-                <div><strong>Shaun O’Leary</strong><span>Owner · project lead</span></div>
-                <span class="status-pill status-pill--active">Office</span>
-              </div>
-              <div class="chat__thread">
-                {% for m in d.messages %}
-                <div class="bubble {% if m.sender_role == 'client' %}bubble--mine{% endif %}">
-                  <span class="bubble__meta">{% if m.sender_role == 'client' %}You{% else %}BuildStack office{% endif %} · {{ m.created_at }}</span>
-                  <p>{{ m.body }}</p>
-                </div>
-                {% else %}
-                <div class="bubble"><span class="bubble__meta">BuildStack office</span><p>Send a message here and it goes to the project team.</p></div>
-                {% endfor %}
-              </div>
-              <form class="chat__form" method="post" action="/portal/messages">
-                <input type="hidden" name="bid_id" value="{{ d.bid.id }}">
-                <input type="text" name="message" placeholder="Write a message…" autocomplete="off" aria-label="Message" required>
-                <button type="submit">Send</button>
-              </form>
-              <p class="chat__note">Messages are stored with your project. For urgent issues, call or text (757) 908-7121.</p>
-            </div>
-          </div>
-        </section>
-
-        {% endif %}
-      </main>
+        <div class="rounded-2xl bg-white/10 border border-white/10 p-4">
+          <p class="text-[11px] uppercase tracking-wide text-slate-300">Balance</p>
+          <p class="mt-1 text-2xl font-black text-indigo-300">${{ "{:,.0f}".format(d.balance) }}</p>
+        </div>
+        <div class="rounded-2xl bg-white/10 border border-white/10 p-4">
+          <p class="text-[11px] uppercase tracking-wide text-slate-300">Next invoice</p>
+          <p class="mt-1 text-lg font-black">{{ d.next_invoice.invoice_number if d.next_invoice else '—' }}</p>
+        </div>
+      </div>
     </div>
+  </section>
+
+  <div class="mt-6 flex flex-wrap items-center gap-2">
+    <a href="#overview" data-panel-link="overview" class="portal-tab is-active inline-flex items-center px-4 py-2 rounded-xl border border-slate-200 bg-white text-sm font-semibold text-slate-600 hover:bg-slate-50">Overview</a>
+    <a href="#schedule" data-panel-link="schedule" class="portal-tab inline-flex items-center px-4 py-2 rounded-xl border border-slate-200 bg-white text-sm font-semibold text-slate-600 hover:bg-slate-50">Schedule</a>
+    <a href="#photos" data-panel-link="photos" class="portal-tab inline-flex items-center px-4 py-2 rounded-xl border border-slate-200 bg-white text-sm font-semibold text-slate-600 hover:bg-slate-50">Photos {% if d.photos %}<span class="ml-2 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-black text-slate-600">{{ d.photos|length }}</span>{% endif %}</a>
+    <a href="#documents" data-panel-link="documents" class="portal-tab inline-flex items-center px-4 py-2 rounded-xl border border-slate-200 bg-white text-sm font-semibold text-slate-600 hover:bg-slate-50">Documents {% if d.documents %}<span class="ml-2 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-black text-slate-600">{{ d.documents|length }}</span>{% endif %}</a>
+    <a href="#invoices" data-panel-link="invoices" class="portal-tab inline-flex items-center px-4 py-2 rounded-xl border border-slate-200 bg-white text-sm font-semibold text-slate-600 hover:bg-slate-50">Invoices</a>
+    <a href="#messages" data-panel-link="messages" class="portal-tab inline-flex items-center px-4 py-2 rounded-xl border border-slate-200 bg-white text-sm font-semibold text-slate-600 hover:bg-slate-50">Messages {% if d.messages %}<span class="ml-2 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-black text-slate-600">{{ d.messages|length }}</span>{% endif %}</a>
+    {% if not is_preview %}
+    <form method="post" action="/portal/logout" class="ml-auto">
+      <button type="submit" class="inline-flex items-center px-4 py-2 rounded-xl border border-slate-200 bg-white text-sm font-semibold text-slate-500 hover:bg-slate-50">Sign out</button>
+    </form>
+    {% endif %}
   </div>
 
-  <script>
-    (function () {
-      "use strict";
-      var links = document.querySelectorAll("[data-panel-link]");
-      var panels = document.querySelectorAll("[data-panel]");
-      var title = document.querySelector("[data-panel-title]");
-      function show(name, push) {
-        panels.forEach(function (p) { p.classList.toggle("is-active", p.getAttribute("data-panel") === name); });
-        links.forEach(function (a) { a.classList.toggle("is-active", a.getAttribute("data-panel-link") === name); });
-        var active = document.querySelector('[data-panel-link="' + name + '"]');
-        if (title && active) title.textContent = active.getAttribute("data-title") || name;
-        if (push && history.replaceState) history.replaceState(null, "", "#" + name);
-      }
-      links.forEach(function (a) {
-        a.addEventListener("click", function (e) {
-          e.preventDefault();
-          show(a.getAttribute("data-panel-link"), true);
-        });
-      });
-      var initial = (location.hash || "#overview").slice(1);
-      if (document.querySelector('[data-panel="' + initial + '"]')) show(initial, false);
+  <div class="mt-6">
+    <section class="portal-panel is-active" data-panel="overview" id="overview">
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div class="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+          <div class="flex items-center justify-between gap-2">
+            <h2 class="text-base font-black text-slate-900">Payment schedule</h2>
+            <a href="#invoices" data-panel-link="invoices" class="text-xs font-bold text-indigo-600 hover:text-indigo-700">Full invoices →</a>
+          </div>
+          <div class="mt-4 space-y-3">
+            {% for i in d.invoices %}
+            <div class="flex items-start justify-between gap-3 border-b border-slate-100 pb-3 last:border-0 last:pb-0">
+              <div class="min-w-0">
+                <p class="text-sm font-bold text-slate-900">{{ i.invoice_number or 'Invoice' }}{% if i.kind %} · {{ i.kind|capitalize }}{% endif %}</p>
+                <p class="text-xs text-slate-500 truncate">{{ i.description or 'Payment' }} · due {{ i.due_date or '—' }}</p>
+              </div>
+              <div class="text-right shrink-0">
+                <p class="text-sm font-bold text-slate-900">${{ "{:,.2f}".format(i.amount or 0) }}</p>
+                {{ pill(i.status) }}
+              </div>
+            </div>
+            {% else %}
+            <p class="text-sm text-slate-500">No invoices have been issued yet.</p>
+            {% endfor %}
+          </div>
+        </div>
 
-      var sidebar = document.querySelector("[data-sidebar]");
-      var overlay = document.querySelector("[data-sidebar-overlay]");
-      var menu = document.querySelector("[data-portal-menu]");
-      if (menu) menu.addEventListener("click", function () {
-        var open = sidebar.classList.toggle("is-open");
-        if (overlay) overlay.classList.toggle("is-visible", open);
-        menu.setAttribute("aria-expanded", open ? "true" : "false");
+        <div class="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+          <h2 class="text-base font-black text-slate-900">Quick actions</h2>
+          <div class="mt-4 grid gap-2">
+            <a href="#invoices" data-panel-link="invoices" class="flex items-center justify-between gap-3 rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 hover:border-indigo-300 hover:bg-indigo-50/40"><span>View invoices &amp; payments</span><span class="text-xs text-slate-400">{{ d.invoices|length }} total</span></a>
+            <a href="#documents" data-panel-link="documents" class="flex items-center justify-between gap-3 rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 hover:border-indigo-300 hover:bg-indigo-50/40"><span>Open project documents</span><span class="text-xs text-slate-400">{{ d.documents|length }} files</span></a>
+            <a href="#photos" data-panel-link="photos" class="flex items-center justify-between gap-3 rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 hover:border-indigo-300 hover:bg-indigo-50/40"><span>View project photos</span><span class="text-xs text-slate-400">{{ d.photos|length }} photos</span></a>
+            <a href="#messages" data-panel-link="messages" class="flex items-center justify-between gap-3 rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 hover:border-indigo-300 hover:bg-indigo-50/40"><span>Message the office</span><span class="text-xs text-slate-400">{{ d.messages|length }} messages</span></a>
+          </div>
+        </div>
+      </div>
+
+      {% if d.photos %}
+      <div class="mt-6 bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+        <div class="flex items-center justify-between gap-2">
+          <h2 class="text-base font-black text-slate-900">Recent photos</h2>
+          <a href="#photos" data-panel-link="photos" class="text-xs font-bold text-indigo-600 hover:text-indigo-700">View all →</a>
+        </div>
+        <div class="mt-4 grid grid-cols-2 sm:grid-cols-3 gap-3">
+          {% for p in d.photos[:3] %}
+          <a href="{{ p.href }}" target="_blank" rel="noopener" class="group rounded-xl overflow-hidden border border-slate-200 bg-slate-50">
+            <img src="{{ p.href }}" alt="{{ p.caption or 'Project photo' }}" class="h-40 w-full object-cover group-hover:scale-[1.02] transition-transform">
+            <span class="block px-3 py-2 text-xs font-semibold text-slate-700 truncate">{{ p.caption or 'Project photo' }}</span>
+          </a>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+    </section>
+
+    <section class="portal-panel" data-panel="schedule" id="schedule">
+      <div class="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+        <h2 class="text-base font-black text-slate-900">Schedule</h2>
+        <p class="mt-1 text-sm text-slate-500">Project dates and payment milestones from your contract.</p>
+        <div class="mt-5 space-y-3">
+          {% if d.project %}
+          <div class="flex items-center justify-between gap-3 border-b border-slate-100 pb-3"><div><p class="text-sm font-bold text-slate-900">Project start</p><p class="text-xs text-slate-500">{{ d.project.start_date or 'To be confirmed' }}</p></div><span class="text-xs font-bold text-slate-400">Planned</span></div>
+          <div class="flex items-center justify-between gap-3 border-b border-slate-100 pb-3"><div><p class="text-sm font-bold text-slate-900">Target completion</p><p class="text-xs text-slate-500">{{ d.project.end_date or 'To be confirmed' }}</p></div><span class="text-xs font-bold text-slate-400">Planned</span></div>
+          {% endif %}
+          {% for i in d.invoices %}
+          <div class="flex items-center justify-between gap-3 border-b border-slate-100 pb-3 last:border-0 last:pb-0">
+            <div><p class="text-sm font-bold text-slate-900">{{ i.invoice_number or 'Invoice' }}{% if i.kind %} · {{ i.kind|capitalize }}{% endif %}</p><p class="text-xs text-slate-500">{{ i.description or 'Payment' }} · due {{ i.due_date or '—' }}</p></div>
+            {{ pill(i.status) }}
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+    </section>
+
+    <section class="portal-panel" data-panel="photos" id="photos">
+      <div class="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+        <h2 class="text-base font-black text-slate-900">Photos</h2>
+        <p class="mt-1 text-sm text-slate-500">Progress and selection photos from the job.</p>
+        {% if d.photos %}
+        <div class="mt-5 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+          {% for p in d.photos %}
+          <a href="{{ p.href }}" target="_blank" rel="noopener" class="group rounded-xl overflow-hidden border border-slate-200 bg-slate-50">
+            <img src="{{ p.href }}" alt="{{ p.caption or 'Project photo' }}" class="h-40 w-full object-cover group-hover:scale-[1.02] transition-transform">
+            <span class="block px-3 py-2 text-xs font-semibold text-slate-700 truncate">{{ p.caption or 'Project photo' }}</span>
+          </a>
+          {% endfor %}
+        </div>
+        {% else %}<p class="mt-4 text-sm text-slate-500">No photos have been posted yet.</p>{% endif %}
+      </div>
+    </section>
+
+    <section class="portal-panel" data-panel="documents" id="documents">
+      <div class="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+        <h2 class="text-base font-black text-slate-900">Documents</h2>
+        <p class="mt-1 text-sm text-slate-500">Contracts, scope, plans and other project files.</p>
+        {% if d.documents %}
+        <div class="mt-5 divide-y divide-slate-100">
+          {% for doc in d.documents %}
+          <div class="flex items-center justify-between gap-3 py-3">
+            <div class="min-w-0">
+              <p class="text-sm font-bold text-slate-900 truncate">{{ doc.filename }}</p>
+              <p class="text-xs text-slate-500">{{ (doc.document_type or 'document')|capitalize }}</p>
+            </div>
+            {% if doc.href %}<a href="{{ doc.href }}" target="_blank" rel="noopener" class="shrink-0 inline-flex items-center px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-bold text-indigo-600 hover:bg-indigo-50">Download</a>{% endif %}
+          </div>
+          {% endfor %}
+        </div>
+        {% else %}<p class="mt-4 text-sm text-slate-500">No documents have been shared yet.</p>{% endif %}
+      </div>
+    </section>
+
+    <section class="portal-panel" data-panel="invoices" id="invoices">
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div class="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm"><p class="text-[11px] uppercase tracking-wide text-slate-400">Contract total</p><p class="mt-1 text-2xl font-black text-slate-900">${{ "{:,.2f}".format(d.contract) }}</p><p class="text-xs text-slate-500">Fixed-price scope</p></div>
+        <div class="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm"><p class="text-[11px] uppercase tracking-wide text-slate-400">Paid to date</p><p class="mt-1 text-2xl font-black text-emerald-600">${{ "{:,.2f}".format(d.paid) }}</p><p class="text-xs text-slate-500">Recorded payments</p></div>
+        <div class="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm"><p class="text-[11px] uppercase tracking-wide text-slate-400">Balance</p><p class="mt-1 text-2xl font-black text-indigo-600">${{ "{:,.2f}".format(d.balance) }}</p><p class="text-xs text-slate-500">{% if d.next_invoice %}Next {{ d.next_invoice.invoice_number or 'invoice' }}{% else %}No open invoice{% endif %}</p></div>
+      </div>
+      <div class="mt-6 bg-white rounded-2xl border border-slate-200 shadow-sm overflow-x-auto">
+        <table class="w-full text-sm min-w-[640px]">
+          <thead><tr class="text-left text-[11px] uppercase tracking-wide text-slate-400 border-b border-slate-100"><th class="px-5 py-3">Invoice</th><th class="px-5 py-3">Description</th><th class="px-5 py-3">Due</th><th class="px-5 py-3 text-right">Amount</th><th class="px-5 py-3">Status</th></tr></thead>
+          <tbody>
+            {% for i in d.invoices %}
+            <tr class="border-b border-slate-50 last:border-0">
+              <td class="px-5 py-3 font-mono text-xs text-slate-600">{{ i.invoice_number or '—' }}</td>
+              <td class="px-5 py-3 text-slate-700">{{ i.description or (i.kind or 'Payment')|capitalize }}</td>
+              <td class="px-5 py-3 text-slate-500">{{ i.due_date or '—' }}</td>
+              <td class="px-5 py-3 text-right font-bold text-slate-900">${{ "{:,.2f}".format(i.amount or 0) }}</td>
+              <td class="px-5 py-3">{{ pill(i.status) }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="5" class="px-5 py-6 text-sm text-slate-500">No invoices have been issued yet.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="mt-4 rounded-2xl bg-amber-50 border border-amber-200 p-4 text-sm text-amber-900">
+        <strong>Before sending a payment:</strong> call or text <a href="tel:{{ co.phone_e164 }}" class="font-bold underline">{{ co.phone }}</a> and we will confirm the invoice and current payment details directly with you. Never send funds to an account from an old email.
+      </div>
+    </section>
+
+    <section class="portal-panel" data-panel="messages" id="messages">
+      <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+        <div class="p-5 border-b border-slate-100">
+          <h2 class="text-base font-black text-slate-900">Messages</h2>
+          <p class="mt-1 text-sm text-slate-500">Direct line to the office and the project team.</p>
+        </div>
+        <div class="p-5 max-h-[420px] overflow-y-auto space-y-3 bg-slate-50/60">
+          {% for m in d.messages %}
+          <div class="flex {% if m.sender_role == 'client' %}justify-end{% endif %}">
+            <div class="max-w-[85%] rounded-2xl px-4 py-2.5 text-sm {% if m.sender_role == 'client' %}bg-indigo-600 text-white{% else %}bg-white border border-slate-200 text-slate-700{% endif %}">
+              <p class="text-[10px] font-bold uppercase tracking-wide {% if m.sender_role == 'client' %}text-indigo-100{% else %}text-slate-400{% endif %}">{% if m.sender_role == 'client' %}You{% else %}BuildStack office{% endif %} · {{ m.created_at }}</p>
+              <p class="mt-1 whitespace-pre-line">{{ m.body }}</p>
+            </div>
+          </div>
+          {% else %}
+          <div class="rounded-2xl bg-white border border-slate-200 p-4 text-sm text-slate-600">Send a message here and it goes to the project team.</div>
+          {% endfor %}
+        </div>
+        {% if not is_preview %}
+        <form method="post" action="/portal/messages" class="p-4 border-t border-slate-100 flex gap-2">
+          <input type="hidden" name="bid_id" value="{{ d.bid.id }}">
+          <input type="text" name="message" required autocomplete="off" placeholder="Write a message…" aria-label="Message"
+                 class="flex-1 rounded-xl border border-slate-200 px-4 py-2.5 text-sm focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 outline-none">
+          <button type="submit" class="inline-flex items-center px-4 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-bold hover:bg-indigo-500">Send</button>
+        </form>
+        {% else %}
+        <p class="p-4 border-t border-slate-100 text-xs text-slate-500">Owner preview — the client message form is disabled.</p>
+        {% endif %}
+      </div>
+    </section>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  (function () {
+    "use strict";
+    var links = document.querySelectorAll("[data-panel-link]");
+    var panels = document.querySelectorAll("[data-panel]");
+    function show(name) {
+      panels.forEach(function (p) { p.classList.toggle("is-active", p.getAttribute("data-panel") === name); });
+      links.forEach(function (a) { a.classList.toggle("is-active", a.getAttribute("data-panel-link") === name); });
+    }
+    links.forEach(function (a) {
+      a.addEventListener("click", function (e) {
+        e.preventDefault();
+        var name = a.getAttribute("data-panel-link");
+        show(name);
+        if (history.replaceState) history.replaceState(null, "", "#" + name);
       });
-      if (overlay) overlay.addEventListener("click", function () {
-        sidebar.classList.remove("is-open");
-        overlay.classList.remove("is-visible");
-        if (menu) menu.setAttribute("aria-expanded", "false");
-      });
-    })();
-  </script>
-</body>
-</html>
+    });
+    var initial = (location.hash || "#overview").slice(1);
+    if (document.querySelector('[data-panel="' + initial + '"]')) show(initial);
+  })();
+</script>
+{% endblock %}

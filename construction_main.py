@@ -10993,6 +10993,14 @@ async def bid_detail_page(bid_id: int, request: Request, db=Depends(get_db)):
     except Exception as exc:
         print(f"[bids] revisions unavailable for bid {bid_id}: {exc}", flush=True)
 
+    portal_messages = []
+    portal_account = None
+    try:
+        portal_messages = portal_service.messages_for_bid(db, bid_id)
+        portal_account = portal_service.linked_client_for_bid(db, bid_id)
+    except Exception as exc:
+        print(f"[bids] portal messages unavailable for bid {bid_id}: {exc}", flush=True)
+
     response = templates.TemplateResponse(
         request=request, name="bid_detail.html",
         context={
@@ -11022,6 +11030,8 @@ async def bid_detail_page(bid_id: int, request: Request, db=Depends(get_db)):
             "statuses": ["new", "drafting", "sent", "shortlist",
                          "won", "lost", "withdrawn"],
             "cost_categories": ["material", "labor", "sub", "equipment", "other"],
+            "portal_messages": portal_messages,
+            "portal_account": portal_account,
         })
     # A bid page is per-record money data. no-store is the belt to the database's
     # braces: a browser or intermediate cache must never hand back bid A's HTML
@@ -14780,7 +14790,69 @@ async def portal_home(request: Request, bid: int = 0, db=Depends(get_db)):
         data = portal_service.portal_data(db, selected["id"], client["id"])
     return templates.TemplateResponse(request=request, name="portal.html", context={
         "client": client, "bids": bids, "selected": selected, "data": data,
+        "portal_client": client, "preview": False,
     })
+
+
+@app.get("/portal/preview/{bid_id}", response_class=HTMLResponse)
+async def portal_preview(bid_id: int, request: Request, db=Depends(get_db)):
+    """Owner-only, read-only view of exactly what the client sees."""
+    require_admin(request)
+    bid = bid_opportunities.get_bid(db, bid_id, _BID_COMPANY)
+    if not bid:
+        raise HTTPException(status_code=404, detail="Bid not found")
+    data = portal_service.portal_data(db, bid_id, 0)
+    return templates.TemplateResponse(request=request, name="portal.html", context={
+        "client": {"name": "Owner preview", "email": "", "id": 0},
+        "bids": [bid], "selected": bid, "data": data,
+        "preview": True,
+    })
+
+
+@app.get("/portal/inbox", response_class=HTMLResponse)
+async def portal_inbox(request: Request, db=Depends(get_db)):
+    """Owner-only list of client portal threads."""
+    require_admin(request)
+    try:
+        threads = portal_service.inbox_threads(db)
+    except Exception as exc:
+        print(f"[portal] inbox unavailable: {exc}", flush=True)
+        threads = []
+    return templates.TemplateResponse(request=request, name="portal_inbox.html", context={
+        "threads": threads,
+    })
+
+
+@app.post("/api/portal/messages")
+async def portal_office_message(request: Request, bid_id: int = Form(...), message: str = Form(""),
+                                db=Depends(get_db)):
+    """Owner reply into a client's portal thread."""
+    require_admin(request)
+    bid = bid_opportunities.get_bid(db, bid_id, _BID_COMPANY)
+    if not bid:
+        raise HTTPException(status_code=404, detail="Bid not found")
+    client = portal_service.linked_client_for_bid(db, bid_id)
+    text = (message or "").strip()
+    try:
+        portal_service.post_message(db, bid_id, client["id"] if client else None, text, role="office")
+    except ValueError:
+        return RedirectResponse(url=f"/bids/{bid_id}#client-messages",
+                                status_code=status.HTTP_303_SEE_OTHER)
+    to = ((client["email"] if client else "") or bid.get("contact_email") or "").strip()
+    if to:
+        try:
+            cfg = documents_service.smtp_config_from_env()
+            await documents_service.send_email(
+                cfg, to,
+                f"New message on your {bid.get('name') or 'project'} portal",
+                (f"You have a new message from BuildStack Construction about "
+                 f"{bid.get('name') or 'your project'}.\n\n{text}\n\n"
+                 f"Sign in at https://{company()['domain']}/portal/login to reply."),
+            )
+        except Exception as exc:
+            logger.warning("portal reply email failed for bid %s: %s", bid_id, exc)
+    return RedirectResponse(url=f"/bids/{bid_id}#client-messages",
+                            status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.post("/portal/messages")
@@ -14795,10 +14867,23 @@ async def portal_message(request: Request, bid_id: str = Form(""), message: str 
         raise HTTPException(status_code=400, detail="Invalid project")
     if not portal_service.can_view_bid(db, client["id"], client["email"], bid_id):
         raise HTTPException(status_code=403, detail="Not your project")
+    text = (message or "").strip()
     try:
-        portal_service.post_message(db, bid_id, client["id"], message)
+        portal_service.post_message(db, bid_id, client["id"], text)
     except ValueError:
         pass
+    if text:
+        bid = bid_opportunities.get_bid(db, bid_id, _BID_COMPANY)
+        try:
+            cfg = documents_service.smtp_config_from_env()
+            await documents_service.send_email(
+                cfg, admin_email(),
+                f"Client portal message — {(bid or {}).get('name') or ('Bid #' + str(bid_id))}",
+                (f"{client.get('name') or client.get('email')} wrote in the client portal:\n\n"
+                 f"{text}\n\nOpen https://{company()['domain']}/bids/{bid_id}#client-messages to reply."),
+            )
+        except Exception as exc:
+            logger.warning("portal owner notification failed for bid %s: %s", bid_id, exc)
     return RedirectResponse(url=f"/portal?bid={bid_id}#messages",
                             status_code=status.HTTP_303_SEE_OTHER)
 

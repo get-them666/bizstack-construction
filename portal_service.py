@@ -47,13 +47,16 @@ def ensure_schema(conn) -> None:
             CREATE TABLE IF NOT EXISTS portal_messages (
                 id SERIAL PRIMARY KEY,
                 bid_id INTEGER NOT NULL,
-                client_id INTEGER NOT NULL REFERENCES portal_clients(id) ON DELETE CASCADE,
+                client_id INTEGER REFERENCES portal_clients(id) ON DELETE CASCADE,
                 sender_role VARCHAR(20) NOT NULL DEFAULT 'client',
                 body TEXT NOT NULL,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
                 read_at TIMESTAMPTZ
             );
         """)
+        # Office replies have no client id of their own; the thread is keyed by
+        # bid_id. Drop the old NOT NULL for databases created before this.
+        cur.execute("ALTER TABLE portal_messages ALTER COLUMN client_id DROP NOT NULL;")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_portal_access_client ON portal_project_access(client_id);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_portal_messages_bid ON portal_messages(bid_id, created_at);")
     conn.commit()
@@ -245,15 +248,51 @@ def portal_data(conn, bid_id: int, client_id: int) -> dict:
     }
 
 
-def post_message(conn, bid_id: int, client_id: int, body: str, role: str = "client") -> int:
+def post_message(conn, bid_id: int, client_id, body: str, role: str = "client") -> int:
     text = (body or "").strip()
     if not text:
         raise ValueError("Message is empty.")
+    cid = int(client_id) if client_id not in (None, "", 0) else None
     with conn.cursor() as cur:
         cur.execute("""
             INSERT INTO portal_messages (bid_id, client_id, sender_role, body)
             VALUES (%s, %s, %s, %s) RETURNING id;
-        """, (int(bid_id), int(client_id), role, text[:4000]))
+        """, (int(bid_id), cid, role, text[:4000]))
         message_id = cur.fetchone()["id"]
     conn.commit()
     return message_id
+
+
+def messages_for_bid(conn, bid_id: int) -> list[dict]:
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT id, sender_role, body, created_at
+            FROM portal_messages WHERE bid_id = %s ORDER BY created_at, id;
+        """, (int(bid_id),))
+        return cur.fetchall()
+
+
+def linked_client_for_bid(conn, bid_id: int):
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT c.* FROM portal_clients c
+            JOIN portal_project_access a ON a.client_id = c.id
+            WHERE a.bid_id = %s ORDER BY c.id LIMIT 1;
+        """, (int(bid_id),))
+        return cur.fetchone()
+
+
+def inbox_threads(conn) -> list[dict]:
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT b.id AS bid_id, b.name, b.contact_name, b.contact_email,
+                   COUNT(m.id) AS message_count, MAX(m.created_at) AS last_at,
+                   (SELECT body FROM portal_messages m2
+                    WHERE m2.bid_id = b.id
+                    ORDER BY m2.created_at DESC, m2.id DESC LIMIT 1) AS last_body
+            FROM bid_opportunities b
+            JOIN portal_messages m ON m.bid_id = b.id
+            GROUP BY b.id, b.name, b.contact_name, b.contact_email
+            ORDER BY last_at DESC;
+        """)
+        return cur.fetchall()
