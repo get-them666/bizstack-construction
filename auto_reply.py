@@ -685,6 +685,27 @@ def note_withheld(db, lead_id, reason: str) -> None:
         print(f"[auto-reply] could not record withheld note for lead {lead_id}: {exc}", flush=True)
 
 
+_NO_REPLY_LOCALS = {
+    "no-reply", "noreply", "do-not-reply", "donotreply", "notifications",
+    "notification", "mailer-daemon", "postmaster", "bounce", "bounces",
+    "automated", "automailer",
+}
+
+
+def is_no_reply(email: str) -> bool:
+    """True for a mailbox that must never receive an automated reply.
+
+    Proton's daily "You have 9 new message(s)" notification came from
+    no-reply@mail.proton.me, was matched to a lead, and the reply bot answered
+    it — Proton then answered the robot. A no-reply address is not a person and
+    has no conversation to continue.
+    """
+    local = (email or "").strip().lower().split("@", 1)[0]
+    return (local in _NO_REPLY_LOCALS
+            or local.startswith(("no-reply", "noreply", "do-not-reply",
+                                 "donotreply", "mailer-daemon")))
+
+
 def _blocked_sources() -> set:
     """Lead sources that must never enter the automated email cadence.
 
@@ -710,6 +731,8 @@ def blocked_reason(email: str, source: str = "") -> str:
     if (source or "").strip().lower() in _blocked_sources():
         return f"source '{source}' is blocked from automated email"
     addr = (email or "").strip().lower()
+    if is_no_reply(addr):
+        return "no-reply address"
     domain = addr.rsplit("@", 1)[-1] if "@" in addr else ""
     if (os.getenv("BLOCK_GOV_MIL_EMAIL", "1") or "1").lower() in ("1", "true", "yes", "on"):
         if _is_federal_domain(domain):
@@ -870,6 +893,10 @@ def ensure_lead_reply(db, company_key, *, name="", phone="", email="", service="
     company_key = company_key if company_key in COMPANIES else "construction"
     email = (email or "").strip()
     service = (service or "").strip()
+    if email and is_no_reply(email):
+        print(f"[auto-reply {company_key}] withheld — no-reply address", flush=True)
+        note_withheld(db, lead_id, "no-reply address")
+        return {"sent": False, "staged": False, "msg": ""}
 
     quote, est = _auto_quote(company_key, service, sqft)
     if est and company_key == "construction" and lead_id:

@@ -27,6 +27,11 @@ _TAG_RE = re.compile(r"<[^>]+>")
 _ENT_RE = re.compile(r"&(?:amp|lt|gt|quot|#39|nbsp);")
 _MULTI_WS = re.compile(r"[ \t\r\f\v]+")
 _NEWLINES = re.compile(r"\n{3,}")
+# Notification robots, not people. They must still be recorded, but they can
+# never be matched to a lead or answered.
+_NO_REPLY_RE = re.compile(
+    r"^(no-?reply|do-?not-?reply|notifications?|mailer-daemon|postmaster|bounces?)@",
+    re.I)
 
 
 def _clean_addr(raw):
@@ -170,7 +175,7 @@ def _ingest(db, company_key, msgs, mailbox_from):
                 "WHERE LOWER(email) = %s AND company = %s;",
                 (_norm(sender), company_key),
             )
-            lead = cur.fetchone()
+            lead = None if _NO_REPLY_RE.match(sender) else cur.fetchone()
             text = (m.get("text") or "").strip()
             subject = (m.get("subject") or "").strip() or "(no subject)"
             ext_id = (m.get("external_id") or "").strip() or _make_content_id(sender, subject, m.get("date") or "")

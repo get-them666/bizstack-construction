@@ -52,6 +52,13 @@ _MAX_THREAD_BODIES = 10
 
 _SUBJECT_PREFIX = re.compile(r"^\s*(?:(?:re|fw|fwd|aw|sv|tr)\s*:\s*)+", re.I)
 _WS = re.compile(r"\s+")
+_NO_REPLY_RE = re.compile(
+    r"^(no-?reply|do-?not-?reply|notifications?|mailer-daemon|postmaster|bounces?)@",
+    re.I)
+# Proton's daily "you have N new messages" notice is not mail from a person.
+# It used to sit at the top of the inbox with a Reply badge and was answered by
+# the lead bot. Hide this one sender; the owner can still see it in Zoho.
+_PROTON_NOTIFICATION_RE = re.compile(r"^no-?reply@mail\.proton\.me$", re.I)
 
 _list_cache: dict = {}
 _list_lock = threading.Lock()
@@ -178,6 +185,8 @@ def conversations(days: int = 14, limit: int = 60) -> dict:
             continue
         from_addr = _addr(h.get("from") or "")
         to_addr = _addr(h.get("to") or "")
+        if _PROTON_NOTIFICATION_RE.match(from_addr):
+            continue
         outbound = bool(me) and from_addr == me
         party = (to_addr if outbound else from_addr).strip()
         if not party or party == me:
@@ -213,7 +222,8 @@ def conversations(days: int = 14, limit: int = 60) -> dict:
     items = sorted(groups.values(), key=lambda x: x["last_ms"], reverse=True)
     for g in items:
         g["when"] = time.strftime("%b %d, %H:%M", time.gmtime(g["last_ms"] / 1000)) if g["last_ms"] else ""
-        g["needs_reply"] = g["last_direction"] == "in"
+        g["needs_reply"] = (g["last_direction"] == "in"
+                            and not _NO_REPLY_RE.match(g["party"]))
     return {"ok": True, "items": items, "mailbox": address or _mailbox(),
             "checked": len(heads)}
 
