@@ -861,6 +861,20 @@ async def lifecycle(app: FastAPI):
     except Exception as e:
         print(f"⚠️ SQLite lead mirror init failed: {e}")
 
+    # Owner's personal client-portal account — same email + password as the
+    # admin login, so the owner can preview what homeowners see without
+    # juggling separate credentials. Created at every boot (idempotent;
+    # create_client upserts on email so the password stays in sync).
+    try:
+        with psycopg.connect(db_url, row_factory=dict_row) as conn:
+            portal_service.ensure_schema(conn)
+            admin_pw = os.getenv("ADMIN_PASSWORD", "password123")
+            admin_email = (os.getenv("ADMIN_EMAIL") or "hello@bizstackperks.com").strip()
+            portal_service.create_client(conn, admin_email, "Owner", admin_pw)
+            print(f"👤 Client portal account ready for {admin_email}")
+    except Exception as e:
+        print(f"⚠️ Client portal owner account setup skipped: {e}")
+
     # Lead pipeline orchestrator: auto-enrich → contact → quote flow. Quote
     # tables must exist before the leads board reads them for deposit amounts;
     # creating them only from a quote route left every existing board broken on
