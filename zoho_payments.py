@@ -38,41 +38,59 @@ class ZohoPaymentsError(RuntimeError):
     """Raised with a customer-safe message; callers show ``str(exc)``."""
 
 
-def account_id() -> str:
-    return (os.getenv("ZOHO_PAYMENTS_ACCOUNT_ID") or "").strip()
+def _value(setting, setting_key: str, env_key: str) -> str:
+    """Environment wins; then the value saved on Settings.
+
+    The widget key is public (it can create a session, not move money), so it
+    is safe to keep in app_settings and let the owner paste it in the app
+    instead of opening Render.
+    """
+    raw = (os.getenv(env_key) or "").strip()
+    if raw:
+        return raw
+    if setting:
+        try:
+            raw = (setting(setting_key) or "").strip()
+        except Exception:
+            raw = ""
+    return raw
 
 
-def api_key() -> str:
+def account_id(setting=None) -> str:
+    return _value(setting, "zoho_payments_account_id", "ZOHO_PAYMENTS_ACCOUNT_ID")
+
+
+def api_key(setting=None) -> str:
     """The public widget key. Safe to put in a page; it cannot move money."""
-    return (os.getenv("ZOHO_PAYMENTS_API_KEY") or "").strip()
+    return _value(setting, "zoho_payments_api_key", "ZOHO_PAYMENTS_API_KEY")
 
 
-def domain() -> str:
-    return (os.getenv("ZOHO_PAYMENTS_DOMAIN") or "US").strip().upper()
+def domain(setting=None) -> str:
+    return (_value(setting, "zoho_payments_domain", "ZOHO_PAYMENTS_DOMAIN") or "US").upper()
 
 
-def configured() -> bool:
+def configured(setting=None) -> bool:
     """Enough configuration to create a session and render the widget."""
-    return bool(account_id() and api_key() and zoho_client.is_configured())
+    return bool(account_id(setting) and api_key(setting) and zoho_client.is_configured())
 
 
-def widget_configured() -> bool:
+def widget_configured(setting=None) -> bool:
     """The browser-side half. Account + key are enough to render."""
-    return bool(account_id() and api_key())
+    return bool(account_id(setting) and api_key(setting))
 
 
 def _amount(value) -> str:
     return str(Decimal(str(value or 0)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
 
-def _call(method: str, path: str, **kwargs) -> dict:
+def _call(method: str, path: str, *, account_id_value: str = "", **kwargs) -> dict:
     headers = zoho_client.get_headers()
     if not headers:
         raise ZohoPaymentsError(
             "Zoho is not connected. Reconnect Zoho in Settings so card payments can be created.")
     url = f"{API_ROOT}{path}"
     params = kwargs.pop("params", {}) or {}
-    params.setdefault("account_id", account_id())
+    params.setdefault("account_id", account_id_value or account_id())
     resp = zoho_client.api_request(method, url, headers=headers, params=params, **kwargs)
     if resp is None:
         raise ZohoPaymentsError("Zoho Payments did not answer. Try again in a moment.")
@@ -88,13 +106,14 @@ def _call(method: str, path: str, **kwargs) -> dict:
 
 
 def create_session(amount, *, description: str, invoice_number: str = "",
-                   reference: str = "", email: str = "", name: str = "") -> dict:
+                   reference: str = "", email: str = "", name: str = "",
+                   setting=None) -> dict:
     """Create a 15-minute payment session for one invoice.
 
     Returns the Zoho patch (``payments_session_id``, ``amount``, ...). Amounts
     are major units, which is what the Zoho API expects.
     """
-    if not configured():
+    if not configured(setting):
         raise ZohoPaymentsError(
             "Card payments are not set up yet. Add the Zoho Payments account id and widget key.")
     payload = {
@@ -115,24 +134,26 @@ def create_session(amount, *, description: str, invoice_number: str = "",
             },
         },
     }
-    body = _call("POST", "/paymentsessions", json=payload)
+    body = _call("POST", "/paymentsessions", json=payload,
+                 account_id_value=account_id(setting))
     session = body.get("payments_session") or {}
     if not session.get("payments_session_id"):
         raise ZohoPaymentsError("Zoho did not return a payment session.")
     return session
 
 
-def retrieve_payment(payment_id: str) -> dict:
+def retrieve_payment(payment_id: str, setting=None) -> dict:
     """The authoritative record of one payment, straight from Zoho."""
     pid = (payment_id or "").strip()
     if not pid:
         raise ZohoPaymentsError("No payment id was supplied.")
-    body = _call("GET", f"/payments/{pid}")
+    body = _call("GET", f"/payments/{pid}", account_id_value=account_id(setting))
     return body.get("payment") or body
 
 
-def retrieve_session(session_id: str) -> dict:
-    body = _call("GET", f"/paymentsessions/{(session_id or '').strip()}")
+def retrieve_session(session_id: str, setting=None) -> dict:
+    body = _call("GET", f"/paymentsessions/{(session_id or '').strip()}",
+                 account_id_value=account_id(setting))
     return body.get("payments_session") or body
 
 

@@ -355,6 +355,34 @@
             <code>ZohoPay.payments.CREATE</code> scope. Zelle and bank transfer still work when those details are on file.
         </div>
         {% endif %}
+        <form method="post" action="/api/settings/zoho-payments" class="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <label class="text-xs font-semibold text-slate-700">
+                Account ID
+                <input name="account_id" value="{{ zoho_payments_status.account_value }}" placeholder="e.g. 23137556"
+                       class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm font-normal">
+            </label>
+            <label class="text-xs font-semibold text-slate-700">
+                Widget / API key
+                <input name="api_key" type="password" autocomplete="off"
+                       placeholder="{{ '•••••••• (set — leave blank to keep)' if zoho_payments_status.widget_key else 'paste the Developer Space key' }}"
+                       class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm font-normal">
+            </label>
+            <label class="text-xs font-semibold text-slate-700">
+                Region
+                <select name="domain" class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm font-normal">
+                    <option value="US" {% if zoho_payments_status.domain == 'US' %}selected{% endif %}>US</option>
+                    <option value="IN" {% if zoho_payments_status.domain == 'IN' %}selected{% endif %}>India</option>
+                </select>
+            </label>
+            <div class="flex items-end">
+                <button class="px-4 py-2 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-500">Save card settings</button>
+            </div>
+        </form>
+        <div class="mt-2 flex flex-wrap gap-3 text-[11px]">
+            <a href="https://payments.zoho.com/app#/settings" target="_blank" rel="noopener" class="font-bold text-indigo-600">Open Zoho Payments settings →</a>
+            <a href="https://payments.zoho.com/app#/settings/developer-space" target="_blank" rel="noopener" class="font-bold text-indigo-600">Developer Space (widget key) →</a>
+            <a href="/oauth/zoho/start" class="font-bold text-red-600">Reconnect Zoho for card scopes →</a>
+        </div>
     </div>
 
     <!-- Sign-in -->

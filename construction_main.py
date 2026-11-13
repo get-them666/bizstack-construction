@@ -1567,6 +1567,11 @@ def _set_setting(db, key, value):
         db.commit()
 
 
+def _setting_getter(db):
+    """`get(key)` for modules that accept settings instead of an env var."""
+    return lambda key: _get_setting(db, key)
+
+
 # --- Crew feature toggles (namespaced per-role) ------------------------------
 CREW_PERMS_KEY = "perms_crew"
 
@@ -6614,9 +6619,11 @@ async def settings_page(request: Request, db=Depends(get_db)):
     zoho_payments_status = {
         "configured": bool(ZOHO_PAYMENTS_WEBHOOK_KEY),
         "webhook_url": f"https://{os.getenv('COMPANY_DOMAIN', 'construction.bizstackperks.com')}/api/payments/zoho/webhook",
-        "card_ready": zoho_payments.configured(),
-        "account_id": bool(zoho_payments.account_id()),
-        "widget_key": bool(zoho_payments.api_key()),
+        "card_ready": zoho_payments.configured(getter),
+        "account_id": bool(zoho_payments.account_id(getter)),
+        "widget_key": bool(zoho_payments.api_key(getter)),
+        "account_value": zoho_payments.account_id(getter),
+        "domain": zoho_payments.domain(getter),
     }
     return templates.TemplateResponse(
         request=request,
@@ -6817,6 +6824,36 @@ async def settings_security(request: Request, otp_enabled: str = Form(""),
     _set_setting(db, "portal_otp_enabled",
                  "true" if portal_otp_enabled.lower() in ("on", "1", "true", "yes") else "false")
     return RedirectResponse(url="/settings?saved=security#security", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/api/settings/zoho-payments")
+async def settings_zoho_payments(request: Request, account_id: str = Form(""),
+                                 api_key: str = Form(""), domain: str = Form("US"),
+                                 clear: str = Form(""), db=Depends(get_db)):
+    """Store the Zoho Payments widget credentials without editing Render.
+
+    The widget key is public: it can create a checkout on our page but cannot
+    move money or read the account. The account id is not a secret either. The
+    server-side OAuth token is separate and still has to be reconnected under
+    Settings → Zoho after the ZohoPay scopes are added.
+    """
+    require_admin(request)
+    if (clear or "").strip():
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM app_settings WHERE key IN "
+                        "('zoho_payments_account_id', 'zoho_payments_api_key', "
+                        "'zoho_payments_domain');")
+        db.commit()
+        return RedirectResponse(url="/settings?saved=zoho-payments#zoho-payments",
+                                status_code=status.HTTP_303_SEE_OTHER)
+    if (account_id or "").strip():
+        _set_setting(db, "zoho_payments_account_id", (account_id or "").strip())
+    if (api_key or "").strip():
+        _set_setting(db, "zoho_payments_api_key", (api_key or "").strip())
+    if (domain or "").strip():
+        _set_setting(db, "zoho_payments_domain", (domain or "US").strip().upper())
+    return RedirectResponse(url="/settings?saved=zoho-payments#zoho-payments",
+                            status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.post("/api/settings/resimply")
@@ -15490,11 +15527,11 @@ async def portal_pay_page(bid_id: int, invoice_id: int, request: Request,
         "due": portal_service.amount_due(inv),
         "pay": pay,
         "reference": (inv.get("invoice_number") or f"INV-{invoice_id}"),
-        "zoho_ready": zoho_payments.configured(),
-        "zoho_widget": zoho_payments.widget_configured(),
-        "zoho_account_id": zoho_payments.account_id(),
-        "zoho_api_key": zoho_payments.api_key(),
-        "zoho_domain": zoho_payments.domain(),
+        "zoho_ready": zoho_payments.configured(_setting_getter(db)),
+        "zoho_widget": zoho_payments.widget_configured(_setting_getter(db)),
+        "zoho_account_id": zoho_payments.account_id(_setting_getter(db)),
+        "zoho_api_key": zoho_payments.api_key(_setting_getter(db)),
+        "zoho_domain": zoho_payments.domain(_setting_getter(db)),
         "paid": request.query_params.get("paid", ""),
         "claimed": request.query_params.get("claimed", ""),
         "confirmation": request.query_params.get("confirmation", ""),
@@ -15521,7 +15558,8 @@ async def portal_pay_session(bid_id: int, invoice_id: int, request: Request,
             description=(f"{company()['name']} — {inv.get('description') or 'Project payment'}"),
             invoice_number=(inv.get("invoice_number") or f"INV-{invoice_id}"),
             reference=_payment_reference(bid_id, invoice_id),
-            email=client.get("email") or "", name=client.get("name") or "")
+            email=client.get("email") or "", name=client.get("name") or "",
+            setting=_setting_getter(db))
     except zoho_payments.ZohoPaymentsError as exc:
         return JSONResponse(status_code=502, content={"ok": False, "error": str(exc)})
     except Exception as exc:
@@ -15557,7 +15595,8 @@ async def portal_pay_confirm(bid_id: int, invoice_id: int, request: Request,
         return JSONResponse(status_code=400, content={"ok": False,
                             "error": "This card form has expired. Start the payment again."})
     try:
-        payment = await asyncio.to_thread(zoho_payments.retrieve_payment, payment_id)
+        payment = await asyncio.to_thread(
+            zoho_payments.retrieve_payment, payment_id, setting=_setting_getter(db))
     except zoho_payments.ZohoPaymentsError as exc:
         return JSONResponse(status_code=502, content={"ok": False, "error": str(exc)})
     except Exception as exc:
