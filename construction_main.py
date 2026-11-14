@@ -9642,6 +9642,18 @@ async def instant_quote_submit(
             "construction", lead_id=lead_id, name=name, phone=phone, email=email,
             service=project_type, address=address, source="instant_quote",
         )
+        asyncio.create_task(
+            asyncio.to_thread(
+                tidy_service.enrich_and_sync_tidy,
+                lead_id=lead_id,
+                name=name,
+                phone=phone,
+                email=email,
+                address=address,
+                project_type=project_type or "Instant Quote",
+                goal="Instant Quote",
+            )
+        )
     except Exception as e:
         print(f"⚠️ instant quote owner notify failed: {e}", flush=True)
 
@@ -14237,7 +14249,8 @@ async def payroll_pay_worker(run_id: int, crew_id: int, request: Request, db=Dep
 async def tidy_outbound_webhook(request: Request):
     payload = await request.json()
     print(f"🧹 [tidy-webhook] event received: {payload}", flush=True)
-    return {"ok": True}
+    res = await asyncio.to_thread(tidy_service.record_tidy_event, payload)
+    return {"ok": True, **res}
 
 
 @app.post("/api/payments/connect-webhook")

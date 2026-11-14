@@ -96,3 +96,30 @@ def enrich_and_sync_tidy(
 
     print(f"🧹 [tidy] synced lead #{lead_id} ({division}) -> addr={addr_res.get('status')}, msg={msg_res.get('status')}", flush=True)
     return {"division": division, "enriched": enriched, "address": addr_res, "message": msg_res}
+
+
+def record_tidy_event(payload: dict) -> dict:
+    """Stores outbound TIDY job/status webhook events in leads.db."""
+    import sqlite3
+
+    event_type = str(payload.get("event") or payload.get("type") or "unknown")
+    conn = sqlite3.connect("leads.db")
+    try:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS tidy_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_type TEXT,
+                payload_json TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO tidy_events (event_type, payload_json) VALUES (?, ?)",
+            (event_type, json.dumps(payload)),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return {"recorded": True, "event_type": event_type}
