@@ -239,3 +239,7 @@ services:
       # --- email transport --------------------------------------------------
       - key: EMAIL_TRANSPORT
         value: gmail
+
+      # --- tidy cleaning & property management --------------------------
+      - key: TIDY_API_KEY
+        sync: false
