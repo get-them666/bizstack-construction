@@ -120,6 +120,7 @@ import pdl_contact_service
 import resimply_service
 import leads_db
 import lead_alert
+import tidy_service
 # Lead pipeline (lifecycle, intake, work queue, store). Vendored in this repo at
 # bizstack_leads/ -- it is this company's own code, not a dependency on another
 # repository. See the lead routes below for the cutover.
@@ -3298,6 +3299,21 @@ async def submit_lead(
     except Exception as e:
         print(f"⚠️ submit-lead cascade failed: {e}", flush=True)
     await asyncio.to_thread(zoho_sync.after_intake, db, lead_id)
+    asyncio.create_task(
+        asyncio.to_thread(
+            tidy_service.enrich_and_sync_tidy,
+            lead_id=lead_id,
+            name=name,
+            phone=phone,
+            email=email,
+            address=address,
+            project_type=project_type,
+            goal=goal,
+            budget=budget,
+            timeline=timeline,
+            message=full_message,
+        )
+    )
     return JSONResponse(content={"status": "success", "lead_id": lead_id})
 
 
@@ -14215,6 +14231,13 @@ async def payroll_pay_worker(run_id: int, crew_id: int, request: Request, db=Dep
         status_code=410,
         detail="Stripe payroll is retired. Finalize the run and use its PNC ACH file instead.",
     )
+
+
+@app.post("/api/webhooks/tidy")
+async def tidy_outbound_webhook(request: Request):
+    payload = await request.json()
+    print(f"🧹 [tidy-webhook] event received: {payload}", flush=True)
+    return {"ok": True}
 
 
 @app.post("/api/payments/connect-webhook")
