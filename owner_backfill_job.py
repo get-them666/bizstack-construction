@@ -39,11 +39,17 @@ _STATE = {
 }
 
 DEAD = ("won", "lost", "closed", "cancelled", "canceled", "archived")
+_KEYS = tuple(_STATE)
 
 
 def status() -> dict:
-    with _LOCK:
-        return dict(_STATE)
+    """Non-blocking read: this is polled from the event loop every 2s."""
+    if _LOCK.acquire(timeout=0.05):
+        try:
+            return dict(_STATE)
+        finally:
+            _LOCK.release()
+    return {k: _STATE.get(k) for k in _KEYS}
 
 
 def _candidates(cur, company: str) -> list:

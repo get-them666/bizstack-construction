@@ -52,6 +52,10 @@ _STATE = {
 
 DEAD = ("won", "lost", "closed", "cancelled", "canceled", "archived")
 
+# Fixed key list, so a contended read can read fields one at a time instead of
+# iterating a dict another thread is mutating (which raises).
+_KEYS = tuple(_STATE)
+
 # A miss is free, but re-asking the same address every click is pointless and
 # the provider asks us not to hammer it. Hits are excluded by having a contact;
 # this window covers the misses.
@@ -61,8 +65,20 @@ ATTEMPT_TAG = "lead_skiptrace_batch"
 
 
 def status() -> dict:
-    with _LOCK:
-        return dict(_STATE)
+    """Progress snapshot. NEVER blocks the caller.
+
+    This is polled from an HTTP route on the event loop, and the worker holds
+    the same lock while it records a result. A plain `with _LOCK` here let the
+    batch park the whole event loop behind a DB write and an email send -- the
+    site stopped answering anything, including /health, while uvicorn was alive
+    and listening. Reads therefore time out and fall back to a copy.
+    """
+    if _LOCK.acquire(timeout=0.05):
+        try:
+            return dict(_STATE)
+        finally:
+            _LOCK.release()
+    return {k: _STATE.get(k) for k in _KEYS}
 
 
 def _no_contact_clause() -> str:
@@ -425,12 +441,51 @@ def _run(company: str, limit: int, city: str = "") -> None:
                 parsed["street"], parsed["city"], parsed["state"]), result)
 
             credits = int(result.get("credits_used") or 0)
+            found_this = result.get("found")
+            # Decide and do the slow work FIRST, then take the lock for the
+            # counters. Holding _LOCK across a DB write and an email send is
+            # what deadlocked the event loop: /api/leads/skiptrace-status takes
+            # the same lock on every poll, and the whole site froze waiting for
+            # it (diagnosed with SIGUSR1: "status() -> _LOCK" blocking the loop).
+            if not found_this and credits:
+                pass  # paid hit with no contact, counted below
+            elif found_this and not result.get("deceased_owner"):
+                found = {
+                    "name": result.get("owner") or "",
+                    "email": result.get("email") or "",
+                    "phone": (result.get("preferred_phone")
+                              or result.get("raw_phone") or ""),
+                }
+                merged = data_enrichment.merge(lead, found)
+                if merged.get("changed"):
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            "UPDATE leads SET name = %s, email = %s, phone = %s "
+                            "WHERE id = %s;",
+                            (merged["name"][:255], merged["email"][:255],
+                             merged["phone"][:50], lead["id"]))
+                    conn.commit()
+                    try:
+                        from bizstack_leads import store as lead_store
+                        lead_store.recompute(conn, lead["id"])
+                    except Exception:
+                        try:
+                            conn.rollback()
+                        except Exception:
+                            pass
+                # Outside the `changed` branch on purpose: the contact may
+                # already have been written on an earlier run, and the first
+                # touch still has to happen.
+                outreach = _outreach(conn, lead, merged)
+            else:
+                outreach = {}
+
             with _LOCK:
                 _STATE["examined"] = i
                 _STATE["credits_used"] += credits
-                if not result.get("found") and not credits:
+                if not found_this and not credits:
                     _STATE["misses"] += 1
-                elif not result.get("found"):
+                elif not found_this:
                     # Paid hit that carried no phone or email. Real, and worth
                     # separating from a free miss because it costs 5 credits.
                     _STATE["paid_empty"] += 1
@@ -442,43 +497,14 @@ def _run(company: str, limit: int, city: str = "") -> None:
                     _STATE["note"] = "skipped a hit: owner is flagged deceased"
                 else:
                     _STATE["found"] += 1
-                    found = {
-                        "name": result.get("owner") or "",
-                        "email": result.get("email") or "",
-                        "phone": (result.get("preferred_phone")
-                                  or result.get("raw_phone") or ""),
-                    }
-                    merged = data_enrichment.merge(lead, found)
-                    outreach = {}
-                    if merged.get("changed"):
-                        with conn.cursor() as cur:
-                            cur.execute(
-                                "UPDATE leads SET name = %s, email = %s, phone = %s "
-                                "WHERE id = %s;",
-                                (merged["name"][:255], merged["email"][:255],
-                                 merged["phone"][:50], lead["id"]))
-                        conn.commit()
-                        try:
-                            from bizstack_leads import store as lead_store
-                            lead_store.recompute(conn, lead["id"])
-                        except Exception:
-                            try:
-                                conn.rollback()
-                            except Exception:
-                                pass
-                    # Outside the `changed` branch on purpose: the contact may
-                    # already have been written on an earlier run, and the
-                    # first touch still has to happen.
-                    outreach = _outreach(conn, lead, merged)
-                    with _LOCK:
-                        if outreach.get("sent"):
-                            _STATE["outreach_sent"] += 1
-                        elif outreach.get("staged"):
-                            _STATE["outreach_staged"] += 1
-                        elif outreach.get("skipped"):
-                            _STATE["outreach_skipped"] += 1
-                            if outreach["skipped"].startswith(("error", "disabled")):
-                                _STATE["note"] = f"outreach: {outreach['skipped']}"[:200]
+                    if outreach.get("sent"):
+                        _STATE["outreach_sent"] += 1
+                    elif outreach.get("staged"):
+                        _STATE["outreach_staged"] += 1
+                    elif outreach.get("skipped"):
+                        _STATE["outreach_skipped"] += 1
+                        if outreach["skipped"].startswith(("error", "disabled")):
+                            _STATE["note"] = f"outreach: {outreach['skipped']}"[:200]
             time.sleep(0.05)
     except Exception as exc:  # noqa: BLE001
         with _LOCK:
