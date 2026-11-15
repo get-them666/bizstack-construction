@@ -851,8 +851,10 @@ document.addEventListener('DOMContentLoaded', function() {
             if (!res.ok) { tracePreview.textContent = d.detail || 'Could not read the queue.'; return; }
             const bal = (d.balance === null || d.balance === undefined) ? 'unknown' : d.balance;
             const afford = (d.affordable === null || d.affordable === undefined) ? '' : ' (' + d.affordable + ' hits affordable)';
-            tracePreview.textContent = d.ready + ' leads ready · ' + d.no_zip + ' still need a ZIP · '
-                + 'balance ' + bal + ' credits' + afford + ' · ' + (d.provider || 'no provider') + ' configured';
+            const skip = d.traced_recently ? ' · ' + d.traced_recently + ' traced in the last 30 days' : '';
+            tracePreview.textContent = d.ready + ' leads ready · ' + d.no_zip + ' still need a ZIP'
+                + skip + ' · balance ' + bal + ' credits' + afford + ' · '
+                + (d.provider || 'no provider') + ' configured';
         } catch (e) {
             tracePreview.textContent = 'Could not read the queue.';
         }

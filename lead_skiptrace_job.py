@@ -127,27 +127,44 @@ def candidates(conn, company: str = "construction", limit: int = 25) -> list:
 
 
 def preview(conn, company: str = "construction") -> dict:
-    """How many leads are ready, how many still need a ZIP, and the balance."""
+    """How many leads a run will actually take, plus the balance.
+
+    Counts what `candidates` would return, not just the no-contact total: an
+    address traced inside the retry window is skipped, so showing it as "ready"
+    would promise work the run will not do.
+    """
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT count(*) AS total, "
-            "  count(*) FILTER (WHERE COALESCE(TRIM(zip), '') = '') AS no_zip, "
-            "  count(*) FILTER (WHERE COALESCE(TRIM(name), '') = '') AS no_name "
-            "FROM leads WHERE company = %s AND COALESCE(address, '') <> '' "
+            "SELECT id, address, zip, name FROM leads "
+            "WHERE company = %s AND COALESCE(address, '') <> '' "
             + _no_contact_clause() +
             f"  AND LOWER(COALESCE(status, 'new')) NOT IN ({','.join(['%s'] * len(DEAD))})",
             (company, *DEAD),
         )
-        row = cur.fetchone() or {}
-    total = int(row.get("total") or 0)
+        rows = cur.fetchall() or []
+    keys = [_key_for(row) for row in rows]
+    done = _recently_traced(conn, keys)
+    ready = 0
+    no_zip = 0
+    traced = 0
+    for row, key in zip(rows, keys):
+        parsed = skiptrace_service.parse_address(row.get("address") or "")
+        if not str(row.get("zip") or "").strip() and not parsed.get("zipcode"):
+            no_zip += 1
+        if key and key in done:
+            traced += 1
+            continue
+        ready += 1
     bal = skip_sherpa_service.tracerfy_balance()
     per_hit = skip_sherpa_service.TRACERFY_CREDITS_PER_HIT
     return {
-        "ready": total,
-        "no_zip": int(row.get("no_zip") or 0),
-        "no_name": int(row.get("no_name") or 0),
+        "ready": ready,
+        "needs_contact": len(rows),
+        "no_zip": no_zip,
+        "traced_recently": traced,
+        "no_name": sum(1 for r in rows if not str(r.get("name") or "").strip()),
         "balance": (bal or {}).get("balance"),
-        "max_credits": total * per_hit,
+        "max_credits": ready * per_hit,
         "affordable": (((bal or {}).get("balance") or 0) // per_hit) if bal else None,
         "configured": skip_sherpa_service.configured(),
         "provider": skip_sherpa_service.provider_name(),
