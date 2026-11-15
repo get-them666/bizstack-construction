@@ -30,6 +30,7 @@ _STATE = {
     "total": 0,
     "examined": 0,
     "updated": 0,
+    "zips_filled": 0,
     "skipped": 0,
     "current": "",
     "started_at": None,
@@ -68,7 +69,7 @@ def start(company: str = "construction", max_leads: int = 0) -> dict:
     with _LOCK:
         if _STATE["running"]:
             return {"started": False, "reason": "already running", **_STATE}
-        _STATE.update(running=True, total=0, examined=0, updated=0, skipped=0,
+        _STATE.update(running=True, total=0, examined=0, updated=0, zips_filled=0, skipped=0,
                       current="", started_at=time.strftime("%Y-%m-%d %H:%M:%S"),
                       finished_at=None, note="starting")
     threading.Thread(target=_run, args=(company, max_leads), daemon=True).start()
@@ -79,6 +80,24 @@ def _run(company: str, max_leads: int) -> None:
     conn = None
     try:
         conn = psycopg.connect(os.environ["DATABASE_URL"], row_factory=dict_row)
+        # Free pass first: every lead missing a ZIP gets one from the Census/
+        # ArcGIS street-level lookup. Without a ZIP the paid skip trace refuses
+        # to run, which is why 75% of the book looked unrunnable.
+        with conn.cursor() as cur:
+            try:
+                z = st.backfill_lead_zips(cur, company, cap=100000, status=None)
+                conn.commit()
+                with _LOCK:
+                    _STATE["zips_filled"] = int(z.get("resolved") or 0)
+                    _STATE["note"] = (f"ZIP backfill: {z.get('resolved', 0)} filled, "
+                                      f"{z.get('unresolved', 0)} unresolved")
+            except Exception as exc:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                with _LOCK:
+                    _STATE["note"] = f"ZIP backfill failed: {str(exc)[:140]}"
         with conn.cursor() as cur:
             rows = _candidates(cur, company)
         if max_leads and max_leads > 0:

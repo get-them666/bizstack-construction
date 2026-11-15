@@ -7798,6 +7798,28 @@ async def enrich_leads_batch(request: Request, limit: int = Form(10), db=Depends
     return JSONResponse(content=result)
 
 
+@app.get("/api/leads/skiptrace-preview")
+async def lead_skiptrace_preview(request: Request, db=Depends(get_db)):
+    require_admin(request)
+    import lead_skiptrace_job
+    return JSONResponse(content=await asyncio.to_thread(
+        lead_skiptrace_job.preview, db, "construction"))
+
+
+@app.post("/api/leads/skiptrace-run")
+async def lead_skiptrace_start(request: Request, limit: int = Form(25), db=Depends(get_db)):
+    require_admin(request)
+    import lead_skiptrace_job
+    return JSONResponse(content=lead_skiptrace_job.start("construction", limit))
+
+
+@app.get("/api/leads/skiptrace-status")
+async def lead_skiptrace_status(request: Request):
+    require_admin(request)
+    import lead_skiptrace_job
+    return JSONResponse(content=lead_skiptrace_job.status())
+
+
 @app.post("/api/leads/find-owners-all")
 async def find_owners_all(request: Request):
     """Start a background owner lookup for every named-placeholder lead."""

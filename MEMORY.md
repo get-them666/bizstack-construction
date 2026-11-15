@@ -1282,6 +1282,32 @@ working without edits.
   settings card reads `TRACERFY_API_KEY`.
 - The old provider's parsing tests remain because `skip_sherpa_service` still
   exposes `_person_phones`, `_person_emails`, `_persons` and `phone_is_usable`.
+- Parcel ID (APN) lookup is wired too: `POST /v1/api/trace/parcel/lookup/`
+  takes `parcel_id` + `county` + `state` (the `#` prefix is optional) and
+  returns the same owner/phone/email payload. `trace_parcel()` is Tracerfy-only;
+  Skip Sherpa has no APN endpoint.
+
+### Lead prep is two stages, and that ordering is the point
+
+The book had 1,427 no-contact leads and every one of them looked "unrunnable"
+because the paid trace requires a ZIP. They were not missing ZIPs: the permit
+feed writes the ZIP into `address` ("101 GRANBY ST, NORFOLK, VA 23510") and the
+`leads.zip` column was simply never populated, while the old backfill only ran
+over `status='new'` and capped at 150 address-without-ZIP rows.
+
+- `skiptrace_service.backfill_lead_zips` is now two-phase and free: it copies a
+  ZIP out of the address string when one is there, and only calls the
+  Census/ArcGIS geocoder when the address genuinely has none, appending the ZIP
+  to `address` so the envelope sorts. `status=None` covers every non-dead lead.
+- `owner_backfill_job` runs that ZIP pass before the owner-name pass, so one
+  click prepares the whole book.
+- `lead_skiptrace_job` is the separate **paid** stage, started by hand from
+  /skiptrace with an explicit batch size. It protects the balance twice over:
+  every paid attempt is written to `skiptrace_audit` with `source='tracerfy'`,
+  and an address traced in the last 30 days is excluded, so a second click
+  cannot re-buy the same miss.
+- Never merge the two stages into one button. Stage 1 is free and unbounded;
+  stage 2 spends credits per hit.
 
 Production is now the DigitalOcean droplet `bizstack-prod` (159.203.175.39,
 NYC3, 4 GB, $24/mo), running Construction, Broom Service/Hosts, two Postgres
