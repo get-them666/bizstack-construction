@@ -1,0 +1,240 @@
+{% extends "base.html" %}
+{% block title %}{{ job.job_number }} · {{ bid.name or 'Job' }} | Books{% endblock %}
+{% block content %}
+<section class="bg-slate-50 min-h-screen py-8">
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+
+    <div class="flex flex-wrap items-start justify-between gap-4 mb-6">
+      <div>
+        <p class="text-xs font-bold uppercase tracking-widest text-indigo-600">Job cost sheet · {{ job.job_number }}</p>
+        <h1 class="mt-1 text-3xl font-black tracking-tight text-slate-900">{{ bid.name or 'Job' }}</h1>
+        <p class="mt-1 text-sm text-slate-600">
+          {{ bid.location or '' }}{% if bid.contact_name %} · {{ bid.contact_name }}{% endif %}
+          {% if bid.contact_email %} · {{ bid.contact_email }}{% endif %}
+        </p>
+      </div>
+      <div class="flex flex-wrap gap-2">
+        <a href="/bids/{{ bid.id }}" class="px-3 py-2 rounded-xl bg-white border border-slate-200 text-xs font-bold text-slate-700 hover:border-indigo-300">Open bid</a>
+        <a href="/books#jobs" class="px-3 py-2 rounded-xl bg-white border border-slate-200 text-xs font-bold text-slate-700 hover:border-indigo-300">← All jobs</a>
+        <button onclick="window.print()" class="px-3 py-2 rounded-xl bg-slate-900 text-white text-xs font-bold">Print</button>
+      </div>
+    </div>
+
+    {% if saved %}<div class="mb-5 rounded-xl bg-emerald-50 border border-emerald-200 px-4 py-3 text-sm font-semibold text-emerald-800">Saved: {{ saved }}</div>{% endif %}
+    {% if error %}<div class="mb-5 rounded-xl bg-rose-50 border border-rose-200 px-4 py-3 text-sm font-semibold text-rose-800">{{ error }}</div>{% endif %}
+
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+      <div class="bg-white rounded-2xl border border-slate-200 p-5">
+        <p class="text-[11px] uppercase tracking-wide text-slate-400">Contract (incl. COs)</p>
+        <p class="mt-1 text-2xl font-black text-slate-900">${{ "{:,.2f}".format(job.contract) }}</p>
+        <p class="text-[11px] text-slate-500">Original ${{ "{:,.2f}".format(job.original_contract) }} + COs ${{ "{:,.2f}".format(job.approved_change_orders) }}</p>
+      </div>
+      <div class="bg-white rounded-2xl border border-slate-200 p-5">
+        <p class="text-[11px] uppercase tracking-wide text-slate-400">Billed / collected</p>
+        <p class="mt-1 text-2xl font-black text-slate-900">${{ "{:,.2f}".format(job.billed) }}</p>
+        <p class="text-[11px] text-emerald-700">${{ "{:,.2f}".format(job.collected) }} collected · ${{ "{:,.2f}".format(job.balance) }} balance</p>
+      </div>
+      <div class="bg-white rounded-2xl border border-slate-200 p-5">
+        <p class="text-[11px] uppercase tracking-wide text-slate-400">Actual direct cost</p>
+        <p class="mt-1 text-2xl font-black text-slate-900">${{ "{:,.2f}".format(job.actual_total) }}</p>
+        <p class="text-[11px] text-slate-500">{{ "%.1f"|format(job.labor_hours) }} labor hours · ${{ "{:,.2f}".format(job.labor_cost) }} labor</p>
+      </div>
+      <div class="bg-white rounded-2xl border border-slate-200 p-5">
+        <p class="text-[11px] uppercase tracking-wide text-slate-400">Gross margin</p>
+        <p class="mt-1 text-2xl font-black {% if job.actual_margin < 0 %}text-rose-700{% else %}text-emerald-700{% endif %}">${{ "{:,.2f}".format(job.actual_margin) }}</p>
+        <p class="text-[11px] text-slate-500">{{ job.actual_margin_pct if job.actual_margin_pct is not none else '—' }}% · budgeted ${{ "{:,.2f}".format(job.estimated_margin) }}</p>
+      </div>
+    </div>
+
+    <div class="grid gap-6 lg:grid-cols-2">
+      <div class="bg-white rounded-2xl border border-slate-200 p-5">
+        <p class="text-sm font-bold text-slate-900">Budget vs actual by cost type</p>
+        <table class="mt-3 w-full text-xs">
+          <thead><tr class="text-left text-slate-400 uppercase tracking-wide">
+            <th class="py-1 font-semibold">Cost</th><th class="py-1 text-right font-semibold">Budget</th>
+            <th class="py-1 text-right font-semibold">Actual</th><th class="py-1 text-right font-semibold">Variance</th>
+          </tr></thead>
+          <tbody>
+          {% for c in job.categories %}
+            <tr class="border-t border-slate-100">
+              <td class="py-1.5 text-slate-700">{{ c.label }}</td>
+              <td class="py-1.5 text-right font-mono">${{ "{:,.2f}".format(c.estimated) }}</td>
+              <td class="py-1.5 text-right font-mono">${{ "{:,.2f}".format(c.actual) }}</td>
+              <td class="py-1.5 text-right font-mono {% if c.variance < 0 %}text-rose-700{% else %}text-emerald-700{% endif %}">${{ "{:,.2f}".format(c.variance) }}</td>
+            </tr>
+          {% endfor %}
+          </tbody>
+          <tfoot><tr class="border-t-2 border-slate-200 font-bold">
+            <td class="py-2">Total</td>
+            <td class="py-2 text-right font-mono">${{ "{:,.2f}".format(job.estimated_total) }}</td>
+            <td class="py-2 text-right font-mono">${{ "{:,.2f}".format(job.actual_total) }}</td>
+            <td class="py-2 text-right font-mono">${{ "{:,.2f}".format(job.estimated_total - job.actual_total) }}</td>
+          </tr></tfoot>
+        </table>
+      </div>
+
+      <div class="bg-white rounded-2xl border border-slate-200 p-5">
+        <p class="text-sm font-bold text-slate-900">Posted to the books</p>
+        <p class="text-xs text-slate-500 mt-1">Journal entries tagged to this job. Zoho Books is downstream of this.</p>
+        <dl class="mt-3 space-y-1.5 text-xs">
+          <div class="flex justify-between border-b border-slate-100 py-1"><dt class="text-slate-500">Revenue posted</dt><dd class="font-mono font-semibold">${{ "{:,.2f}".format(job.books.revenue) }}</dd></div>
+          <div class="flex justify-between border-b border-slate-100 py-1"><dt class="text-slate-500">Direct cost posted</dt><dd class="font-mono font-semibold">${{ "{:,.2f}".format(job.books.direct_cost) }}</dd></div>
+          <div class="flex justify-between border-b border-slate-100 py-1"><dt class="text-slate-500">Overhead tagged</dt><dd class="font-mono font-semibold">${{ "{:,.2f}".format(job.books.overhead) }}</dd></div>
+          <div class="flex justify-between border-b border-slate-100 py-1"><dt class="text-slate-500">Gross margin</dt><dd class="font-mono font-semibold">${{ "{:,.2f}".format(job.books.margin) }}</dd></div>
+          <div class="flex justify-between py-1"><dt class="text-slate-500">Net</dt><dd class="font-mono font-semibold">${{ "{:,.2f}".format(job.books.net) }}</dd></div>
+        </dl>
+      </div>
+    </div>
+
+    {# ── Change orders ─────────────────────────────────────────────────── #}
+    <div class="bg-white rounded-2xl border border-slate-200 p-5 mt-6">
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <p class="text-sm font-bold text-slate-900">Change orders</p>
+          <p class="text-xs text-slate-500 mt-1">Numbered automatically. Approval adds to the contract and posts to 4020 — Change Order Revenue.</p>
+        </div>
+        <span class="text-xs font-bold text-slate-500">Approved: ${{ "{:,.2f}".format(job.approved_change_orders) }}</span>
+      </div>
+      <div class="mt-3 overflow-x-auto">
+        <table class="w-full text-xs">
+          <thead><tr class="text-left text-slate-400 uppercase tracking-wide">
+            <th class="py-1 pr-2 font-semibold">No.</th><th class="py-1 pr-2 font-semibold">Title</th>
+            <th class="py-1 pr-2 text-right font-semibold">Amount</th><th class="py-1 pr-2 text-right font-semibold">Days</th>
+            <th class="py-1 pr-2 font-semibold">Status</th><th class="py-1 text-right font-semibold"></th>
+          </tr></thead>
+          <tbody>
+          {% for co in job.change_orders %}
+            <tr class="border-t border-slate-100">
+              <td class="py-2 pr-2 font-mono text-slate-600">{{ co.number }}</td>
+              <td class="py-2 pr-2 text-slate-700">{{ co.title }}{% if co.description %}<span class="block text-[10px] text-slate-400">{{ co.description[:90] }}</span>{% endif %}</td>
+              <td class="py-2 pr-2 text-right font-mono">${{ "{:,.2f}".format(co.amount or 0) }}</td>
+              <td class="py-2 pr-2 text-right font-mono">{{ co.schedule_days or 0 }}</td>
+              <td class="py-2 pr-2">
+                <span class="px-2 py-0.5 rounded-full text-[10px] font-bold {% if co.status == 'approved' %}bg-emerald-50 text-emerald-700{% elif co.status == 'rejected' %}bg-rose-50 text-rose-700{% else %}bg-amber-50 text-amber-700{% endif %}">{{ co.status }}</span>
+              </td>
+              <td class="py-2 text-right whitespace-nowrap">
+                <a href="/change-orders/{{ co.id }}.pdf" class="text-indigo-600 font-semibold mr-2">PDF</a>
+                {% if co.status != 'approved' and co.status != 'void' %}
+                <form method="post" action="/api/change-orders/{{ co.id }}/status" class="inline">
+                  <input type="hidden" name="status" value="approved">
+                  <button class="text-emerald-700 font-semibold mr-2" onclick="return confirm('Approve {{ co.number }} and add ${{ "{:,.2f}".format(co.amount or 0) }} to the contract?');">Approve</button>
+                </form>
+                <form method="post" action="/api/change-orders/{{ co.id }}/status" class="inline">
+                  <input type="hidden" name="status" value="rejected">
+                  <button class="text-rose-700 font-semibold">Reject</button>
+                </form>
+                {% endif %}
+              </td>
+            </tr>
+          {% else %}
+            <tr><td colspan="6" class="py-4 text-center text-slate-500">No change orders yet.</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      <form method="post" action="/api/bids/{{ bid.id }}/change-orders" class="mt-4 grid gap-2 sm:grid-cols-6">
+        <input name="title" required placeholder="Title — e.g. Add island outlet" class="sm:col-span-2 text-sm border border-slate-200 rounded-lg px-3 py-2">
+        <input name="amount" inputmode="decimal" required placeholder="Amount" class="text-sm border border-slate-200 rounded-lg px-3 py-2">
+        <input name="cost_amount" inputmode="decimal" placeholder="Our cost" class="text-sm border border-slate-200 rounded-lg px-3 py-2">
+        <input name="schedule_days" inputmode="numeric" placeholder="Days" class="text-sm border border-slate-200 rounded-lg px-3 py-2">
+        <button class="text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg px-4 py-2">Add change order</button>
+        <input name="description" placeholder="What changed, and why" class="sm:col-span-6 text-sm border border-slate-200 rounded-lg px-3 py-2">
+        <input name="requested_by" placeholder="Requested by (optional)" class="sm:col-span-2 text-sm border border-slate-200 rounded-lg px-3 py-2">
+      </form>
+    </div>
+
+    {# ── Job expense / receipt ─────────────────────────────────────────── #}
+    <div class="bg-white rounded-2xl border border-slate-200 p-5 mt-6">
+      <p class="text-sm font-bold text-slate-900">Log a job cost / receipt</p>
+      <p class="text-xs text-slate-500 mt-1">Direct cost only — materials, subs, equipment, permits. Overhead belongs on the main Books page.</p>
+      <form method="post" action="/books/jobs/{{ bid.id }}/expense" enctype="multipart/form-data" class="mt-3 grid gap-2 sm:grid-cols-6">
+        <select name="category" class="text-sm border border-slate-200 rounded-lg px-3 py-2">
+          {% for c in co_categories if c != 'labor' %}<option value="{{ c }}">{{ c|capitalize }}</option>{% endfor %}
+        </select>
+        <input name="vendor" placeholder="Vendor" class="text-sm border border-slate-200 rounded-lg px-3 py-2">
+        <input name="amount" inputmode="decimal" required placeholder="Amount" class="text-sm border border-slate-200 rounded-lg px-3 py-2">
+        <input name="incurred_on" type="date" class="text-sm border border-slate-200 rounded-lg px-3 py-2">
+        <input name="receipt" type="file" accept="image/*,application/pdf" class="text-sm border border-slate-200 rounded-lg px-3 py-2">
+        <button class="text-sm font-bold text-white bg-slate-900 rounded-lg px-4 py-2">Post cost</button>
+        <input name="description" placeholder="Description — e.g. 40 sheets 1/2in drywall" class="sm:col-span-6 text-sm border border-slate-200 rounded-lg px-3 py-2">
+      </form>
+    </div>
+
+    {# ── Cost lines & receipts ─────────────────────────────────────────── #}
+    <div class="bg-white rounded-2xl border border-slate-200 p-5 mt-6">
+      <p class="text-sm font-bold text-slate-900">Cost lines &amp; receipts</p>
+      <div class="mt-3 overflow-x-auto">
+        <table class="w-full text-xs">
+          <thead><tr class="text-left text-slate-400 uppercase tracking-wide">
+            <th class="py-1 pr-2 font-semibold">Date</th><th class="py-1 pr-2 font-semibold">Category</th>
+            <th class="py-1 pr-2 font-semibold">Vendor / description</th>
+            <th class="py-1 pr-2 text-right font-semibold">Budget</th><th class="py-1 pr-2 text-right font-semibold">Actual</th>
+            <th class="py-1 text-right font-semibold">Receipt</th>
+          </tr></thead>
+          <tbody>
+          {% for ln in job.summary.lines %}
+            <tr class="border-t border-slate-100">
+              <td class="py-1.5 pr-2 text-slate-600">{{ ln.incurred_on or (ln.created_at.strftime('%Y-%m-%d') if ln.created_at else '—') }}</td>
+              <td class="py-1.5 pr-2 text-slate-600">{{ ln.category }}</td>
+              <td class="py-1.5 pr-2 text-slate-700">{{ ln.vendor or '' }}{% if ln.vendor and ln.description %} · {% endif %}{{ ln.description or '' }}</td>
+              <td class="py-1.5 pr-2 text-right font-mono">${{ "{:,.2f}".format(ln.estimated or 0) }}</td>
+              <td class="py-1.5 pr-2 text-right font-mono">${{ "{:,.2f}".format(ln.actual or 0) }}</td>
+              <td class="py-1.5 text-right">{% if ln.receipt_url %}<a href="{{ ln.receipt_url }}" target="_blank" rel="noopener" class="font-semibold text-indigo-600">View</a>{% else %}—{% endif %}</td>
+            </tr>
+          {% else %}
+            <tr><td colspan="6" class="py-4 text-center text-slate-500">No cost lines yet.</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="grid gap-6 lg:grid-cols-2 mt-6">
+      <div class="bg-white rounded-2xl border border-slate-200 p-5">
+        <p class="text-sm font-bold text-slate-900">Invoices</p>
+        <table class="mt-3 w-full text-xs">
+          <thead><tr class="text-left text-slate-400 uppercase tracking-wide"><th class="py-1 font-semibold">Invoice</th><th class="py-1 font-semibold">Status</th><th class="py-1 text-right font-semibold">Amount</th><th class="py-1 text-right font-semibold">Paid</th></tr></thead>
+          <tbody>
+          {% for i in job.invoices %}
+            <tr class="border-t border-slate-100">
+              <td class="py-1.5 font-mono text-slate-600">{{ i.invoice_number or i.id }}</td>
+              <td class="py-1.5 text-slate-600">{{ i.status }}</td>
+              <td class="py-1.5 text-right font-mono">${{ "{:,.2f}".format(i.amount or 0) }}</td>
+              <td class="py-1.5 text-right font-mono">${{ "{:,.2f}".format(i.collected or 0) }}</td>
+            </tr>
+          {% else %}<tr><td colspan="4" class="py-4 text-center text-slate-500">No invoices.</td></tr>{% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      <div class="bg-white rounded-2xl border border-slate-200 p-5">
+        <p class="text-sm font-bold text-slate-900">Recent labour</p>
+        <table class="mt-3 w-full text-xs">
+          <thead><tr class="text-left text-slate-400 uppercase tracking-wide"><th class="py-1 font-semibold">Date</th><th class="py-1 font-semibold">Crew</th><th class="py-1 text-right font-semibold">Hours</th><th class="py-1 font-semibold">Status</th></tr></thead>
+          <tbody>
+          {% for t in job.timesheets %}
+            <tr class="border-t border-slate-100"><td class="py-1.5 text-slate-600">{{ t.work_date }}</td><td class="py-1.5 text-slate-700">{{ t.crew_name }}</td><td class="py-1.5 text-right font-mono">{{ "%.1f"|format(t.hours or 0) }}</td><td class="py-1.5 text-slate-500">{{ t.status }}</td></tr>
+          {% else %}<tr><td colspan="4" class="py-4 text-center text-slate-500">No timesheets.</td></tr>{% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    {% if job.entries %}
+    <div class="bg-white rounded-2xl border border-slate-200 p-5 mt-6">
+      <p class="text-sm font-bold text-slate-900">Journal entries for this job</p>
+      <table class="mt-3 w-full text-xs">
+        <thead><tr class="text-left text-slate-400 uppercase tracking-wide"><th class="py-1 font-semibold">Entry</th><th class="py-1 font-semibold">Date</th><th class="py-1 font-semibold">Source</th><th class="py-1 font-semibold">Memo</th><th class="py-1 text-right font-semibold">Amount</th></tr></thead>
+        <tbody>
+        {% for e in job.entries %}
+          <tr class="border-t border-slate-100"><td class="py-1.5 font-mono">{{ e.entry_no }}</td><td class="py-1.5 text-slate-600">{{ e.entry_date }}</td><td class="py-1.5 text-slate-500">{{ e.source_type or '—' }}</td><td class="py-1.5 text-slate-600">{{ (e.memo or '')[:70] }}</td><td class="py-1.5 text-right font-mono">${{ "{:,.2f}".format(e.amount) }}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+
+  </div>
+</section>
+{% endblock %}

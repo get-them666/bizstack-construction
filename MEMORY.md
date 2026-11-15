@@ -1224,3 +1224,40 @@ portal and change/recover their own credentials.
 (`/api/bids/{id}/signing/send|revoke|credentials`), and the public sign routes
 must stay in step. The portal invoice buttons and `/portal/pay/{bid}/{invoice}`
 are the only client-facing payment surface.
+
+## 2026-11-15: books became a job-costing system, not just a ledger
+
+The owner's requirement was QuickBooks-style job costing: every transaction
+tagged to a job, direct costs separated from overhead, time and receipts
+captured at the source, and standardized documents that explain a change in
+price. The site already had the hard part — a balanced double-entry ledger with
+direct-cost accounts 5010-5050 and overhead 6010-6070. This pass made it
+navigable and closed the missing workflow.
+
+- `/books` now has four sections: Overview, Jobs & job costing, Chart of
+  accounts, Journal. The job table joins the bid's name, customer, contract,
+  billed and collected, and links to a cost sheet. `ledger.job_pnl()` breaks
+  direct cost into material/labor/sub/equipment/permit/other; the plain
+  `test_ledger.py` database has no bid tables, so the function degrades to the
+  old shape instead of failing.
+- `/books/jobs/{bid_id}` (`job_costing.cost_sheet`) is the job cost sheet:
+  contract incl. approved change orders, billed/collected, budget vs actual by
+  category, posted ledger revenue/direct/overhead, change orders, invoices,
+  recent labour and journal entries. Labour actual comes from timesheets via
+  `bid_costing.labor_actual`; it is not typed twice.
+- `change_orders.py` owns numbered change orders (`CO-YYYY-0001`, sequential per
+  company/year). Approval adds the amount to
+  `bid_opportunities.contract_value` and posts AR/4020 Change Order Revenue
+  through `ledger.post` with source `change_order:<id>`. Approval is one-way;
+  a correction is a new negative change order. `/change-orders/{id}.pdf` is the
+  signable document.
+- Job expenses are posted from the cost sheet: `bid_costs.actual` plus optional
+  receipt photo (`bid_costs.incurred_on`, `receipt_key`, `receipt_url`), then
+  `ledger_sync.sync_cost_line` puts it on the books. Receipts go through
+  `photo_store.save(..., key_prefix="receipts/bid-N")` (R2 in production).
+- Estimates and quotes were already standardized on the bid card; the cost
+  sheet links back to `/bids/{id}` rather than duplicating them.
+
+The invariant to keep: a job cost sheet is a read model. The ledger is the
+accounting truth, `ledger_sync.pending` explains source records that have not
+reached it, and Zoho Books remains downstream only.

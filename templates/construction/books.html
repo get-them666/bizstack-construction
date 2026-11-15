@@ -16,9 +16,15 @@
             <a href="/bids" class="px-4 py-2.5 text-sm font-semibold text-slate-700 bg-white border border-slate-200 rounded-xl">← Bids</a>
         </div>
 
-        {# ── Honesty banner. A trial balance that does not sum to zero, or a
-             balance sheet that does not balance, means the books are wrong and
-             every other number here is suspect. Say so at the top. ─────────── #}
+        {# ── Section navigation: one page, four jobs ───────────────────────── #}
+        <div class="mb-6 flex flex-wrap gap-2">
+            <a href="#overview" class="px-3 py-2 rounded-xl bg-white border border-slate-200 text-xs font-bold text-slate-700 hover:border-indigo-300">Overview</a>
+            <a href="#jobs" class="px-3 py-2 rounded-xl bg-white border border-slate-200 text-xs font-bold text-slate-700 hover:border-indigo-300">Jobs &amp; job costing</a>
+            <a href="#accounts" class="px-3 py-2 rounded-xl bg-white border border-slate-200 text-xs font-bold text-slate-700 hover:border-indigo-300">Chart of accounts</a>
+            <a href="#journal" class="px-3 py-2 rounded-xl bg-white border border-slate-200 text-xs font-bold text-slate-700 hover:border-indigo-300">Journal</a>
+        </div>
+
+
         {% if tb.balanced and bs.balanced and not pending %}
         <div class="mb-6 px-4 py-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm font-semibold">
             Books balance. Debits equal credits, assets equal liabilities plus equity.
@@ -131,7 +137,7 @@
         {% endif %}
 
         {# ── Headline ──────────────────────────────────────────────────────── #}
-        <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+        <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6" id="overview">
             <div class="bg-white rounded-2xl border border-slate-200 p-5">
                 <p class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Revenue</p>
                 <p class="text-2xl font-black text-slate-900 mt-1">${{ "{:,.2f}".format(is.total_revenue) }}</p>
@@ -236,35 +242,47 @@
 
         {# ── Per job ───────────────────────────────────────────────────────── #}
         {% if jobs %}
-        <div class="bg-white rounded-2xl border border-slate-200 p-5 mt-6">
-            <p class="text-sm font-bold text-slate-900 mb-3">By job</p>
+        <div class="bg-white rounded-2xl border border-slate-200 p-5 mt-6" id="jobs">
+            <div class="flex flex-wrap items-center justify-between gap-3 mb-3">
+                <div>
+                    <p class="text-sm font-bold text-slate-900">Jobs &amp; job costing</p>
+                    <p class="text-xs text-slate-500 mt-1">Every posted dollar is tagged to a job. Open a job for its cost sheet, change orders and receipts.</p>
+                </div>
+            </div>
             <div class="overflow-x-auto">
                 <table class="w-full text-xs">
                     <thead><tr class="text-left text-slate-400 uppercase tracking-wide">
                         <th class="py-1 pr-3 font-semibold">Job</th>
-                        <th class="py-1 pr-3 text-right font-semibold">Revenue</th>
+                        <th class="py-1 pr-3 font-semibold">Customer</th>
+                        <th class="py-1 pr-3 text-right font-semibold">Contract</th>
+                        <th class="py-1 pr-3 text-right font-semibold">Billed</th>
+                        <th class="py-1 pr-3 text-right font-semibold">Collected</th>
                         <th class="py-1 pr-3 text-right font-semibold">Direct cost</th>
                         <th class="py-1 pr-3 text-right font-semibold">Margin</th>
                         <th class="py-1 pr-3 text-right font-semibold">%</th>
-                        <th class="py-1 text-right font-semibold">Repair</th>
+                        <th class="py-1 text-right font-semibold"></th>
                     </tr></thead>
                     <tbody>
                     {% for j in jobs %}
                     <tr class="border-t border-slate-100">
                         <td class="py-2 pr-3">
-                            <span class="font-mono text-slate-400">#{{ j.bid_id }}</span>
-                            <span class="text-slate-700">{{ j.name or 'job ' ~ j.bid_id }}</span>
+                            <a href="/books/jobs/{{ j.bid_id }}" class="font-semibold text-indigo-700 hover:underline">
+                                <span class="font-mono text-slate-400">#{{ j.bid_id }}</span>
+                                {{ j.name or 'Job ' ~ j.bid_id }}
+                            </a>
+                            {% if j.location %}<span class="block text-[10px] text-slate-400">{{ j.location }}</span>{% endif %}
                         </td>
-                        <td class="py-2 pr-3 text-right font-mono">${{ "{:,.2f}".format(j.revenue) }}</td>
+                        <td class="py-2 pr-3 text-slate-600">{{ j.contact_name or '—' }}</td>
+                        <td class="py-2 pr-3 text-right font-mono">${{ "{:,.2f}".format(j.contract_value or 0) }}</td>
+                        <td class="py-2 pr-3 text-right font-mono">${{ "{:,.2f}".format(j.billed or 0) }}</td>
+                        <td class="py-2 pr-3 text-right font-mono">${{ "{:,.2f}".format(j.collected or 0) }}</td>
                         <td class="py-2 pr-3 text-right font-mono">${{ "{:,.2f}".format(j.direct_cost) }}</td>
                         <td class="py-2 pr-3 text-right font-mono font-bold text-slate-900">${{ "{:,.2f}".format(j.gross_margin) }}</td>
                         <td class="py-2 pr-3 text-right font-mono {% if j.gross_margin_pct and j.gross_margin_pct < 20 %}text-rose-700{% else %}text-emerald-700{% endif %}">
                             {{ j.gross_margin_pct }}%
                         </td>
                         <td class="py-2 text-right">
-                            <form method="post" action="/api/bids/{{ j.bid_id }}/books/repair">
-                                <button class="text-xs font-semibold text-indigo-600 hover:text-indigo-800">Re-post</button>
-                            </form>
+                            <a href="/books/jobs/{{ j.bid_id }}" class="text-xs font-semibold text-indigo-600 hover:text-indigo-800">Cost sheet →</a>
                         </td>
                     </tr>
                     {% endfor %}
@@ -274,9 +292,32 @@
         </div>
         {% endif %}
 
+        {# ── Chart of accounts ─────────────────────────────────────────────── #}
+        {% if accounts %}
+        <div class="bg-white rounded-2xl border border-slate-200 p-5 mt-6" id="accounts">
+            <p class="text-sm font-bold text-slate-900">Chart of accounts</p>
+            <p class="text-xs text-slate-500 mt-1 mb-4">Direct job costs (5000s) are kept separate from overhead (6000s), so a job margin is real.</p>
+            <div class="grid gap-5 md:grid-cols-2">
+                {% for type_key, label in [('asset','Assets'),('liability','Liabilities'),('equity','Equity'),('revenue','Revenue'),('expense','Expenses')] %}
+                <div>
+                    <p class="text-[11px] font-bold uppercase tracking-wide text-slate-400 mb-1">{{ label }}</p>
+                    <table class="w-full text-xs">
+                        {% for a in accounts.groups.get(type_key, []) %}
+                        <tr class="border-t border-slate-100">
+                            <td class="py-1 pr-2"><span class="font-mono text-slate-400">{{ a.code }}</span> <span class="text-slate-700">{{ a.name }}</span></td>
+                            <td class="py-1 text-right font-mono text-slate-800">${{ "{:,.2f}".format(a.balance) }}</td>
+                        </tr>
+                        {% endfor %}
+                    </table>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+
         {# ── Recent entries ───────────────────────────────────────────────── #}
         {% if entries %}
-        <div class="bg-white rounded-2xl border border-slate-200 p-5 mt-6">
+        <div class="bg-white rounded-2xl border border-slate-200 p-5 mt-6" id="journal">
             <p class="text-sm font-bold text-slate-900 mb-3">Recent entries</p>
             <div class="overflow-x-auto">
                 <table class="w-full text-xs">

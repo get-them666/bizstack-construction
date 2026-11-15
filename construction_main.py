@@ -103,6 +103,8 @@ import auth_service
 import portal_service
 import contract_signing
 import zoho_payments
+import change_orders
+import job_costing
 import construction_radar
 import materials_service
 import supplier_adapters
@@ -843,6 +845,7 @@ async def lifecycle(app: FastAPI):
             # runs after. takeoff and supplier_prices are independent of each
             # other and guard their own FKs.
             bid_costing.ensure_accounting_schema(conn)
+            change_orders.ensure_schema(conn)
             takeoff.ensure_schema(conn)
             supplier_prices.ensure_schema(conn)
             # Chart of accounts and journal tables. Its own ensure_schema also
@@ -4567,6 +4570,8 @@ async def books_page(request: Request, as_of: str = "", db=Depends(get_db)):
         request=request, name="books.html",
         context={"tb": tb, "bs": bs, "is": ist,
                  "jobs": ledger.job_pnl(db, company=_BID_COMPANY),
+                 "accounts": ledger.accounts_with_balances(db, as_of=as_of or None,
+                                                           company=_BID_COMPANY),
                  "entries": ledger.entries(db, 25, company=_BID_COMPANY),
                  "pending": ledger_sync.pending(db, company=_BID_COMPANY),
                  "legacy_unposted": [],
@@ -4602,6 +4607,122 @@ async def books_rebuild(request: Request, db=Depends(get_db)):
     return RedirectResponse(
         url=f"{back}{sep}rebuilt={result.posted}&queued={result.queued}",
         status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.get("/books/jobs/{bid_id}", response_class=HTMLResponse)
+async def books_job_sheet(bid_id: int, request: Request, db=Depends(get_db)):
+    """One job's cost sheet: contract, budget vs actual, change orders, books."""
+    require_admin(request)
+    sheet = job_costing.cost_sheet(db, bid_id, _BID_COMPANY)
+    if not sheet:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return templates.TemplateResponse(
+        request=request, name="job_cost_sheet.html",
+        context={"job": sheet, "bid": sheet["bid"], "project": sheet["project"],
+                 "co_categories": bid_costing.COST_CATEGORIES,
+                 "saved": request.query_params.get("saved", ""),
+                 "error": request.query_params.get("error", "")})
+
+
+@app.post("/books/jobs/{bid_id}/expense")
+async def books_job_expense(bid_id: int, request: Request,
+                            category: str = Form("material"), vendor: str = Form(""),
+                            description: str = Form(""), amount: str = Form(""),
+                            incurred_on: str = Form(""), receipt: UploadFile | None = File(None),
+                            db=Depends(get_db)):
+    """Log a direct job cost, with the receipt photo attached to the line."""
+    require_admin(request)
+    back = f"/books/jobs/{bid_id}"
+    try:
+        amount_f = round(float((amount or "").replace("$", "").replace(",", "")), 2)
+    except ValueError:
+        return RedirectResponse(url=back + "?error=Amount+must+be+a+number",
+                                status_code=status.HTTP_303_SEE_OTHER)
+    if amount_f <= 0:
+        return RedirectResponse(url=back + "?error=Amount+must+be+more+than+zero",
+                                status_code=status.HTTP_303_SEE_OTHER)
+    if category not in bid_costing.COST_CATEGORIES:
+        category = "other"
+    key = url = ""
+    if receipt is not None and getattr(receipt, "filename", ""):
+        try:
+            data = await receipt.read()
+            if data:
+                key = photo_store.save(data, receipt.filename,
+                                       key_prefix=f"receipts/bid-{bid_id}")
+                url = photo_store.url_for(key)
+        except Exception as exc:
+            logger.warning("receipt upload failed for bid %s: %s", bid_id, exc)
+            return RedirectResponse(url=back + "?error=Receipt+upload+failed",
+                                    status_code=status.HTTP_303_SEE_OTHER)
+    try:
+        line_id = bid_costing.add_cost_line(
+            db, bid_id, category=category,
+            description=(description or vendor or "Job expense"),
+            vendor=vendor, actual=amount_f, estimated=None,
+            incurred_on=(incurred_on or None), receipt_key=key, receipt_url=url,
+            company=_BID_COMPANY)
+        ledger_sync.ensure_schema(db)
+        ledger_sync.sync_cost_line(db, line_id, _BID_COMPANY)
+    except Exception as exc:
+        logger.warning("job expense failed for bid %s: %s", bid_id, exc)
+        return RedirectResponse(url=back + "?error=" + urllib.parse.quote(str(exc)[:160]),
+                                status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(url=back + "?saved=expense", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/api/bids/{bid_id}/change-orders")
+async def change_order_create(bid_id: int, request: Request, title: str = Form(""),
+                              description: str = Form(""), amount: str = Form("0"),
+                              cost_amount: str = Form("0"), schedule_days: str = Form("0"),
+                              requested_by: str = Form(""), db=Depends(get_db)):
+    require_admin(request)
+    bid = bid_opportunities.get_bid(db, bid_id, _BID_COMPANY)
+    if not bid:
+        raise HTTPException(status_code=404, detail="Bid not found")
+    try:
+        co = change_orders.create(
+            db, bid_id, title=title, description=description, amount=amount,
+            cost_amount=cost_amount, schedule_days=int(schedule_days or 0),
+            requested_by=requested_by, company=_BID_COMPANY)
+    except (ValueError, TypeError) as exc:
+        return RedirectResponse(
+            url=f"/books/jobs/{bid_id}?error=" + urllib.parse.quote(str(exc)[:160]),
+            status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(url=f"/books/jobs/{bid_id}?saved={co['number']}",
+                            status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/api/change-orders/{co_id}/status")
+async def change_order_status(co_id: int, request: Request, status: str = Form("sent"),
+                              signature_name: str = Form(""), db=Depends(get_db)):
+    require_admin(request)
+    co = change_orders.get(db, co_id, _BID_COMPANY)
+    if not co:
+        raise HTTPException(status_code=404, detail="Change order not found")
+    back = f"/books/jobs/{co['bid_id']}"
+    try:
+        change_orders.set_status(
+            db, co_id, status, actor=admin_email(),
+            signature_name=signature_name, company=_BID_COMPANY)
+    except Exception as exc:
+        return RedirectResponse(url=back + "?error=" + urllib.parse.quote(str(exc)[:160]),
+                                status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(url=back + "?saved=change-order", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.get("/change-orders/{co_id}.pdf")
+async def change_order_pdf(co_id: int, request: Request, db=Depends(get_db)):
+    require_admin(request)
+    co = change_orders.get(db, co_id, _BID_COMPANY)
+    if not co:
+        raise HTTPException(status_code=404, detail="Change order not found")
+    bid = bid_opportunities.get_bid(db, co["bid_id"], _BID_COMPANY)
+    pdf = change_orders.build_pdf(co, bid or {})
+    return Response(content=pdf, media_type="application/pdf",
+                    headers={"Content-Disposition":
+                             f'inline; filename="{co["number"]}.pdf"',
+                             "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"})
 
 
 @app.get("/letters", response_class=HTMLResponse)

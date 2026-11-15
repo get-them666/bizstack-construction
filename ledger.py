@@ -656,29 +656,131 @@ def close_period(conn, to_date, company: str = "construction") -> dict:
 
 
 def job_pnl(conn, company: str = "construction") -> list[dict]:
-    """Revenue, direct cost and margin per job. This is the number that matters."""
+    """Revenue, direct cost and margin per job. This is the number that matters.
+
+    Broken down by the direct-cost account so the books page can answer "was it
+    labor, materials or subs?" without opening a second report. The customer
+    and job name are joined when the bid tables exist; the plain ledger test
+    database does not have them, and a report must not fail because of that.
+    """
+    has_bids = table_exists(conn, "bid_opportunities")
+    has_invoices = has_bids and table_exists(conn, "bid_invoices")
+    if has_bids:
+        bid_cols = """
+                   MAX(b.name) AS name, MAX(b.location) AS location,
+                   MAX(b.contact_name) AS contact_name, MAX(b.contact_email) AS contact_email,
+                   MAX(b.status) AS status,
+                   COALESCE(MAX(b.contract_value), MAX(b.bid_amount), 0)::numeric AS contract_value,"""
+        bid_join = ("LEFT JOIN bid_opportunities b ON b.id = l.bid_id "
+                    "AND b.company = e.company")
+    else:
+        bid_cols = """
+                   NULL::text AS name, NULL::text AS location,
+                   NULL::text AS contact_name, NULL::text AS contact_email,
+                   NULL::text AS status, 0::numeric AS contract_value,"""
+        bid_join = ""
+    if has_invoices:
+        invoice_cols = """
+                   (SELECT COALESCE(SUM(i.amount), 0) FROM bid_invoices i
+                     WHERE i.bid_id = l.bid_id AND i.company = e.company
+                       AND COALESCE(i.status, '') <> 'void')::numeric AS billed,
+                   (SELECT COALESCE(SUM(i.collected), 0) FROM bid_invoices i
+                     WHERE i.bid_id = l.bid_id AND i.company = e.company
+                       AND COALESCE(i.status, '') <> 'void')::numeric AS collected,"""
+    else:
+        invoice_cols = "0::numeric AS billed, 0::numeric AS collected,"
     with conn.cursor() as cur:
-        cur.execute("""
+        cur.execute(f"""
             SELECT l.bid_id,
+                   {bid_cols}
+                   {invoice_cols}
                    COALESCE(SUM(l.credit_cents) FILTER (WHERE a.type = 'revenue'), 0)::bigint AS rev,
                    COALESCE(SUM(l.debit_cents)  FILTER (WHERE a.type = 'expense' AND a.code LIKE '50%%'), 0)::bigint AS dc,
-                   COALESCE(SUM(l.debit_cents)  FILTER (WHERE a.type = 'expense' AND a.code LIKE '60%%'), 0)::bigint AS oh
+                   COALESCE(SUM(l.debit_cents)  FILTER (WHERE a.type = 'expense' AND a.code LIKE '60%%'), 0)::bigint AS oh,
+                   COALESCE(SUM(l.debit_cents)  FILTER (WHERE a.code = '5010'), 0)::bigint AS material,
+                   COALESCE(SUM(l.debit_cents)  FILTER (WHERE a.code = '5020'), 0)::bigint AS labor,
+                   COALESCE(SUM(l.debit_cents)  FILTER (WHERE a.code = '5030'), 0)::bigint AS sub,
+                   COALESCE(SUM(l.debit_cents)  FILTER (WHERE a.code = '5040'), 0)::bigint AS equipment,
+                   COALESCE(SUM(l.debit_cents)  FILTER (WHERE a.code = '5050'), 0)::bigint AS permit,
+                   COALESCE(SUM(l.debit_cents)  FILTER (WHERE a.type = 'expense' AND a.code LIKE '50%%'
+                                                         AND a.code NOT IN ('5010','5020','5030','5040','5050')), 0)::bigint AS other_direct
             FROM ledger_lines l
             JOIN ledger_entries e ON e.id = l.entry_id
             JOIN ledger_accounts a ON a.code = l.account_code AND a.company = e.company
+            {bid_join}
             WHERE e.company = %s AND l.bid_id IS NOT NULL
-            GROUP BY l.bid_id ORDER BY rev DESC
+            GROUP BY l.bid_id, e.company
+            ORDER BY rev DESC
         """, (company,))
         rows = cur.fetchall()
         out = []
         for r in rows:
             rev, dc, oh = r["rev"] / 100.0, r["dc"] / 100.0, r["oh"] / 100.0
-            out.append({"bid_id": r["bid_id"], "revenue": rev, "direct_cost": dc,
-                        "overhead_allocated": oh,
-                        "gross_margin": round(rev - dc, 2),
-                        "gross_margin_pct": round((rev - dc) / rev * 100, 1) if rev else None,
-                        "net": round(rev - dc - oh, 2)})
+            out.append({
+                "bid_id": r["bid_id"],
+                "name": r.get("name") or "",
+                "location": r.get("location") or "",
+                "contact_name": r.get("contact_name") or "",
+                "contact_email": r.get("contact_email") or "",
+                "status": r.get("status") or "",
+                "contract_value": float(r.get("contract_value") or 0),
+                "billed": float(r.get("billed") or 0),
+                "collected": float(r.get("collected") or 0),
+                "revenue": rev, "direct_cost": dc,
+                "material": r["material"] / 100.0,
+                "labor": r["labor"] / 100.0,
+                "sub": r["sub"] / 100.0,
+                "equipment": r["equipment"] / 100.0,
+                "permit": r["permit"] / 100.0,
+                "other_direct": r["other_direct"] / 100.0,
+                "overhead_allocated": oh,
+                "gross_margin": round(rev - dc, 2),
+                "gross_margin_pct": round((rev - dc) / rev * 100, 1) if rev else None,
+                "net": round(rev - dc - oh, 2),
+            })
         return out
+
+
+def accounts_with_balances(conn, as_of=None, company: str = "construction") -> dict:
+    """Every chart account, grouped by type, with its current balance.
+
+    Unlike ``trial_balance`` this keeps zero-balance accounts, because the
+    point of a chart of accounts is to show the available buckets — including
+    the ones a job has not used yet.
+    """
+    params: list = [company]
+    date_clause = ""
+    if as_of:
+        date_clause = "AND e.entry_date <= %s"
+        params.append(as_of)
+    with conn.cursor() as cur:
+        cur.execute(f"""
+            SELECT a.code, a.name, a.type,
+                   COALESCE(SUM(l.debit_cents), 0)::bigint AS dr,
+                   COALESCE(SUM(l.credit_cents), 0)::bigint AS cr
+              FROM ledger_accounts a
+              LEFT JOIN ledger_lines l ON l.account_code = a.code
+              LEFT JOIN ledger_entries e ON e.id = l.entry_id
+                   AND e.company = a.company {date_clause}
+             WHERE a.company = %s
+             GROUP BY a.code, a.name, a.type
+             ORDER BY a.code
+        """, params)
+        rows = cur.fetchall()
+    groups: dict[str, list] = {t: [] for t in TYPES}
+    for r in rows:
+        dr, cr = r["dr"] / 100.0, r["cr"] / 100.0
+        # Debit-normal accounts show a positive number when they have a debit
+        # balance; credit-normal accounts when they have a credit balance.
+        balance = (dr - cr) if r["type"] in _DEBIT_NORMAL else (cr - dr)
+        groups.setdefault(r["type"], []).append({
+            "code": r["code"], "name": r["name"], "type": r["type"],
+            "debit": dr, "credit": cr, "balance": round(balance, 2),
+        })
+    labels = {ASSET: "Assets", LIABILITY: "Liabilities", EQUITY: "Equity",
+              REVENUE: "Revenue", EXPENSE: "Expenses"}
+    return {"groups": groups, "labels": labels}
+
 
 
 def entries(conn, limit: int = 50, company: str = "construction") -> list[dict]:

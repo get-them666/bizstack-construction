@@ -110,6 +110,12 @@ def ensure_accounting_schema(conn) -> None:
         # drop -- but it must never count toward the total or the PDFs again.
         cur.execute("ALTER TABLE bid_costs ADD COLUMN IF NOT EXISTS removed_at TIMESTAMP WITH TIME ZONE;")
         cur.execute("ALTER TABLE bid_costs ADD COLUMN IF NOT EXISTS removed_note TEXT;")
+        # When the money was actually spent, and the receipt that proves it.
+        # created_at is when the row was typed, which is not the same thing
+        # when an owner catches up on a stack of receipts on Sunday night.
+        cur.execute("ALTER TABLE bid_costs ADD COLUMN IF NOT EXISTS incurred_on DATE;")
+        cur.execute("ALTER TABLE bid_costs ADD COLUMN IF NOT EXISTS receipt_key TEXT;")
+        cur.execute("ALTER TABLE bid_costs ADD COLUMN IF NOT EXISTS receipt_url TEXT;")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_bid_costs_bid ON bid_costs(bid_id);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_bid_costs_cat ON bid_costs(bid_id, category);")
 
@@ -237,18 +243,22 @@ def cost_lines(conn, bid_id: int, company: str = "construction",
 
 def add_cost_line(conn, bid_id: int, category: str = "material", description: str = "",
                   vendor: str = "", qty=None, unit_cost=None, estimated=None,
-                  actual=None, unit: str = "", company: str = "construction") -> int:
+                  actual=None, unit: str = "", company: str = "construction",
+                  incurred_on=None, receipt_key: str = "",
+                  receipt_url: str = "") -> int:
     if category not in COST_CATEGORIES:
         raise ValueError(f"category must be one of {COST_CATEGORIES}")
     with conn.cursor() as cur:
         cur.execute(
             "INSERT INTO bid_costs (bid_id, category, description, vendor, qty, "
-            "unit_cost, estimated, actual, unit, company) "
-            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+            "unit_cost, estimated, actual, unit, company, incurred_on, receipt_key, receipt_url) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
             "RETURNING id",
             (bid_id, category, description.strip() if description else None,
              vendor.strip() if vendor else None, qty, unit_cost,
-             _money(estimated), _money(actual), (unit or None), company))
+             _money(estimated), _money(actual), (unit or None), company,
+             incurred_on or None, (receipt_key or "").strip() or None,
+             (receipt_url or "").strip() or None))
         lid = cur.fetchone()["id"]
     conn.commit()
     return lid
