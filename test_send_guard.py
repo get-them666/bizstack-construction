@@ -100,7 +100,7 @@ if __name__ == "__main__":
     print("\n[5] a configured cap cannot be raised to unlimited")
     # TEXT_DAILY_CAP / EMAIL_DAILY_CAP are read from the environment per call. A
     # value of 0, -1 or an empty string must not become "no limit".
-    for value, want in (("0", 0), ("-1", 0), ("-999", 0), ("99999", 50), ("80", 50)):
+    for value, want in (("0", 0), ("-1", 0), ("-999", 0), ("99999", 200), ("80", 80), ("200", 200)):
         os.environ["EMAIL_DAILY_CAP"] = value
         got = auto_reply._hard_daily_ceiling("email")
         check(f"EMAIL_DAILY_CAP={value!r} -> {want}", got == want, got)
