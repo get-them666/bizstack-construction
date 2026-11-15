@@ -454,7 +454,7 @@
     </p>
 
     <!-- Tracerfy -->
-    <div class="mt-4 bg-white rounded-2xl border border-slate-200 p-5">
+    <div class="mt-4 bg-white rounded-2xl border border-slate-200 p-5" id="owner-lookup">
         <div class="flex items-center gap-3">
             <div class="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center text-slate-700 font-bold">🔍</div>
             <div>
@@ -472,11 +472,34 @@
             <em>name</em> and no contact details. Tracerfy supplies the phone and email,
             5 credits per hit, with misses free. A lookup is triggered by a button on that page — never as a batch.
         </p>
+        {% if tracerfy_balance %}
+        <div class="mt-3 rounded-xl bg-slate-50 border border-slate-200 p-3 text-xs text-slate-700">
+            <b>{{ "{:,}".format(tracerfy_balance.balance) }}</b> credits left
+            · {{ "{:,}".format(tracerfy_balance.traced) }} properties traced
+            · {{ tracerfy_balance.balance // 5 }} hits available
+        </div>
+        {% endif %}
+        <form method="post" action="/api/settings/tracerfy" class="mt-4 grid gap-2 sm:grid-cols-6 items-end">
+            <label class="text-xs font-semibold text-slate-700 sm:col-span-4">
+                API key
+                <input name="api_key" type="password" autocomplete="off"
+                       placeholder="{{ '•••••••• (set — leave blank to keep)' if skip_sherpa_configured else 'paste the Tracerfy API key' }}"
+                       class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm font-normal">
+            </label>
+            <button class="px-4 py-2 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-500">Save key</button>
+            {% if skip_sherpa_configured %}
+            <button name="clear" value="1" onclick="return confirm('Remove the saved Tracerfy key?');"
+                    class="px-4 py-2 rounded-lg border border-slate-300 text-xs font-bold text-slate-600 hover:bg-slate-50">Clear</button>
+            {% endif %}
+        </form>
         {% if not skip_sherpa_configured %}
         <div class="mt-3 rounded-xl bg-amber-50 border border-amber-200 p-3 text-xs text-amber-800">
-            Set <code class="bg-amber-100 px-1 rounded">TRACERFY_API_KEY</code> in the environment.
-            Until then the lookup button on /skiptrace reports that it is not configured and spends no credit.
+            Paste the key from <b>tracerfy.com → account menu → API key</b>. No webhook is needed for
+            instant lookup — it is synchronous. The environment variable
+            <code class="bg-amber-100 px-1 rounded">TRACERFY_API_KEY</code> still overrides this if set.
         </div>
+        {% else %}
+        <p class="mt-2 text-[11px] text-slate-400">Instant lookup is synchronous; no webhook needed. The key is stored in Settings (the environment variable still wins if set).</p>
         {% endif %}
     </div>
 

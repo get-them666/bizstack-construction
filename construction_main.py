@@ -6770,6 +6770,7 @@ async def settings_page(request: Request, db=Depends(get_db)):
             "saved": request.query_params.get("saved", ""),
             "error": request.query_params.get("error", ""),
             "skip_sherpa_configured": skip_sherpa_service.configured(),
+            "tracerfy_balance": skip_sherpa_service.tracerfy_balance(),
             "docs_email": _docs_recipient(db),
             "resimply_configured": configured,
             "resimply_status": resimply_status,
@@ -6990,6 +6991,27 @@ async def settings_zoho_payments(request: Request, account_id: str = Form(""),
     if (domain or "").strip():
         _set_setting(db, "zoho_payments_domain", (domain or "US").strip().upper())
     return RedirectResponse(url="/settings?saved=zoho-payments#zoho-payments",
+                            status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/api/settings/tracerfy")
+async def settings_tracerfy(request: Request, api_key: str = Form(""),
+                            clear: str = Form(""), db=Depends(get_db)):
+    """Save the Tracerfy key without editing the server environment.
+
+    The env var still wins if set; this is the in-app fallback and the only
+    place the owner needs to touch. Instant lookup needs no webhook.
+    """
+    require_admin(request)
+    if (clear or "").strip():
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM app_settings WHERE key = 'tracerfy_api_key';")
+        db.commit()
+    elif (api_key or "").strip():
+        _set_setting(db, "tracerfy_api_key", (api_key or "").strip())
+    skip_sherpa_service._KEY_CACHE.update({"at": 0.0, "value": ""})
+    skip_sherpa_service._BALANCE_CACHE.update({"at": 0.0, "value": None})
+    return RedirectResponse(url="/settings?saved=tracerfy#owner-lookup",
                             status_code=status.HTTP_303_SEE_OTHER)
 
 

@@ -42,6 +42,9 @@ import time
 import urllib.error
 import urllib.request
 
+import psycopg
+from psycopg.rows import dict_row
+
 API_ROOT = "https://skipsherpa.com"
 
 # Tracerfy is the preferred provider. It is synchronous, costs 5 credits per
@@ -95,8 +98,33 @@ def api_key() -> str:
     return (os.getenv("SKIP_SHERPA_API_KEY") or "").strip()
 
 
-def tracerfy_key() -> str:
-    return (os.getenv("TRACERFY_API_KEY") or "").strip()
+def _setting(key: str) -> str:
+    """Read an app-setting without importing the app (this module is imported
+    by background loops that have no request or connection)."""
+    try:
+        with psycopg.connect(os.getenv("DATABASE_URL", ""), row_factory=dict_row, connect_timeout=5) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT value FROM app_settings WHERE key = %s;", (key,))
+                row = cur.fetchone()
+        return (row or {}).get("value") or ""
+    except Exception:
+        return ""
+
+
+_KEY_CACHE = {"at": 0.0, "value": ""}
+
+
+def tracerfy_key(force: bool = False) -> str:
+    """Environment wins; then the key saved under Settings → Owner lookup."""
+    env = (os.getenv("TRACERFY_API_KEY") or "").strip()
+    if env:
+        return env
+    now = time.time()
+    if not force and _KEY_CACHE["value"] and now - _KEY_CACHE["at"] < 30:
+        return _KEY_CACHE["value"]
+    value = _setting("tracerfy_api_key").strip()
+    _KEY_CACHE.update({"at": now, "value": value})
+    return value
 
 
 def provider_name() -> str:
@@ -628,3 +656,35 @@ def trace(street: str, city: str, state: str, zipcode: str) -> dict:
     if tracerfy_key():
         return _trace_tracerfy(street, city, state, zipcode)
     return _trace_skip_sherpa(street, city, state, zipcode)
+
+
+_BALANCE_CACHE = {"at": 0.0, "value": None}
+
+
+def tracerfy_balance(force: bool = False) -> dict | None:
+    """Credit balance for the Settings card. Cached for 60 seconds.
+
+    A missing key or an upstream error returns None; the UI then shows "set the
+    key" rather than a fake balance.
+    """
+    key = tracerfy_key()
+    if not key:
+        return None
+    now = time.time()
+    if not force and _BALANCE_CACHE["value"] and now - _BALANCE_CACHE["at"] < 60:
+        return _BALANCE_CACHE["value"]
+    req = urllib.request.Request(
+        f"{TRACERFY_API_ROOT}/analytics/",
+        headers={"Authorization": f"Bearer {key}", "Accept": "application/json",
+                 "User-Agent": TRACERFY_USER_AGENT},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            data = json.loads(resp.read().decode("utf-8", "replace"))
+        out = {"balance": int(data.get("balance") or 0),
+               "traced": int(data.get("properties_traced") or 0),
+               "pending": int(data.get("queues_pending") or 0)}
+        _BALANCE_CACHE.update({"at": now, "value": out})
+        return out
+    except Exception:
+        return None
