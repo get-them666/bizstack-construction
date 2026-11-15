@@ -48,6 +48,18 @@ if __name__ == "__main__":
         check(f"{name!r} -> {want!r}", auto_reply._person_first(name) == want,
               auto_reply._person_first(name))
 
+    print("\n[2b] assessor records put the surname first")
+    # These are the shapes the skip trace writes back. "Last, First" was
+    # greeted by surname -- real sends opened "Hi Fields," and "Hi Hotor,".
+    for name, want in (("Fields, Sterling Iii Et Al", "Sterling"),
+                       ("HOTOR, EBENEZER", "Ebenezer"),
+                       ("Hamoud, Mohamad M Et Al", "Mohamad"),
+                       ("TURNER", "Turner"),
+                       ("6076 NEWPORT POINT", ""),
+                       ("PERMIT · 6076 NEWPORT POINT", "")):
+        check(f"{name!r} -> {want!r}", auto_reply._person_first(name) == want,
+              auto_reply._person_first(name))
+
     print("\n[3] the SAM.gov 'title · person' form still resolves to the person")
     # This is the form the two-touch-policy commit was written for; it must not
     # regress while fixing the city case.

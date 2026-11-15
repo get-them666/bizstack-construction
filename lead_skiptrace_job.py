@@ -39,6 +39,9 @@ _STATE = {
     "skipped": 0,
     "already_traced": 0,
     "credits_used": 0,
+    "outreach_sent": 0,
+    "outreach_staged": 0,
+    "outreach_skipped": 0,
     "current": "",
     "city": "",
     "note": "",
@@ -133,7 +136,8 @@ def candidates(conn, company: str = "construction", limit: int = 25,
     params.append(want * 6 if not city else want * 3)
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT id, name, email, phone, address, zip, source, status "
+            "SELECT id, name, email, phone, address, zip, source, status, "
+            "       project_type, description, do_not_contact, last_outbound_at "
             "FROM leads WHERE company = %s AND COALESCE(address, '') <> '' "
             + _no_contact_clause() +
             f"  AND LOWER(COALESCE(status, 'new')) NOT IN ({','.join(['%s'] * len(DEAD))}) "
@@ -222,7 +226,8 @@ def start(company: str = "construction", limit: int = 25, city: str = "") -> dic
             n = 25
         city = (city or "").strip()
         _STATE.update(running=True, total=n, examined=0, found=0, misses=0,
-                      paid_empty=0, skipped=0, already_traced=0, credits_used=0, current="",
+                      paid_empty=0, skipped=0, already_traced=0, credits_used=0,
+                      outreach_sent=0, outreach_staged=0, outreach_skipped=0, current="",
                       city=city, note="starting",
                       started_at=time.strftime("%Y-%m-%d %H:%M:%S"),
                       finished_at=None, balance=None)
@@ -284,6 +289,43 @@ def _audit(conn, key: str, result: dict) -> None:
             conn.rollback()
         except Exception:
             pass
+
+
+def _outreach(conn, lead: dict, merged: dict) -> dict:
+    """Put a freshly traced lead into the normal first-touch flow.
+
+    The trace only writes columns. Without this, a lead that became reachable
+    today sits silently in the database forever, because `ensure_lead_reply`
+    is otherwise only called when a lead ARRIVES. Everything the guardrail
+    layer does -- suppression list, DNC, federal block, caps, cooldowns, review
+    mode -- still applies, because this is the same call the inbound path uses.
+    """
+    if (os.getenv("DISABLE_TRACE_OUTREACH", "") or "").strip().lower() in ("1", "true", "yes", "on"):
+        return {"skipped": "disabled"}
+    if lead.get("do_not_contact") or lead.get("last_outbound_at"):
+        return {"skipped": "already contacted or opted out"}
+    if not (merged.get("email") or merged.get("phone")):
+        return {"skipped": "no channel"}
+    try:
+        import auto_reply
+        out = auto_reply.ensure_lead_reply(
+            conn, "construction",
+            name=merged.get("name") or "",
+            phone=merged.get("phone") or "",
+            email=merged.get("email") or "",
+            service=lead.get("project_type") or "",
+            address=lead.get("address") or "",
+            message=lead.get("description") or "",
+            source=lead.get("source") or "",
+            lead_id=lead.get("id"),
+        )
+        return out or {}
+    except Exception as exc:  # noqa: BLE001 - outreach must never end the batch
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return {"skipped": f"error: {str(exc)[:120]}"}
 
 
 def _run(company: str, limit: int, city: str = "") -> None:
@@ -373,6 +415,7 @@ def _run(company: str, limit: int, city: str = "") -> None:
                                   or result.get("raw_phone") or ""),
                     }
                     merged = data_enrichment.merge(lead, found)
+                    outreach = {}
                     if merged.get("changed"):
                         with conn.cursor() as cur:
                             cur.execute(
@@ -389,6 +432,19 @@ def _run(company: str, limit: int, city: str = "") -> None:
                                 conn.rollback()
                             except Exception:
                                 pass
+                    # Outside the `changed` branch on purpose: the contact may
+                    # already have been written on an earlier run, and the
+                    # first touch still has to happen.
+                    outreach = _outreach(conn, lead, merged)
+                    with _LOCK:
+                        if outreach.get("sent"):
+                            _STATE["outreach_sent"] += 1
+                        elif outreach.get("staged"):
+                            _STATE["outreach_staged"] += 1
+                        elif outreach.get("skipped"):
+                            _STATE["outreach_skipped"] += 1
+                            if outreach["skipped"].startswith(("error", "disabled")):
+                                _STATE["note"] = f"outreach: {outreach['skipped']}"[:200]
             time.sleep(0.05)
     except Exception as exc:  # noqa: BLE001
         with _LOCK:

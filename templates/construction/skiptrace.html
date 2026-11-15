@@ -910,6 +910,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 + d.examined + '/' + d.total + ' examined · ' + d.found + ' found · '
                 + d.misses + ' misses · ' + d.credits_used + ' credits'
                 + (d.paid_empty ? ' · ' + d.paid_empty + ' paid with no contact' : '')
+                + (d.outreach_sent ? ' · ' + d.outreach_sent + ' emailed/texted' : '')
+                + (d.outreach_staged ? ' · ' + d.outreach_staged + ' draft(s) staged' : '')
+                + (d.outreach_skipped ? ' · ' + d.outreach_skipped + ' not contacted' : '')
                 + (d.balance !== null && d.balance !== undefined ? ' · balance ' + d.balance : '')
                 + (d.current ? ' · ' + d.current : '')
                 + (d.note ? ' · ' + d.note : '');

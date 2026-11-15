@@ -197,9 +197,22 @@ def _person_first(name):
         return ""
     if re.sub(r"\s+", " ", raw).strip().lower() in _NOT_A_PERSON:
         return ""
-    first = raw.split()[0]
+    # Assessor records write "Last, First Middle" ("Fields, Sterling Iii Et Al")
+    # and permit feeds often shout: "HOTOR, EBENEZER". Taking the first token
+    # of that gives the surname, and the email then opens "Hi Fields,". The
+    # part after the comma is the given name, so prefer it.
+    if "," in raw:
+        raw = raw.split(",", 1)[1].strip()
+    first = raw.split()[0].strip(" .,;:'\"()-")
     if len(first) < 2:
         return ""
+    # A numbered place ("6076 NEWPORT POINT") must not be greeted as a person,
+    # and an all-caps surname reads as shouting.
+    if not re.search(r"[A-Za-z]", first):
+        return ""
+    if first.isupper():
+        first = first.capitalize()
+    return first
     return first
 
 
