@@ -304,6 +304,25 @@ def _audit(conn, key: str, result: dict) -> None:
             pass
 
 
+def _pace() -> None:
+    """Space out real sends so a batch is not a burst.
+
+    Zoho blocked the mailbox on 2026-11-15 after 51 cold emails in one hour
+    (35 in the 17:00 hour alone) -- all to first-time consumer recipients.
+    Mailbox hosts flag that shape as abuse regardless of how old the account
+    is, so the batch trickles instead of firing every lead at once.
+
+    OUTREACH_MIN_GAP_SECONDS=0 turns the pause off. 20s caps a batch at ~180
+    sends an hour, which is still faster than the 200/day budget allows.
+    """
+    try:
+        gap = float((os.getenv("OUTREACH_MIN_GAP_SECONDS", "20") or "0").strip())
+    except (TypeError, ValueError):
+        gap = 20.0
+    if gap > 0:
+        time.sleep(min(gap, 600.0))
+
+
 def _outreach(conn, lead: dict, merged: dict) -> dict:
     """Put a freshly traced lead into the normal first-touch flow.
 
@@ -332,6 +351,8 @@ def _outreach(conn, lead: dict, merged: dict) -> dict:
             source=lead.get("source") or "",
             lead_id=lead.get("id"),
         )
+        if (out or {}).get("sent"):
+            _pace()
         return out or {}
     except Exception as exc:  # noqa: BLE001 - outreach must never end the batch
         try:
