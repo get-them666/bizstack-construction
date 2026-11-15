@@ -1262,6 +1262,36 @@ The invariant to keep: a job cost sheet is a read model. The ledger is the
 accounting truth, `ledger_sync.pending` explains source records that have not
 reached it, and Zoho Books remains downstream only.
 
+## 2026-11-15: outbound email transport on DigitalOcean
+
+Two hard facts, both hit in one evening:
+
+1. **DigitalOcean blocks outbound SMTP.** Ports 25, 465 and 587 all time out
+   from `bizstack-prod`. Anything that reaches the aiosmtplib ladder sits for
+   the connect timeout and fails, so "the bot is broken" was really "the
+   droplet cannot open an SMTP connection". Nothing in the mail code can fix
+   that; every transport must be HTTPS.
+2. **A Zoho *mailbox* is not a bulk sender.** After ~50 cold emails,
+   `smtp`/API sends from `hello@bizstackperks.com` came back
+   `550 5.4.6 Unusual sending activity detected` and Zoho blocked outgoing for
+   the account until the owner clicks their unblock link. Zoho's own advice is
+   ZeptoMail, which is the transactional product with its own limits.
+
+`documents_service.send_email` therefore tries, in order: **ZeptoMail**
+(`ZEPTOMAIL_TOKEN`, HTTPS, `api.zeptomail.com/v1.1/email`) → **Zoho Mail**
+(connected account, HTTPS) → Resend/SES/aiosmtplib. ZeptoMail is the channel
+that must carry volume; leave the mailbox for human mail.
+
+- `auto_reply._hard_daily_ceiling` clamps email to 200/day and text to 20/day.
+  A cap of 0 in `_channel_allowed` means *unlimited*, so never use 0 to pause
+  sending — use `LEAD_AUTO_SEND=0` (review mode, drafts stage instead).
+- `LEAD_EMAIL_DAILY_CAP` caps the bid-inquiry sender against the *same*
+  outbound counter, so it has to be raised alongside `EMAIL_DAILY_CAP` or
+  bid inquiries starve behind lead email.
+- During the block, `LEAD_AUTO_SEND=0` was set on the droplet so the bot stages
+  drafts instead of retrying a blocked mailbox on every lead. Turn it back to 1
+  once ZeptoMail carries the traffic.
+
 ## 2026-11-15: skip trace provider is Tracerfy
 
 The owner bought 1,000 Tracerfy credits, so `skip_sherpa_service.py` now uses

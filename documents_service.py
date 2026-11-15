@@ -511,6 +511,86 @@ def os_getenv(key, default=""):
     return os.getenv(key, default)
 
 
+# --- ZeptoMail (transactional, HTTPS) ----------------------------------------
+ZEPTOMAIL_DEFAULT_URL = "https://api.zeptomail.com/v1.1/email"
+
+
+def zeptomail_configured() -> bool:
+    return bool((os_getenv("ZEPTOMAIL_TOKEN", "") or "").strip())
+
+
+def _zeptomail_send(to: str, subject: str, body_text: str, cfg: dict, cc: str = "",
+                    attachment: bytes = None, filename: str = "",
+                    attachments: list | None = None) -> bool:
+    """Deliver one message through ZeptoMail's HTTPS API.
+
+    This is the bulk/transactional channel Zoho points at when a mailbox starts
+    refusing mail for sending volume. It is HTTPS, so DigitalOcean's outbound
+    SMTP block (25/465/587 are all closed on the droplet) cannot touch it.
+
+    Returns True only when ZeptoMail accepted the message.
+    """
+    import base64
+    import json
+    import urllib.error
+    import urllib.request
+
+    token = (os_getenv("ZEPTOMAIL_TOKEN", "") or "").strip()
+    if not token:
+        return False
+    url = (os_getenv("ZEPTOMAIL_API_URL", "") or ZEPTOMAIL_DEFAULT_URL).strip()
+    sender = (cfg.get("SMTP_FROM") or "").strip()
+    if not sender:
+        return False
+
+    def _addr(addr: str, name: str = "") -> dict:
+        entry = {"email_address": {"address": (addr or "").strip()}}
+        if name:
+            entry["email_address"]["name"] = name
+        return entry
+
+    payload = {
+        "from": {"address": sender, "name": (cfg.get("SMTP_NAME") or "").strip()},
+        "to": [_addr(to)],
+        "subject": subject,
+        "textbody": body_text,
+        "htmlbody": body_text.replace("\n", "<br>"),
+    }
+    cc_list = [_addr(a) for a in (cc or "").split(",") if a.strip()]
+    if cc_list:
+        payload["cc"] = cc_list
+    files = []
+    for raw, name in (attachments or []):
+        if raw and name:
+            files.append({"name": name, "mime_type": mime_type(name),
+                          "content": base64.b64encode(raw).decode()})
+    if attachment and filename:
+        files.insert(0, {"name": filename, "mime_type": mime_type(filename),
+                         "content": base64.b64encode(attachment).decode()})
+    if files:
+        payload["attachments"] = files
+
+    req = urllib.request.Request(
+        url, data=json.dumps(payload).encode(), method="POST",
+        headers={"Content-Type": "application/json", "Accept": "application/json",
+                 "Authorization": f"Zoho-enczapikey {token}"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=int(os_getenv("ZEPTOMAIL_TIMEOUT", "20") or 20)) as resp:
+            return 200 <= getattr(resp, "status", 0) < 300
+    except urllib.error.HTTPError as exc:
+        detail = ""
+        try:
+            detail = exc.read().decode("utf-8", "replace")[:200]
+        except Exception:
+            pass
+        print(f"[EMAIL] ZeptoMail rejected {to}: HTTP {exc.code} {detail}", flush=True)
+        return False
+    except Exception as exc:  # noqa: BLE001
+        print(f"[EMAIL] ZeptoMail failed for {to}: {type(exc).__name__}: {exc}", flush=True)
+        return False
+
+
 def smtp_configured(cfg: dict) -> bool:
     """True when there is enough configuration to attempt a send at all.
 
@@ -723,7 +803,22 @@ async def send_email(cfg: dict, to: str, subject: str, body: str, attachment: by
         return False
     physical = (os_getenv("SENDER_PHYSICAL_ADDRESS", "")).strip()
 
-    # Zoho Mail over HTTPS first, when it is connected.
+    # ZeptoMail over HTTPS first, when a token is configured. It is the
+    # transactional channel for volume: a Zoho *mailbox* throttles and then
+    # blocks the account ("unusual sending activity") long before a few hundred
+    # cold emails, which is exactly what happened on 2026-11-15.
+    if zeptomail_configured():
+        try:
+            ok = await asyncio.to_thread(
+                _zeptomail_send, to, subject, body, cfg, cc,
+                attachment, filename, attachments)
+            if ok:
+                return True
+            print(f"[EMAIL] ZeptoMail did not accept {to}; trying the Zoho mailbox", flush=True)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[EMAIL] ZeptoMail path failed for {to}: {type(exc).__name__}: {exc}", flush=True)
+
+    # Zoho Mail over HTTPS next, when it is connected.
     #
     # DigitalOcean blocks outbound SMTP (25, 465 and 587 all time out from the
     # droplet), so every send that reached the SMTP ladder below sat for the
