@@ -128,35 +128,48 @@ def candidates(conn, company: str = "construction", limit: int = 25,
     """
     want = max(1, int(limit))
     city = (city or "").strip()
-    params: list = [company, *DEAD]
     city_clause = ""
+    city_params: list = []
     if city:
         city_clause = "  AND BTRIM(split_part(address, ',', 2)) ILIKE %s "
-        params.append(city)
-    params.append(want * 6 if not city else want * 3)
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT id, name, email, phone, address, zip, source, status, "
-            "       project_type, description, do_not_contact, last_outbound_at "
-            "FROM leads WHERE company = %s AND COALESCE(address, '') <> '' "
-            + _no_contact_clause() +
-            f"  AND LOWER(COALESCE(status, 'new')) NOT IN ({','.join(['%s'] * len(DEAD))}) "
-            + city_clause +
-            "ORDER BY id DESC LIMIT %s",
-            (*params,),
-        )
-        pool = cur.fetchall() or []
-    if not pool:
-        return []
-    keys = [_key_for(row) for row in pool]
-    done = _recently_traced(conn, keys)
-    picked = []
-    for row, key in zip(pool, keys):
-        if key and key in done:
-            continue
-        picked.append(row)
-        if len(picked) >= want:
+        city_params.append(city)
+    picked: list = []
+    last_id = None
+    # Page through the queue instead of reading one fixed window. A previous
+    # run consumes the newest rows, so a single LIMIT window returns only rows
+    # that are already in the retry log and the next click finds "nothing
+    # ready" while hundreds of untouched leads sit below it.
+    while len(picked) < want:
+        page = max(200, want * 4)
+        params: list = [company, *DEAD, *city_params]
+        id_clause = ""
+        if last_id is not None:
+            id_clause = "  AND id < %s "
+            params.append(last_id)
+        params.append(page)
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, name, email, phone, address, zip, source, status, "
+                "       project_type, description, do_not_contact, last_outbound_at "
+                "FROM leads WHERE company = %s AND COALESCE(address, '') <> '' "
+                + _no_contact_clause() +
+                f"  AND LOWER(COALESCE(status, 'new')) NOT IN ({','.join(['%s'] * len(DEAD))}) "
+                + city_clause + id_clause +
+                "ORDER BY id DESC LIMIT %s",
+                (*params,),
+            )
+            rows = cur.fetchall() or []
+        if not rows:
             break
+        last_id = rows[-1]["id"]
+        done = _recently_traced(conn, [_key_for(row) for row in rows])
+        for row in rows:
+            key = _key_for(row)
+            if key and key in done:
+                continue
+            picked.append(row)
+            if len(picked) >= want:
+                break
     return picked
 
 
