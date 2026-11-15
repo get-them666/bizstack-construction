@@ -1027,6 +1027,20 @@ async def lifecycle(app: FastAPI):
 app = FastAPI(title=brand.name(), lifespan=lifecycle)
 
 
+# You cannot attach a debugger to a wedged container from here, and a hung event
+# loop looks identical to a dead process from outside (2026-11-15: the site was
+# "down" while uvicorn was alive and listening). SIGUSR1 now dumps every thread's
+# stack to the container log:
+#     docker compose exec construction kill -USR1 7 && docker compose logs -n 200 construction
+try:
+    import faulthandler as _faulthandler
+    import signal as _signal
+
+    _faulthandler.register(_signal.SIGUSR1, all_threads=True)
+except Exception:  # pragma: no cover - diagnostic only
+    pass
+
+
 @app.exception_handler(Exception)
 async def api_exception_handler(request: Request, exc: Exception):
     """Keep unexpected API failures JSON-shaped and correlate them with logs."""
@@ -7716,7 +7730,7 @@ async def send_once_route(lead_id: int, request: Request, subject: str = Form(""
         cur.execute("UPDATE leads SET draft_reply = %s WHERE id = %s;", (f"{subject}\n{body}", lead_id))
         db.commit()
 
-    result = auto_reply.fire_lead_draft(db, "construction", lead_id)
+    result = await asyncio.to_thread(auto_reply.fire_lead_draft, db, "construction", lead_id)
 
     # fire_lead_draft only clears draft_reply on a real send. If it was blocked
     # -- no transport, cap reached, lead already contacted -- the text is left
@@ -7742,7 +7756,9 @@ async def send_once_route(lead_id: int, request: Request, subject: str = Form(""
 @app.post("/api/leads/{lead_id}/fire-draft")
 async def fire_lead_draft_route(lead_id: int, request: Request, db=Depends(get_db)):
     require_admin(request)
-    result = auto_reply.fire_lead_draft(db, "construction", lead_id)
+    # Off the event loop: one send can pay a full transport timeout, and a
+    # blocked mailbox made those long enough to freeze every other page.
+    result = await asyncio.to_thread(auto_reply.fire_lead_draft, db, "construction", lead_id)
     if request.headers.get("hx-request"):
         return JSONResponse(content={"status": "fired" if result.get("sent") else "blocked", "why": result.get("why", "")})
     return RedirectResponse(url=request.headers.get("referer") or "/leads", status_code=status.HTTP_303_SEE_OTHER)
@@ -7768,7 +7784,12 @@ async def fire_all_drafts_route(request: Request, db=Depends(get_db)):
     require_admin(request)
     # Scoped to this company. Without the scope this button would send every
     # staged draft on this site.
-    result = auto_reply.fire_all_drafts(db, "construction")
+    #
+    # In a worker thread, not on the event loop. This loop sends one draft at a
+    # time and each send can pay a full transport timeout; run inline it froze
+    # every other page for minutes (2026-11-15: the site "wouldn't load" while
+    # one click sat on blocked SMTP connects).
+    result = await asyncio.to_thread(auto_reply.fire_all_drafts, db, "construction")
     if request.headers.get("hx-request"):
         return JSONResponse(content=result)
     return RedirectResponse(url=request.headers.get("referer") or "/leads", status_code=status.HTTP_303_SEE_OTHER)

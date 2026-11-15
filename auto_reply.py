@@ -1197,14 +1197,25 @@ def fire_all_drafts(db, company_key=None):
     sent = 0
     skipped = 0
     reasons = {}
+    consecutive_failures = 0
     for ck, lead_id in pending:
         res = fire_lead_draft(db, ck, lead_id, force=True)
         if res.get("sent"):
             sent += 1
+            consecutive_failures = 0
         else:
             skipped += 1
             why = res.get("why") or "unknown"
             reasons[why] = reasons.get(why, 0) + 1
+            # A dead transport fails the same way for every draft and each
+            # attempt pays a full connect timeout -- on 2026-11-15 that meant a
+            # single click sat in blocked SMTP calls long enough to look like
+            # the whole site was down. Stop after a few, and say why.
+            consecutive_failures += 1
+            if consecutive_failures >= 3:
+                reasons["stopped after 3 consecutive failures"] = 1
+                print(f"[auto-reply] fire-all stopping: 3 consecutive failures, last was {why}", flush=True)
+                break
     print(f"[auto-reply] fire-all: {len(pending)} pending, {sent} sent, {skipped} skipped", flush=True)
     return {'pending': len(pending), 'sent': sent, 'skipped': skipped, 'reasons': reasons}
 
