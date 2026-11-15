@@ -7799,18 +7799,19 @@ async def enrich_leads_batch(request: Request, limit: int = Form(10), db=Depends
 
 
 @app.get("/api/leads/skiptrace-preview")
-async def lead_skiptrace_preview(request: Request, db=Depends(get_db)):
+async def lead_skiptrace_preview(request: Request, city: str = "", db=Depends(get_db)):
     require_admin(request)
     import lead_skiptrace_job
     return JSONResponse(content=await asyncio.to_thread(
-        lead_skiptrace_job.preview, db, "construction"))
+        lead_skiptrace_job.preview, db, "construction", city))
 
 
 @app.post("/api/leads/skiptrace-run")
-async def lead_skiptrace_start(request: Request, limit: int = Form(25), db=Depends(get_db)):
+async def lead_skiptrace_start(request: Request, limit: int = Form(25),
+                                city: str = Form(""), db=Depends(get_db)):
     require_admin(request)
     import lead_skiptrace_job
-    return JSONResponse(content=lead_skiptrace_job.start("construction", limit))
+    return JSONResponse(content=lead_skiptrace_job.start("construction", limit, city))
 
 
 @app.get("/api/leads/skiptrace-status")

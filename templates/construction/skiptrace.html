@@ -146,6 +146,12 @@
                     <p id="trace-preview" class="text-[11px] text-slate-500">Checking how many leads are ready…</p>
                 </div>
                 <div class="flex items-end gap-2">
+                    <label class="text-[11px] font-semibold text-slate-600">City
+                        <select id="trace-city"
+                                class="block mt-1 px-2 py-1.5 text-sm rounded-lg border border-slate-200">
+                            <option value="">All cities</option>
+                        </select>
+                    </label>
                     <label class="text-[11px] font-semibold text-slate-600">Leads
                         <input id="trace-limit" type="number" min="1" max="500" value="25"
                                class="block mt-1 w-20 px-2 py-1.5 text-sm rounded-lg border border-slate-200">
@@ -842,23 +848,40 @@ document.addEventListener('DOMContentLoaded', function() {
     const traceStatus = document.getElementById('trace-status');
     const tracePreview = document.getElementById('trace-preview');
     const traceLimit = document.getElementById('trace-limit');
+    const traceCity = document.getElementById('trace-city');
 
     async function refreshPreview() {
         if (!tracePreview) return;
+        const picked = traceCity ? traceCity.value : '';
         try {
-            const res = await fetch('/api/leads/skiptrace-preview', { headers: { 'Accept': 'application/json' } });
+            const res = await fetch('/api/leads/skiptrace-preview?city=' + encodeURIComponent(picked),
+                                    { headers: { 'Accept': 'application/json' } });
             const d = await res.json();
             if (!res.ok) { tracePreview.textContent = d.detail || 'Could not read the queue.'; return; }
+            // The city list is rebuilt from the live counts, but the current
+            // pick has to survive the rebuild or every poll resets the filter.
+            if (traceCity && d.cities) {
+                const keep = traceCity.value;
+                traceCity.innerHTML = '<option value="">All cities</option>'
+                    + d.cities.map(function (c) {
+                        return '<option value="' + esc(c.city) + '">' + esc(c.city)
+                            + ' (' + c.ready + ')</option>';
+                    }).join('');
+                traceCity.value = keep;
+            }
             const bal = (d.balance === null || d.balance === undefined) ? 'unknown' : d.balance;
             const afford = (d.affordable === null || d.affordable === undefined) ? '' : ' (' + d.affordable + ' hits affordable)';
             const skip = d.traced_recently ? ' · ' + d.traced_recently + ' traced in the last 30 days' : '';
-            tracePreview.textContent = d.ready + ' leads ready · ' + d.no_zip + ' still need a ZIP'
+            tracePreview.textContent = d.ready + ' leads ready in ' + (picked || 'all cities')
+                + ' · ' + d.no_zip + ' still need a ZIP'
                 + skip + ' · balance ' + bal + ' credits' + afford + ' · '
                 + (d.provider || 'no provider') + ' configured';
         } catch (e) {
             tracePreview.textContent = 'Could not read the queue.';
         }
     }
+
+    if (traceCity) traceCity.addEventListener('change', refreshPreview);
 
     async function pollPrep() {
         try {
@@ -917,14 +940,17 @@ document.addEventListener('DOMContentLoaded', function() {
 
     if (traceBtn) traceBtn.addEventListener('click', async function() {
         const n = Math.max(1, Math.min(500, parseInt(traceLimit.value || '25', 10) || 25));
-        if (!confirm('Run Tracerfy on up to ' + n + ' leads?\n\nAt 5 credits per hit and free misses, '
-                     + 'the maximum spend is ' + (n * 5) + ' credits.')) return;
+        const where = traceCity && traceCity.value ? ' in ' + traceCity.value : '';
+        if (!confirm('Run Tracerfy on up to ' + n + ' leads' + where + '?\n\n'
+                     + 'At 5 credits per hit and free misses, the maximum spend is '
+                     + (n * 5) + ' credits.')) return;
         traceBtn.disabled = true;
         traceBtn.textContent = 'Tracing…';
         traceStatus.textContent = 'Starting Tracerfy…';
         try {
             const body = new FormData();
             body.set('limit', String(n));
+            if (traceCity) body.set('city', traceCity.value);
             const res = await fetch('/api/leads/skiptrace-run', { method: 'POST', body: body, headers: { 'Accept': 'application/json' } });
             const d = await res.json();
             if (!res.ok) { traceStatus.textContent = d.detail || 'Could not start.'; traceBtn.disabled = false; return; }

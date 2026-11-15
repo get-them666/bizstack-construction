@@ -40,6 +40,7 @@ _STATE = {
     "already_traced": 0,
     "credits_used": 0,
     "current": "",
+    "city": "",
     "note": "",
     "started_at": None,
     "finished_at": None,
@@ -100,17 +101,45 @@ def _key_for(lead: dict) -> str:
         parsed["street"], parsed["city"], parsed["state"])
 
 
-def candidates(conn, company: str = "construction", limit: int = 25) -> list:
-    """No-contact leads with an address, newest first, minus recent attempts."""
+def _city_of(address: str) -> str:
+    """The city exactly as the address string spells it, for grouping.
+
+    '2348 BALLENTINE BOULEVARD, Norfolk, VA 23509' -> 'Norfolk'. Permit feeds
+    are inconsistent about case ('VIRGINIA BEACH' vs 'Virginia Beach'), so
+    grouping is case-insensitive and the first spelling seen wins.
+    """
+    parts = str(address or "").split(",")
+    if len(parts) < 2:
+        return ""
+    return parts[1].strip()
+
+
+def candidates(conn, company: str = "construction", limit: int = 25,
+               city: str = "") -> list:
+    """No-contact leads with an address, newest first, minus recent attempts.
+
+    ``city`` narrows the pool by a case-insensitive match on the address's own
+    city part. That matters because coverage is not uniform: Virginia Beach
+    returns contacts most of the time and Norfolk mostly does not, so ordering
+    purely by recency spends the balance on the half that cannot answer.
+    """
     want = max(1, int(limit))
+    city = (city or "").strip()
+    params: list = [company, *DEAD]
+    city_clause = ""
+    if city:
+        city_clause = "  AND BTRIM(split_part(address, ',', 2)) ILIKE %s "
+        params.append(city)
+    params.append(want * 6 if not city else want * 3)
     with conn.cursor() as cur:
         cur.execute(
             "SELECT id, name, email, phone, address, zip, source, status "
             "FROM leads WHERE company = %s AND COALESCE(address, '') <> '' "
             + _no_contact_clause() +
             f"  AND LOWER(COALESCE(status, 'new')) NOT IN ({','.join(['%s'] * len(DEAD))}) "
+            + city_clause +
             "ORDER BY id DESC LIMIT %s",
-            (company, *DEAD, want * 6),
+            (*params,),
         )
         pool = cur.fetchall() or []
     if not pool:
@@ -127,12 +156,13 @@ def candidates(conn, company: str = "construction", limit: int = 25) -> list:
     return picked
 
 
-def preview(conn, company: str = "construction") -> dict:
+def preview(conn, company: str = "construction", city: str = "") -> dict:
     """How many leads a run will actually take, plus the balance.
 
     Counts what `candidates` would return, not just the no-contact total: an
     address traced inside the retry window is skipped, so showing it as "ready"
-    would promise work the run will not do.
+    would promise work the run will not do. Ready counts are also broken out by
+    city, because that is the one thing that predicts whether a hit is likely.
     """
     with conn.cursor() as cur:
         cur.execute(
@@ -145,21 +175,31 @@ def preview(conn, company: str = "construction") -> dict:
         rows = cur.fetchall() or []
     keys = [_key_for(row) for row in rows]
     done = _recently_traced(conn, keys)
+    want_city = (city or "").strip().lower()
     ready = 0
     no_zip = 0
     traced = 0
+    cities: dict = {}
     for row, key in zip(rows, keys):
         parsed = skiptrace_service.parse_address(row.get("address") or "")
-        if not str(row.get("zip") or "").strip() and not parsed.get("zipcode"):
+        missing_zip = not str(row.get("zip") or "").strip() and not parsed.get("zipcode")
+        in_city = not want_city or _city_of(row.get("address")).lower() == want_city
+        if in_city and missing_zip:
             no_zip += 1
         if key and key in done:
             traced += 1
             continue
-        ready += 1
+        label = _city_of(row.get("address")) or "Unknown"
+        bucket = cities.setdefault(label.lower(), {"city": label, "ready": 0})
+        bucket["ready"] += 1
+        if in_city:
+            ready += 1
     bal = skip_sherpa_service.tracerfy_balance()
     per_hit = skip_sherpa_service.TRACERFY_CREDITS_PER_HIT
     return {
         "ready": ready,
+        "city": city or "",
+        "cities": sorted(cities.values(), key=lambda c: -c["ready"])[:8],
         "needs_contact": len(rows),
         "no_zip": no_zip,
         "traced_recently": traced,
@@ -172,7 +212,7 @@ def preview(conn, company: str = "construction") -> dict:
     }
 
 
-def start(company: str = "construction", limit: int = 25) -> dict:
+def start(company: str = "construction", limit: int = 25, city: str = "") -> dict:
     with _LOCK:
         if _STATE["running"]:
             return {"started": False, "reason": "already running", **_STATE}
@@ -180,11 +220,13 @@ def start(company: str = "construction", limit: int = 25) -> dict:
             n = max(1, min(int(limit or 25), 500))
         except (TypeError, ValueError):
             n = 25
+        city = (city or "").strip()
         _STATE.update(running=True, total=n, examined=0, found=0, misses=0,
                       paid_empty=0, skipped=0, already_traced=0, credits_used=0, current="",
-                      note="starting", started_at=time.strftime("%Y-%m-%d %H:%M:%S"),
+                      city=city, note="starting",
+                      started_at=time.strftime("%Y-%m-%d %H:%M:%S"),
                       finished_at=None, balance=None)
-    threading.Thread(target=_run, args=(company, n), daemon=True).start()
+    threading.Thread(target=_run, args=(company, n, city), daemon=True).start()
     return {"started": True, **_STATE}
 
 
@@ -244,7 +286,7 @@ def _audit(conn, key: str, result: dict) -> None:
             pass
 
 
-def _run(company: str, limit: int) -> None:
+def _run(company: str, limit: int, city: str = "") -> None:
     conn = None
     try:
         conn = psycopg.connect(os.environ["DATABASE_URL"], row_factory=dict_row)
@@ -257,7 +299,7 @@ def _run(company: str, limit: int) -> None:
                 conn.rollback()
             except Exception:
                 pass
-        rows = candidates(conn, company, limit)
+        rows = candidates(conn, company, limit, city)
         with _LOCK:
             _STATE["total"] = len(rows)
         if not rows:
