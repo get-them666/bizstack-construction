@@ -56,7 +56,7 @@ document.addEventListener('DOMContentLoaded', function() {
             enrichBtn.disabled = true;
             enrichBtn.textContent = 'Looking up…';
             out.classList.remove('hidden');
-            out.innerHTML = '<p class="text-slate-500">Tracing up to 10 address-only leads. One Skip Sherpa credit per address; cached addresses are free.</p>';
+            out.innerHTML = '<p class="text-slate-500">Tracing up to 10 address-only leads. Tracerfy charges 5 credits per hit; misses and cached addresses are free.</p>';
             try {
                 const body = new FormData();
                 body.set('limit', '10');
@@ -75,7 +75,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     + '<p><b>' + json.examined + '</b> address(es) examined · '
                     + '<b>' + json.enriched + '</b> phone/email found · '
                     + json.name_only + ' name only</p>'
-                    + '<p>' + json.sherpa_lookups + ' Skip Sherpa lookup(s) · '
+                    + '<p>' + json.sherpa_lookups + ' Tracerfy lookup(s) · '
                     + json.unchanged + ' unchanged · '
                     + json.drafts + ' draft(s) staged</p>'
                     + (json.skipped ? '<p class="text-amber-700">' + escapeHtml(json.skipped) + '</p>' : '')

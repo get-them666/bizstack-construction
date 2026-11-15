@@ -5,7 +5,7 @@
    Construction had no settings page at all -- provider keys were environment-only,
    which is fine for deployment but means nothing can be changed without a redeploy.
    This adds a place to manage the two integrations the /skiptrace owner-contact
-   flow depends on: Skip Sherpa (the contact provider) and REsimpli (the downstream
+   flow depends on: Tracerfy (the contact provider) and REsimpli (the downstream
    CRM push).
 
    Secrets render as password fields with a "leave blank to keep current" hint and
@@ -453,12 +453,12 @@
         API credentials for the tools that turn a permit address into a reachable homeowner.
     </p>
 
-    <!-- Skip Sherpa -->
+    <!-- Tracerfy -->
     <div class="mt-4 bg-white rounded-2xl border border-slate-200 p-5">
         <div class="flex items-center gap-3">
             <div class="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center text-slate-700 font-bold">🔍</div>
             <div>
-                <p class="text-base font-bold text-slate-900">Skip Sherpa</p>
+                <p class="text-base font-bold text-slate-900">Tracerfy</p>
                 <p class="text-xs text-slate-500">Owner phone and email from a property address</p>
             </div>
             {% if skip_sherpa_configured %}
@@ -469,12 +469,12 @@
         </div>
         <p class="mt-3 text-xs text-slate-600">
             The assessor record behind <a href="/skiptrace" class="underline">/skiptrace</a> returns an owner
-            <em>name</em> and no contact details. Skip Sherpa supplies the phone and email, one billable
-            lookup per address, triggered by a button on that page — never as a batch.
+            <em>name</em> and no contact details. Tracerfy supplies the phone and email,
+            5 credits per hit, with misses free. A lookup is triggered by a button on that page — never as a batch.
         </p>
         {% if not skip_sherpa_configured %}
         <div class="mt-3 rounded-xl bg-amber-50 border border-amber-200 p-3 text-xs text-amber-800">
-            Set <code class="bg-amber-100 px-1 rounded">SKIP_SHERPA_API_KEY</code> in the environment.
+            Set <code class="bg-amber-100 px-1 rounded">TRACERFY_API_KEY</code> in the environment.
             Until then the lookup button on /skiptrace reports that it is not configured and spends no credit.
         </div>
         {% endif %}

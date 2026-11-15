@@ -737,7 +737,7 @@ def build_contact_tools(db, owner_email: str):
             return {"ok": False, "error": "Need an address, e.g. '8494 Lynn River Road, Norfolk, VA 23518'."}
         if not skip_sherpa_service.configured():
             return {"ok": False,
-                    "error": "Skip Sherpa is not configured (SKIP_SHERPA_API_KEY is not set). "
+                    "error": "Skip tracing is not configured (set TRACERFY_API_KEY). "
                              "No lookup was made and nothing was billed."}
         parsed = sts.parse_address(raw)
         if not parsed["ok"]:

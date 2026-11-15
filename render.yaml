@@ -62,6 +62,8 @@ envVarGroups:
         sync: false
       - key: SKIP_SHERPA_API_KEY
         sync: false
+      - key: TRACERFY_API_KEY
+        sync: false
       - key: SCRAP_IO_API_KEY
         sync: false
 

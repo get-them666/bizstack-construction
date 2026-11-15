@@ -7259,7 +7259,7 @@ async def skiptrace_contact(request: Request, street: str = Form(""),
             "error": "contact_lookup_not_configured",
             "detail": (
                 "Owner names are available from free public parcels. Phone and email "
-                "lookup needs SKIP_SHERPA_API_KEY; no contact lookup was made."
+                "lookup needs TRACERFY_API_KEY; no contact lookup was made."
             ),
         })
     if not (street or "").strip() or not (city or "").strip():

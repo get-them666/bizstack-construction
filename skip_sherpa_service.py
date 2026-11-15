@@ -1,4 +1,4 @@
-"""Owner contact lookup via Skip Sherpa — web-facing, single address, opt-in.
+"""Owner contact lookup via Tracerfy, with Skip Sherpa as a legacy fallback.
 
 Why this exists
 ---------------
@@ -39,11 +39,18 @@ import json
 import os
 import re
 import time
-import time
 import urllib.error
 import urllib.request
 
 API_ROOT = "https://skipsherpa.com"
+
+# Tracerfy is the preferred provider. It is synchronous, costs 5 credits per
+# hit, and — unlike Skip Sherpa — a miss costs nothing. The public interface of
+# this module is unchanged: callers still use trace()/configured()/ProviderError
+# so every route and enrichment path keeps working.
+TRACERFY_API_ROOT = "https://tracerfy.com/v1/api"
+TRACERFY_USER_AGENT = "BuildStackConstruction/1.0"
+TRACERFY_CREDITS_PER_HIT = 5
 
 # Cloudflare fronts this API and answers python-urllib with Error 1010 "Access
 # denied" -- a bot-fingerprint rule. It does not 403 as an auth failure, it
@@ -88,8 +95,21 @@ def api_key() -> str:
     return (os.getenv("SKIP_SHERPA_API_KEY") or "").strip()
 
 
+def tracerfy_key() -> str:
+    return (os.getenv("TRACERFY_API_KEY") or "").strip()
+
+
+def provider_name() -> str:
+    """Which skip-trace provider trace() will use."""
+    if tracerfy_key():
+        return "Tracerfy"
+    if api_key():
+        return "Skip Sherpa"
+    return ""
+
+
 def configured() -> bool:
-    return bool(api_key())
+    return bool(tracerfy_key() or api_key())
 
 
 # A 429 means the month's credits are gone. Retrying the next address spends
@@ -317,7 +337,7 @@ def phone_is_usable(phone_type: str, dnc: bool, last_seen: str) -> bool:
     return True
 
 
-def trace(street: str, city: str, state: str, zipcode: str) -> dict:
+def _trace_skip_sherpa(street: str, city: str, state: str, zipcode: str) -> dict:
     """One address, one credit. Owner name, phones and emails, or an error.
 
     Returns a dict with `phones` (each carrying type/dnc/last_seen/usable),
@@ -428,3 +448,183 @@ def trace(street: str, city: str, state: str, zipcode: str) -> dict:
         "value": prop.get("estimated_value"),
         "checked_at": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
+
+
+# --- Tracerfy -----------------------------------------------------------------
+def _tracerfy_post(payload: dict) -> dict:
+    key = tracerfy_key()
+    if not key:
+        raise ProviderError("Tracerfy is not configured (TRACERFY_API_KEY is not set).",
+                            status=400, spendable=False)
+    req = urllib.request.Request(
+        f"{TRACERFY_API_ROOT}/trace/lookup/",
+        data=json.dumps(payload).encode(),
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {key}",
+            "Accept": "application/json",
+            "User-Agent": TRACERFY_USER_AGENT,
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+            return json.loads(resp.read().decode("utf-8", "replace"))
+    except urllib.error.HTTPError as exc:
+        body = ""
+        try:
+            body = exc.read().decode("utf-8", "replace")
+        except Exception:
+            pass
+        detail = body[:300]
+        if exc.code == 401:
+            raise ProviderError("Tracerfy rejected the API key (401). Check TRACERFY_API_KEY.",
+                                status=502, spendable=False) from None
+        if exc.code == 402:
+            _note_quota_block(
+                "Tracerfy is out of lookup credits (402). Owner names still come from "
+                "the free assessors; add credits to resume phone/email lookups.")
+            raise ProviderError(
+                "Tracerfy is out of lookup credits. Owner names still resolve from the "
+                "free assessors; add credits to resume phone/email lookups.",
+                status=402, spendable=False) from None
+        if exc.code == 403:
+            raise ProviderError("Tracerfy refused the request (403). The account may be "
+                                "suspended or API access disabled.", status=502, spendable=False) from None
+        if exc.code == 429:
+            _note_quota_block("Tracerfy rate limit reached (429). Try again shortly.")
+            raise ProviderError("Tracerfy rate limit reached. Try again shortly.",
+                                status=429, spendable=False) from None
+        if exc.code == 503:
+            raise ProviderError("Tracerfy is temporarily unavailable (503). No credit was spent.",
+                                status=502, spendable=False) from None
+        raise ProviderError(f"Tracerfy API error {exc.code}: {detail or exc.reason}",
+                            status=502, spendable=exc.code not in (400, 404)) from None
+    except urllib.error.URLError as exc:
+        raise ProviderError(f"Could not reach Tracerfy: {exc.reason}", spendable=False) from None
+
+
+def _tracerfy_e164(number) -> str:
+    raw = str(number or "").strip()
+    digits = re.sub(r"\D", "", raw)
+    if len(digits) == 10:
+        return "+1" + digits
+    if len(digits) == 11 and digits.startswith("1"):
+        return "+" + digits
+    if raw.startswith("+") and 10 <= len(digits) <= 15:
+        return "+" + digits
+    return ""
+
+
+def _trace_tracerfy(street: str, city: str, state: str, zipcode: str) -> dict:
+    """One address through Tracerfy. Five credits on a hit; a miss is free."""
+    blocked = quota_blocked()
+    if blocked:
+        raise ProviderError(blocked, status=429, spendable=False)
+
+    data = _tracerfy_post({
+        "address": street, "city": city, "state": state, "zip": zipcode,
+        "find_owner": True,
+    })
+    if data.get("error"):
+        # A miss returns hit=false rather than error; an error means the request
+        # itself failed. Tracerfy does not charge for a miss.
+        raise ProviderError(f"Tracerfy: {data['error']}", spendable=False)
+
+    persons = data.get("persons") or []
+    hit = bool(data.get("hit"))
+    credits = int(data.get("credits_deducted") or 0)
+    if not hit or not persons:
+        return {
+            "ok": False, "found": False, "owner_found": False,
+            "owner": "", "all_owners": [], "phones": [], "preferred_phone": "",
+            "raw_phone": "", "phone_count": 0, "dnc_count": 0, "emails": [],
+            "email": "", "email_count": 0,
+            "message": ("No owner contact found for this address. Tracerfy charges "
+                        "nothing for a miss." if credits == 0 else
+                        "No owner contact found for this address."),
+            "owner_occupied": None, "value": None,
+            "checked_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "provider": "Tracerfy", "credits_used": credits,
+        }
+
+    names, phones, emails = [], [], []
+    for person in persons:
+        if not isinstance(person, dict):
+            continue
+        nm = (person.get("full_name") or
+              " ".join(x for x in (person.get("first_name"), person.get("last_name")) if x)).strip()
+        if nm:
+            nm = " ".join(w.capitalize() for w in nm.split())
+            if nm not in names:
+                names.append(nm)
+        for ph in person.get("phones") or []:
+            if not isinstance(ph, dict):
+                continue
+            e164 = _tracerfy_e164(ph.get("number"))
+            if not e164:
+                continue
+            typ = str(ph.get("type") or "")
+            # Tracerfy returns both DNC and TCPA-litigator flags. A litigator
+            # number is not safe for cold outreach either, so treat it as DNC.
+            dnc = bool(ph.get("dnc") or ph.get("tcpa"))
+            phones.append((e164, typ, dnc, ""))
+        for em in person.get("emails") or []:
+            if not isinstance(em, dict):
+                continue
+            addr = str(em.get("email") or "").strip().lower()
+            if "@" in addr and addr.rsplit("@", 1)[-1] not in JUNK_EMAIL_DOMAINS:
+                emails.append(addr)
+
+    def rank(rec):
+        e164, typ, _dnc, seen = rec
+        is_mobile = "mobile" in typ.lower() or "cell" in typ.lower()
+        return (0 if is_mobile else 1, e164)
+
+    ordered = sorted(phones, key=rank)
+    seen_phones = []
+    for e164, typ, dnc, seen in ordered:
+        if any(p["e164"] == e164 for p in seen_phones):
+            continue
+        seen_phones.append({
+            "e164": e164, "type": typ, "dnc": dnc, "last_seen": seen,
+            "usable": phone_is_usable(typ, dnc, seen),
+        })
+    unique_emails = []
+    for e in emails:
+        if e not in unique_emails:
+            unique_emails.append(e)
+    usable = [p for p in seen_phones if p["usable"]]
+    found = bool(unique_emails or seen_phones)
+    return {
+        "ok": True,
+        "found": found,
+        "owner_found": bool(names),
+        "owner": names[0] if names else "",
+        "all_owners": names[:4],
+        "phones": seen_phones[:6],
+        "preferred_phone": usable[0]["e164"] if usable else "",
+        "raw_phone": seen_phones[0]["e164"] if seen_phones else "",
+        "phone_count": len(phones),
+        "dnc_count": sum(1 for p in seen_phones if p["dnc"]),
+        "emails": unique_emails[:6],
+        "email": unique_emails[0] if unique_emails else "",
+        "email_count": len(unique_emails),
+        "message": "" if found else "Matched the property owner but found no phone or email on file.",
+        "owner_occupied": None,
+        "value": None,
+        "checked_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "provider": "Tracerfy",
+        "credits_used": credits,
+    }
+
+
+def trace(street: str, city: str, state: str, zipcode: str) -> dict:
+    """Skip trace through Tracerfy when configured, else the legacy provider.
+
+    The return shape is identical for both providers, so nothing downstream
+    needs to know which one ran.
+    """
+    if tracerfy_key():
+        return _trace_tracerfy(street, city, state, zipcode)
+    return _trace_skip_sherpa(street, city, state, zipcode)

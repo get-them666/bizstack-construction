@@ -1261,3 +1261,28 @@ navigable and closed the missing workflow.
 The invariant to keep: a job cost sheet is a read model. The ledger is the
 accounting truth, `ledger_sync.pending` explains source records that have not
 reached it, and Zoho Books remains downstream only.
+
+## 2026-11-15: skip trace provider is Tracerfy
+
+The owner bought 1,000 Tracerfy credits, so `skip_sherpa_service.py` now uses
+Tracerfy's instant lookup when `TRACERFY_API_KEY` is set. Skip Sherpa remains
+as a fallback only when that key is absent; the public interface
+(`trace`, `configured`, `ProviderError`, `parse_address`) did not change, so the
+/skiptrace page, Copilot tools, enrichment loop and RentCast leads all keep
+working without edits.
+
+- Tracerfy: `POST https://tracerfy.com/v1/api/trace/lookup/`, Bearer token,
+  **5 credits per hit, 0 on a miss**, up to 500 lookups/minute. A ZIP is still
+  required before spending anything because a ZIP-less lookup can match another
+  door. Phones are normalised to E.164; `dnc` **or** `tcpa` makes a number
+  unusable; junk email domains are dropped.
+- 1,000 credits = 200 hits. Misses are free, so the balance lasts longer than a
+  Skip Sherpa balance did.
+- UI copy now says Tracerfy and "5 credits per hit; misses are free". The
+  settings card reads `TRACERFY_API_KEY`.
+- The old provider's parsing tests remain because `skip_sherpa_service` still
+  exposes `_person_phones`, `_person_emails`, `_persons` and `phone_is_usable`.
+
+Production is now the DigitalOcean droplet `bizstack-prod` (159.203.175.39,
+NYC3, 4 GB, $24/mo), running Construction, Broom Service/Hosts, two Postgres
+containers and Caddy. Render  services are suspended, Railway is retired.

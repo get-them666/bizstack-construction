@@ -284,7 +284,7 @@ document.addEventListener('DOMContentLoaded', function() {
     //
     // Deliberately a second button, not a continuation of the assessor lookup.
     // The assessor record is free and cached and gives a NAME. A phone and an
-    // email cost a Skip Sherpa credit, and most doors are not worth one.
+    // email cost a Tracerfy credit, and most doors are not worth one.
     // A separate click means a credit is spent only on the addresses you chose.
     //
     // Nothing is written to the database until Save is pressed, and Save stages
@@ -293,7 +293,7 @@ document.addEventListener('DOMContentLoaded', function() {
         let h = '<div class="mx-5 mb-4 rounded-xl border border-slate-200 bg-slate-50 p-3">';
         h += '<p class="text-[10px] font-bold uppercase tracking-wide text-slate-500 mb-1">Owner phone &amp; email</p>';
         if (d.no_zip) {
-            // No ZIP means no lookup button at all. Skip Sherpa keys on the full
+            // No ZIP means no lookup button at all. Tracerfy keys on the full
             // address and a ZIP-less lookup can match a different house and
             // still bill a credit.
             h += '<p class="text-xs text-amber-800">This lookup has no ZIP, and a skip trace without one can '
@@ -304,7 +304,7 @@ document.addEventListener('DOMContentLoaded', function() {
         // Two providers, two buttons. They are NOT interchangeable.
         //
         // PDL is the cheaper first move and returns one email plus one phone.
-        // Skip Sherpa returns several of each AND a do-not-call flag, so it is
+        // Tracerfy returns several of each AND a do-not-call flag, so it is
         // the one to use when you intend to dial. Neither is a continuation of
         // the free assessor lookup -- both bill per address, which is why each
         // is a separate click.
@@ -327,7 +327,7 @@ document.addEventListener('DOMContentLoaded', function() {
             if (hasPdl) h += '<div class="my-2 border-t border-slate-200"></div>';
             h += '<button type="button" id="st-contact-btn" '
                + 'class="px-4 py-2 text-xs font-bold text-white bg-slate-700 hover:bg-slate-800 rounded-lg">'
-               + 'Find contact for this owner (Skip Sherpa)</button>';
+               + 'Find contact for this owner (Tracerfy)</button>';
             h += '<p class="mt-1 text-[11px] text-slate-500">Several phones and emails, and do-not-call flags. '
                + 'Use this one when you plan to call rather than email.</p>';
         }
@@ -370,7 +370,7 @@ document.addEventListener('DOMContentLoaded', function() {
         }
         h += '</div>';
         h += '<p class="mt-2 text-[11px] text-amber-800">People Data Labs does not report do-not-call registration. '
-           + 'This number has not been checked against the registry -- check it, or use the Skip Sherpa button, '
+           + 'This number has not been checked against the registry -- check it, or use the Tracerfy button, '
            + 'before dialing.</p>';
         if (d._cached) {
             h += '<p class="mt-1 text-[11px] text-slate-500">Cached from an earlier lookup — no new search was spent.</p>';
@@ -385,7 +385,7 @@ document.addEventListener('DOMContentLoaded', function() {
         return h;
     }
 
-    // Render a Skip Sherpa result. DNC numbers are shown but not selectable --
+    // Render a Tracerfy result. DNC numbers are shown but not selectable --
     // visible, so the choice is informed, without being one click away.
     function renderContact(d) {
         if (d.detail) {
@@ -403,7 +403,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const emails = d.emails || [];
         if (!phones.length && !emails.length) {
             return '<div class="rounded-xl bg-amber-50 border border-amber-200 p-3 text-sm text-amber-800">'
-                 + 'Skip Sherpa matched the property but has no phone or email for this owner. A credit was spent.</div>';
+                 + 'Tracerfy matched the property but has no phone or email for this owner. That lookup was charged.</div>';
         }
 
         let h = '<div class="rounded-xl bg-white border border-slate-200 p-3">';
@@ -516,7 +516,7 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
-    // Save a PDL result. Same endpoint as the Skip Sherpa save, but the fields
+    // Save a PDL result. Same endpoint as the Tracerfy save, but the fields
     // are readonly inputs rather than selects because PDL returns one of each.
     async function savePdlContact() {
         const btn = document.getElementById('st-p-save');
