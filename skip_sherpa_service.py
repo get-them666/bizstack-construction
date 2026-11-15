@@ -479,13 +479,13 @@ def _trace_skip_sherpa(street: str, city: str, state: str, zipcode: str) -> dict
 
 
 # --- Tracerfy -----------------------------------------------------------------
-def _tracerfy_post(payload: dict) -> dict:
+def _tracerfy_post(payload: dict, path: str = "/trace/lookup/") -> dict:
     key = tracerfy_key()
     if not key:
         raise ProviderError("Tracerfy is not configured (TRACERFY_API_KEY is not set).",
                             status=400, spendable=False)
     req = urllib.request.Request(
-        f"{TRACERFY_API_ROOT}/trace/lookup/",
+        f"{TRACERFY_API_ROOT}{path}",
         data=json.dumps(payload).encode(),
         method="POST",
         headers={
@@ -559,6 +559,10 @@ def _trace_tracerfy(street: str, city: str, state: str, zipcode: str) -> dict:
         # itself failed. Tracerfy does not charge for a miss.
         raise ProviderError(f"Tracerfy: {data['error']}", spendable=False)
 
+    return _tracerfy_parse(data, noun="address")
+
+
+def _tracerfy_parse(data: dict, noun: str = "address") -> dict:
     persons = data.get("persons") or []
     hit = bool(data.get("hit"))
     credits = int(data.get("credits_deducted") or 0)
@@ -568,9 +572,9 @@ def _trace_tracerfy(street: str, city: str, state: str, zipcode: str) -> dict:
             "owner": "", "all_owners": [], "phones": [], "preferred_phone": "",
             "raw_phone": "", "phone_count": 0, "dnc_count": 0, "emails": [],
             "email": "", "email_count": 0,
-            "message": ("No owner contact found for this address. Tracerfy charges "
+            "message": (f"No owner contact found for this {noun}. Tracerfy charges "
                         "nothing for a miss." if credits == 0 else
-                        "No owner contact found for this address."),
+                        f"No owner contact found for this {noun}."),
             "owner_occupied": None, "value": None,
             "checked_at": time.strftime("%Y-%m-%d %H:%M:%S"),
             "provider": "Tracerfy", "credits_used": credits,
@@ -645,6 +649,31 @@ def _trace_tracerfy(street: str, city: str, state: str, zipcode: str) -> dict:
         "provider": "Tracerfy",
         "credits_used": credits,
     }
+
+
+def _trace_tracerfy_parcel(parcel_id: str, county: str, state: str) -> dict:
+    """One APN through Tracerfy. Same 5-credit hit pricing and free misses."""
+    blocked = quota_blocked()
+    if blocked:
+        raise ProviderError(blocked, status=429, spendable=False)
+    data = _tracerfy_post(
+        {"parcel_id": parcel_id, "county": county, "state": state},
+        path="/trace/parcel/lookup/",
+    )
+    if data.get("error"):
+        raise ProviderError(f"Tracerfy: {data['error']}", spendable=False)
+    return _tracerfy_parse(data, noun="parcel ID")
+
+
+def trace_parcel(parcel_id: str, county: str, state: str) -> dict:
+    """APN skip trace. Falls back to Skip Sherpa only when Tracerfy is unset
+    (Skip Sherpa has no APN endpoint, so this is Tracerfy-only in practice)."""
+    if not tracerfy_key():
+        raise ProviderError(
+            "Parcel ID lookup needs Tracerfy (set TRACERFY_API_KEY or save the key in Settings).",
+            status=400, spendable=False)
+    return _trace_tracerfy_parcel((parcel_id or "").strip(), (county or "").strip(),
+                                  (state or "").strip().upper())
 
 
 def trace(street: str, city: str, state: str, zipcode: str) -> dict:

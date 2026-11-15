@@ -7313,6 +7313,69 @@ async def skiptrace_contact(request: Request, street: str = Form(""),
     return JSONResponse(content=result)
 
 
+@app.post("/api/skiptrace/parcel-contact")
+async def skiptrace_parcel_contact(request: Request, parcel_id: str = Form(""),
+                                   county: str = Form(""), state: str = Form(""),
+                                   permit_id: str = Form(""), db=Depends(get_db)):
+    """Tracerfy APN lookup. 5 credits per hit, free on a miss.
+
+    County + state are required by the provider; the APN's # prefix is optional.
+    A permit id is only used to fill a missing state, never to change the APN.
+    """
+    require_admin(request)
+    if not skip_sherpa_service.configured():
+        return JSONResponse(status_code=400, content={
+            "ok": False, "error": "contact_lookup_not_configured",
+            "detail": "APN lookup needs Tracerfy. Save the API key in Settings → Owner lookup.",
+        })
+    apn = (parcel_id or "").strip().lstrip("#").strip()
+    county = (county or "").strip()
+    state = (state or "").strip().upper()
+    if permit_id and not state:
+        try:
+            with db.cursor() as cur:
+                cur.execute("SELECT state FROM job_leads WHERE id = %s AND NOT is_demo;",
+                            (int(permit_id),))
+                row = cur.fetchone()
+            state = ((row or {}).get("state") or "").strip().upper()
+        except Exception:
+            db.rollback()
+    if not apn or not county or len(state) != 2:
+        return JSONResponse(status_code=400, content={
+            "ok": False, "error": "parcel_fields_required",
+            "detail": "APN, county and a 2-letter state are required. No lookup was made.",
+        })
+    try:
+        result = await asyncio.to_thread(
+            skip_sherpa_service.trace_parcel, apn, county, state)
+    except skip_sherpa_service.ProviderError as exc:
+        logger.warning("APN contact provider failure status=%s detail=%s", exc.status, exc.message)
+        db.rollback()
+        return JSONResponse(status_code=exc.status, content={
+            "ok": False, "error": "contact_provider_error",
+            "detail": exc.message, "credit_spent": exc.spendable,
+        })
+    return JSONResponse(content=result)
+    first = (owner or "there").split()[0]
+    detail = []
+    if property_data.get("year_built"):
+        detail.append(f"built in {property_data['year_built']}")
+    if property_data.get("square_footage"):
+        detail.append(f"{int(property_data['square_footage']):,} sq ft")
+    listed_property = (
+        "The public assessor record lists it as " + ", ".join(detail) + ".\n\n"
+        if detail else ""
+    )
+    return (
+        f"Hi {first},\n\n"
+        f"I'm reaching out about the property at {address}. I'm a local contractor "
+        "and wanted to introduce myself in case you need help with a renovation "
+        f"or repair.\n\n{listed_property}"
+        "If this is not relevant, let me know and I won't follow up.\n\n"
+        f"Thanks,\n{brand.short_name()}"
+    )
+
+
 def _owner_draft_body(owner: str, address: str, property_data: dict) -> str:
     first = (owner or "there").split()[0]
     detail = []

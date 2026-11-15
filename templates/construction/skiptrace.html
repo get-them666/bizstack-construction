@@ -84,6 +84,38 @@
     </form>
 
     <div id="st-out" class="mt-5"></div>
+
+    <form id="st-apn-form" class="mt-4 bg-white rounded-2xl border border-slate-200 p-5">
+        <p class="text-sm font-bold text-slate-900">Already have the Parcel ID (APN)?</p>
+        <p class="mt-1 text-xs text-slate-500">
+            Tracerfy can trace by APN + county + state. 5 credits per hit; misses are free.
+        </p>
+        <div class="mt-3 grid grid-cols-1 sm:grid-cols-4 gap-3">
+            <div class="sm:col-span-2">
+                <label class="block text-xs font-semibold text-slate-600 mb-1">Parcel ID / APN</label>
+                <input type="text" id="st-apn" placeholder="e.g. 123-45-678"
+                       class="w-full px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-400">
+            </div>
+            <div>
+                <label class="block text-xs font-semibold text-slate-600 mb-1">County / city</label>
+                <input type="text" id="st-apn-county" placeholder="e.g. Virginia Beach"
+                       class="w-full px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-400">
+            </div>
+            <div class="flex gap-2">
+                <div class="flex-1">
+                    <label class="block text-xs font-semibold text-slate-600 mb-1">State</label>
+                    <input type="text" id="st-apn-state" value="VA" maxlength="2"
+                           class="w-full px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-400">
+                </div>
+                <button type="submit" id="st-apn-go"
+                        class="self-end px-4 py-3 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl">
+                    Trace APN
+                </button>
+            </div>
+        </div>
+        <p class="mt-2 text-[11px] text-slate-400">The <code>#</code> prefix is optional. Enter the property address above too if you want to save the result to Leads.</p>
+    </form>
+    <div id="st-apn-out" class="mt-5"></div>
 </section>
 {% endblock %}
 
@@ -96,6 +128,20 @@ document.addEventListener('DOMContentLoaded', function() {
     const city = document.getElementById('st-city');
     const state = document.getElementById('st-state');
     const zip = document.getElementById('st-zip');
+
+    const apnForm = document.getElementById('st-apn-form');
+    if (apnForm) {
+        apnForm.addEventListener('submit', function(e) {
+            e.preventDefault();
+            const out = document.getElementById('st-out');
+            if (out) out.innerHTML = '';
+            const btn = document.getElementById('st-apn-go');
+            findParcelContact(btn,
+                document.getElementById('st-apn').value,
+                document.getElementById('st-apn-county').value,
+                'st-apn-out');
+        });
+    }
 
     // Fill the ZIP from street+city+state. Census first, ArcGIS second, both
     // free and keyless. Never invents one: if the server reports no match we
@@ -330,6 +376,12 @@ document.addEventListener('DOMContentLoaded', function() {
                + 'Find contact for this owner (Tracerfy)</button>';
             h += '<p class="mt-1 text-[11px] text-slate-500">Several phones and emails, and do-not-call flags. '
                + 'Use this one when you plan to call rather than email.</p>';
+        }
+        if (hasSherpa && d.parcel && d.county) {
+            h += '<button type="button" id="st-apn-btn" data-apn="' + esc(d.parcel) + '" data-county="' + esc(d.county) + '" '
+               + 'class="mt-2 px-4 py-2 text-xs font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-lg">'
+               + 'Trace by Parcel ID ' + esc(d.parcel) + ' (Tracerfy)</button>';
+            h += '<p class="mt-1 text-[11px] text-slate-500">Uses the APN + ' + esc(d.county) + ' + state. 5 credits per hit; a miss is free.</p>';
         }
         h += '<div id="st-contact" class="mt-3"></div>';
         h += '</div>';
@@ -595,6 +647,42 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
+    async function findParcelContact(btn, apn, county, targetId) {
+        const box = document.getElementById(targetId || 'st-apn-out');
+        const label = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = 'Tracing APN…';
+        box.innerHTML = '<p class="text-xs text-slate-500">5 credits on a hit; a miss is free.</p>';
+        const body = new FormData();
+        body.set('parcel_id', apn);
+        body.set('county', county);
+        body.set('state', document.getElementById('st-state').value
+            || document.getElementById('st-apn-state').value || 'VA');
+        body.set('permit_id', document.getElementById('st-permit-id').value);
+        try {
+            const res = await fetch('/api/skiptrace/parcel-contact', { method: 'POST', body: body });
+            const text = await res.text();
+            let json;
+            try { json = JSON.parse(text); }
+            catch (err) {
+                box.innerHTML = '<div class="rounded-xl bg-rose-50 border border-rose-200 p-3 text-sm text-rose-700">The server returned HTTP '
+                    + res.status + '. The page could not read the response.</div>';
+                return;
+            }
+            lastResult = Object.assign({}, json, { owner_of_record: json.owner || '' });
+            box.innerHTML = renderContact(json);
+            const save = document.getElementById('st-c-save');
+            if (save && json.ok && json.found) {
+                save.addEventListener('click', function() { saveContact(); });
+            }
+        } catch (err) {
+            box.innerHTML = '<div class="rounded-xl bg-rose-50 border border-rose-200 p-3 text-sm text-rose-700">Network error.</div>';
+        } finally {
+            btn.disabled = false;
+            btn.textContent = label;
+        }
+    }
+
     async function saveContact() {
         const btn = document.getElementById('st-c-save');
         const box = document.getElementById('st-c-result');
@@ -692,6 +780,10 @@ document.addEventListener('DOMContentLoaded', function() {
             if (pbtn) pbtn.addEventListener('click', function() { findPdlContact(pbtn); });
             const cbtn = document.getElementById('st-contact-btn');
             if (cbtn) cbtn.addEventListener('click', function() { findContact(cbtn); });
+            const abtn = document.getElementById('st-apn-btn');
+            if (abtn) abtn.addEventListener('click', function() {
+                findParcelContact(abtn, abtn.dataset.apn, abtn.dataset.county, 'st-contact');
+            });
         } catch (err) {
             out.innerHTML = '<div class="rounded-2xl bg-rose-50 border border-rose-200 p-5 text-rose-700">Network error.</div>';
         } finally {
