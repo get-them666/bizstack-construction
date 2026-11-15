@@ -721,13 +721,40 @@ async def send_email(cfg: dict, to: str, subject: str, body: str, attachment: by
     if contains_bank_details(subject) or contains_bank_details(body):
         print("[EMAIL] blocked: routing/account details in the message body", flush=True)
         return False
+    physical = (os_getenv("SENDER_PHYSICAL_ADDRESS", "")).strip()
+
+    # Zoho Mail over HTTPS first, when it is connected.
+    #
+    # DigitalOcean blocks outbound SMTP (25, 465 and 587 all time out from the
+    # droplet), so every send that reached the SMTP ladder below sat for the
+    # connect timeout and then failed. The symptom was the bot "not sending"
+    # while the Zoho REST path in loan_outreach delivered fine. This tries the
+    # transport that actually works from this host, and only falls through to
+    # SMTP/Resend when Zoho cannot take it.
+    transport = (os_getenv("EMAIL_TRANSPORT", "") or "").strip().lower()
+    if transport in ("", "auto", "zoho"):
+        try:
+            import zoho_mail
+            if zoho_mail.available():
+                ok = await asyncio.to_thread(
+                    zoho_mail.send, to, subject, body,
+                    sender=(cfg.get("SMTP_FROM") or "").strip(),
+                    sender_name=(cfg.get("SMTP_NAME") or "").strip(),
+                    cc=cc, attachment=attachment, filename=filename,
+                    attachments=attachments,
+                )
+                if ok:
+                    return True
+                print(f"[EMAIL] zoho did not accept {to}; trying the SMTP ladder", flush=True)
+        except Exception as exc:  # noqa: BLE001 - never lose mail to this path
+            print(f"[EMAIL] zoho path failed for {to}: {type(exc).__name__}: {exc}", flush=True)
+
     msg = EmailMessage()
     msg["Subject"] = subject
     msg["From"] = formataddr((cfg.get("SMTP_NAME", ""), cfg.get("SMTP_FROM", "")))
     msg["To"] = to
     if cc:
         msg["Cc"] = cc
-    physical = (os_getenv("SENDER_PHYSICAL_ADDRESS", "")).strip()
     msg.set_content(body + ("\n\n" + physical if physical else ""))
     if attachment and filename:
         msg.add_attachment(
