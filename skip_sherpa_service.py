@@ -580,10 +580,24 @@ def _tracerfy_parse(data: dict, noun: str = "address") -> dict:
             "provider": "Tracerfy", "credits_used": credits,
         }
 
+    # A hit routinely carries several people: the owner, a spouse, and former
+    # owners whose numbers are still attached to the address. Ordering matters
+    # because the first phone and first email are what gets written to the lead
+    # and what the page offers as "preferred". The property owner comes first,
+    # a living person before a deceased one, and anyone else last -- so the
+    # auto-filled contact belongs to the owner rather than to whoever happened
+    # to be listed first.
+    def _person_rank(person):
+        return (
+            0 if person.get("property_owner") else 1,
+            1 if person.get("deceased") else 0,
+        )
+
+    ordered_persons = sorted(
+        [p for p in persons if isinstance(p, dict)], key=_person_rank)
+
     names, phones, emails = [], [], []
-    for person in persons:
-        if not isinstance(person, dict):
-            continue
+    for person in ordered_persons:
         nm = (person.get("full_name") or
               " ".join(x for x in (person.get("first_name"), person.get("last_name")) if x)).strip()
         if nm:
@@ -607,6 +621,8 @@ def _tracerfy_parse(data: dict, noun: str = "address") -> dict:
             addr = str(em.get("email") or "").strip().lower()
             if "@" in addr and addr.rsplit("@", 1)[-1] not in JUNK_EMAIL_DOMAINS:
                 emails.append(addr)
+
+    best = ordered_persons[0] if ordered_persons else {}
 
     def rank(rec):
         e164, typ, _dnc, seen = rec
@@ -633,6 +649,8 @@ def _tracerfy_parse(data: dict, noun: str = "address") -> dict:
         "found": found,
         "owner_found": bool(names),
         "owner": names[0] if names else "",
+        "owner_confirmed": bool(best.get("property_owner")),
+        "deceased_owner": bool(best.get("deceased")),
         "all_owners": names[:4],
         "phones": seen_phones[:6],
         "preferred_phone": usable[0]["e164"] if usable else "",

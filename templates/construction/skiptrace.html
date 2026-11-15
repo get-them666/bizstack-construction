@@ -886,6 +886,7 @@ document.addEventListener('DOMContentLoaded', function() {
             traceStatus.textContent = (d.running ? 'Running… ' : 'Done. ')
                 + d.examined + '/' + d.total + ' examined · ' + d.found + ' found · '
                 + d.misses + ' misses · ' + d.credits_used + ' credits'
+                + (d.paid_empty ? ' · ' + d.paid_empty + ' paid with no contact' : '')
                 + (d.balance !== null && d.balance !== undefined ? ' · balance ' + d.balance : '')
                 + (d.current ? ' · ' + d.current : '')
                 + (d.note ? ' · ' + d.note : '');

@@ -35,6 +35,7 @@ _STATE = {
     "examined": 0,
     "found": 0,
     "misses": 0,
+    "paid_empty": 0,
     "skipped": 0,
     "already_traced": 0,
     "credits_used": 0,
@@ -180,7 +181,7 @@ def start(company: str = "construction", limit: int = 25) -> dict:
         except (TypeError, ValueError):
             n = 25
         _STATE.update(running=True, total=n, examined=0, found=0, misses=0,
-                      skipped=0, already_traced=0, credits_used=0, current="",
+                      paid_empty=0, skipped=0, already_traced=0, credits_used=0, current="",
                       note="starting", started_at=time.strftime("%Y-%m-%d %H:%M:%S"),
                       finished_at=None, balance=None)
     threading.Thread(target=_run, args=(company, n), daemon=True).start()
@@ -305,34 +306,47 @@ def _run(company: str, limit: int) -> None:
             _audit(conn, skiptrace_service.normalize_address(
                 parsed["street"], parsed["city"], parsed["state"]), result)
 
-            found = {
-                "name": result.get("owner") or "",
-                "email": result.get("email") or "",
-                "phone": result.get("preferred_phone") or result.get("raw_phone") or "",
-            }
-            merged = data_enrichment.merge(lead, found)
-            if merged.get("changed"):
-                with conn.cursor() as cur:
-                    cur.execute(
-                        "UPDATE leads SET name = %s, email = %s, phone = %s WHERE id = %s;",
-                        (merged["name"][:255], merged["email"][:255],
-                         merged["phone"][:50], lead["id"]))
-                conn.commit()
-                try:
-                    from bizstack_leads import store as lead_store
-                    lead_store.recompute(conn, lead["id"])
-                except Exception:
-                    try:
-                        conn.rollback()
-                    except Exception:
-                        pass
+            credits = int(result.get("credits_used") or 0)
             with _LOCK:
                 _STATE["examined"] = i
-                _STATE["credits_used"] += int(result.get("credits_used") or 0)
-                if result.get("found"):
-                    _STATE["found"] += 1
-                else:
+                _STATE["credits_used"] += credits
+                if not result.get("found") and not credits:
                     _STATE["misses"] += 1
+                elif not result.get("found"):
+                    # Paid hit that carried no phone or email. Real, and worth
+                    # separating from a free miss because it costs 5 credits.
+                    _STATE["paid_empty"] += 1
+                elif result.get("deceased_owner"):
+                    # A deceased owner's numbers are usually a relative's by
+                    # now. Left for a human to look at on /skiptrace rather
+                    # than auto-filled onto a lead.
+                    _STATE["skipped"] += 1
+                    _STATE["note"] = "skipped a hit: owner is flagged deceased"
+                else:
+                    _STATE["found"] += 1
+                    found = {
+                        "name": result.get("owner") or "",
+                        "email": result.get("email") or "",
+                        "phone": (result.get("preferred_phone")
+                                  or result.get("raw_phone") or ""),
+                    }
+                    merged = data_enrichment.merge(lead, found)
+                    if merged.get("changed"):
+                        with conn.cursor() as cur:
+                            cur.execute(
+                                "UPDATE leads SET name = %s, email = %s, phone = %s "
+                                "WHERE id = %s;",
+                                (merged["name"][:255], merged["email"][:255],
+                                 merged["phone"][:50], lead["id"]))
+                        conn.commit()
+                        try:
+                            from bizstack_leads import store as lead_store
+                            lead_store.recompute(conn, lead["id"])
+                        except Exception:
+                            try:
+                                conn.rollback()
+                            except Exception:
+                                pass
             time.sleep(0.05)
     except Exception as exc:  # noqa: BLE001
         with _LOCK:
