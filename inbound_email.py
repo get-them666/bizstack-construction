@@ -202,6 +202,16 @@ def _ingest(db, company_key, msgs, mailbox_from):
                 continue
             matched += 1
             lead_id = lead["id"]
+            # Attach the inbound row to the lead. Without this the reply sits in
+            # comms_logs with lead_id NULL, lead_store.recompute() finds no
+            # inbound for the lead, last_inbound_at stays NULL, and the funnel's
+            # Replied stage can never move -- a real reply from a real lead read
+            # as "never replied".
+            try:
+                cur.execute("UPDATE comms_logs SET lead_id = %s WHERE id = %s;",
+                            (lead_id, row["id"]))
+            except Exception as exc:
+                print(f"[inbound-email] could not attach comms log to lead {lead_id}: {exc}", flush=True)
             cur.execute("SELECT id, email, name, notes, status, phone FROM leads WHERE id = %s;", (lead_id,))
             lead = cur.fetchone()
             notes = lead.get("notes") or ""
