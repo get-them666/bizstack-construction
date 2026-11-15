@@ -1262,6 +1262,34 @@ The invariant to keep: a job cost sheet is a read model. The ledger is the
 accounting truth, `ledger_sync.pending` explains source records that have not
 reached it, and Zoho Books remains downstream only.
 
+## 2026-11-15: a status lock froze the entire site
+
+Twice in one evening `construction.bizstackperks.com` stopped answering any
+request — `/health` included — while uvicorn was alive, listening and logging
+nothing. Caddy showed `dial tcp … connection refused` and `EOF`, which looks
+like the app is down. It was not down; the event loop was parked.
+
+Diagnosis came from the `SIGUSR1` faulthandler dump (`construction_main.py`
+registers it): the main thread sat in `lead_skiptrace_job.status()` waiting on
+`_LOCK`, because the batch worker held that same lock across an `UPDATE`, a
+`lead_store.recompute` and an email send. The browser polls
+`/api/leads/skiptrace-status` every 2s, so the first poll after the worker took
+the lock froze every other request behind it.
+
+Rules that came out of it:
+
+- **Never hold a `threading.Lock` across I/O** in a job whose status is polled
+  from a route. Compute and write first, then take the lock for counters only.
+  `test_skiptrace_status_lock.py` enforces this with an AST check on `_run`.
+- **Status readers must not block**: `status()` uses `acquire(timeout=0.05)` and
+  falls back to a field-by-field copy. Same in `owner_backfill_job`.
+- Heavy work inside an `async def` route goes to `asyncio.to_thread`. That bit
+  `fire-all-drafts`, which sent every staged draft inline and made one click
+  look like a dead server.
+- `docker compose exec … kill` does not exist in the image; send signals with
+  `python -c "import os,signal; os.kill(7, signal.SIGUSR1)"` and read
+  `docker compose logs`.
+
 ## 2026-11-15: outbound email transport on DigitalOcean
 
 Two hard facts, both hit in one evening:
