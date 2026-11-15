@@ -1657,7 +1657,9 @@ def _smtp_cfg() -> dict:
 async def _deliver_otp(email: str, code: str, actor: dict):
     cfg = _smtp_cfg()
     if not cfg["from"]:
-        print(f"[OTP] Email not configured — code for {email}: {code}")
+        # No code is ever sent silently. If the transport is down the owner has
+        # to be able to find the code, so it goes to the server log as well.
+        print(f"[OTP] Email not configured — code for {email}: {code}", flush=True)
         return False, "Email delivery is not configured yet."
     body = (
         f"Hi {actor.get('name') or 'there'},\n\n"
@@ -1668,14 +1670,23 @@ async def _deliver_otp(email: str, code: str, actor: dict):
     try:
         import documents_service
 
-        await documents_service.send_email(
+        # send_email reports delivery. It used to be called for its side effect
+        # only, so a blocked mailbox returned False, nothing was sent, and the
+        # login page still said "we sent a code" -- the user then sat staring at
+        # an empty inbox with no way to tell what happened.
+        delivered = await documents_service.send_email(
             {"SMTP_FROM": cfg["from"], "SMTP_NAME": cfg["name"]},
             email,
             f"Your {cfg['name']} login code",
             body,
         )
+        if not delivered:
+            print(f"[OTP] DELIVERY FAILED for {email} — code={code}", flush=True)
+            return False, ("We could not send the code (email delivery is failing). "
+                           "The code was written to the server log.")
         return True, ""
     except Exception as e:
+        print(f"[OTP] DELIVERY ERROR for {email} — code={code} — {e}", flush=True)
         return False, f"Could not send email: {e}"
 
 
@@ -1695,6 +1706,46 @@ def _mask_email(email: str) -> str:
     name, domain = email.split("@", 1)
     shown = (name[:1] + "*") if len(name) <= 2 else (name[0] + "*" * (len(name) - 2) + name[-1])
     return f"{shown}@{domain}"
+
+
+def _otp_reveal_enabled() -> bool:
+    """Temporary escape hatch for a dead mail transport.
+
+    Off unless OTP_REVEAL_ON_DELIVERY_FAILURE is set. When the code cannot be
+    delivered AND this is on, the verify page shows the code to the browser that
+    just passed the password check, instead of locking the owner out of their own
+    business. That gives up the second factor, so it is a switch to turn off --
+    not a default.
+    """
+    return (os.getenv("OTP_REVEAL_ON_DELIVERY_FAILURE", "") or "").strip().lower() in (
+        "1", "true", "yes", "on")
+
+
+def _otp_step_response(role, actor_id, email, name, code, delivered, err, resend=False):
+    """Send the browser to the verify page, telling the truth about delivery.
+
+    Delivery failure used to bounce back to /login with the pending cookie never
+    set, which is a dead end: the code may still be the only thing standing
+    between the owner and their own data. The pending cookie is always issued;
+    the page then either says "code sent" or says delivery failed.
+    """
+    qs = []
+    if resend:
+        qs.append("resent=1")
+    if not delivered:
+        qs.append("delivery=failed")
+    url = "/login/otp" + ("?" + "&".join(qs) if qs else "")
+    resp = RedirectResponse(url=url, status_code=status.HTTP_303_SEE_OTHER)
+    resp.set_cookie(
+        key=auth_service.OTP_COOKIE,
+        value=auth_service.issue_pending(role, actor_id, email, name),
+        httponly=True, samesite="lax", secure=_secure_cookies(),
+        max_age=auth_service.OTP_TTL_SECONDS,
+    )
+    if not delivered and _otp_reveal_enabled():
+        resp.set_cookie(key="otp_reveal", value=code, httponly=True, samesite="lax",
+                        secure=_secure_cookies(), max_age=600)
+    return resp
 
 
 # --- AI tool handlers -------------------------------------------------------
@@ -3799,15 +3850,8 @@ async def api_login(identifier: str = Form(...), secret: str = Form(...), reques
     code = auth_service.generate_otp()
     _store_otp(db, actor["role"], actor.get("id"), email, code)
     ok, err = await _deliver_otp(email, code, actor)
-    if not ok:
-        return RedirectResponse(url=f"/login?error={urllib.parse.quote(err)}", status_code=status.HTTP_303_SEE_OTHER)
-    resp = RedirectResponse(url="/login/otp", status_code=status.HTTP_303_SEE_OTHER)
-    resp.set_cookie(
-        key=auth_service.OTP_COOKIE,
-        value=auth_service.issue_pending(actor["role"], actor.get("id"), email, actor.get("name")),
-        httponly=True, samesite="lax", secure=_secure_cookies(), max_age=auth_service.OTP_TTL_SECONDS,
-    )
-    return resp
+    return _otp_step_response(actor["role"], actor.get("id"), email, actor.get("name"),
+                              code, ok, err, resend=False)
 
 
 @app.get("/login/otp", response_class=HTMLResponse)
@@ -3818,6 +3862,8 @@ async def read_otp(request: Request):
     return templates.TemplateResponse(request=request, name="otp.html", context={
         "error": request.query_params.get("error"),
         "resent": request.query_params.get("resent"),
+        "delivery_failed": request.query_params.get("delivery") == "failed",
+        "reveal_code": (request.cookies.get("otp_reveal") or "") if _otp_reveal_enabled() else "",
         "email": pending.get("email"),
         "masked_email": _mask_email(pending.get("email") or ""),
         "name": pending.get("name"),
@@ -3861,15 +3907,8 @@ async def api_resend_otp(request: Request, db=Depends(get_db)):
     code = auth_service.generate_otp()
     _store_otp(db, pending["role"], pending.get("id"), pending.get("email"), code)
     ok, err = await _deliver_otp(pending.get("email"), code, {"name": pending.get("name")})
-    if not ok:
-        return RedirectResponse(url=f"/login?error={urllib.parse.quote(err)}", status_code=status.HTTP_303_SEE_OTHER)
-    resp = RedirectResponse(url="/login/otp?resent=1", status_code=status.HTTP_303_SEE_OTHER)
-    resp.set_cookie(
-        key=auth_service.OTP_COOKIE,
-        value=auth_service.issue_pending(pending["role"], pending.get("id"), pending.get("email"), pending.get("name")),
-        httponly=True, samesite="lax", secure=_secure_cookies(), max_age=auth_service.OTP_TTL_SECONDS,
-    )
-    return resp
+    return _otp_step_response(pending["role"], pending.get("id"), pending.get("email"),
+                              pending.get("name"), code, ok, err, resend=True)
 
 
 @app.get("/api/auth/logout")
