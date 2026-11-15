@@ -34,6 +34,8 @@ SCOPES = [
     "ZohoCRM.modules.ALL", "ZohoCRM.settings.READ", "ZohoCRM.users.READ",
     "ZohoBooks.fullaccess.all",
     "ZohoCampaigns.contact.ALL", "ZohoCampaigns.campaign.READ",
+    # Create + send an email campaign from the app (Settings → Campaigns).
+    "ZohoCampaigns.campaign.CREATE", "ZohoCampaigns.campaign.UPDATE",
     "ZohoMail.accounts.READ", "ZohoMail.messages.CREATE", "ZohoMail.messages.READ",
     "ZohoCalendar.calendar.ALL", "ZohoCalendar.event.ALL",
     # Embedded card checkout in the client portal. Creating a payment session
