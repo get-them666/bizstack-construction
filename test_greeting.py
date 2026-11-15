@@ -56,7 +56,13 @@ if __name__ == "__main__":
                        ("Hamoud, Mohamad M Et Al", "Mohamad"),
                        ("TURNER", "Turner"),
                        ("6076 NEWPORT POINT", ""),
-                       ("PERMIT · 6076 NEWPORT POINT", "")):
+                       ("PERMIT · 6076 NEWPORT POINT", ""),
+                       # Surname-first with no comma cannot be resolved, so it
+                       # must not guess: these opened "Hi Clarke," and
+                       # "Hi Vinichenko," to the people who own those surnames.
+                       ("CLARKE JEFFREY A & CLAUDIA", ""),
+                       ("CRONIN MARGARET MARY", ""),
+                       ("HONG SUSAN", "")):
         check(f"{name!r} -> {want!r}", auto_reply._person_first(name) == want,
               auto_reply._person_first(name))
 

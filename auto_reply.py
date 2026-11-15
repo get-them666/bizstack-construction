@@ -197,17 +197,34 @@ def _person_first(name):
         return ""
     if re.sub(r"\s+", " ", raw).strip().lower() in _NOT_A_PERSON:
         return ""
-    # Assessor records write "Last, First Middle" ("Fields, Sterling Iii Et Al")
-    # and permit feeds often shout: "HOTOR, EBENEZER". Taking the first token
-    # of that gives the surname, and the email then opens "Hi Fields,". The
-    # part after the comma is the given name, so prefer it.
+    # "Last, First Middle" ("Fields, Sterling Iii Et Al", "HOTOR, EBENEZER").
+    # The comma tells us the order, so the given name is recoverable and worth
+    # using -- taking the first token greets people by their surname.
     if "," in raw:
-        raw = raw.split(",", 1)[1].strip()
-    first = raw.split()[0].strip(" .,;:'\"()-")
+        after = raw.split(",", 1)[1].strip()
+        tokens = [t.strip(" .,;:'\"()-") for t in after.split()]
+        tokens = [t for t in tokens if t and not re.fullmatch(r"(?i)(et|al|jr|sr|ii|iii|iv)", t)]
+        if not tokens:
+            return ""
+        first = tokens[0]
+        if not re.search(r"[A-Za-z]", first):
+            return ""
+        return first.capitalize() if first.isupper() else first
+
+    # Surname-first with no comma ("CLARKE JEFFREY A & CLAUDIA", "CRONIN MARGARET
+    # MARY"). Nothing in the string says which token is the given name, and
+    # guessing produced real sends opening "Hi Clarke," / "Hi Vinichenko," to
+    # the person whose surname it is. Generic beats insulting.
+    shouted = raw.replace(".", " ").strip()
+    letters = [c for c in shouted if c.isalpha()]
+    if letters and all(c.isupper() for c in letters) and len(shouted.split()) >= 2:
+        return ""
+    if " & " in f" {shouted} " or re.search(r"\bET\s+AL\b", shouted, re.I):
+        return ""
+    first = shouted.split()[0].strip(" .,;:'\"()-")
     if len(first) < 2:
         return ""
-    # A numbered place ("6076 NEWPORT POINT") must not be greeted as a person,
-    # and an all-caps surname reads as shouting.
+    # A numbered place ("6076 NEWPORT POINT") must not be greeted as a person.
     if not re.search(r"[A-Za-z]", first):
         return ""
     if first.isupper():
@@ -1160,12 +1177,33 @@ def fire_lead_draft(db, company_key, lead_id, *, force=False):
     return result
 
 
+def _fire_gap() -> float:
+    """Seconds between sends in a fire-all sweep.
+
+    35 emails left in a single minute on 2026-11-15 (21:42) and the mailbox was
+    blocked for volume an hour later. A manual sweep now trickles like the batch
+    does. OUTREACH_MIN_GAP_SECONDS=0 turns it off.
+    """
+    try:
+        gap = float((os.getenv("OUTREACH_MIN_GAP_SECONDS", "20") or "0").strip())
+    except (TypeError, ValueError):
+        gap = 20.0
+    return max(0.0, min(gap, 600.0))
+
+
+def _fire_cap() -> int:
+    try:
+        return max(1, int(os.getenv("FIRE_ALL_MAX", "10") or 10))
+    except (TypeError, ValueError):
+        return 10
+
+
 def fire_all_drafts(db, company_key=None):
-    """Owner action: fire every staged review draft for a company at once.
+    """Owner action: fire staged review drafts, paced and capped per click.
 
     Loops over leads with a draft_reply set, sends each via fire_lead_draft
     (which re-checks caps + scrub per lead), and reports sent/skipped. Returns
-    {"pending": n, "sent": m, "skipped": k, "reasons": {reason: count}}."""
+    {"pending": n, "fired": m, "sent": k, "skipped": j, "reasons": {...}}."""
     company_key = company_key if company_key in COMPANIES else None
     _ensure_draft_column(db)
     pending = []
@@ -1194,6 +1232,11 @@ def fire_all_drafts(db, company_key=None):
     except Exception as exc:
         print(f"[auto-reply] fire-all query failed: {exc}", flush=True)
         return {"pending": 0, "sent": 0, "skipped": 0, "errors": [f"query failed: {exc}"]}
+    total_pending = len(pending)
+    cap = _fire_cap()
+    if len(pending) > cap:
+        pending = pending[:cap]
+    gap = _fire_gap()
     sent = 0
     skipped = 0
     reasons = {}
@@ -1203,6 +1246,8 @@ def fire_all_drafts(db, company_key=None):
         if res.get("sent"):
             sent += 1
             consecutive_failures = 0
+            if gap:
+                time.sleep(gap)
         else:
             skipped += 1
             why = res.get("why") or "unknown"
@@ -1216,8 +1261,11 @@ def fire_all_drafts(db, company_key=None):
                 reasons["stopped after 3 consecutive failures"] = 1
                 print(f"[auto-reply] fire-all stopping: 3 consecutive failures, last was {why}", flush=True)
                 break
-    print(f"[auto-reply] fire-all: {len(pending)} pending, {sent} sent, {skipped} skipped", flush=True)
-    return {'pending': len(pending), 'sent': sent, 'skipped': skipped, 'reasons': reasons}
+    print(f"[auto-reply] fire-all: {total_pending} pending, {len(pending)} attempted, "
+          f"{sent} sent, {skipped} skipped", flush=True)
+    return {'pending': total_pending, 'attempted': len(pending), 'sent': sent,
+            'skipped': skipped, 'reasons': reasons,
+            'capped': total_pending > len(pending)}
 
 
 def auto_reply_to_lead(db, company_key, *, name="", phone="", email="", service="", address="",
