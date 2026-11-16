@@ -114,6 +114,7 @@ def issue_session(role: str, actor_id, email: str, name: str) -> str:
         "t": "session", "role": role, "id": actor_id,
         "email": email or "", "name": name or "",
         "sid": secrets.token_urlsafe(24),
+        "iat": time.time(),
         "exp": time.time() + SESSION_TTL_SECONDS,
     })
 

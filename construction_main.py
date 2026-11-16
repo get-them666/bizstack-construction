@@ -35,6 +35,7 @@ from contextlib import asynccontextmanager
 
 import asyncio
 import psycopg
+from psycopg.errors import UniqueViolation
 from psycopg.rows import dict_row
 try:
     from psycopg_pool import ConnectionPool
@@ -870,15 +871,20 @@ async def lifecycle(app: FastAPI):
 
     # Owner's personal client-portal account — same email + password as the
     # admin login, so the owner can preview what homeowners see without
-    # juggling separate credentials. Created at every boot (idempotent;
-    # create_client upserts on email so the password stays in sync).
+    # juggling separate credentials. Only created on first boot: once the
+    # owner changes their password, re-creating the account must not clobber
+    # the new one with the default from the environment.
     try:
         with psycopg.connect(db_url, row_factory=dict_row) as conn:
             portal_service.ensure_schema(conn)
-            admin_pw = os.getenv("ADMIN_PASSWORD", "password123")
             admin_email = (os.getenv("ADMIN_EMAIL") or "hello@bizstackperks.com").strip()
-            portal_service.create_client(conn, admin_email, "Owner", admin_pw)
-            print(f"👤 Client portal account ready for {admin_email}")
+            existing_owner = portal_service.client_by_email(conn, admin_email)
+            if not existing_owner:
+                admin_pw = os.getenv("ADMIN_PASSWORD", "password123")
+                portal_service.create_client(conn, admin_email, "Owner", admin_pw)
+                print(f"👤 Client portal account created for {admin_email}")
+            else:
+                print(f"👤 Client portal account already exists for {admin_email}")
     except Exception as e:
         print(f"⚠️ Client portal owner account setup skipped: {e}")
 
@@ -894,20 +900,20 @@ async def lifecycle(app: FastAPI):
     except Exception as e:
         print(f"⚠️ Lead pipeline init skipped: {e}")
 
-    if not os.getenv("DISABLE_LOAN_OUTREACH"):
+    if not settings_status.flag_on("DISABLE_LOAN_OUTREACH"):
         _outreach_tasks = start_outreach_tasks()
         try:
             app.state.outreach_tasks = _outreach_tasks
         except AttributeError:
             pass
 
-    if not os.getenv("DISABLE_PERMIT_IMPORT"):
+    if not settings_status.flag_on("DISABLE_PERMIT_IMPORT"):
         try:
             _start_permit_importer()
         except Exception as exc:
             print(f"[permit-scan] could not start importer: {exc}", flush=True)
 
-    if not os.getenv("DISABLE_LEAD_SCAN"):
+    if not settings_status.flag_on("DISABLE_LEAD_SCAN"):
         try:
             _start_lead_source_scheduler()
         except Exception as exc:
@@ -925,10 +931,12 @@ async def lifecycle(app: FastAPI):
         except Exception as exc:
             print(f"[vapi] assistant url sync failed: {exc}", flush=True)
 
-    threading.Thread(target=_sync_vapi_assistant, daemon=True).start()
+    if not settings_status.flag_on("DISABLE_VAPI_SYNC"):
+        threading.Thread(target=_sync_vapi_assistant, daemon=True).start()
 
     # Transport watchdog: SMS/voice failures must be loud, not silent.
-    threading.Thread(target=_transport_health_loop, daemon=True).start()
+    if not settings_status.flag_on("DISABLE_TRANSPORT_HEALTH"):
+        threading.Thread(target=_transport_health_loop, daemon=True).start()
 
     # Copilot conversation memory + the one-year task list. Self-initializing, so
     # this is safe on every boot and on redeploys against an existing database.
@@ -1084,6 +1092,9 @@ async def security_headers(request: Request, call_next):
         response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
     if path.startswith("/api/payroll/run/") or path.startswith("/api/crew/app/bank"):
         response.headers["Cache-Control"] = "no-store"
+    if path.startswith("/portal"):
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Vary"] = "Cookie"
     return response
 
 
@@ -1223,6 +1234,22 @@ def require_auth(request: Request):
 def require_admin(request: Request) -> None:
     if not require_auth(request)[0]:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Admin login required")
+
+
+def _verify_inbound_webhook(request: Request) -> None:
+    """If INBOUND_WEBHOOK_SECRET is set, every inbound carrier webhook
+    (/comms/sms-webhook, /comms/voice-webhook, /comms/outbound-voice-webhook)
+    must carry that secret in X-Inbound-Secret. Without the env var the check
+    is a no-op (back-compat while the secret is being rolled out). Use this to
+    stop anyone on the internet from minting fake inbound SMS/voice that the
+    bot replies to at our expense."""
+    secret = os.getenv("INBOUND_WEBHOOK_SECRET", "").strip()
+    if not secret:
+        return
+    provided = (request.headers.get("X-Inbound-Secret") or "").strip()
+    if not hmac.compare_digest(provided, secret):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                            detail="Inbound webhook secret missing or invalid")
 
 
 # --- Auth0 login bridge ------------------------------------------------------
@@ -1405,10 +1432,27 @@ def current_worker(request: Request):
     return actor
 
 
-def require_worker(request: Request) -> dict:
+def require_worker(request: Request, db=None) -> dict:
     worker = current_worker(request)
     if not worker:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Worker login required")
+    # A fired/inactive worker must lose access immediately, not ride out the
+    # remaining 72h of their session token. Re-check is_active from the DB
+    # whenever a connection is available so every route that uses this
+    # dependency inherits the check.
+    if db is not None:
+        try:
+            with db.cursor() as cur:
+                cur.execute("SELECT is_active FROM crew WHERE id = %s;", (worker.get("id"),))
+                row = cur.fetchone()
+            if not row or not row.get("is_active"):
+                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Worker account is inactive")
+        except HTTPException:
+            raise
+        except Exception:
+            # A DB blip must not knock out a working session — fall through and
+            # let the route's own queries surface a real error if the row is gone.
+            pass
     return worker
 
 
@@ -1430,6 +1474,7 @@ def _worker_login_response(worker: dict) -> RedirectResponse:
         key=WORKER_COOKIE,
         value=auth_service.issue_session("worker", worker.get("id"), worker.get("email") or "", worker.get("name") or ""),
         httponly=True, samesite="lax", secure=_secure_cookies(),
+        max_age=auth_service.SESSION_TTL_SECONDS,
     )
     return resp
 
@@ -1912,8 +1957,32 @@ def build_tool_handlers(db, stripe_svc):
                 "next_action": saved.get("next_action")}
 
     def send_sms_message(to, body):
+        # Guardrails: suppression check + comms_logs audit, matching the email
+        # wrapper pattern. Wrapped in try/except so a guardrail failure never
+        # blocks the send — log and continue.
+        try:
+            allowed, why = suppression.check_outbound(db, suppression.CHANNEL_SMS, to)
+            if not allowed:
+                print(f"⚠️ SMS blocked for {to}: {why}", flush=True)
+                return {"ok": False, "error": f"Cannot send SMS to {to}: {why}"}
+        except Exception as exc:
+            print(f"⚠️ SMS suppression check failed (continuing): {exc}", flush=True)
         ok = signalwire.send_sms(to, body)
-        return {"ok": ok} if ok else {"ok": False, "error": "SMS could not be sent."}
+        try:
+            with psycopg.connect(db_url, row_factory=dict_row) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO comms_logs (direction, channel, recipient, message_body) "
+                        "VALUES ('outbound', 'sms', %s, %s);",
+                        (to, (body or "")[:500]),
+                    )
+                conn.commit()
+        except Exception as exc:
+            print(f"⚠️ SMS comms_logs write failed (non-fatal): {exc}", flush=True)
+        if not ok:
+            print(f"⚠️ SMS send failed for {to}", flush=True)
+            return {"ok": False, "error": "SMS could not be sent."}
+        return {"ok": True}
 
     def send_email_message(to, subject, body):
         import documents_service
@@ -2324,7 +2393,17 @@ f"The mail transport did not accept the message. This usually means the "
             cur.execute(
                 "SELECT COALESCE(SUM(amount_cents),0)::BIGINT AS amt, COUNT(*) AS n "
                 "FROM payments WHERE company = 'construction' AND status = 'paid' AND lead_id IS NOT NULL;")
-            collected = cur.fetchone()
+            collected_legacy = cur.fetchone()
+            # Invoice payments (paid/partial bid_invoices) are the current
+            # collection path; the legacy payments table only covers leads-
+            # table deposits. Both count toward total collections so the
+            # accounting summary does not understate cash received.
+            cur.execute(
+                "SELECT COALESCE(SUM(collected * 100),0)::BIGINT AS amt, "
+                "       COUNT(*) FILTER (WHERE collected > 0) AS n "
+                "FROM bid_invoices WHERE company = 'construction' "
+                "  AND status IN ('paid','partial');")
+            collected_inv = cur.fetchone()
             cur.execute(
                 "SELECT COALESCE(SUM(deposit_cents),0)::BIGINT AS amt, COUNT(*) AS n "
                 "FROM leads WHERE company = 'construction' AND deposit_status = 'paid';")
@@ -2337,12 +2416,14 @@ f"The mail transport did not accept the message. This usually means the "
                 "SELECT COALESCE(SUM(estimated_value * 100),0)::BIGINT AS amt, COUNT(*) AS n "
                 "FROM job_leads WHERE status = 'new';")
             open_job_value = cur.fetchone()
+        total_cents = int(collected_legacy["amt"] or 0) + int(collected_inv["amt"] or 0)
+        total_count = int(collected_legacy["n"] or 0) + int(collected_inv["n"] or 0)
         return {
             "ok": True,
             "collected_deposits_cents": deposits["amt"],
             "collected_deposits_count": deposits["n"],
-            "total_collections_cents": collected["amt"],
-            "payments_count": collected["n"],
+            "total_collections_cents": total_cents,
+            "payments_count": total_count,
             "payroll_paid_total_cents": payroll_paid["amt"],
             "open_job_feed_value_cents": open_job_value["amt"],
             "open_job_feed_count": open_job_value["n"],
@@ -2862,6 +2943,9 @@ def build_copilot_handlers(db, owner_email: str):
         body = (body or "").strip()
         if not to or not subject or not body:
             return {"ok": False, "error": "to, subject and body are all required."}
+        blocked = auto_reply.blocked_reason(to, "copilot")
+        if blocked:
+            return {"ok": False, "error": f"Cannot email {to}: {blocked}"}
         ok, reason = auto_reply._recent_send_guard(db, to, "email", days=1)
         if not ok:
             if not _copilot_conversation_open(db, to):
@@ -3213,7 +3297,17 @@ async def vision_quote_endpoint(
 
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    """Liveness check that also verifies the database is reachable. A deploy
+    with a missing or mispointed DATABASE_URL used to pass Render's health check
+    and 500 every real request — see AGENTS.md / RENDER.md."""
+    try:
+        import psycopg as _psycopg
+        with _psycopg.connect(os.getenv("DATABASE_URL", ""), connect_timeout=3) as _c:
+            _c.execute("SELECT 1")
+        return {"status": "ok"}
+    except Exception as _e:
+        return JSONResponse({"status": "db down", "error": str(_e)[:200]},
+                            status_code=503)
 
 
 @app.get("/maps/health", response_class=JSONResponse)
@@ -3379,7 +3473,7 @@ async def submit_lead(
             goal=goal,
             budget=budget,
             timeline=timeline,
-            message=full_message,
+            message=full_description,
         )
     )
     return JSONResponse(content={"status": "success", "lead_id": lead_id})
@@ -3413,12 +3507,21 @@ def _run_followups() -> dict:
         def _send_email(to, subject, body):
             if _blocked(suppression.CHANNEL_EMAIL, to):
                 return False
+            # contact_policy_allows: one touch per lead, then wait for a reply
+            # before touching again. Without this, the follow-up sweep can
+            # email a lead the auto-reply already contacted today.
+            allowed, _why = auto_reply.contact_policy_allows(conn, to, "email")
+            if not allowed:
+                return False
             if not documents_service.smtp_configured(cfg):
                 return False
             return bool(auto_reply.run_coro(documents_service.send_email(cfg, to, subject, body.replace("\n", "<br>"))))
 
         def _send_sms(to, body):
             if _blocked(suppression.CHANNEL_SMS, to):
+                return False
+            allowed, _why = auto_reply.contact_policy_allows(conn, to, "text")
+            if not allowed:
                 return False
             return signalwire.send_sms(to, body)
 
@@ -4977,7 +5080,10 @@ def _contract_amount(bid: dict) -> float:
 def _billed_excluding_void(conn, bid_id: int) -> float:
     total = 0.0
     for inv in bid_costing.list_invoices(conn, bid_id, _BID_COMPANY):
-        if inv.get("status") != "void":
+        # Match invoice_summary: drafts have never been sent so they cannot be
+        # part of what the customer owes, and counting them made a duplicated
+        # custom invoice look like a real receivable.
+        if inv.get("status") not in ("void", "draft"):
             total += float(inv.get("amount") or 0)
     return total
 
@@ -4996,12 +5102,17 @@ async def bid_invoice_progress(bid_id: int, request: Request, db=Depends(get_db)
         if inv.get("kind") == "progress" and inv.get("status") != "void":
             return RedirectResponse(url=f"/bids/{bid_id}", status_code=status.HTTP_303_SEE_OTHER)
     amount = round(contract * bid_package_pdf.PROGRESS_PCT / 100.0, 2)
-    inv = bid_costing.create_invoice(
-        db, bid_id, amount, _BID_COMPANY,
-        description=(f"{bid_package_pdf.PROGRESS_PCT}% progress invoice — "
-                     "rough-in, drywall and substrate complete"),
-        kind="progress",
-    )
+    try:
+        inv = bid_costing.create_invoice(
+            db, bid_id, amount, _BID_COMPANY,
+            description=(f"{bid_package_pdf.PROGRESS_PCT}% progress invoice — "
+                         "rough-in, drywall and substrate complete"),
+            kind="progress",
+        )
+    except UniqueViolation:
+        # Concurrent double-click: the unique index on (bid_id, kind) for live
+        # invoices caught the race. Treat it the same as the pre-check above.
+        return RedirectResponse(url=f"/bids/{bid_id}", status_code=status.HTTP_303_SEE_OTHER)
     bid_costing.set_invoice_status(db, inv["id"], "sent", _BID_COMPANY)
     ledger_sync.ensure_schema(db)
     ledger_sync.sync_invoice(db, inv["id"], _BID_COMPANY)
@@ -5018,18 +5129,26 @@ async def bid_invoice_final(bid_id: int, request: Request, db=Depends(get_db)):
     contract = _contract_amount(bid)
     if contract <= 0:
         raise HTTPException(status_code=400, detail="Set the bid amount before billing final.")
-    remaining = round(max(0.0, contract - _billed_excluding_void(db, bid_id)), 2)
+    # Approved change orders have already posted their amount as revenue at
+    # approval time and also bumped contract_value, so subtract them here to
+    # avoid billing the same money twice (once as CO revenue, once via final).
+    co_total = float(change_orders.approved_total(db, bid_id, _BID_COMPANY))
+    remaining = round(max(0.0, contract - _billed_excluding_void(db, bid_id) - co_total), 2)
     if remaining <= 0:
         raise HTTPException(status_code=400, detail="Everything on this bid is already billed.")
     for inv in bid_costing.list_invoices(db, bid_id, _BID_COMPANY):
         if inv.get("kind") == "final" and inv.get("status") != "void":
             return RedirectResponse(url=f"/bids/{bid_id}", status_code=status.HTTP_303_SEE_OTHER)
-    inv = bid_costing.create_invoice(
-        db, bid_id, remaining, _BID_COMPANY,
-        description=(f"{bid_package_pdf.FINAL_PCT}% final invoice — "
-                     "due on final walkthrough and acceptance"),
-        kind="final",
-    )
+    try:
+        inv = bid_costing.create_invoice(
+            db, bid_id, remaining, _BID_COMPANY,
+            description=(f"{bid_package_pdf.FINAL_PCT}% final invoice — "
+                         "due on final walkthrough and acceptance"),
+            kind="final",
+        )
+    except UniqueViolation:
+        # Concurrent double-click: the unique index on (bid_id, kind) caught it.
+        return RedirectResponse(url=f"/bids/{bid_id}", status_code=status.HTTP_303_SEE_OTHER)
     bid_costing.set_invoice_status(db, inv["id"], "sent", _BID_COMPANY)
     ledger_sync.ensure_schema(db)
     ledger_sync.sync_invoice(db, inv["id"], _BID_COMPANY)
@@ -5317,6 +5436,11 @@ async def bid_cost_delete(bid_id: int, line_id: int, request: Request,
     require_admin(request)
     if not bid_costing.delete_cost_line(db, line_id, bid_id, _BID_COMPANY, note=note):
         raise HTTPException(status_code=404, detail="Cost line not found")
+    # The row now has ``removed_at`` set so sync_cost_line would skip it.
+    # Reverse whatever was previously posted for this line so the books
+    # reflect the deletion.
+    ledger_sync.ensure_schema(db)
+    ledger_sync.reverse_cost_line(db, line_id, _BID_COMPANY)
     _recalc_bid_amount(db, bid_id)
     if back.startswith("/bids/"):
         return RedirectResponse(url=back, status_code=status.HTTP_303_SEE_OTHER)
@@ -5330,6 +5454,11 @@ async def bid_cost_restore(bid_id: int, line_id: int, request: Request,
     require_admin(request)
     if not bid_costing.restore_cost_line(db, line_id, bid_id, _BID_COMPANY):
         raise HTTPException(status_code=404, detail="Removed cost line not found")
+    # Fresh post with the current amount (the idempotency key includes the
+    # amount, so a re-restored line whose amount has not changed is a safe
+    # no-op, and one whose amount did change posts a new entry).
+    ledger_sync.ensure_schema(db)
+    ledger_sync.sync_cost_line(db, line_id, _BID_COMPANY)
     _recalc_bid_amount(db, bid_id)
     if back.startswith("/bids/"):
         return RedirectResponse(url=back, status_code=status.HTTP_303_SEE_OTHER)
@@ -7409,24 +7538,6 @@ async def skiptrace_parcel_contact(request: Request, parcel_id: str = Form(""),
             "detail": exc.message, "credit_spent": exc.spendable,
         })
     return JSONResponse(content=result)
-    first = (owner or "there").split()[0]
-    detail = []
-    if property_data.get("year_built"):
-        detail.append(f"built in {property_data['year_built']}")
-    if property_data.get("square_footage"):
-        detail.append(f"{int(property_data['square_footage']):,} sq ft")
-    listed_property = (
-        "The public assessor record lists it as " + ", ".join(detail) + ".\n\n"
-        if detail else ""
-    )
-    return (
-        f"Hi {first},\n\n"
-        f"I'm reaching out about the property at {address}. I'm a local contractor "
-        "and wanted to introduce myself in case you need help with a renovation "
-        f"or repair.\n\n{listed_property}"
-        "If this is not relevant, let me know and I won't follow up.\n\n"
-        f"Thanks,\n{brand.short_name()}"
-    )
 
 
 def _owner_draft_body(owner: str, address: str, property_data: dict) -> str:
@@ -8356,7 +8467,6 @@ async def zoho_payments_webhook(request: Request, db=Depends(get_db)):
     if event_type not in (
         "payment.captured",
         "payment.success",
-        "payment.authorized",
         "order.paid",
         "payment.completed",
     ):
@@ -8468,6 +8578,7 @@ async def business_summary(request: Request, db=Depends(get_db)):
 # --- SignalWire SMS webhook -------------------------------------------------
 @app.post("/comms/sms-webhook")
 async def inbound_sms_webhook(request: Request, db=Depends(get_db)):
+    _verify_inbound_webhook(request)
     form = await request.form()
     From = form.get("From", "")
     Body = form.get("Body", "")
@@ -8535,6 +8646,7 @@ async def inbound_sms_webhook(request: Request, db=Depends(get_db)):
 # --- SignalWire voice webhooks ----------------------------------------------
 @app.post("/comms/voice-webhook")
 async def voice_webhook(request: Request, db=Depends(get_db)):
+    _verify_inbound_webhook(request)
     form = await request.form()
     CallSid = form.get("CallSid", "unknown")
     From = form.get("From", "unknown")
@@ -8672,11 +8784,14 @@ def _follow_up_new_lead(lead_id: int) -> None:
                 return
             if sid:
                 with db.cursor() as cur:
-                    cur.execute(
-                        "CREATE TABLE IF NOT EXISTS bot_calls (call_sid TEXT PRIMARY KEY, lead_id INTEGER, "
-                        "direction TEXT, status TEXT, turns INTEGER DEFAULT 0, "
-                        "created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP);"
-                    )
+                    try:
+                        cur.execute(
+                            "CREATE TABLE IF NOT EXISTS bot_calls (call_sid TEXT PRIMARY KEY, lead_id INTEGER, "
+                            "direction TEXT, status TEXT, turns INTEGER DEFAULT 0, "
+                            "created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP);"
+                        )
+                    except Exception:
+                        db.rollback()  # concurrent-create race
                     cur.execute(
                         "INSERT INTO bot_calls (call_sid, lead_id, direction, status) "
                         "VALUES (%s, %s, 'outbound', 'dialed') ON CONFLICT (call_sid) DO NOTHING;",
@@ -8690,6 +8805,14 @@ def _follow_up_new_lead(lead_id: int) -> None:
                 print(f"📞[followup] dialed lead {lead_id} ({to}) sid={sid}", flush=True)
         except Exception as e:
             print(f"📞[followup] follow-up failed for lead {lead_id}: {e}", flush=True)
+        finally:
+            # The connection was opened for this one call. Without the close,
+            # every fresh lead leaked a Postgres session until the thread was
+            # reaped, and on a busy import day the pool ran dry.
+            try:
+                db.close()
+            except Exception:
+                pass
 
     threading.Thread(target=_run, daemon=True).start()
 
@@ -8772,16 +8895,20 @@ def _outbound_turn(db, sid, to, text, turns):
 
 @app.post("/comms/outbound-voice-webhook")
 async def outbound_voice_webhook(request: Request, db=Depends(get_db)):
+    _verify_inbound_webhook(request)
     form = await request.form()
     sid = form.get("CallSid", "")
     to = form.get("To", "unknown")
     lead = _bot_lead_for_call(db, to)
     with db.cursor() as cur:
-        cur.execute(
-            "CREATE TABLE IF NOT EXISTS bot_calls (call_sid TEXT PRIMARY KEY, lead_id INTEGER, "
-            "direction TEXT, status TEXT, turns INTEGER DEFAULT 0, "
-            "created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP);"
-        )
+        try:
+            cur.execute(
+                "CREATE TABLE IF NOT EXISTS bot_calls (call_sid TEXT PRIMARY KEY, lead_id INTEGER, "
+                "direction TEXT, status TEXT, turns INTEGER DEFAULT 0, "
+                "created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP);"
+            )
+        except Exception:
+            db.rollback()  # concurrent-create race
         try:
             cur.execute("ALTER TABLE bot_calls ALTER COLUMN status TYPE TEXT;")
         except Exception:
@@ -9185,13 +9312,13 @@ def _build_voice_swml(prompt: str, ai_params_extra: dict | None = None) -> dict:
     }
 
 
-@app.api_route("/voice.swml", methods=["GET", "POST"])
-@app.api_route("/voice-app.swml", methods=["GET", "POST"])
+@app.api_route("/voice.swml", methods=["GET", "POST"], operation_id="voice_swml")
+@app.api_route("/voice-app.swml", methods=["GET", "POST"], operation_id="voice_app_swml")
 async def voice_swml():
     return JSONResponse(content=_build_voice_swml(_voice_prompt()))
 
 
-@app.api_route("/comms/outbound-voice.swml", methods=["GET", "POST"])
+@app.api_route("/comms/outbound-voice.swml", methods=["GET", "POST"], operation_id="outbound_voice_swml")
 async def outbound_voice_swml(request: Request, db=Depends(get_db)):
     to = request.query_params.get("to") or request.query_params.get("To") or ""
     if not to:
@@ -9726,6 +9853,7 @@ def _swaig_tool_response_text(name: str, result) -> str:
 
 @app.api_route("/api/voice/tool", methods=["POST"])
 async def voice_tool(request: Request, db=Depends(get_db)):
+    require_admin(request)
     try:
         payload = await request.json()
     except Exception:
@@ -9771,7 +9899,7 @@ async def voice_tool(request: Request, db=Depends(get_db)):
     return JSONResponse({"response": text})
 
 
-@app.api_route("/api/voice/debug", methods=["GET", "POST"])
+@app.api_route("/api/voice/debug", methods=["GET", "POST"], operation_id="voice_debug")
 async def voice_debug(request: Request, db=Depends(get_db)):
     raw = await request.body()
     try:
@@ -12441,21 +12569,52 @@ async def backlog_create(
         if paid_cents > 0:
             cur.execute(
                 "INSERT INTO payments (lead_id, amount_cents, status, created_at, company) "
-                "VALUES (%s,%s,'paid',%s,'construction');",
+                "VALUES (%s,%s,'paid',%s,'construction') RETURNING id;",
                 (lead_id, paid_cents, when),
             )
+            payment_id = cur.fetchone()["id"]
+        else:
+            payment_id = None
         db.commit()
+    # Post the deposit to the ledger after the application write committed,
+    # so a books failure never rolls back the real payment row.
+    if payment_id:
+        try:
+            ledger_sync.ensure_schema(db)
+            ledger_sync.sync_deposit(db, payment_id, "construction")
+        except Exception as e:
+            print(f"[backlog] ledger sync failed for payment {payment_id}: {e}", flush=True)
     return RedirectResponse(url="/backlog?ok=added", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.post("/api/backlog/{lead_id}/delete")
 async def backlog_delete(lead_id: int, request: Request, db=Depends(get_db)):
     require_admin(request)
+    # Reverse any ledger entry posted for this lead's payment before deleting
+    # the row, so the cash received comes off the books with the deletion.
     with db.cursor() as cur:
+        cur.execute("SELECT id FROM payments WHERE lead_id=%s;", (lead_id,))
+        payment_ids = [r["id"] for r in cur.fetchall()]
         cur.execute("DELETE FROM payments WHERE lead_id=%s;", (lead_id,))
         cur.execute("DELETE FROM projects WHERE lead_id=%s;", (lead_id,))
         cur.execute("DELETE FROM leads WHERE id=%s AND source='backlog';", (lead_id,))
         db.commit()
+    for pid in payment_ids:
+        try:
+            ledger_sync.ensure_schema(db)
+            # Reverse via the deposit source_id we keyed on (payment-{id}).
+            if ledger._table_exists(db, "ledger_entries"):
+                with db.cursor() as cur:
+                    cur.execute(
+                        "SELECT id FROM ledger_entries "
+                        "WHERE company = 'construction' AND source_type = 'deposit' "
+                        "  AND source_id = %s", (f"payment-{pid}",))
+                    entry = cur.fetchone()
+                if entry:
+                    ledger.reverse_entry(db, entry["id"],
+                                         memo=f"Backlog entry {lead_id} deleted")
+        except Exception as e:
+            print(f"[backlog] ledger reversal failed for payment {pid}: {e}", flush=True)
     return RedirectResponse(url="/backlog?ok=deleted", status_code=status.HTTP_303_SEE_OTHER)
 
 
@@ -12596,6 +12755,36 @@ async def crew_update(crew_id: int, request: Request, db=Depends(get_db),
     return RedirectResponse(url="/crew/admin?ok=saved", status_code=status.HTTP_303_SEE_OTHER)
 
 
+# Registered BEFORE /api/crew/{crew_id}/pin — Starlette matches the first route,
+# and {crew_id: int} would otherwise swallow "app" and 422 on a missing int.
+@app.post("/api/crew/app/pin")
+async def crew_app_pin(request: Request, db=Depends(get_db)):
+    """Change the PIN from inside the installable app."""
+    worker = require_worker(request, db=db)
+    body = await request.json()
+    current = (body.get("current_pin") or "").strip()
+    pin = (body.get("new_pin") or "").strip()
+    confirm = (body.get("confirm_pin") or pin).strip()
+    with db.cursor() as cur:
+        cur.execute("SELECT id, pin_hash FROM crew WHERE id = %s AND is_active = TRUE;",
+                    (worker.get("id"),))
+        row = cur.fetchone()
+    if not row or not _verify_pin(current, row.get("pin_hash") or ""):
+        return JSONResponse(status_code=403, content={"status": "error",
+                            "message": "Current PIN is incorrect."})
+    if pin != confirm:
+        return JSONResponse(status_code=400, content={"status": "error",
+                            "message": "The new PINs do not match."})
+    if not _valid_pin(pin):
+        return JSONResponse(status_code=400, content={"status": "error",
+                            "message": "PIN must be 4-6 digits."})
+    with db.cursor() as cur:
+        cur.execute("UPDATE crew SET pin_hash = %s WHERE id = %s;",
+                    (_hash_pin(pin), int(row["id"])))
+        db.commit()
+    return JSONResponse(content={"status": "ok", "message": "PIN updated."})
+
+
 @app.post("/api/crew/{crew_id}/pin")
 async def crew_pin(crew_id: int, request: Request, pin: str = Form(""), db=Depends(get_db)):
     require_admin(request)
@@ -12642,7 +12831,6 @@ async def crew_portal_index(request: Request):
 async def crew_login(request: Request, phone: str = Form(...), pin: str = Form(...), db=Depends(get_db)):
     digits = "".join(c for c in (phone or "") if c.isdigit())
     keys = (f"phone:{digits}", f"ip:{_client_ip(request)}")
-    login_throttle.ensure_schema(db)
     if login_throttle.locked(db, *keys):
         return RedirectResponse(url="/crew?error=Too+many+attempts.+Try+again+later.", status_code=status.HTTP_303_SEE_OTHER)
     with db.cursor() as cur:
@@ -12652,7 +12840,7 @@ async def crew_login(request: Request, phone: str = Form(...), pin: str = Form(.
     if not row or not _verify_pin((pin or "").strip(), row["pin_hash"]):
         login_throttle.fail(db, *keys)
         return RedirectResponse(url="/crew?error=Invalid+phone+or+PIN", status_code=status.HTTP_303_SEE_OTHER)
-    login_throttle.clear(db, keys[0])
+    login_throttle.clear(db, *keys)
     return _worker_login_response(row)
 
 
@@ -12665,10 +12853,14 @@ async def crew_logout():
 
 @app.get("/crew/dashboard", response_class=HTMLResponse)
 async def crew_dashboard(request: Request, db=Depends(get_db)):
-    worker = require_worker(request)
+    worker = current_worker(request)
+    if not worker:
+        return RedirectResponse(url="/crew", status_code=status.HTTP_303_SEE_OTHER)
     with db.cursor() as cur:
         cur.execute("SELECT * FROM crew WHERE id = %s;", (worker.get("id"),))
         crew_row = cur.fetchone()
+        if not crew_row or not crew_row.get("is_active"):
+            return RedirectResponse(url="/crew", status_code=status.HTTP_303_SEE_OTHER)
         cur.execute("""
             SELECT p.*, (SELECT COUNT(*) FROM job_photos ph WHERE ph.project_id = p.id) AS photo_count
             FROM project_assignments pa JOIN projects p ON p.id = pa.project_id
@@ -12694,8 +12886,14 @@ async def crew_dashboard(request: Request, db=Depends(get_db)):
 
 @app.get("/crew/jobs/{project_id}", response_class=HTMLResponse)
 async def crew_job_detail(project_id: int, request: Request, db=Depends(get_db)):
-    worker = require_worker(request)
+    worker = current_worker(request)
+    if not worker:
+        return RedirectResponse(url="/crew", status_code=status.HTTP_303_SEE_OTHER)
     with db.cursor() as cur:
+        cur.execute("SELECT is_active FROM crew WHERE id = %s;", (worker.get("id"),))
+        r = cur.fetchone()
+        if not r or not r.get("is_active"):
+            return RedirectResponse(url="/crew", status_code=status.HTTP_303_SEE_OTHER)
         cur.execute("SELECT * FROM projects WHERE id = %s;", (project_id,))
         job = cur.fetchone()
         cur.execute("""
@@ -12716,7 +12914,8 @@ async def crew_job_detail(project_id: int, request: Request, db=Depends(get_db))
 
 @app.post("/api/crew/clock-in")
 async def crew_clock_in(request: Request, project_id: int = Form(0), lat: str = Form(""), lng: str = Form(""), db=Depends(get_db)):
-    worker = require_worker(request)
+    worker = require_worker(request, db=db)
+    _require_crew_feature(db, "timeclock")
     with db.cursor() as cur:
         cur.execute("SELECT * FROM crew WHERE id = %s;", (worker.get("id"),))
         crew_row = cur.fetchone()
@@ -12736,7 +12935,7 @@ async def crew_clock_in(request: Request, project_id: int = Form(0), lat: str = 
 
 @app.post("/api/crew/clock-out")
 async def crew_clock_out(request: Request, clock_id: int = Form(0), lat: str = Form(""), lng: str = Form(""), db=Depends(get_db)):
-    worker = require_worker(request)
+    worker = require_worker(request, db=db)
     with db.cursor() as cur:
         cur.execute("SELECT * FROM crew WHERE id = %s;", (worker.get("id"),))
         crew_row = cur.fetchone()
@@ -12758,12 +12957,20 @@ async def crew_clock_out(request: Request, clock_id: int = Form(0), lat: str = F
         in_dt = ev["punch_in_at"]
         if in_dt:
             out_dt = datetime.now(APP_TZ)
+            # Timesheet date/time must be in local (ET) time, not UTC — a punch
+            # at 11pm UTC is 7pm ET and belongs on today's sheet, not tomorrow's.
+            in_dt_local = in_dt.astimezone(APP_TZ) if in_dt.tzinfo else in_dt.replace(tzinfo=timezone.utc).astimezone(APP_TZ)
             hours = _punch_hours(in_dt, out_dt)
+            # A forgotten punch-out can blow the total past a reasonable shift.
+            # Cap at 24h so the timesheet stays honest and the owner notices.
+            if hours > 24.0:
+                print(f"⚠️ shift exceeded 24h for crew {crew_row['id']}: {hours:.2f}h (capped at 24.0)", flush=True)
+                hours = 24.0
             if hours > 0:
                 cur.execute(
                     "INSERT INTO timesheets (crew_id, project_id, work_date, start_time, end_time, hours, work_type, source, status) "
                     "VALUES (%s,%s,%s,%s,%s,%s,'regular','clock','submitted');",
-                    (crew_row["id"], ev["project_id"], in_dt.date(), in_dt.strftime("%H:%M"),
+                    (crew_row["id"], ev["project_id"], in_dt_local.date(), in_dt_local.strftime("%H:%M"),
                      out_dt.strftime("%H:%M"), hours),
                 )
                 db.commit()
@@ -12773,7 +12980,7 @@ async def crew_clock_out(request: Request, clock_id: int = Form(0), lat: str = F
 @app.post("/api/crew/hours")
 async def crew_add_hours(request: Request, project_id: int = Form(0), work_date: str = Form(""), hours: str = Form(""),
                          work_type: str = Form("regular"), notes: str = Form(""), db=Depends(get_db)):
-    worker = require_worker(request)
+    worker = require_worker(request, db=db)
     # Crew hours come from clocking in and out. Only the owner adds time, from /payroll.
     return RedirectResponse(url="/crew/hours?error=Hours+come+from+clocking+in+and+out.+Ask+the+office+to+add+missed+time.",
                             status_code=status.HTTP_303_SEE_OTHER)
@@ -12801,7 +13008,7 @@ async def crew_add_hours(request: Request, project_id: int = Form(0), work_date:
 
 @app.post("/api/crew/hours/{sheet_id}/delete")
 async def crew_delete_hours(sheet_id: int, request: Request, db=Depends(get_db)):
-    worker = require_worker(request)
+    worker = require_worker(request, db=db)
     with db.cursor() as cur:
         cur.execute("SELECT id FROM timesheets WHERE id = %s AND crew_id = %s AND status = 'submitted';",
                     (sheet_id, worker.get("id")))
@@ -12814,12 +13021,21 @@ async def crew_delete_hours(sheet_id: int, request: Request, db=Depends(get_db))
 @app.post("/api/crew/photo")
 async def crew_photo_upload(request: Request, project_id: int = Form(0), caption: str = Form(""),
                             punchlist: str = Form(""), photo: UploadFile = Form(...), db=Depends(get_db)):
-    worker = require_worker(request)
+    worker = require_worker(request, db=db)
     _require_crew_feature(db, "photos")
     with db.cursor() as cur:
         cur.execute("SELECT id FROM crew WHERE id = %s;", (worker.get("id"),))
         if not cur.fetchone():
             raise HTTPException(status_code=401, detail="Worker not found")
+    # Only allow photos on projects the worker is assigned to; unassigned
+    # project_ids silently become None so the upload still lands.
+    effective_project_id = project_id or None
+    if effective_project_id:
+        with db.cursor() as cur:
+            cur.execute("SELECT 1 FROM project_assignments WHERE project_id = %s AND crew_id = %s;",
+                        (effective_project_id, worker.get("id")))
+            if not cur.fetchone():
+                effective_project_id = None
     raw = await photo.read()
     if not raw:
         return RedirectResponse(url=request.headers.get("referer") or "/crew", status_code=status.HTTP_303_SEE_OTHER)
@@ -12832,7 +13048,7 @@ async def crew_photo_upload(request: Request, project_id: int = Form(0), caption
     with db.cursor() as cur:
         cur.execute(
             "INSERT INTO job_photos (project_id, crew_id, filename, caption, is_punchlist) VALUES (%s,%s,%s,%s,%s);",
-            (project_id or None, worker.get("id"), stored["key"], caption, punchlist.lower() in ("on", "true", "1")),
+            (effective_project_id, worker.get("id"), stored["key"], caption, punchlist.lower() in ("on", "true", "1")),
         )
         db.commit()
     return RedirectResponse(url=request.headers.get("referer") or "/crew/dashboard", status_code=status.HTTP_303_SEE_OTHER)
@@ -12840,10 +13056,14 @@ async def crew_photo_upload(request: Request, project_id: int = Form(0), caption
 
 @app.get("/crew/hours", response_class=HTMLResponse)
 async def crew_hours_page(request: Request, db=Depends(get_db)):
-    worker = require_worker(request)
+    worker = current_worker(request)
+    if not worker:
+        return RedirectResponse(url="/crew", status_code=status.HTTP_303_SEE_OTHER)
     with db.cursor() as cur:
         cur.execute("SELECT * FROM crew WHERE id = %s;", (worker.get("id"),))
         crew_row = cur.fetchone()
+        if not crew_row or not crew_row.get("is_active"):
+            return RedirectResponse(url="/crew", status_code=status.HTTP_303_SEE_OTHER)
         cur.execute("SELECT id, name FROM projects WHERE status IN ('planned','active');")
         jobs = cur.fetchall()
         cur.execute("""
@@ -12858,15 +13078,20 @@ async def crew_hours_page(request: Request, db=Depends(get_db)):
 
 @app.get("/crew/pay", response_class=HTMLResponse)
 async def crew_pay_page(request: Request, db=Depends(get_db)):
-    worker = require_worker(request)
+    worker = current_worker(request)
+    if not worker:
+        return RedirectResponse(url="/crew", status_code=status.HTTP_303_SEE_OTHER)
     with db.cursor() as cur:
         cur.execute("SELECT * FROM crew WHERE id = %s;", (worker.get("id"),))
         crew_row = cur.fetchone()
+        if not crew_row or not crew_row.get("is_active"):
+            return RedirectResponse(url="/crew", status_code=status.HTTP_303_SEE_OTHER)
         cur.execute("""
             SELECT pr.period_start, pr.period_end, pr.status AS run_status,
                    pl.hours, pl.overtime_hours, pl.gross_cents
             FROM payroll_lines pl JOIN payroll_runs pr ON pr.id = pl.run_id
-            WHERE pl.crew_id = %s ORDER BY pr.period_start DESC;
+            WHERE pl.crew_id = %s AND pr.status = 'paid'
+            ORDER BY pr.period_start DESC;
         """, (worker.get("id"),))
         pay_history = cur.fetchall()
     # Bank details come from the phone app form (crew_bank_accounts), not Stripe.
@@ -12886,7 +13111,7 @@ async def crew_pay_page(request: Request, db=Depends(get_db)):
 @app.post("/api/crew/direct-deposit")
 async def crew_direct_deposit(request: Request, db=Depends(get_db)):
     """Retire Stripe onboarding; crew bank details belong in the PNC phone app."""
-    require_worker(request)
+    require_worker(request, db=db)
     return RedirectResponse(
         url="/crew/pay?error=Use+the+phone+app+to+save+PNC+bank+details",
         status_code=status.HTTP_303_SEE_OTHER,
@@ -12896,7 +13121,7 @@ async def crew_direct_deposit(request: Request, db=Depends(get_db)):
 # --- Direct deposit (ACH from the company bank account, no Stripe) -----------
 @app.get("/api/crew/app/bank")
 async def worker_app_bank_get(request: Request, db=Depends(get_db)):
-    worker = require_worker(request)
+    worker = require_worker(request, db=db)
     if not direct_deposit.enabled():
         return JSONResponse(content={"status": "ok", "enabled": False, "on_file": False})
     direct_deposit.ensure_schema(db)
@@ -12905,7 +13130,7 @@ async def worker_app_bank_get(request: Request, db=Depends(get_db)):
 
 @app.post("/api/crew/app/bank")
 async def worker_app_bank_save(request: Request, db=Depends(get_db)):
-    worker = require_worker(request)
+    worker = require_worker(request, db=db)
     if not direct_deposit.enabled():
         return JSONResponse(status_code=503, content={"status": "error", "message": "Direct deposit isn't turned on yet. Ask the office."})
     body = await request.json()
@@ -12913,7 +13138,6 @@ async def worker_app_bank_save(request: Request, db=Depends(get_db)):
         return JSONResponse(status_code=400, content={"status": "error", "message": "Account numbers don't match."})
     # A stolen session must not be enough to redirect someone's pay: re-check
     # the PIN, with the same lockout as login.
-    login_throttle.ensure_schema(db)
     keys = (f"bank:{worker['id']}", f"ip:{_client_ip(request)}")
     if login_throttle.locked(db, *keys):
         return JSONResponse(status_code=429, content={"status": "error", "message": "Too many attempts. Try again later."})
@@ -12923,7 +13147,7 @@ async def worker_app_bank_save(request: Request, db=Depends(get_db)):
     if not crew_row or not _verify_pin((body.get("pin") or "").strip(), crew_row["pin_hash"]):
         login_throttle.fail(db, *keys)
         return JSONResponse(status_code=403, content={"status": "error", "message": "Wrong PIN. Enter your sign-in PIN to confirm."})
-    login_throttle.clear(db, keys[0])
+    login_throttle.clear(db, *keys)
     direct_deposit.ensure_schema(db)
     previous = direct_deposit.masked(db, worker["id"])
     res = direct_deposit.save(db, worker["id"], body.get("account_holder", ""), body.get("routing_number", ""),
@@ -12948,7 +13172,7 @@ async def worker_app_bank_save(request: Request, db=Depends(get_db)):
 
 @app.post("/api/crew/app/bank/remove")
 async def worker_app_bank_remove(request: Request, db=Depends(get_db)):
-    worker = require_worker(request)
+    worker = require_worker(request, db=db)
     direct_deposit.ensure_schema(db)
     direct_deposit.remove(db, worker["id"])
     return JSONResponse(content={"status": "ok", "on_file": False})
@@ -12994,7 +13218,6 @@ async def service_worker():
 async def worker_app_login(request: Request, phone: str = Form(...), pin: str = Form(...), db=Depends(get_db)):
     digits = "".join(c for c in (phone or "") if c.isdigit())
     keys = (f"phone:{digits}", f"ip:{_client_ip(request)}")
-    login_throttle.ensure_schema(db)
     wait = login_throttle.locked(db, *keys)
     if wait:
         return JSONResponse(status_code=429, content={"status": "error",
@@ -13008,10 +13231,11 @@ async def worker_app_login(request: Request, phone: str = Form(...), pin: str = 
         msg = (f"Too many attempts. Locked for {login_throttle.human(engaged)}." if engaged
                else "Invalid phone or PIN")
         return JSONResponse(status_code=429 if engaged else 401, content={"status": "error", "message": msg})
-    login_throttle.clear(db, keys[0])
+    login_throttle.clear(db, *keys)
     token = auth_service.issue_session("worker", row.get("id"), row.get("email") or "", row.get("name") or "")
     resp = JSONResponse(content={"status": "ok", "name": row["name"]})
-    resp.set_cookie(key=WORKER_COOKIE, value=token, httponly=True, samesite="lax", secure=_secure_cookies())
+    resp.set_cookie(key=WORKER_COOKIE, value=token, httponly=True, samesite="lax", secure=_secure_cookies(),
+                    max_age=auth_service.SESSION_TTL_SECONDS)
     return resp
 
 
@@ -13069,7 +13293,8 @@ async def worker_app_me(request: Request, db=Depends(get_db)):
         cur.execute("""
             SELECT pl.hours, pl.overtime_hours, pl.gross_cents, pr.period_start, pr.period_end, pr.status AS run_status
             FROM payroll_lines pl JOIN payroll_runs pr ON pr.id = pl.run_id
-            WHERE pl.crew_id = %s ORDER BY pr.period_start DESC LIMIT 12;
+            WHERE pl.crew_id = %s AND pr.status = 'paid'
+            ORDER BY pr.period_start DESC LIMIT 12;
         """, (worker.get("id"),))
         pay_rows = []
         for p in cur.fetchall():
@@ -13098,12 +13323,23 @@ async def worker_app_me(request: Request, db=Depends(get_db)):
 @app.post("/api/crew/app/clock")
 async def worker_app_clock(request: Request, project_id: int = Form(0), action: str = Form(...),
                            lat: str = Form(""), lng: str = Form(""), accuracy: str = Form(""), db=Depends(get_db)):
-    worker = require_worker(request)
+    worker = require_worker(request, db=db)
     _require_crew_feature(db, "timeclock")
     with db.cursor() as cur:
         cur.execute("SELECT id FROM crew WHERE id = %s AND is_active = TRUE;", (worker.get("id"),))
         if not cur.fetchone():
             return JSONResponse(status_code=401, content={"status": "error", "message": "Worker not found"})
+
+    # A worker can only clock in/out against a project they're assigned to.
+    # Silently drop the project_id for unassigned projects — the crew member
+    # can still clock in "unassigned" and the office can reassign later.
+    effective_project_id = project_id or None
+    if effective_project_id:
+        with db.cursor() as cur:
+            cur.execute("SELECT 1 FROM project_assignments WHERE project_id = %s AND crew_id = %s;",
+                        (effective_project_id, worker.get("id")))
+            if not cur.fetchone():
+                effective_project_id = None
 
     if action == "in":
         with db.cursor() as cur:
@@ -13113,7 +13349,7 @@ async def worker_app_clock(request: Request, project_id: int = Form(0), action: 
             cur.execute(
                 "INSERT INTO clock_events (crew_id, project_id, punch_in_at, punch_in_lat, punch_in_lng) "
                 "VALUES (%s,%s,NOW(),%s,%s) RETURNING id;",
-                (worker.get("id"), project_id or None, lat or None, lng or None),
+                (worker.get("id"), effective_project_id, lat or None, lng or None),
             )
             db.commit()
         return JSONResponse(content={"status": "ok"})
@@ -13131,18 +13367,28 @@ async def worker_app_clock(request: Request, project_id: int = Form(0), action: 
             db.commit()
             in_dt = ev["punch_in_at"]
             out_dt = datetime.now(APP_TZ)
+            # Timesheet date/time must be in local (ET) time, not UTC.
+            in_dt_local = in_dt.astimezone(APP_TZ) if in_dt.tzinfo else in_dt.replace(tzinfo=timezone.utc).astimezone(APP_TZ)
             hours = _punch_hours(in_dt, out_dt)
+            # A forgotten punch-out can blow the total past a reasonable shift.
+            # Cap at 24h so the timesheet stays honest and the owner notices.
+            if hours > 24.0:
+                print(f"⚠️ shift exceeded 24h for crew {worker.get('id')}: {hours:.2f}h (capped at 24.0)", flush=True)
+                hours = 24.0
             if hours > 0:
                 cur.execute(
                     "INSERT INTO timesheets (crew_id, project_id, work_date, start_time, end_time, hours, work_type, source, status) "
                     "VALUES (%s,%s,%s,%s,%s,%s,'regular','clock','submitted');",
-                    (worker.get("id"), ev["project_id"], in_dt.date(), in_dt.strftime("%H:%M"),
+                    (worker.get("id"), ev["project_id"], in_dt_local.date(), in_dt_local.strftime("%H:%M"),
                      out_dt.strftime("%H:%M"), hours),
                 )
                 db.commit()
             else:
+                # Flag too-short punches explicitly so the PWA can surface the
+                # message instead of silently treating it like a normal clock-out.
                 return JSONResponse(content={
                     "status": "ok",
+                    "too_short": True,
                     "message": "Punched out. That shift was too short to record, so no hours were added.",
                 })
         elif action == "update":
@@ -13206,14 +13452,16 @@ async def worker_app_photos(request: Request, project_id: int = 0, db=Depends(ge
     _require_crew_feature(db, "photos")
     with db.cursor() as cur:
         if project_id:
+            # A worker can only list photos for a project they are assigned to.
             cur.execute("""
                 SELECT jp.id, jp.project_id, p.name AS project_name, jp.crew_id, c.name AS crew_name,
                        jp.caption, jp.is_punchlist, jp.filename, jp.created_at
                 FROM job_photos jp
+                JOIN project_assignments pa ON pa.project_id = jp.project_id AND pa.crew_id = %s
                 LEFT JOIN projects p ON p.id = jp.project_id
                 LEFT JOIN crew c ON c.id = jp.crew_id
                 WHERE jp.project_id = %s ORDER BY jp.created_at DESC LIMIT 200;
-            """, (project_id,))
+            """, (worker.get("id"), project_id))
         else:
             cur.execute("""
                 SELECT jp.id, jp.project_id, p.name AS project_name, jp.crew_id, c.name AS crew_name,
@@ -13245,6 +13493,17 @@ async def worker_app_photos_upload(request: Request, project_id: int = Form(0), 
         cur.execute("SELECT id FROM crew WHERE id = %s;", (worker.get("id"),))
         if not cur.fetchone():
             raise HTTPException(status_code=401, detail="Worker not found")
+        # A worker may only upload photos for a project they are assigned to.
+        # If unassigned (or no project), silently drop the project_id so the
+        # photo lands in the unassigned bucket rather than another job's feed.
+        effective_project_id = project_id or None
+        if effective_project_id:
+            cur.execute(
+                "SELECT 1 FROM project_assignments WHERE project_id = %s AND crew_id = %s;",
+                (effective_project_id, worker.get("id")),
+            )
+            if not cur.fetchone():
+                effective_project_id = None
     raw = await photo.read()
     if not raw:
         raise HTTPException(status_code=400, detail="Empty file")
@@ -13257,7 +13516,7 @@ async def worker_app_photos_upload(request: Request, project_id: int = Form(0), 
     with db.cursor() as cur:
         cur.execute(
             "INSERT INTO job_photos (project_id, crew_id, filename, caption, is_punchlist) VALUES (%s,%s,%s,%s,%s);",
-            (project_id or None, worker.get("id"), stored["key"], caption, punchlist.lower() in ("on", "true", "1")),
+            (effective_project_id, worker.get("id"), stored["key"], caption, punchlist.lower() in ("on", "true", "1")),
         )
         db.commit()
     return JSONResponse(content={"status": "ok", "url": stored["url"],
@@ -15273,11 +15532,40 @@ def _portal_actor(request: Request):
     return auth_service.actor_from_token(request.cookies.get(portal_service.COOKIE))
 
 
+def _portal_token_iat(request: Request):
+    """When this session was issued, or 0 for legacy tokens without an iat."""
+    payload = auth_service.verify_token(request.cookies.get(portal_service.COOKIE))
+    if not payload:
+        return 0
+    return payload.get("iat") or 0
+
+
 def _require_portal_client(request: Request, db):
     actor = _portal_actor(request)
     if not actor or actor.get("role") != portal_service.ROLE:
         return None
-    return portal_service.client_by_id(db, actor.get("id"))
+    client = portal_service.client_by_id(db, actor.get("id"))
+    if not client:
+        return None
+    # Session revocation: if the client changed their password after this
+    # session was issued, the session is no longer valid. Tokens issued before
+    # the iat field existed (iat == 0) are allowed through once, so a live
+    # deploy does not log every customer out.
+    iat = _portal_token_iat(request)
+    pwc = client.get("password_changed_at")
+    if iat and pwc:
+        try:
+            import time as _time
+            from datetime import timezone as _tz
+            if getattr(pwc, "tzinfo", None) is None:
+                pwc_ts = pwc.replace(tzinfo=_tz.utc).timestamp()
+            else:
+                pwc_ts = pwc.timestamp()
+            if iat < pwc_ts:
+                return None
+        except Exception:
+            pass
+    return client
 
 
 @app.get("/portal/login", response_class=HTMLResponse)
@@ -15297,7 +15585,6 @@ async def portal_login_submit(request: Request, email: str = Form(""), password:
     email = portal_service.normalize_email(email)
     ip = request.client.host if request.client else ""
     keys = (f"portal:{email}", f"portal-ip:{ip}")
-    login_throttle.ensure_schema(db)
     wait = login_throttle.locked(db, *keys)
     if wait:
         return RedirectResponse(
@@ -15355,17 +15642,21 @@ async def portal_logout():
 
 
 @app.get("/portal", response_class=HTMLResponse)
-async def portal_home(request: Request, bid: int = 0, db=Depends(get_db)):
+async def portal_home(request: Request, bid: str = "", db=Depends(get_db)):
     client = _require_portal_client(request, db)
     if not client:
         return RedirectResponse(url="/portal/login", status_code=status.HTTP_303_SEE_OTHER)
     if client.get("must_change_password"):
         return RedirectResponse(url="/portal/account?first=1", status_code=status.HTTP_303_SEE_OTHER)
+    try:
+        bid_int = int(bid) if bid else 0
+    except (TypeError, ValueError):
+        return RedirectResponse(url="/portal", status_code=status.HTTP_303_SEE_OTHER)
     bids = portal_service.accessible_bids(db, client["id"], client["email"])
     selected = None
     data = None
     if bids:
-        selected = next((b for b in bids if int(b["id"]) == int(bid)), bids[0])
+        selected = next((b for b in bids if int(b["id"]) == int(bid_int)), bids[0])
         data = _decorate_portal_data(portal_service.portal_data(db, selected["id"], client["id"]))
     return templates.TemplateResponse(request=request, name="portal.html", context={
         "client": client, "bids": bids, "selected": selected, "data": data,
@@ -15521,9 +15812,12 @@ async def _deliver_portal_code(client: dict, code: str, purpose: str = "login") 
         f"If you did not ask for this, ignore this email — your password has not changed.\n\n"
         f"— {cfg['name']}\n")
     try:
-        await documents_service.send_email(
+        ok = await documents_service.send_email(
             {"SMTP_FROM": cfg["from"], "SMTP_NAME": cfg["name"]},
             client.get("email") or "", subject, body)
+        if not ok:
+            logger.warning("portal code email returned False for %s", client.get("email"))
+            return False, "We could not send the email. Call or text the office."
         return True, ""
     except Exception as e:
         logger.warning("portal code email failed for %s: %s", client.get("email"), e)
@@ -15577,7 +15871,6 @@ async def portal_resend_code(request: Request, db=Depends(get_db)):
     if not client:
         return RedirectResponse(url="/portal/login", status_code=status.HTTP_303_SEE_OTHER)
     keys = (f"portal-otp:{client['id']}", f"portal-otp-ip:{request.client.host if request.client else ''}")
-    login_throttle.ensure_schema(db)
     wait = login_throttle.locked(db, *keys)
     if wait:
         return RedirectResponse(
@@ -15607,7 +15900,6 @@ async def portal_forgot_submit(request: Request, email: str = Form(""), db=Depen
     email = portal_service.normalize_email(email)
     ip = request.client.host if request.client else ""
     keys = (f"portal-forgot:{email}", f"portal-forgot-ip:{ip}")
-    login_throttle.ensure_schema(db)
     if login_throttle.locked(db, *keys):
         return RedirectResponse(
             url="/portal/forgot?error=" + urllib.parse.quote(
@@ -15616,15 +15908,15 @@ async def portal_forgot_submit(request: Request, email: str = Form(""), db=Depen
     login_throttle.fail(db, *keys)
     client = portal_service.client_by_email(db, email)
     # The page says the same thing whether or not the address exists: a public
-    # form must not double as a customer list. Only a delivery failure differs,
-    # because a real client needs to know to call instead.
+    # form must not double as a customer list. A delivery failure is also
+    # reported as success to the user — a real client who does not receive the
+    # code can call the office, but an enumeration oracle helps an attacker.
     if client:
         code = auth_service.generate_otp()
         portal_service.store_otp(db, int(client["id"]), email, code, portal_service.OTP_RESET)
         ok, err = await _deliver_portal_code(client, code, portal_service.OTP_RESET)
         if not ok:
-            return RedirectResponse(url="/portal/forgot?error=" + urllib.parse.quote(err),
-                                    status_code=status.HTTP_303_SEE_OTHER)
+            logger.warning("forgot-password email failed for %s: %s", email, err)
     return RedirectResponse(
         url="/portal/forgot?sent=1&email=" + urllib.parse.quote(email),
         status_code=status.HTTP_303_SEE_OTHER)
@@ -15672,6 +15964,8 @@ async def portal_account_page(request: Request, db=Depends(get_db)):
     client = _require_portal_client(request, db)
     if not client:
         return RedirectResponse(url="/portal/login", status_code=status.HTTP_303_SEE_OTHER)
+    if client.get("must_change_password"):
+        return RedirectResponse(url="/portal/account?first=1", status_code=status.HTTP_303_SEE_OTHER)
     return templates.TemplateResponse(request=request, name="portal_account.html", context={
         "client": client,
         "first": request.query_params.get("first", ""),
@@ -15754,9 +16048,36 @@ def _apply_card_payment(db, *, bid_id: int, invoice_id: int, payment_id: str,
     inv_amount = float(inv.get("amount") or 0)
     already = float(inv.get("collected") or 0)
     pay = min(amount_cents / 100.0, max(0.0, inv_amount - already))
-    new_collected = round(min(inv_amount, already + pay), 2)
-    status = "paid" if new_collected >= inv_amount - 0.005 else "partial"
-    bid_costing.set_invoice_status(db, invoice_id, status, _BID_COMPANY, new_collected)
+    inv_status = "paid" if (already + pay) >= inv_amount - 0.005 else "partial"
+    try:
+        # Pass the delta (pay), not the cumulative total. set_invoice_status
+        # ADDs the value to the existing collected, so passing the cumulative
+        # would double-count everything previously collected.
+        bid_costing.set_invoice_status(db, invoice_id, inv_status, _BID_COMPANY, pay)
+    except Exception as exc:
+        # The payment row is already committed (record_payment does its own
+        # commit), so the money is recorded but the invoice still shows the
+        # old collected amount. Surface to the owner via the pending ledger
+        # retry path so it is visible, not silent.
+        logger.error("invoice status update failed for payment %s on invoice %s: %s — "
+                     "payment is recorded but invoice needs manual reconciliation",
+                     payment_id, invoice_id, exc)
+        try:
+            ledger_sync.ensure_schema(db)
+            with db.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO ledger_pending (kind, ref_id, detail, last_error) "
+                    "VALUES (%s, %s, %s, %s) "
+                    "ON CONFLICT (company, kind, ref_id) WHERE resolved_at IS NULL DO NOTHING;",
+                    ("card_payment_invoice_update", str(invoice_id),
+                     json.dumps({"payment_id": payment_id, "bid_id": bid_id,
+                                 "invoice_id": invoice_id, "status": inv_status,
+                                 "collected": new_collected}),
+                     str(exc)[:500]))
+            db.commit()
+        except Exception as pend_exc:
+            logger.warning("could not queue pending invoice update for %s: %s",
+                           invoice_id, pend_exc)
 
     try:
         ledger_sync.ensure_schema(db)
@@ -15775,7 +16096,7 @@ def _apply_card_payment(db, *, bid_id: int, invoice_id: int, payment_id: str,
         logger.warning("zoho books payment push failed for invoice %s: %s", invoice_id, exc)
 
     return {"ok": True, "duplicate": False, "paid": round(pay, 2),
-            "invoice_status": status, "collected": new_collected}
+            "invoice_status": inv_status, "collected": new_collected}
 
 
 async def _notify_card_payment(db, bid_id: int, invoice_id: int, amount: float,
@@ -15835,12 +16156,18 @@ async def portal_pay_page(bid_id: int, invoice_id: int, request: Request,
     client = _require_portal_client(request, db)
     if not client:
         return RedirectResponse(url="/portal/login", status_code=status.HTTP_303_SEE_OTHER)
+    if client.get("must_change_password"):
+        return RedirectResponse(url="/portal/account?first=1", status_code=status.HTTP_303_SEE_OTHER)
     inv = portal_service.invoice_for_client(
         db, int(client["id"]), client["email"], bid_id, invoice_id)
     if not inv:
         raise HTTPException(status_code=404, detail="Invoice not found")
     try:
         pay = deposit_instructions.ach_details(lambda k: _get_setting(db, k))
+        # The full decrypted account number is never needed in the template —
+        # only the last 4 digits are shown. Strip the full number so it cannot
+        # leak if the template accidentally renders it.
+        pay.pop("account", None)
     except deposit_instructions.NotConfigured as exc:
         logger.warning("[portal pay] payment details unavailable: %s", exc)
         pay = {"zelle": "", "zelle_display": "", "account": "", "routing": "",
@@ -15858,7 +16185,16 @@ async def portal_pay_page(bid_id: int, invoice_id: int, request: Request,
         "zoho_api_key": zoho_payments.api_key(_setting_getter(db)),
         "zoho_domain": zoho_payments.domain(_setting_getter(db)),
         "paid": request.query_params.get("paid", ""),
+        "paid_verified": bool(
+            request.query_params.get("paid")
+            and portal_service.payment_by_confirmation(
+                db, request.query_params.get("confirmation", ""))
+        ),
         "claimed": request.query_params.get("claimed", ""),
+        "claimed_verified": bool(
+            request.query_params.get("claimed")
+            and request.query_params.get("confirmation")
+        ),
         "confirmation": request.query_params.get("confirmation", ""),
         "error": request.query_params.get("error", ""),
     })
@@ -16495,7 +16831,7 @@ async def _deliver_crew_code(row: dict, code: str) -> tuple[bool, str]:
     if not to:
         return False, "There is no email on file for you. Call the office to reset your PIN."
     if not (cfg.get("from") or "").strip():
-        print(f"[crew OTP] email not configured — code for {to}: {code}", flush=True)
+        print(f"[crew OTP] email not configured — code for {to}: ***REDACTED***", flush=True)
         return False, "Email delivery is not set up. Call the office."
     name = (row.get("name") or "there").split()[0]
     body = (
@@ -16571,8 +16907,8 @@ async def crew_forgot_page(request: Request):
 @app.post("/crew/forgot")
 async def crew_forgot_submit(request: Request, identifier: str = Form(""), db=Depends(get_db)):
     ident = (identifier or "").strip()
-    keys = (f"crew-forgot:{ident.lower()}", f"crew-forgot-ip:{request.client.host if request.client else ''}")
-    login_throttle.ensure_schema(db)
+    # Use _client_ip to respect x-forwarded-for/cf-connecting-ip behind proxies.
+    keys = (f"crew-forgot:{ident.lower()}", f"crew-forgot-ip:{_client_ip(request)}")
     if login_throttle.locked(db, *keys):
         return RedirectResponse(
             url="/crew/forgot?error=" + urllib.parse.quote("Too many requests. Try again later."),
@@ -16627,29 +16963,3 @@ async def crew_reset_submit(request: Request, identifier: str = Form(""), code: 
         "PIN changed. Sign in with your new PIN."), status_code=status.HTTP_303_SEE_OTHER)
 
 
-@app.post("/api/crew/app/pin")
-async def crew_app_pin(request: Request, db=Depends(get_db)):
-    """Change the PIN from inside the installable app."""
-    worker = require_worker(request)
-    body = await request.json()
-    current = (body.get("current_pin") or "").strip()
-    pin = (body.get("new_pin") or "").strip()
-    confirm = (body.get("confirm_pin") or pin).strip()
-    with db.cursor() as cur:
-        cur.execute("SELECT id, pin_hash FROM crew WHERE id = %s AND is_active = TRUE;",
-                    (worker.get("id"),))
-        row = cur.fetchone()
-    if not row or not _verify_pin(current, row.get("pin_hash") or ""):
-        return JSONResponse(status_code=403, content={"status": "error",
-                            "message": "Current PIN is incorrect."})
-    if pin != confirm:
-        return JSONResponse(status_code=400, content={"status": "error",
-                            "message": "The new PINs do not match."})
-    if not _valid_pin(pin):
-        return JSONResponse(status_code=400, content={"status": "error",
-                            "message": "PIN must be 4-6 digits."})
-    with db.cursor() as cur:
-        cur.execute("UPDATE crew SET pin_hash = %s WHERE id = %s;",
-                    (_hash_pin(pin), int(row["id"])))
-        db.commit()
-    return JSONResponse(content={"status": "ok", "message": "PIN updated."})

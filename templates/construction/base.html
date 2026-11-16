@@ -38,12 +38,8 @@
     <link rel="icon" href="/static/construction_favicon.svg" type="image/svg+xml">
     {# Static Tailwind build (see tailwind.config.js). Replaces the Play CDN,
        which shipped ~400 KB of render-blocking JS and compiled the stylesheet
-       in the browser on every page view. Rebuild with `npm run css`.
-       
-       NOTE: npm is broken on this machine (dyld/simdutf), so we use the CDN
-       until Node is restored. The CDN compiles Tailwind in-browser — adds
-       ~400ms to first page load but guarantees every class is styled. #}
-    <script src="https://cdn.tailwindcss.com"></script>
+       in the browser on every page view. Rebuild with `npm run css`. #}
+    <link rel="stylesheet" href="/static/css/tailwind.css">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
@@ -246,22 +242,32 @@
     {# The public look (seasonal colours, fonts, decor) is for homeowners. The
        owner's pages stay light, Inter, undecorated: a back office themed like a
        Halloween landing page is why it read as a mess. #}
-    {% if not owner_view %}{{ site_theme_state().css | safe }}{% endif %}
+    {% if not owner_view and not request.path.startswith('/portal') %}{{ site_theme_state().css | safe }}{% endif %}
 </head>
 <body class="bg-slate-50 text-slate-900 antialiased selection:bg-indigo-500 selection:text-white">
     <!-- Header Navigation -->
+    {% if not request.path.startswith('/portal') %}
     {% include "_header.html" %}
+    {% endif %}
 
     <main>
         {% block content %}{% endblock %}
     </main>
 
     <!-- Footer -->
+    {% set is_portal = request.path.startswith('/portal') %}
     {% if owner_view %}
     <footer class="bg-slate-900 text-slate-500 py-5 border-t border-slate-800 text-xs">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-wrap items-center justify-between gap-2">
             <span>{{ co.name }} · owner portal</span>
             <span><a href="/" class="hover:text-slate-300">Public site</a> · <a href="/settings" class="hover:text-slate-300">Settings</a> · <a href="/api/auth/logout" class="hover:text-slate-300">Log out</a></span>
+        </div>
+    </footer>
+    {% elif is_portal %}
+    <footer class="bg-slate-50 text-slate-400 py-6 border-t border-slate-200 text-xs">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-wrap items-center justify-between gap-2">
+            <span>{{ co.name }} · client portal</span>
+            <span><a href="tel:{{ co.phone_e164 }}" class="hover:text-indigo-600 font-semibold">{{ co.phone }}</a> · <a href="/portal/login" class="hover:text-indigo-600">Sign in</a></span>
         </div>
     </footer>
     {% else %}
@@ -350,7 +356,7 @@
     </script>
     {% block scripts %}{% endblock %}
     {% include "_addr_autocomplete.html" %}
-    {% if not owner_view %}
+    {% if not owner_view and not request.path.startswith('/portal') %}
     {# Sticky call/text bar for mobile — replaces the old chat widget.
        Same conversion path (call us), zero API cost, always visible. #}
     <a href="tel:{{ co.phone_e164 }}" class="lg:hidden fixed bottom-4 right-4 z-50 flex items-center gap-2 px-5 py-3.5 rounded-full bg-emerald-600 text-white font-bold text-sm shadow-lg shadow-emerald-900/30 hover:bg-emerald-500 transition-all active:scale-95" aria-label="Call {{ co.phone }}">

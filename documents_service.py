@@ -1054,7 +1054,8 @@ async def send_email(cfg: dict, to: str, subject: str, body: str, attachment: by
         try:
             import socket
 
-            infos = await asyncio.getaddrinfo(host, port, family=socket.AF_INET, type=socket.SOCK_STREAM)
+            loop = asyncio.get_event_loop()
+            infos = await loop.getaddrinfo(host, port, family=socket.AF_INET, type=socket.SOCK_STREAM)
             ipv4_addresses = list(dict.fromkeys(i[4][0] for i in infos))
         except Exception:
             pass

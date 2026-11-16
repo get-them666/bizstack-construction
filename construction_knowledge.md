@@ -390,6 +390,14 @@ records.
 - **Office:** `add_task`, `list_tasks`, `complete_task`, `search_comms`, `calculate`,
   `web_search`, `schedule_event`, `cancel_event`, `list_calendar_events`,
   `maps_geocode`, `maps_directions`
+- **People:** `find_people(query)` — search crew, customers and leads by name, phone or
+  email. Read-only; no side effects.
+- **Voice:** `make_outbound_call(to, notes)` — place an outbound AI phone call to a number
+  right now. Only appropriate when the owner explicitly asks the bot to call someone back
+  or reach out by phone — never auto-dial a residential lead without the owner's say-so.
+  The call is answered by the same voice assistant that handles inbound calls. `to` is E.164;
+  `notes` is optional context for the call.
+- **Inventory:** `get_inventory`, `update_inventory`, `reorder_report`, `navigation_guide`
 - **SMS:** `send_sms_message`, plus SMS/voice from leads.
 - **Email:** `send_email_message(to, subject, body)` — sends a real email from the business
   address. **One initiated email per person per day.** If that person replies, the thread is

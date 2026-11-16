@@ -94,6 +94,13 @@ def ensure_schema(conn) -> None:
         cur.execute("ALTER TABLE portal_messages ALTER COLUMN client_id DROP NOT NULL;")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_portal_access_client ON portal_project_access(client_id);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_portal_messages_bid ON portal_messages(bid_id, created_at);")
+        # Owner-uploaded documents and photos can be marked internal (not
+        # visible to the client portal). The column defaults TRUE so existing
+        # rows stay visible; the owner toggles them off when needed.
+        cur.execute("ALTER TABLE bid_documents ADD COLUMN IF NOT EXISTS "
+                    "client_visible BOOLEAN NOT NULL DEFAULT TRUE;")
+        cur.execute("ALTER TABLE job_photos ADD COLUMN IF NOT EXISTS "
+                    "client_visible BOOLEAN NOT NULL DEFAULT TRUE;")
         # One row per card payment, keyed by Zoho's payment id. The unique key
         # is what makes the browser callback, a page refresh and a webhook
         # converge on one recorded payment instead of three.
@@ -337,8 +344,10 @@ def verify_otp_code(conn, client_id: int, purpose: str, code: str) -> tuple[bool
         if int(row.get("attempts") or 0) >= MAX_OTP_ATTEMPTS:
             return False, "Too many attempts. Request a new code."
         if not auth_service.verify_otp((code or "").strip(), row.get("code_hash") or ""):
-            cur.execute("UPDATE login_otps SET attempts = attempts + 1 WHERE id = %s;",
-                        (row["id"],))
+            cur.execute(
+                "UPDATE login_otps SET attempts = attempts + 1 "
+                "WHERE id = %s AND attempts < %s RETURNING attempts;",
+                (row["id"], MAX_OTP_ATTEMPTS))
             conn.commit()
             return False, "That code is not correct."
         cur.execute("UPDATE login_otps SET consumed = TRUE WHERE id = %s;", (row["id"],))
@@ -419,7 +428,7 @@ def portal_data(conn, bid_id: int, client_id: int) -> dict:
         cur.execute("""
             SELECT id, filename, key, url, content_type, bytes, document_type, uploaded_at
             FROM bid_documents
-            WHERE bid_id = %s AND superseded_at IS NULL
+            WHERE bid_id = %s AND superseded_at IS NULL AND client_visible = TRUE
             ORDER BY uploaded_at DESC NULLS LAST, id DESC;
         """, (int(bid_id),))
         documents = cur.fetchall()
@@ -428,7 +437,7 @@ def portal_data(conn, bid_id: int, client_id: int) -> dict:
         if project:
             cur.execute("""
                 SELECT id, filename, caption, uploaded_at
-                FROM job_photos WHERE project_id = %s
+                FROM job_photos WHERE project_id = %s AND client_visible = TRUE
                 ORDER BY uploaded_at DESC NULLS LAST, id DESC;
             """, (project["id"],))
             photos = cur.fetchall()
@@ -544,7 +553,7 @@ def amount_due(invoice: dict) -> float:
 def open_invoices(invoices: list) -> list:
     """Invoices a client can still pay, oldest first."""
     return [i for i in (invoices or [])
-            if str(i.get("status") or "").lower() not in ("paid", "void")
+            if str(i.get("status") or "").lower() not in ("paid", "void", "draft")
             and amount_due(i) > 0]
 
 
@@ -577,6 +586,20 @@ def existing_payment(conn, payment_id: str):
         cur.execute("SELECT * FROM portal_payments WHERE payment_id = %s;",
                     ((payment_id or "").strip(),))
         return cur.fetchone()
+
+
+def payment_by_confirmation(conn, confirmation: str):
+    """Look up a portal_payments row whose derived confirmation matches."""
+    conf = (confirmation or "").strip().upper()
+    if not conf or not conf.startswith("PAY-"):
+        return None
+    with conn.cursor() as cur:
+        cur.execute("SELECT payment_id FROM portal_payments ORDER BY created_at DESC LIMIT 200;")
+        for row in cur.fetchall():
+            if confirmation_number(row["payment_id"]) == conf:
+                cur.execute("SELECT * FROM portal_payments WHERE payment_id = %s;", (row["payment_id"],))
+                return cur.fetchone()
+    return None
 
 
 def record_payment(conn, *, bid_id: int, invoice_id: int, payment_id: str,
@@ -622,7 +645,7 @@ def confirmation_number(payment_id: str) -> str:
 
 def record_claim(conn, *, bid_id: int, invoice_id: int, method: str,
                  amount_cents: int) -> dict:
-    ref = "SENT-" + secrets.token_hex(3).upper()
+    ref = "SENT-" + secrets.token_hex(6).upper()
     with conn.cursor() as cur:
         cur.execute("""
             INSERT INTO portal_payment_claims

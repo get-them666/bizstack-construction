@@ -411,6 +411,9 @@ def build_calendar_tools(db):
     ) -> dict:
         """Create a calendar event (walkthrough, crew shift, training)."""
         gc = _impl()
+        ident, err = _guard()
+        if err:
+            return err
         if not summary.strip():
             return {"ok": False, "error": "The event needs a title."}
         start_dt = _parse_dt(start, None)

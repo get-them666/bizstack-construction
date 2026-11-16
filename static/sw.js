@@ -1,6 +1,5 @@
-const CACHE = "buildstack-crew-v13";
+const CACHE = "buildstack-crew-v14";
 const SHELL = [
-  "/app",
   "/manifest.webmanifest",
   "/static/css/tailwind.css",
   "/static/icons/icon-192.png",
@@ -10,13 +9,10 @@ const SHELL = [
   "https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"
 ];
 
-// Crew pages cached for offline use (app shell).
-const CREW_PAGES = [
-  "/crew/dashboard",
-  "/crew/hours",
-  "/crew/pay",
-  "/crew"
-];
+// Authenticated pages are deliberately NOT pre-cached -- crew routes
+// (/crew, /crew/dashboard, /crew/hours, /crew/pay) depend on a live session
+// and must never be served from cache, especially after logout.
+const CREW_PAGES = [];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -50,11 +46,15 @@ self.addEventListener("fetch", (event) => {
   }
 
   // App shell: network-first (fresh always wins) with cached fallback for offline.
+  // HTML document requests are NOT cached -- authenticated crew pages must not
+  // survive logout or get served stale. Static subresources (CSS, JS, icons,
+  // fonts, manifest) still get a cached fallback.
   // self.location (not bare `location`, which is undefined in a service worker).
+  const wantsHtml = (request.headers.get("accept") || "").includes("text/html");
   if (url.origin === self.location.origin) {
     event.respondWith(
       fetch(request, { cache: "no-cache" }).then((res) => {
-        if (res && res.ok && res.type === "basic") {
+        if (res && res.ok && res.type === "basic" && !wantsHtml) {
           const copy = res.clone();
           caches.open(CACHE).then((cache) => cache.put(request, copy));
         }

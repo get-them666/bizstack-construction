@@ -12,13 +12,13 @@
     <a href="/portal#invoices" class="px-4 py-2 rounded-xl border border-slate-200 text-sm font-bold text-slate-600 hover:bg-slate-50">Back to portal</a>
   </div>
 
-  {% if paid %}
+  {% if paid_verified %}
   <div class="mt-5 rounded-2xl bg-emerald-50 border border-emerald-200 p-5">
     <p class="text-lg font-black text-emerald-800">✓ Payment received</p>
     {% if confirmation %}<p class="mt-1 text-sm text-emerald-900">Confirmation number: <b class="font-mono">{{ confirmation }}</b></p>{% endif %}
     <p class="mt-1 text-sm text-emerald-800">Thank you. A receipt is on its way to your email and the office has been notified.</p>
   </div>
-  {% elif claimed %}
+  {% elif claimed_verified %}
   <div class="mt-5 rounded-2xl bg-amber-50 border border-amber-200 p-5">
     <p class="text-lg font-black text-amber-900">Payment notice received</p>
     {% if confirmation %}<p class="mt-1 text-sm text-amber-900">Confirmation number: <b class="font-mono">{{ confirmation }}</b></p>{% endif %}
@@ -73,9 +73,8 @@
       {% if pay.ach_ready %}
       <div class="rounded-xl bg-slate-50 border border-slate-200 p-3 text-xs">
         <p class="font-bold text-slate-800">Bank transfer (ACH)</p>
-        <p>Routing: <span class="font-mono">{{ pay.routing }}</span></p>
         <p>Account: <span class="font-mono">••••{{ pay.account_last4 }}</span></p>
-        <p class="mt-1 text-slate-500">The full account number is read to you by the office. Put <span class="font-mono">{{ reference }}</span> in the memo.</p>
+        <p class="mt-1 text-slate-500">The routing number and full account are supplied by the office when needed. Put <span class="font-mono">{{ reference }}</span> in the memo.</p>
       </div>
       {% endif %}
     </div>
@@ -99,7 +98,7 @@
 {% endblock %}
 
 {% block scripts %}
-{% if zoho_widget and zoho_ready and due > 0 and not paid %}
+{% if zoho_widget and zoho_ready and due > 0 and not paid_verified %}
 <script src="https://static.zohocdn.com/zpay/zpay-js/v1/zpayments.js"></script>
 <script>
 (function () {
@@ -143,7 +142,7 @@
           payments_session_id: session.session_id,
           currency_symbol: "$",
           business: {{ co.name | tojson }},
-          description: "Invoice {{ reference }} — " + {{ (bid.name or 'Project') | tojson }},
+          description: "Invoice " + {{ reference | tojson }} + " — " + {{ (bid.name or 'Project') | tojson }},
           invoice_number: {{ reference | tojson }},
           address: {
             name: {{ (client.name or '') | tojson }},

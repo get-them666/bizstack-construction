@@ -105,10 +105,13 @@ def sync_deposit(conn, payment_id: int, company: str = "construction") -> Sync:
         return s
     _guard(conn, "deposit", payment_id, f"deposit {pay.get('lead_name') or pay.get('lead_id')}",
            lambda: bridge.post_deposit(conn, {
-               # A payment with no lead (cash recorded without one) used to post
-               # under source_id "None", so a second such deposit was silently
-               # treated as a repost. The payment id is unique either way.
-               "id": pay.get("lead_id") or f"payment-{payment_id}",
+               # The ledger's idempotency key is (source_type, source_id), and
+               # the sync guard here uses ``payment_id``. The bridge used to
+               # post under the lead id instead, so a second deposit on the
+               # same lead was silently treated as "already posted" even though
+               # it was a different payment row. Use the payment id in both
+               # places so the guard and the ledger agree.
+               "id": f"payment-{payment_id}",
                "name": pay.get("lead_name")},
                amount / 100.0, company, when=pay.get("created_at")), s)
     return s
@@ -174,7 +177,15 @@ def sync_invoice(conn, invoice_id: int, company: str = "construction") -> Sync:
 
 
 def sync_invoice_status(conn, invoice_id: int, company: str = "construction") -> Sync:
-    """Marking an invoice paid is what actually relieves the receivable."""
+    """Marking an invoice paid is what actually relieves the receivable.
+
+    Voids unwind whatever was previously posted for this invoice (a reversal
+    entry), because a voided invoice can never collect money and the cash
+    received must come back off the books. For non-void invoices the posted
+    amount is the DELTA since the last payment, not the running total -- a
+    second mark-paid on a partially-paid invoice used to re-post the whole
+    ``collected`` figure and double-count every dollar that had already hit.
+    """
     s = Sync()
     with conn.cursor() as cur:
         cur.execute("SELECT i.*, b.id AS bid_id, b.name AS bid_name "
@@ -185,8 +196,51 @@ def sync_invoice_status(conn, invoice_id: int, company: str = "construction") ->
         s.skipped += 1
         return s
     bid = {"id": inv["bid_id"], "name": inv["bid_name"]}
+
+    # Void branch: unwind prior payment(s) and post nothing new.
+    if (inv.get("status") or "").lower() == "void":
+        _reverse_prior_payments(conn, invoice_id, company, s)
+        return s
+
     collected = float(inv.get("collected") or 0)
-    if collected > 0:
+    if collected <= 0:
+        return s
+
+    # Determine the delta since the last payment posted for this invoice.
+    # The legacy key was "{invoice_id}:{collected:.2f}" with the cumulative
+    # total, so every re-mark added the total a second time. Now we look up
+    # the most recent prior payment amount and post only the new money.
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT l.debit_cents FROM ledger_lines l "
+                "JOIN ledger_entries e ON e.id = l.entry_id "
+                "WHERE e.company = %s AND e.source_type = 'payment' "
+                "  AND e.source_id LIKE %s "
+                "ORDER BY e.created_at DESC, l.id DESC LIMIT 1",
+                (company, f"{invoice_id}:%"))
+            prev_row = cur.fetchone()
+        prev_total = (float(prev_row["debit_cents"]) / 100.0) if prev_row else 0.0
+        delta = round(collected - prev_total, 2)
+        if delta <= 0:
+            # Already posted (collected unchanged since last sync) or reversed.
+            s.skipped += 1
+            return s
+        _guard(conn, "payment", f"{invoice_id}:{delta:.2f}",
+               f"payment on {inv.get('invoice_number')}",
+               lambda: bridge.post_payment(conn, bid, {
+                   "id": f"{invoice_id}:{delta:.2f}",
+                   "amount": delta,
+                   "date": inv.get("issued_date"),
+                   "method": "ach"}, company), s)
+    except Exception as e:
+        # Fall back to the legacy cumulative post so a ledger lookup failure
+        # never silently drops real cash. Log and continue.
+        try:
+            print(f"[ledger_sync] payment-delta fallback for invoice {invoice_id}: {e}",
+                  flush=True)
+        except Exception:
+            pass
         _guard(conn, "payment", f"{invoice_id}:{collected:.2f}",
                f"payment on {inv.get('invoice_number')}",
                lambda: bridge.post_payment(conn, bid, {
@@ -197,8 +251,75 @@ def sync_invoice_status(conn, invoice_id: int, company: str = "construction") ->
     return s
 
 
+def _reverse_prior_payments(conn, invoice_id: int, company: str, s: Sync) -> None:
+    """Reverse any previously-posted payment entries for a now-voided invoice.
+
+    A void means the invoice can never collect, so whatever cash was received
+    against it must come back off the books. Each distinct payment entry (keyed
+    by its own source_id) gets its own reversal so the audit trail stays
+    append-only; the original entries are left intact per ledger rule #4.
+    """
+    if not ledger._table_exists(conn, "ledger_entries"):
+        return
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT id, source_id FROM ledger_entries "
+            "WHERE company = %s AND source_type = 'payment' "
+            "  AND source_id LIKE %s "
+            "ORDER BY created_at",
+            (company, f"{invoice_id}:%"))
+        prior = cur.fetchall()
+    for entry in prior:
+        # Skip anything that was already reversed by a prior void.
+        reversal_key = f"reverse:{entry['source_id']}"
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT id FROM ledger_entries "
+                    "WHERE company = %s AND source_type = 'payment_void' "
+                    "  AND source_id = %s",
+                    (company, reversal_key))
+                if cur.fetchone():
+                    s.skipped += 1
+                    continue
+            res = ledger.reverse_entry(
+                conn, entry["id"],
+                memo=f"Void of invoice {invoice_id}",
+                company=company)
+            # Re-tag the reversal entry so it is distinct from the original
+            # and so a second void does not re-reverse it.
+            if res and res.get("posted"):
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE ledger_entries SET source_type = 'payment_void', "
+                        "source_id = %s WHERE id = %s AND company = %s",
+                        (reversal_key, res["entry_id"], company))
+                conn.commit()
+                s.posted += 1
+            else:
+                s.skipped += 1
+        except Exception as e:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            s.errors.append(f"void reversal {entry['id']}: {e}"[:200])
+            s.queued += 1
+
+
 def sync_cost_line(conn, cost_line_id: int, company: str = "construction") -> Sync:
-    """An incurred direct cost is an expense and a payable."""
+    """An incurred direct cost is an expense and a payable.
+
+    Idempotency keys on the cost-line id AND its amount, so editing a line
+    (changing the actual) does not silently drop the update as "already
+    posted". The old entry is reversed and a fresh one takes its place -- the
+    books stay append-only and the new amount wins.
+
+    Delete and restore are handled by callers: the delete path in
+    construction_main reverses the prior entry via :func:`reverse_cost_line`,
+    and restore re-runs this function which posts a new entry with a fresh
+    amount-bearing key.
+    """
     s = Sync()
     with conn.cursor() as cur:
         cur.execute("SELECT c.*, b.id AS bid_id, b.name AS bid_name "
@@ -219,9 +340,83 @@ def sync_cost_line(conn, cost_line_id: int, company: str = "construction") -> Sy
     if category == "labor" or not incurred:
         s.skipped += 1
         return s
+    amount = round(float(cl.get("actual") or 0), 2)
     bid = {"id": cl["bid_id"], "name": cl["bid_name"]}
-    _guard(conn, "cost", cost_line_id, cl.get("description"),
-           lambda: bridge.post_cost_line(conn, bid, cl, company), s)
+    new_key = f"{cost_line_id}:{amount:.2f}"
+
+    # If a prior post exists for this cost line with a DIFFERENT amount,
+    # reverse it first so the books reflect the updated figure. A matching
+    # key means it was already posted correctly -- skip.
+    if ledger._table_exists(conn, "ledger_entries"):
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT id, source_id FROM ledger_entries "
+                    "WHERE company = %s AND source_type = 'cost' "
+                    "  AND source_id LIKE %s "
+                    "ORDER BY created_at",
+                    (company, f"{cost_line_id}:%"))
+                prior = cur.fetchall()
+            for entry in prior:
+                if entry["source_id"] == new_key:
+                    # Same amount already posted; idempotent no-op.
+                    s.skipped += 1
+                    return s
+                # Different amount (or legacy bare-id key) -> reverse it.
+                try:
+                    ledger.reverse_entry(
+                        conn, entry["id"],
+                        memo=f"Cost line {cost_line_id} updated",
+                        company=company)
+                except Exception as e:
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        pass
+                    s.errors.append(f"cost reversal {entry['id']}: {e}"[:200])
+        except Exception as e:
+            s.errors.append(f"cost prior-lookup {cost_line_id}: {e}"[:200])
+
+    _guard(conn, "cost", new_key, cl.get("description"),
+           lambda: bridge.post_cost_line(conn, bid, {**cl, "id": new_key}, company), s)
+    return s
+
+
+def reverse_cost_line(conn, cost_line_id: int, company: str = "construction") -> Sync:
+    """Reverse every posted entry for a (now-deleted) cost line.
+
+    Called from the bid card's delete path. The row still exists with
+    ``removed_at`` set, so :func:`sync_cost_line` would silently skip it; this
+    function walks the ledger directly and reverses each entry found.
+    """
+    s = Sync()
+    if not ledger._table_exists(conn, "ledger_entries"):
+        return s
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT id FROM ledger_entries "
+            "WHERE company = %s AND source_type = 'cost' "
+            "  AND source_id LIKE %s "
+            "ORDER BY created_at",
+            (company, f"{cost_line_id}:%"))
+        prior = cur.fetchall()
+    for entry in prior:
+        try:
+            res = ledger.reverse_entry(
+                conn, entry["id"],
+                memo=f"Cost line {cost_line_id} removed",
+                company=company)
+            if res and res.get("posted"):
+                s.posted += 1
+            else:
+                s.skipped += 1
+        except Exception as e:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            s.errors.append(f"cost delete reversal {entry['id']}: {e}"[:200])
+            s.queued += 1
     return s
 
 
@@ -388,6 +583,8 @@ def retry_all(conn, company: str = "construction") -> Sync:
             _merge(total, sync_payroll_paid(conn, int(ref), company))
         elif kind == "payroll_accrual":
             _merge(total, sync_payroll_accrual(conn, int(ref), company))
+        elif kind == "deposit":
+            _merge(total, sync_deposit(conn, int(ref), company))
     return total
 
 

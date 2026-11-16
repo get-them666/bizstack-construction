@@ -1,15 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <!-- Google tag (gtag.js) -->
-    <script async src="https://www.googletagmanager.com/gtag/js?id=G-744XSDL07S"></script>
-    <script>
-      window.dataLayer = window.dataLayer || [];
-      function gtag(){dataLayer.push(arguments);}
-      gtag('js', new Date());
-
-      gtag('config', 'G-744XSDL07S');
-    </script>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>BuildStack Crew</title>
@@ -340,6 +331,11 @@
             checkGeo();
             loadBulletin();
             show('home');
+            // Resume location tracking if the worker was already clocked in
+            // when the app opened (cold open). Without this, the tracker only
+            // started after a fresh clock-in and a cold-open while clocked in
+            // would silently stop sending location updates.
+            if (state.clocked_in && !state.updateTimer) startTracking();
         }
 
         function renderHome() {
@@ -670,23 +666,30 @@
         async function clockIn(id) {
             const btn = document.querySelector(`[data-act="in"]`);
             if (btn) { btn.disabled = true; btn.textContent = 'Checking location…'; }
+            let c;
             try {
                 const pos = await new Promise((resolve, reject) =>
                     navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, timeout: 25000, maximumAge: 5000 }));
-                const c = { latitude: pos.coords.latitude, longitude: pos.coords.longitude, accuracy: pos.coords.accuracy };
-                const { res, data } = await api('/api/crew/app/clock', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                    body: new URLSearchParams({ project_id: id, action: 'in', lat: c.latitude, lng: c.longitude, accuracy: c.accuracy || '' })
-                });
-                if (!res.ok) { alert(data.message || 'Cannot clock in.'); return loadMe(); }
-                await loadMe();
-                startTracking();
+                c = { latitude: pos.coords.latitude, longitude: pos.coords.longitude, accuracy: pos.coords.accuracy };
             } catch (e) {
                 if (btn) { btn.disabled = false; btn.textContent = '🕐 Clock In'; }
                 checkGeo();
                 alert('Could not get your location. Tap "Allow Location" at the top, or enable Location in your phone settings.');
+                return;
             }
+            const result = await api('/api/crew/app/clock', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: new URLSearchParams({ project_id: id, action: 'in', lat: c.latitude, lng: c.longitude, accuracy: c.accuracy || '' })
+            }).catch(err => ({ res: { ok: false }, data: { message: err.message || 'Network error' } }));
+            if (!result.res.ok) {
+                queuePendingAction({ action: 'in', project_id: id, lat: c.latitude, lng: c.longitude, accuracy: c.accuracy || '', ts: Date.now() });
+                alert('Clock-in failed' + (result.data && result.data.message ? ': ' + result.data.message : '') + '. It will retry when you are back online.');
+                if (btn) { btn.disabled = false; btn.textContent = '🕐 Clock In'; }
+                return;
+            }
+            await loadMe();
+            startTracking();
         }
 
         async function clockOut(id) {
@@ -697,11 +700,16 @@
                 lat = pos.coords.latitude; lng = pos.coords.longitude;
             } catch (e) {}
             stopTracking();
-            const { res } = await api('/api/crew/app/clock', {
+            const { res, data } = await api('/api/crew/app/clock', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                 body: new URLSearchParams({ project_id: id || 0, action: 'out', lat, lng })
-            });
+            }).catch(err => ({ res: { ok: false }, data: { message: err.message || 'Network error' } }));
+            if (!res.ok) {
+                // Queue the clock-out so it can be retried when back online.
+                queuePendingAction({ action: 'out', project_id: id || 0, lat, lng, ts: Date.now() });
+                alert('Clock-out failed' + (data && data.message ? ': ' + data.message : '') + '. It will retry when you are back online.');
+            }
             await loadMe();
         }
 
@@ -737,6 +745,47 @@
 
         function stopTrackingIfNone() {
             if (!state.clocked_in) stopTracking();
+        }
+
+        // Offline queue: when a clock-in or clock-out POST fails with a network
+        // error, store it in localStorage and replay it when the connection
+        // comes back. This prevents the "still clocked in forever" failure mode.
+        function queuePendingAction(action) {
+            try {
+                localStorage.setItem('pendingClockAction', JSON.stringify(action));
+            } catch (e) { /* storage full or blocked; ignore */ }
+        }
+
+        function getPendingAction() {
+            try {
+                const raw = localStorage.getItem('pendingClockAction');
+                return raw ? JSON.parse(raw) : null;
+            } catch (e) { return null; }
+        }
+
+        function clearPendingAction() {
+            try { localStorage.removeItem('pendingClockAction'); } catch (e) {}
+        }
+
+        async function replayPendingActions() {
+            const pending = getPendingAction();
+            if (!pending) return;
+            const params = new URLSearchParams({
+                project_id: pending.project_id || 0,
+                action: pending.action,
+                lat: pending.lat || 0,
+                lng: pending.lng || 0
+            });
+            if (pending.accuracy) params.set('accuracy', pending.accuracy);
+            const result = await api('/api/crew/app/clock', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: params
+            }).catch(() => ({ res: { ok: false } }));
+            if (result.res.ok) {
+                clearPendingAction();
+                await loadMe();
+            }
         }
 
         function showGeo(show) { $('geo-banner').classList.toggle('hidden', !show); }
@@ -879,7 +928,7 @@
                 $('map-embed-wrap').classList.add('hidden');
                 return;
             }
-            const sorted = [...jobs].sort((a, b) => (a.clocked_in ? 0 : 1) - (b.clocked_in ? 0 : 1));
+            const sorted = [...jobs].sort((a, b) => (a.clock_id ? 0 : 1) - (b.clock_id ? 0 : 1));
             sorted.forEach((j, i) => {
                 const row = document.createElement('button');
                 row.type = 'button';
@@ -887,7 +936,7 @@
                 row.innerHTML = `
                     <div class="flex items-center justify-between">
                         <span class="text-sm font-bold text-slate-800">${escapeHtml(j.name)}</span>
-                        <span class="text-xs text-slate-400">${j.clocked_in ? '● On the clock' : (j.status === 'active' ? 'Active' : 'Planned')}</span>
+                        <span class="text-xs text-slate-400">${j.clock_id ? '● On the clock' : (j.status === 'active' ? 'Active' : 'Planned')}</span>
                     </div>
                     <p class="text-xs text-slate-500 mt-0.5">${escapeHtml(j.address)}</p>`;
                 row.addEventListener('click', () => {
@@ -1168,6 +1217,8 @@
                 if (state.chatWs) { try { state.chatWs.close(); } catch (e) {} }
                 state.chatStarted = false; state.chatWs = null; state.chatLastId = 0; state.chatSeen.clear();
                 await api('/api/crew/app/logout', { method: 'POST' });
+                // Clear all caches so authenticated pages don't persist after logout
+                caches.keys().then(keys => keys.forEach(k => caches.delete(k)));
                 show('login');
             });
 
@@ -1308,10 +1359,13 @@
                 await loadMe();
             }
 
-            window.addEventListener('online', () => $('offline-banner').classList.add('hidden'));
+            window.addEventListener('online', () => {
+                $('offline-banner').classList.add('hidden');
+                replayPendingActions();
+            });
             window.addEventListener('offline', () => $('offline-banner').classList.remove('hidden'));
 
-            loadMe();
+            loadMe().then(() => replayPendingActions());
         });
     </script>
 </body>

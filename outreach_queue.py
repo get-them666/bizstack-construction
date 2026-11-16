@@ -134,8 +134,15 @@ def queue_email(db, lead_id: int, subject: str, body: str) -> Dict:
         return {"queued": False, "reason": "contact policy: too recent"}
     
     try:
-        import auto_reply
-        result = auto_reply._send_email(email, subject, body)
+        import asyncio
+        import documents_service
+
+        cfg = documents_service.smtp_config_from_env()
+        send_ok = asyncio.run(documents_service.send_email(cfg, email, subject, body))
+        result = {"ok": send_ok} if send_ok else {"ok": False, "error": "email transport refused"}
+    except Exception as exc:
+        result = {"ok": False, "error": str(exc)}
+    try:
         if result.get("ok"):
             with db.cursor() as cur:
                 cur.execute(

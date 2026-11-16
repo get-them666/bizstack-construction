@@ -1067,6 +1067,77 @@ OPERATING MANUAL:
         tools = [t for t in tools
                  if t.get("function", {}).get("name") not in dead_maps]
 
+        # --- Inventory + navigation tools -----------------------------------
+        # Handlers live in build_tool_handlers (construction_main.py ~2751-2796).
+        # These were registered as handlers but had no OpenAPI schemas, so the
+        # Copilot could never reach them.
+        tools += [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_inventory",
+                    "description": (
+                        "List supply inventory for the construction company, optionally "
+                        "filtered by category or to items at/below reorder level."
+                    ),
+                    "parameters": self._props(
+                        {"company": "string", "category": "string", "low_only": "boolean"},
+                        [],
+                        "company defaults to 'construction'. category filters by supply category. "
+                        "low_only=true returns only items at or below their reorder level.",
+                    ),
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "update_inventory",
+                    "description": (
+                        "Adjust a supply item's quantity: add or remove via qty_delta, or set "
+                        "an absolute amount with set_qty. Creates the item if it does not exist."
+                    ),
+                    "parameters": self._props(
+                        {
+                            "item_name": "string", "qty_delta": "number",
+                            "company": "string", "category": "string", "set_qty": "number",
+                        },
+                        ["item_name"],
+                        "item_name is required. Pass qty_delta to add/subtract, or set_qty to "
+                        "set an absolute quantity. category is used only when creating a new item.",
+                    ),
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "reorder_report",
+                    "description": (
+                        "Every supply at or below its reorder level — the restock shopping list."
+                    ),
+                    "parameters": self._props(
+                        {"company": "string"}, [],
+                        "company defaults to 'construction'.",
+                    ),
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "navigation_guide",
+                    "description": (
+                        "How to navigate the BuildStack websites and apps for a given role "
+                        "(employee/crew, customer, owner, or anyone). Returns the key URLs and "
+                        "what each one does."
+                    ),
+                    "parameters": self._props(
+                        {"role": "string", "company": "string"}, [],
+                        "role: 'employee', 'crew', 'owner', 'customer', or blank for anyone. "
+                        "company defaults to 'construction'.",
+                    ),
+                },
+            },
+        ]
+
         return tools
 
     def _tools(self) -> list:

@@ -189,12 +189,15 @@ pattern (`test_schema_safety.py`); use it for new DDL that may race or hit a mis
 
 ### Templates
 
-- Jinja2 has **no `first` filter** — use `xs[0] if xs else none`. Nested
+- Jinja2's `first` filter exists, but on an empty sequence returns `Undefined` which
+  renders blank — prefer `xs[0] if xs else none` when you want a visible fallback. Nested
   `{% '{:,.1f}'.format(x) %}` is invalid; use `{{ }}`. Both have shipped 500s this month.
 - **CSS is a static Tailwind v3 build, committed** (`static/css/tailwind.css`, from
   `tailwind.config.js` scanning `templates/**`, `*.py`, `static/**/*.js`). The image has no
   node. After using a class no template used before, run `npm run css` and commit the result
-  or it renders unstyled in production.
+  or it renders unstyled in production. Public pages load the static build via
+  `<link rel="stylesheet" href="/static/css/tailwind.css">` in `base.html`; the Tailwind
+  Play CDN that previously loaded on every public page has been removed.
 
 ### AI agents — three places must agree
 

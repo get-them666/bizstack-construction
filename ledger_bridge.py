@@ -246,8 +246,15 @@ def post_referral_commission(conn, referral, when=None, company: str = "construc
 
 
 def record_operating_expense(conn, code, amount, description="", when=None,
-                             company: str = "construction") -> dict:
-    """Overhead — insurance, fuel, rent, the things that are not a job."""
+                             company: str = "construction",
+                             ref_id: str = "") -> dict:
+    """Overhead — insurance, fuel, rent, the things that are not a job.
+
+    ``ref_id`` is an optional caller-supplied unique id (an expense row's
+    primary key, a receipt id, ...) that disambiguates two same-day entries
+    whose first 40 characters of description happen to match. Without it the
+    key falls back to the historical acct:date:detail shape.
+    """
     acct = str(code or "").strip()
     account_types = {a[0]: a[2] for a in ledger.CHART}
     if acct not in account_types:
@@ -259,11 +266,13 @@ def record_operating_expense(conn, code, amount, description="", when=None,
         return {"posted": False, "reason": "no amount"}
     normalized_date = str(when or date.today().isoformat())
     detail = (description or "")[:200]
+    source_id = (f"{acct}:{normalized_date}:{detail[:40]}:{ref_id}"
+                 if ref_id else f"{acct}:{normalized_date}:{detail[:40]}")
     return ledger.post(conn, [
         {"account": acct, "debit": amt, "description": detail},
         {"account": "1010", "credit": amt, "description": "Cash out"},
     ], entry_date=when, memo=f"{acct} — {detail}"[:200],
-        source_type="opex", source_id=f"{acct}:{normalized_date}:{detail[:40]}",
+        source_type="opex", source_id=source_id,
         company=company)
 
 # --------------------------------------------------------------------------

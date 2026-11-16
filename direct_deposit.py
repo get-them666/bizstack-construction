@@ -129,7 +129,13 @@ def missing() -> list[str]:
 
 
 def run_lines(conn, run_id: int) -> list[dict]:
-    """Payroll lines for a run with decrypted bank details; lines with no bank on file are flagged."""
+    """Payroll lines for a run with decrypted bank details; lines with no bank on file are flagged.
+
+    Zero-gross lines (hours x rate = 0) are included so the downstream
+    "mark paid" update cannot silently skip a worker who clocked but earned
+    nothing -- excluding them here meant their timesheets stayed unpaid in
+    the ledger even though the rest of the run settled.
+    """
     with conn.cursor() as cur:
         cur.execute("""
             SELECT pl.crew_id, pl.gross_cents, c.name,
@@ -137,7 +143,7 @@ def run_lines(conn, run_id: int) -> list[dict]:
               FROM payroll_lines pl
               JOIN crew c ON c.id = pl.crew_id
               LEFT JOIN crew_bank_accounts b ON b.crew_id = pl.crew_id
-             WHERE pl.run_id = %s AND COALESCE(pl.gross_cents, 0) > 0
+             WHERE pl.run_id = %s
              ORDER BY c.name;
         """, (run_id,))
         rows = [dict(r) for r in cur.fetchall()]

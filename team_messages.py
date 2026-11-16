@@ -150,14 +150,33 @@ def serialize(m: dict) -> dict:
 
 # --- storage -----------------------------------------------------------------
 
-def list_after(conn, after_id: int, actor: dict, limit: int = 500) -> list[dict]:
+def list_after(conn, after_id: int, actor: dict, limit: int = 100) -> list[dict]:
+    """Return visible messages for *actor*.
+
+    When *after_id* is 0 (initial load from the PWA), return the newest
+    ``limit`` visible messages in chronological order -- this avoids the old
+    bug where ``WHERE id > 0 LIMIT 500`` fetched early rows that were then
+    dropped by visibility filtering, so messages past id 500 were unreachable.
+
+    When *after_id* > 0 (incremental fetch / WebSocket replay), return up to
+    ``limit`` visible messages newer than that id, ascending.
+    """
     ensure_schema(conn)
     with conn.cursor() as cur:
-        cur.execute(
-            "SELECT * FROM messages WHERE id > %s ORDER BY id ASC LIMIT %s;",
-            (int(after_id or 0), int(limit)),
-        )
-        rows = cur.fetchall()
+        if after_id:
+            cur.execute(
+                "SELECT * FROM messages WHERE id > %s ORDER BY id ASC LIMIT %s;",
+                (int(after_id), int(limit)),
+            )
+            rows = cur.fetchall()
+        else:
+            # Newest-first so we always get the most recent visible messages
+            # even when early rows are not visible to this actor.
+            cur.execute(
+                "SELECT * FROM messages ORDER BY id DESC LIMIT %s;",
+                (int(limit),),
+            )
+            rows = list(reversed(cur.fetchall()))
     return [serialize(m) for m in rows if visible(m, actor)]
 
 

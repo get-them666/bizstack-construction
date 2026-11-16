@@ -178,17 +178,28 @@ def test_business_summary_does_not_count_payroll_as_customer_deposits():
 
 def test_accounting_summary_uses_paid_payroll_and_customer_cash_only():
     db = _Db(responses=[
-        {"amt": 10000, "n": 1}, {"amt": 3000, "n": 1},
-        {"amt": 25000}, {"amt": 1250000, "n": 2},
+        # 1) legacy payments table (lead-level cash)
+        {"amt": 10000, "n": 1},
+        # 2) bid_invoices paid/partial (the current invoice collection path)
+        {"amt": 400000, "n": 2},
+        # 3) leads.deposit_status='paid' (historical deposit flag)
+        {"amt": 3000, "n": 1},
+        # 4) payroll paid total
+        {"amt": 25000},
+        # 5) open job leads value
+        {"amt": 1250000, "n": 2},
     ])
     handlers = construction_main.build_tool_handlers(db, object())
     result = handlers["get_accounting_summary"]()
-    assert result["total_collections_cents"] == 10000
+    # Total collections is the union of legacy payments and invoice payments.
+    assert result["total_collections_cents"] == 10000 + 400000
+    assert result["payments_count"] == 1 + 2
     assert result["payroll_paid_total_cents"] == 25000
     assert result["open_job_feed_value_cents"] == 1250000
     assert "lead_id IS NOT NULL" in db.queries[0][0]
-    assert "pr.status = 'paid'" in db.queries[2][0]
-    assert "estimated_value * 100" in db.queries[3][0]
+    assert "status IN ('paid','partial')" in db.queries[1][0]
+    assert "pr.status = 'paid'" in db.queries[3][0]
+    assert "estimated_value * 100" in db.queries[4][0]
 
 
 def test_payroll_summary_includes_finalized_unpaid_run_and_pnc_readiness(monkeypatch):

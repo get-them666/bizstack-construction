@@ -147,6 +147,16 @@ def ensure_accounting_schema(conn) -> None:
         # Zoho Books this is the URL that carries the card/ACH pay button.
         cur.execute("ALTER TABLE bid_invoices ADD COLUMN IF NOT EXISTS zoho_invoice_url VARCHAR(600);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_bid_invoices_bid ON bid_invoices(bid_id);")
+        # A (bid_id, kind) pair can only have one live invoice at a time: the
+        # progress and final invoice routes are check-then-insert, and without
+        # a unique constraint a second concurrent click slips a duplicate past
+        # and the customer gets billed twice. The partial index excludes void
+        # and draft invoices so a withdrawn deposit can be re-raised.
+        cur.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_bid_invoices_bid_kind_live
+                ON bid_invoices(bid_id, kind)
+                WHERE status NOT IN ('void', 'draft')
+        """)
         cur.execute("CREATE INDEX IF NOT EXISTS idx_bid_invoices_kind ON bid_invoices(bid_id, kind);")
         # One invoice number per company. NULL numbers are allowed to repeat,
         # which is why this is a partial index rather than a plain UNIQUE.

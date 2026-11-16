@@ -616,11 +616,48 @@ def open_books(conn, cash_cents: int, equity_cents: int = None,
     A ledger with no opening entry reports everything the first time money
     moves, which makes the first trial balance look like a catastrophe that
     was not the books' fault. This puts the starting position in explicitly.
+
+    If the books were already opened with a different amount, a correction
+    entry is posted instead of silently returning "already posted" -- the old
+    behaviour buried a mistyped opening balance under an idempotency skip.
     """
     cash = _c(cash_cents, "opening cash")
     eq = cash if equity_cents is None else _c(equity_cents, "opening equity")
     if cash <= 0:
         return {"posted": False, "reason": "nothing to open with"}
+    # Detect a prior opening entry with a different amount and post a
+    # correction (Dr/Cr delta) rather than returning "already posted".
+    if _table_exists(conn, "ledger_entries") and _table_exists(conn, "ledger_lines"):
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT e.id, COALESCE(SUM(l.debit_cents), 0)::bigint AS prior "
+                "FROM ledger_entries e "
+                "LEFT JOIN ledger_lines l ON l.entry_id = e.id AND l.account_code = '1010' "
+                "WHERE e.company = %s AND e.source_type = 'open' AND e.source_id = '1' "
+                "GROUP BY e.id ORDER BY e.id DESC LIMIT 1",
+                (company,))
+            prior = cur.fetchone()
+        if prior and prior["prior"] and prior["prior"] != cash:
+            delta = cash - int(prior["prior"])
+            # Post a correction: positive delta adds cash; negative removes it.
+            if delta > 0:
+                lines = [
+                    {"account": "1010", "debit": delta,
+                     "description": "Opening balance correction"},
+                    {"account": "3010", "credit": delta,
+                     "description": "Opening capital correction"},
+                ]
+            else:
+                lines = [
+                    {"account": "3010", "debit": -delta,
+                     "description": "Opening capital correction"},
+                    {"account": "1010", "credit": -delta,
+                     "description": "Opening balance correction"},
+                ]
+            return post(conn, lines, entry_date=when,
+                        memo="Opening balance correction",
+                        source_type="open_correction", source_id="1",
+                        company=company)
     return post(conn, [
         {"account": "1010", "debit": cash, "description": "Opening balance"},
         {"account": "3010", "credit": eq, "description": "Opening capital"},

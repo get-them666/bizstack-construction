@@ -71,4 +71,4 @@ def test_permit_finder_copy_is_untouched():
 def test_other_trades_still_get_the_generic_reply():
     body = _msg(service="kitchen remodel")
     assert "roof" not in body.lower()
-    assert "project estimator" in body
+    assert "the estimator" in body
