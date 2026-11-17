@@ -38,7 +38,7 @@ def send_lead_alert(
     anywhere (sync route handler, background thread, etc.)."""
     targets = _owner_targets()
     if not targets:
-        print(f"[lead-alert] no owner email configured; alert for lead #{lead_id} skipped", flush=True)
+        print(f"⚠️ [lead-alert] no owner email configured; alert for lead #{lead_id} skipped", flush=True)
         return False
 
     subject = f"New lead #{lead_id}: {name or 'New inquiry'}"
@@ -56,9 +56,9 @@ def send_lead_alert(
                 ok = True
                 print(f"[lead-alert] emailed {to} (lead #{lead_id})", flush=True)
             else:
-                print(f"[lead-alert] email to {to} not delivered", flush=True)
+                print(f"⚠️ [lead-alert] email to {to} not delivered (transport returned False) for lead #{lead_id}", flush=True)
         except Exception as exc:
-            print(f"[lead-alert] email to {to} failed: {exc}", flush=True)
+            print(f"⚠️ [lead-alert] email to {to} failed for lead #{lead_id}: {exc}", flush=True)
     return ok
 
 
@@ -138,7 +138,7 @@ async def _send_email(to: str, subject: str, body: str) -> bool:
     import documents_service
     cfg = documents_service.smtp_config_from_env()
     if not documents_service.smtp_configured(cfg):
-        print("[lead-alert] SMTP not configured; cannot send alert", flush=True)
+        print(f"⚠️ [lead-alert] SMTP not configured; cannot send alert for lead #{lead_id}", flush=True)
         return False
     # Build a plain-text MIME message.
     from email.message import EmailMessage

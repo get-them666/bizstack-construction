@@ -1,14 +1,15 @@
 # AGENTS.md
 
 BuildStack Construction — a small construction-business back office and public site.
-FastAPI + Postgres + Jinja, deployed to **Render**. ~190 flat Python modules at the repo root.
+FastAPI + Postgres + Jinja, deployed to **DigitalOcean** (Docker on Droplet `bizstack-prod`).
+~190 flat Python modules at the repo root.
 
-> **Production is Render, not Railway.** `RENDER.md` is the deployment truth:
-> service `bizstack-construction` (`srv-dbo1a53m8hqs73f9humg`), Postgres
-> `bizstack-construction-db`, **live database `construction_live`**. The live
-> app does *not* use the datastore default `construction_mv91`, and must never
-> touch the `hosts` database in the same cluster. The Railway rows later in this
-> file are historical.
+> **Production is DigitalOcean, not Render or Railway.** The Droplet is `bizstack-prod`
+> at `159.203.175.39`, running Docker Compose with Caddy as reverse proxy. Two apps
+> (`bizstack-construction` and `bizstack-hosts`) each with their own Postgres 18 database
+> (pgvector-enabled). Deploy is `rsync` + `docker compose build` + `docker compose up -d`.
+> Render and Railway are **not used** — any references to them elsewhere in this file are
+> historical and should be ignored.
 
 **Read `MEMORY.md` before touching business logic.** It documents decisions that are not
 recoverable from the code: phone numbers, the business-contacts-only boundary, Stripe
@@ -20,16 +21,16 @@ Treat it as authoritative and keep it current.
 ## This is ONE of TWO separate companies — do not merge them
 
 BuildStack Construction and BuildStack Hosts (`../bizstack-hosts`) are **separate businesses
-with separate domains, separate Render services and separate databases.** Not a monorepo,
-not a shared package, not two services over one database.
+with separate domains, separate Docker containers and separate databases on the same
+Droplet.** Not a monorepo, not a shared package, not two services over one database.
 
 | | Construction (this repo) | Hosts |
 |---|---|---|
-| Render web service | **`bizstack-construction`** `srv-dbo1a53m8hqs73f9humg` | **`bizstack-hosts`** `srv-dbps9p0ae00c73chdqs0` |
-| Postgres | `bizstack-construction-db`; live db **`construction_live`** | same cluster, db **`hosts`** |
-| Domain | `construction.bizstackperks.com` | `bizstackperks.com` |
+| DO container | **`bizstack-construction-1`** | **`bizstack-hosts-1`** |
+| Postgres container | **`bizstack-db-construction-1`**; db name `construction` | **`bizstack-db-hosts-1`**; db name `hosts` |
+| Domain (via Caddy) | `construction.bizstackperks.com` | `bizstackperks.com` / `www.bizstackperks.com` |
 | Repo | `get-them666/bizstack-construction` | `get-them666/bizstack-hosts` |
-| Historical (Railway, retired) | project `281375d7-…`, service `f0831991-…` | project `d5ed0396-…`, service `9ff95d24-…` |
+| Droplet | `bizstack-prod` (`159.203.175.39`, NYC3) | same Droplet |
 
 - **Never add a dependency on another repository.** `requirements.txt` must not name a git
   URL. `bizstack_leads/` is a vendored copy of the old shared lead package and **is live** —
@@ -37,8 +38,10 @@ not a shared package, not two services over one database.
   Edit it here; never re-point it at a git URL or at `../bizstack-hosts`.
 - **Never point this app at the hosts database, or vice versa.**
 - **Never assume a file exists in both repos because it used to.** They diverge on purpose.
-- **A push to `main` deploys this service on Render.** Confirm the target with
-  `render deploys list srv-dbo1a53m8hqs73f9humg -o text`. Railway is retired.
+- **Deploy:** `rsync` the repo to `/opt/bizstack/construction/` on the Droplet, then
+  `docker compose build construction && docker compose up -d construction`. Confirm with
+  `docker ps` and `docker logs bizstack-construction-1 --tail 20`. There is no auto-deploy;
+  every deploy is manual via SSH + `doctl compute ssh bizstack-prod`.
 - The crew app (`/app`, timesheets, payroll) is **this company's** crew tooling. Broom Service
   has its own separate installable app in the hosts repo — do not touch it from here.
 
@@ -113,9 +116,8 @@ DATABASE_URL=postgresql://$(whoami)@localhost:5432/bz_test venv/bin/python test_
 - Tests monkeypatch network entry points to raisers (e.g. `property_service._api_call`).
   RentCast's free tier is 50 calls/**month** — never let a test reach it.
 - Outbound TLS from this machine needs `SSL_CERT_FILE=/etc/ssl/cert.pem`.
-- `railway run` executes **locally**; `*.railway.internal` never resolves. Use a tcp-proxy to
-  reach the live DB, then close and delete the URL.
-- Docker daemon isn't running here — Dockerfile edits are unverified locally.
+- Docker daemon isn't running here — Dockerfile edits are verified by building on the
+  Droplet (`doctl compute ssh bizstack-prod` then `cd /opt/bizstack && docker compose build`).
 - `git commit` occasionally fails with `fatal: /: '/' is outside repository`; retry.
 - `opencode.jsonc` (tracked) only registers the Catalyst MCP. `opencode.json` is gitignored.
 
@@ -236,8 +238,9 @@ lead-source scheduler, Gmail inbound poll, acquisition radar, bid-inquiry firing
 name/email/phone on owner-entered bids via skip trace, builds SOW/itemized/contract once a
 bid has cost lines; `source='manual'` only, 7-day retry log in `bid_autopilot_log`,
 `BID_AUTOPILOT_MAX` traces per pass). Kill switches `DISABLE_PERMIT_IMPORT`,
-`DISABLE_LEAD_SCAN`, `DISABLE_LOAN_OUTREACH`, `DISABLE_LEAD_ENRICH`, `DISABLE_BID_AUTOPILOT`. Railway stores unset flags as the **string `"false"`**, which is
-truthy — parse explicitly, never bare `os.getenv(...)` truthiness.
+`DISABLE_LEAD_SCAN`, `DISABLE_LOAN_OUTREACH`, `DISABLE_LEAD_ENRICH`, `DISABLE_BID_AUTOPILOT`.
+Env vars may be set as the string `"false"` (which is truthy) — parse explicitly, never bare
+`os.getenv(...)` truthiness. Use `str(os.getenv("DISABLE_X", "")).lower() in ("1", "true", "yes")`.
 
 ### Outbound messaging
 
@@ -283,23 +286,23 @@ Much of this repo is real money and real people's data and is **not reproducible
 
 ## Deploy
 
-**Render. See `RENDER.md` for the full runbook.** Do not use Railway.
+**DigitalOcean Droplet `bizstack-prod`** at `159.203.175.39`. Docker Compose with Caddy
+reverse proxy. No Render. No Railway. No auto-deploy.
 
-- Web service `bizstack-construction` — `srv-dbo1a53m8hqs73f9humg`, Docker build,
-  region `virginia`, health check `/health`, `autoDeployTrigger: commit`.
-  Push to `main` deploys; confirm with `render deploys list <service> -o text`.
-- Postgres `bizstack-construction-db` — `dpg-dbo168bm8hqs73f97b8g-a`. The live
-  database is **`construction_live`**. `render psql <db>` connects to the
-  datastore default `construction_mv91` and will look like the app is missing
-  tables — it is the wrong database. The `hosts` database in the same cluster
-  belongs to the other company and must never be touched.
+- **Deploy steps:**
+  1. `rsync -avz --exclude='venv' --exclude='__pycache__' --exclude='.git' --exclude='uploads' --exclude='outbox' --exclude='*.pyc' --exclude='.env' --delete -e "ssh" . root@159.203.175.39:/opt/bizstack/construction/`
+  2. `doctl compute ssh bizstack-prod --ssh-command "cd /opt/bizstack && docker compose build construction && docker compose up -d construction"`
+  3. Verify: `docker logs bizstack-construction-1 --tail 20` — look for `🎯 bid_opportunities ready.`
+- **Caddy** routes `construction.bizstackperks.com` → `construction:8000` and
+  `bizstackperks.com` / `www.bizstackperks.com` → `hosts:8000`.
+- **Database** is Postgres 18 with pgvector in container `bizstack-db-construction-1`,
+  database name `construction`. The hosts app has its own container and database.
 - Schema is created at boot by `lifecycle()`; there is no migration command.
-  After a deploy, the log line `🎯 bid_opportunities ready.` means the startup
-  DDL block (including `portal_service.ensure_schema` and
-  `contract_signing.ensure_schema`) committed.
-- Before/after any Blueprint sync, check that the service's `DATABASE_URL`
-  still ends in `/construction_live`. `render.yaml`'s `fromDatabase` resolves to
-  the datastore default (`construction_mv91`) and would silently move the app.
+- **Env vars** live in `/opt/bizstack/construction.env` on the Droplet. To add or change
+  one: `doctl compute ssh bizstack-prod`, edit the file, then `docker compose restart construction`.
+- **Backups:** `/opt/bizstack/backup.sh` dumps both databases daily; backups go to
+  `/opt/bizstack/backups/`.
 
-Historical Railway notes: `railway.json` is stale; push-to-`main` used to deploy
-there. The `workflow_dispatch`-only Cloud Run workflow must stay manual-only.
+Historical: this project used to be on Render (`RENDER.md`, `render.yaml`) and before that
+Railway (`railway.json`). Both are deleted. Any AI assistant that references Render or Railway
+for this project is reading stale docs.

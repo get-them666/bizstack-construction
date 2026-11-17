@@ -50,14 +50,66 @@
     {
       "@context": "https://schema.org",
       "@type": "GeneralContractor",
+      "@id": "https://construction.bizstackperks.com/#business",
       "name": {{ co.name | tojson }},
-      "telephone": {{ co.phone | tojson }},
-      "email": {{ co.email | tojson }},
+      "alternateName": {{ co.short_name | tojson }},
+      "description": "Licensed, insured general contractor specializing in whole-home renovations, kitchen and bathroom remodels, home additions, roofing, siding, drywall, plumbing, electrical, tile, flooring, decks, fences, custom carpentry, and rental/STR renovations in Hampton Roads, VA and Currituck County, NC.",
       "url": {{ ('https://' ~ co.domain) | tojson }},
+      "logo": {{ ('https://' ~ co.domain ~ '/static/og.png') | tojson }},
       "image": {{ ('https://' ~ co.domain ~ '/static/og.png') | tojson }},
-      "areaServed": {{ co.service_area | tojson }},
+      "telephone": {{ co.phone_e164 | tojson }},
+      "email": {{ co.email | tojson }},
+      "address": {
+        "@type": "PostalAddress",
+        "streetAddress": "701 Dana Dr",
+        "addressLocality": "Chesapeake",
+        "addressRegion": "VA",
+        "postalCode": "23321",
+        "addressCountry": "US"
+      },
+      "areaServed": [
+        {"@type": "Place", "name": "Hampton Roads, VA"},
+        {"@type": "Place", "name": "Currituck County / Elizabeth City, NC"}
+      ],
       "priceRange": "$$",
-      "description": "Licensed, insured general contractor for whole-home renovations and repairs."
+      "openingHoursSpecification": [
+        {
+          "@type": "OpeningHoursSpecification",
+          "dayOfWeek": ["Monday","Tuesday","Wednesday","Thursday","Friday"],
+          "opens": "07:00",
+          "closes": "18:00"
+        },
+        {
+          "@type": "OpeningHoursSpecification",
+          "dayOfWeek": "Saturday",
+          "opens": "08:00",
+          "closes": "14:00"
+        }
+      ],
+      "hasOfferCatalog": {
+        "@type": "OfferCatalog",
+        "name": "Construction Services",
+        "itemListElement": [
+          {"@type": "Offer","itemOffered": {"@type": "Service","name": "Whole-home renovations"}},
+          {"@type": "Offer","itemOffered": {"@type": "Service","name": "Kitchen remodels"}},
+          {"@type": "Offer","itemOffered": {"@type": "Service","name": "Bathroom remodels"}},
+          {"@type": "Offer","itemOffered": {"@type": "Service","name": "Home additions"}},
+          {"@type": "Offer","itemOffered": {"@type": "Service","name": "Roofing"}},
+          {"@type": "Offer","itemOffered": {"@type": "Service","name": "Siding"}},
+          {"@type": "Offer","itemOffered": {"@type": "Service","name": "Drywall"}},
+          {"@type": "Offer","itemOffered": {"@type": "Service","name": "Plumbing"}},
+          {"@type": "Offer","itemOffered": {"@type": "Service","name": "Electrical"}},
+          {"@type": "Offer","itemOffered": {"@type": "Service","name": "Tile"}},
+          {"@type": "Offer","itemOffered": {"@type": "Service","name": "Flooring"}},
+          {"@type": "Offer","itemOffered": {"@type": "Service","name": "Decks"}},
+          {"@type": "Offer","itemOffered": {"@type": "Service","name": "Fences"}},
+          {"@type": "Offer","itemOffered": {"@type": "Service","name": "Custom carpentry"}},
+          {"@type": "Offer","itemOffered": {"@type": "Service","name": "Rental and STR renovations"}}
+        ]
+      },
+      "credential": "Virginia Contractor License",
+      "foundingDate": "2026-10-28",
+      "sameAs": []
     }
     </script>
     <style>
@@ -350,19 +402,129 @@
                 return prefix + '(' + d.slice(0, 3) + ') ' + d.slice(3, 6) + '-' + d.slice(6, 10);
             }
             document.querySelectorAll('input[data-phone-format]').forEach(function(inp) {
-                inp.addEventListener('input', function() { inp.value = autoFormatPhone(inp.value); });
+                inp.addEventListener('input', function() {
+                    var cursor = inp.selectionStart;
+                    var before = inp.value.length;
+                    inp.value = autoFormatPhone(inp.value);
+                    var after = inp.value.length;
+                    var newCursor = Math.max(0, cursor + (after - before));
+                    inp.setSelectionRange(newCursor, newCursor);
+                });
             });
         });
     </script>
     {% block scripts %}{% endblock %}
     {% include "_addr_autocomplete.html" %}
     {% if not owner_view and not request.path.startswith('/portal') %}
+    {# Floating chat lead-capture button (bottom-left, mobile only).
+       Opens a small panel that submits to /submit-lead — same endpoint as the
+       main quote form. No WebSocket, no AI backend — just a fast way for a
+       homeowner to leave their info when they aren't ready to call. #}
+    <button id="chat-launch" class="fixed bottom-4 left-4 z-50 flex items-center gap-2 px-5 py-3.5 rounded-full bg-indigo-600 text-white font-bold text-sm shadow-lg lg:hidden">
+        💬 Chat with us
+    </button>
+    <div id="chat-panel" class="fixed bottom-0 left-0 right-0 z-50 hidden lg:hidden" style="max-height:85vh">
+        <div class="bg-white rounded-t-2xl shadow-2xl border-t border-slate-200 flex flex-col" style="height:85vh">
+            <div class="flex items-center justify-between px-5 py-3.5 border-b border-slate-100 bg-indigo-600 rounded-t-2xl">
+                <div class="flex items-center gap-2">
+                    <span class="text-lg">💬</span>
+                    <span class="font-bold text-white text-sm">Chat with us</span>
+                </div>
+                <button id="chat-close" class="text-white/80 hover:text-white text-xl leading-none px-1" aria-label="Close chat">&times;</button>
+            </div>
+            <div id="chat-body" class="flex-1 overflow-y-auto p-5">
+                <div id="chat-form-view">
+                    <p class="text-sm text-slate-600 mb-4">Tell us about your project — we'll get back to you within one business hour.</p>
+                    <form id="chat-lead-form" class="space-y-3">
+                        <div>
+                            <label for="chat-name" class="block text-xs font-semibold text-slate-600 mb-1">Your name</label>
+                            <input id="chat-name" name="name" type="text" required class="w-full px-3 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                        </div>
+                        <div>
+                            <label for="chat-phone" class="block text-xs font-semibold text-slate-600 mb-1">Phone</label>
+                            <input id="chat-phone" name="phone" type="tel" required data-phone-format class="w-full px-3 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                        </div>
+                        <div>
+                            <label for="chat-email" class="block text-xs font-semibold text-slate-600 mb-1">Email</label>
+                            <input id="chat-email" name="email" type="email" class="w-full px-3 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                        </div>
+                        <div>
+                            <label for="chat-address" class="block text-xs font-semibold text-slate-600 mb-1">Property address</label>
+                            <input id="chat-address" name="address" type="text" class="w-full px-3 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                        </div>
+                        <div>
+                            <label for="chat-desc" class="block text-xs font-semibold text-slate-600 mb-1">What do you need done?</label>
+                            <textarea id="chat-desc" name="description" rows="3" class="w-full px-3 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"></textarea>
+                        </div>
+                        <button type="submit" id="chat-submit" class="w-full px-4 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-sm transition-colors">Send message</button>
+                    </form>
+                </div>
+                <div id="chat-done-view" class="hidden text-center py-8">
+                    <p class="text-4xl mb-3">✅</p>
+                    <p class="font-bold text-slate-900 text-lg">Got it!</p>
+                    <p class="text-sm text-slate-500 mt-2">We'll be in touch shortly. You can also call or text us directly:</p>
+                    <div class="mt-4 flex flex-col gap-2">
+                        <a href="tel:+17579087121" class="px-4 py-3 rounded-xl bg-emerald-600 text-white font-bold text-sm">📞 Call now</a>
+                        <a href="sms:+17579087121" class="px-4 py-3 rounded-xl bg-indigo-600 text-white font-bold text-sm">💬 Text us</a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script>
+    (function() {
+        var launch = document.getElementById('chat-launch');
+        var panel = document.getElementById('chat-panel');
+        var closeBtn = document.getElementById('chat-close');
+        var form = document.getElementById('chat-lead-form');
+        var formView = document.getElementById('chat-form-view');
+        var doneView = document.getElementById('chat-done-view');
+        var submitBtn = document.getElementById('chat-submit');
+        if (!launch || !panel) return;
+        launch.addEventListener('click', function() {
+            panel.classList.remove('hidden');
+            launch.classList.add('hidden');
+        });
+        closeBtn.addEventListener('click', function() {
+            panel.classList.add('hidden');
+            launch.classList.remove('hidden');
+        });
+        if (form) {
+            form.addEventListener('submit', function(e) {
+                e.preventDefault();
+                submitBtn.disabled = true;
+                submitBtn.textContent = 'Sending…';
+                var data = new FormData(form);
+                data.set('project_type', 'Chat inquiry');
+                data.set('source', 'chat_widget');
+                fetch('/submit-lead', { method: 'POST', body: data })
+                    .then(function(r) { return r.json().catch(function() { return {}; }); })
+                    .then(function() {
+                        formView.classList.add('hidden');
+                        doneView.classList.remove('hidden');
+                    })
+                    .catch(function() {
+                        submitBtn.disabled = false;
+                        submitBtn.textContent = 'Send message';
+                        alert('Could not send — please call us instead.');
+                    });
+            });
+        }
+    })();
+    </script>
+
     {# Sticky call/text bar for mobile — replaces the old chat widget.
        Same conversion path (call us), zero API cost, always visible. #}
-    <a href="tel:{{ co.phone_e164 }}" class="lg:hidden fixed bottom-4 right-4 z-50 flex items-center gap-2 px-5 py-3.5 rounded-full bg-emerald-600 text-white font-bold text-sm shadow-lg shadow-emerald-900/30 hover:bg-emerald-500 transition-all active:scale-95" aria-label="Call {{ co.phone }}">
-        <span class="text-lg">📞</span>
-        <span>Call Now — Free Estimate</span>
-    </a>
+    <div class="lg:hidden fixed bottom-4 right-4 z-50 flex gap-2">
+        <a href="tel:+17579087121" class="flex-1 flex items-center justify-center gap-2 px-4 py-3.5 rounded-full bg-emerald-600 text-white font-bold text-sm shadow-lg shadow-emerald-900/30 hover:bg-emerald-500 transition-all active:scale-95" aria-label="Call {{ co.phone }}">
+            <span class="text-lg">📞</span>
+            <span>Call</span>
+        </a>
+        <a href="sms:+17579087121?body=Hi%20BuildStack%2C%20I'd%20like%20a%20free%20estimate." class="flex-1 flex items-center justify-center gap-2 px-4 py-3.5 rounded-full bg-indigo-600 text-white font-bold text-sm shadow-lg shadow-indigo-900/30 hover:bg-indigo-500 transition-all active:scale-95" aria-label="Text {{ co.phone }}">
+            <span class="text-lg">💬</span>
+            <span>Text</span>
+        </a>
+    </div>
     {{ site_theme_state().decor | safe }}
     {% endif %}
 </body>

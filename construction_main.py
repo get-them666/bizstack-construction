@@ -119,6 +119,7 @@ import photo_store
 import autodesk_oauth
 import skiptrace_service
 import skip_sherpa_service
+import pnc_importer
 import pdl_contact_service
 import resimply_service
 import leads_db
@@ -453,6 +454,43 @@ def _transport_health_loop() -> None:
         except Exception as exc:  # noqa: BLE001 - a monitor must never kill the app
             print(f"[transport-health] loop error: {exc}", flush=True)
         _time.sleep(600)
+
+
+def _notification_health_check():
+    """Log transport status once daily so silent failures surface.
+
+    This is a simple diagnostic log, not an alert. It runs once at boot and
+    then once every 24 hours. The goal is to make it obvious in the logs when
+    SMTP/ZeptoMail/Gmail/SignalWire are not configured, so the owner knows
+    why notifications are not going out.
+    """
+    import time as _time
+    last_check = getattr(_notification_health_check, '_last', 0)
+    if _time.time() - last_check < 86400:
+        return
+    _notification_health_check._last = _time.time()
+
+    try:
+        cfg = documents_service.smtp_config_from_env()
+        print(f"[transport-health] SMTP configured: {documents_service.smtp_configured(cfg)}", flush=True)
+    except Exception as e:
+        print(f"[transport-health] SMTP config check failed: {e}", flush=True)
+
+    print(f"[transport-health] ZEPTOMAIL_TOKEN set: {bool((os.getenv('ZEPTOMAIL_TOKEN','') or '').strip())}", flush=True)
+    print(f"[transport-health] EMAIL_TRANSPORT: {(os.getenv('EMAIL_TRANSPORT','') or 'gmail').strip()}", flush=True)
+    print(f"[transport-health] SIGNALWIRE_PROJECT_ID set: {bool(os.getenv('SIGNALWIRE_PROJECT_ID'))}", flush=True)
+    print(f"[transport-health] SIGNALWIRE_API_TOKEN set: {bool(os.getenv('SIGNALWIRE_API_TOKEN'))}", flush=True)
+    print(f"[transport-health] OWNER_MOBILE set: {bool((os.getenv('OWNER_MOBILE','') or '').strip())}", flush=True)
+    print(f"[transport-health] NOTIFY_EMAIL: {(os.getenv('NOTIFY_EMAIL','') or '').strip() or '(not set)'}", flush=True)
+
+    # Retry any failed emails from the queue
+    try:
+        from documents_service import retry_failed_emails
+        retried = retry_failed_emails()
+        if retried:
+            print(f"[transport-health] retried {retried} failed email(s) from queue", flush=True)
+    except Exception as e:
+        print(f"[transport-health] email retry failed: {e}", flush=True)
 
 
 @asynccontextmanager
@@ -857,6 +895,7 @@ async def lifecycle(app: FastAPI):
             # ledger tables; the commission only reaches the books later, when
             # the owner marks a referral paid.
             funding_referrals.ensure_schema(conn)
+            pnc_importer.ensure_schema(conn)
         print("🎯 bid_opportunities ready.")
     except Exception as e:
         print(f"⚠️ bid_opportunities init skipped: {e}")
@@ -937,6 +976,20 @@ async def lifecycle(app: FastAPI):
     # Transport watchdog: SMS/voice failures must be loud, not silent.
     if not settings_status.flag_on("DISABLE_TRANSPORT_HEALTH"):
         threading.Thread(target=_transport_health_loop, daemon=True).start()
+
+    # Notification health check: log transport status once daily and retry failed emails.
+    def _notification_health_loop():
+        """Run the health check once at boot, then once every 24 hours."""
+        import time as _time
+        _notification_health_check()  # run once at boot
+        while True:
+            _time.sleep(86400)  # 24 hours
+            try:
+                _notification_health_check()
+            except Exception as exc:
+                print(f"[transport-health] daily check failed: {exc}", flush=True)
+
+    threading.Thread(target=_notification_health_loop, daemon=True).start()
 
     # Copilot conversation memory + the one-year task list. Self-initializing, so
     # this is safe on every boot and on redeploys against an existing database.
@@ -3361,6 +3414,26 @@ async def sitemap_xml(request: Request):
 
 
 # --- Lead capture -----------------------------------------------------------
+# In-memory rate limit for public lead forms: {ip: [timestamp, ...]}
+_lead_submit_times: dict[str, list[float]] = {}
+
+
+def _lead_submit_throttled(ip: str, window: int = 600, max_calls: int = 3) -> bool:
+    """Reject more than *max_calls* submissions from the same IP within *window* seconds."""
+    now = time.time()
+    times = [t for t in _lead_submit_times.get(ip, []) if now - t < window]
+    if len(times) >= max_calls:
+        _lead_submit_times[ip] = times
+        return True
+    times.append(now)
+    _lead_submit_times[ip] = times
+    # Evict stale entries to avoid unbounded growth
+    if len(_lead_submit_times) > 5000:
+        for key in [k for k, v in _lead_submit_times.items() if not v or now - v[-1] > window]:
+            _lead_submit_times.pop(key, None)
+    return False
+
+
 def _is_form_bot(honeypot: str, source: str = "") -> bool:
     """A filled honeypot is a bot. Log it and let the caller fake success.
 
@@ -3392,90 +3465,146 @@ async def submit_lead(
     company_website: str = Form(""),
     db=Depends(get_db),
 ):
+    # --- Honeypot: fake success so bots don't learn which field tripped ---
     src = (source or "").strip().lower() or "website"
     if _is_form_bot(company_website, src):
         return JSONResponse(content={"status": "success", "lead_id": 0})
-    # Prepend the goal to the description so it's visible in the lead detail
-    # and the owner notification without needing a new column.
+
+    # --- IP rate limit: 3 submissions per 10 minutes ----------------------
+    client_ip = _client_ip(request)
+    if _lead_submit_throttled(client_ip):
+        return JSONResponse(
+            status_code=429,
+            content={
+                "status": "error",
+                "message": "Too many submissions. Please wait a few minutes and try again, or call us directly.",
+            },
+        )
+
+    # --- Field validation -------------------------------------------------
+    name_clean = (name or "").strip()
+    phone_clean = (phone or "").strip()
+    email_clean = (email or "").strip()
+    errors: list[str] = []
+    if not name_clean:
+        errors.append("name")
+    if not phone_clean and not email_clean:
+        errors.append("phone")  # require at least one contact method
+    if errors:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "status": "error",
+                "message": "Please fill in the required fields.",
+                "errors": errors,
+            },
+        )
+
+    # --- 1. Save lead FIRST so a notification failure never loses data ---
     full_description = description
     if goal:
         full_description = f"Goal: {goal}. {description}".strip()
     res = lead_intake.intake_lead(
-        db, company="construction", source=src, name=name, phone=phone,
-        email=(email or "").strip(), address=address, description=full_description,
+        db, company="construction", source=src, name=name_clean, phone=phone_clean,
+        email=email_clean, address=address, description=full_description,
         project_type=project_type,
         extra={"budget": budget, "timeline": timeline, "goal": goal},
     )
     lead_id = res["lead_id"]
     created = res["created"]
     if not created:
-        # A duplicate or merged lead: nothing new to notify, draft, or schedule.
         return JSONResponse(content={"status": "success", "lead_id": lead_id, "duplicate": True})
-    # --- SQLite mirror + instant email alert ---------------------------------
-    # Written before any downstream notification so a Postgres outage or a
-    # failing email transport can never lose the inquiry. The SQLite row is the
-    # record of truth for the admin page.
+
+    # --- 2. SQLite mirror (isolated from notification failures) --------
     try:
-        client_ip = _client_ip(request)
         sqlite_id = leads_db.insert_lead(
-            name=name, phone=phone, email=email, address=address,
+            name=name_clean, phone=phone_clean, email=email_clean, address=address,
             project_type=project_type, goal=goal, budget=budget,
             timeline=timeline, message=full_description, source=src,
             ip=client_ip, user_agent=(request.headers.get("user-agent") or ""),
         )
+    except Exception as e:
+        print(f"⚠️ [lead-notify] SQLite mirror failed for lead {lead_id}: {e}", flush=True)
+        sqlite_id = lead_id  # fallback to Postgres ID for alert
+
+    # --- 2b. Instant email alert (isolated so transport failures are visible) -
+    try:
         lead_alert.send_lead_alert(
-            lead_id=sqlite_id, name=name, phone=phone, email=email,
+            lead_id=sqlite_id, name=name_clean, phone=phone_clean, email=email_clean,
             address=address, project_type=project_type, goal=goal,
             budget=budget, timeline=timeline, message=full_description,
             source=src,
         )
     except Exception as e:
-        print(f"⚠️ SQLite/alert write failed (non-fatal): {e}", flush=True)
+        print(f"⚠️ [lead-alert] email alert failed for lead {lead_id}: {e}", flush=True)
+
+    # --- 3. Owner notification + auto-reply + follow-up + cascade --------
     try:
         auto_reply.notify_owner_email(
-            "construction", lead_id=lead_id, name=name, phone=phone, email=(email or "").strip(),
+            "construction", lead_id=lead_id, name=name_clean, phone=phone_clean, email=email_clean,
             service=(project_type or ""), address=address,
             budget=budget, timeline=timeline, message=description, source=src, goal=goal,
         )
     except Exception as e:
-        print(f"⚠️ submit-lead owner notify failed: {e}", flush=True)
+        print(f"⚠️ [lead-notify] owner notify failed for lead {lead_id}: {e}", flush=True)
     try:
         auto_reply.auto_reply_to_lead(
-            db, "construction", name=name, phone=phone, email=(email or "").strip(),
+            db, "construction", name=name_clean, phone=phone_clean, email=email_clean,
             service=(project_type or ""), address=address,
             budget=budget, timeline=timeline, message=description, source=src,
             lead_id=lead_id,
         )
     except Exception as e:
-        print(f"⚠️ submit-lead auto-reply failed: {e}", flush=True)
+        print(f"⚠️ [lead-notify] auto-reply failed for lead {lead_id}: {e}", flush=True)
     try:
         _follow_up_new_lead(lead_id)
     except Exception as e:
-        print(f"⚠️ submit-lead follow-up failed: {e}", flush=True)
-    # CASCADING PIPELINE: Lead created → auto-enrich → auto-contact → auto-quote
+        print(f"⚠️ [lead-notify] follow-up failed for lead {lead_id}: {e}", flush=True)
     try:
         await asyncio.to_thread(
             lead_pipeline.on_lead_created, db, lead_id
         )
         print(f"🔄 Lead {lead_id} cascade initiated", flush=True)
     except Exception as e:
-        print(f"⚠️ submit-lead cascade failed: {e}", flush=True)
-    await asyncio.to_thread(zoho_sync.after_intake, db, lead_id)
-    asyncio.create_task(
-        asyncio.to_thread(
-            tidy_service.enrich_and_sync_tidy,
-            lead_id=lead_id,
-            name=name,
-            phone=phone,
-            email=email,
-            address=address,
-            project_type=project_type,
-            goal=goal,
-            budget=budget,
-            timeline=timeline,
-            message=full_description,
+        print(f"⚠️ [lead-notify] pipeline cascade failed for lead {lead_id}: {e}", flush=True)
+
+    # --- 4. Background syncs — wrapped so failures don't 500 the request -
+    try:
+        await asyncio.to_thread(zoho_sync.after_intake, db, lead_id)
+    except Exception as e:
+        print(f"⚠️ [lead-notify] zoho_sync.after_intake failed for lead {lead_id}: {e}", flush=True)
+
+    def _tidy_done_callback(task):
+        """Surface exceptions from the fire-and-forget tidy enrichment task."""
+        try:
+            exc = task.exception()
+            if exc:
+                print(f"⚠️ [lead-notify] tidy enrichment failed for lead {lead_id}: {exc}", flush=True)
+        except asyncio.CancelledError:
+            print(f"⚠️ [lead-notify] tidy enrichment cancelled for lead {lead_id}", flush=True)
+        except Exception as cb_err:
+            print(f"⚠️ [lead-notify] tidy callback error: {cb_err}", flush=True)
+
+    try:
+        tidy_task = asyncio.create_task(
+            asyncio.to_thread(
+                tidy_service.enrich_and_sync_tidy,
+                lead_id=lead_id,
+                name=name_clean,
+                phone=phone_clean,
+                email=email_clean,
+                address=address,
+                project_type=project_type,
+                goal=goal,
+                budget=budget,
+                timeline=timeline,
+                message=full_description,
+            )
         )
-    )
+        tidy_task.add_done_callback(_tidy_done_callback)
+    except Exception as e:
+        print(f"⚠️ [lead-notify] tidy enrich task creation failed (non-fatal): {e}", flush=True)
+
     return JSONResponse(content={"status": "success", "lead_id": lead_id})
 
 
@@ -3842,7 +3971,10 @@ async def finance_submit(
             _follow_up_new_lead(lead_id)
         except Exception as e:
             print(f"[finance] follow-up failed: {e}", flush=True)
-        await asyncio.to_thread(zoho_sync.after_intake, db, lead_id)
+        try:
+            await asyncio.to_thread(zoho_sync.after_intake, db, lead_id)
+        except Exception as e:
+            print(f"[finance] zoho_sync.after_intake failed for lead {lead_id}: {e}", flush=True)
     else:
         # A repeat application is still worth flagging to the owner -- it is a
         # second signal of intent, not a duplicate to discard silently.
@@ -7308,6 +7440,99 @@ async def admin_mark_all_read(request: Request):
     return JSONResponse(content={"ok": True})
 
 
+# --- Admin: PNC Bank CSV importer ------------------------------------------
+import base64 as _b64
+
+@app.get("/admin/tax/import", response_class=HTMLResponse)
+async def admin_tax_import_get(request: Request, db=Depends(get_db)):
+    """Upload page for the PNC PINACLE CSV → transactions pipeline."""
+    require_admin(request)
+    return templates.TemplateResponse(request=request, name="admin_tax_import.html", context={
+        "error": None, "success": False, "inserted_count": 0,
+        "skipped_duplicate": 0, "skipped_transfer": 0, "skipped_payout": 0,
+        "preview_rows": [], "counts": {}, "csv_base64": "",
+    })
+
+
+@app.post("/admin/tax/import", response_class=HTMLResponse)
+async def admin_tax_import_post(request: Request, db=Depends(get_db)):
+    """Two-stage: ``action=preview`` parses and classifies rows without writing;
+    ``action=commit`` re-parses from a base64 cache (the browser cannot hold
+    the original UploadFile across a submit) and writes the rows the owner
+    left marked as 'new'. Owner overrides to ``business_unit`` come back as
+    ``tag_<tx_hash>`` form fields.
+    """
+    require_admin(request)
+    ctx_base = {
+        "error": None, "success": False, "inserted_count": 0,
+        "skipped_duplicate": 0, "skipped_transfer": 0, "skipped_payout": 0,
+        "preview_rows": [], "counts": {}, "csv_base64": "",
+    }
+
+    form = await request.form()
+    action = (form.get("action") or "").strip()
+
+    # --- Commit path: rehydrate the bytes from the hidden base64 field ------
+    if action == "commit":
+        raw_b64 = (form.get("csv_base64") or "").strip()
+        if not raw_b64:
+            ctx_base["error"] = "Session expired — re-upload the CSV."
+            return templates.TemplateResponse(request=request, name="admin_tax_import.html", context=ctx_base)
+        try:
+            raw_bytes = _b64.b64decode(raw_b64)
+        except Exception:
+            ctx_base["error"] = "Corrupt upload cache — re-upload the CSV."
+            return templates.TemplateResponse(request=request, name="admin_tax_import.html", context=ctx_base)
+
+        rows, parse_errors = pnc_importer.parse_csv(raw_bytes)
+        if parse_errors and not rows:
+            ctx_base["error"] = "; ".join(parse_errors)
+            return templates.TemplateResponse(request=request, name="admin_tax_import.html", context=ctx_base)
+
+        preview = pnc_importer.classify_for_preview(rows, db)
+
+        # Collect owner overrides: any form field starting with ``tag_`` is a
+        # hash→business_unit override.
+        forced_tags: dict[str, str] = {}
+        for key, value in form.multi_items():
+            if key.startswith("tag_") and value:
+                forced_tags[key[4:]] = str(value)
+
+        inserted = pnc_importer.save_rows(db, preview["rows"], forced_tags=forced_tags)
+        ctx_base.update({
+            "success": True,
+            "inserted_count": inserted,
+            "skipped_duplicate": preview["counts"].get("duplicate", 0),
+            "skipped_transfer": preview["counts"].get("internal_transfer", 0),
+            "skipped_payout": preview["counts"].get("website_payout", 0),
+        })
+        return templates.TemplateResponse(request=request, name="admin_tax_import.html", context=ctx_base)
+
+    # --- Preview path: read the uploaded file and classify ------------------
+    upload = form.get("csv_file")
+    if not upload or not hasattr(upload, "read"):
+        ctx_base["error"] = "No CSV file uploaded."
+        return templates.TemplateResponse(request=request, name="admin_tax_import.html", context=ctx_base)
+
+    raw_bytes = await upload.read()
+    if not raw_bytes:
+        ctx_base["error"] = "Uploaded file is empty."
+        return templates.TemplateResponse(request=request, name="admin_tax_import.html", context=ctx_base)
+
+    rows, parse_errors = pnc_importer.parse_csv(raw_bytes)
+    if parse_errors and not rows:
+        ctx_base["error"] = "; ".join(parse_errors)
+        return templates.TemplateResponse(request=request, name="admin_tax_import.html", context=ctx_base)
+
+    preview = pnc_importer.classify_for_preview(rows, db)
+    ctx_base.update({
+        "preview_rows": preview["rows"],
+        "counts": preview["counts"],
+        "csv_base64": _b64.b64encode(raw_bytes).decode("ascii"),
+    })
+    return templates.TemplateResponse(request=request, name="admin_tax_import.html", context=ctx_base)
+
+
 def _actor_label(request: Request) -> str:
     """Who to record in an audit row. Best-effort; never raises.
 
@@ -9981,6 +10206,7 @@ async def instant_quote_submit(
     project_type: str = Form(""),
     sqft: str = Form(""),
     rental_intent: str = Form(""),
+    website: str = Form(""),  # honeypot — must be empty
     db=Depends(get_db),
 ):
     ctx = {
@@ -9990,16 +10216,67 @@ async def instant_quote_submit(
         "rental_intent": rental_intent,
         "error": None, "quote": None, "prop": None,
     }
+
+    def _err(msg, status=200):
+        ctx["error"] = msg
+        return templates.TemplateResponse(
+            request=request, name="instant_quote.html", context=ctx,
+            status_code=status,
+        )
+
+    # --- honeypot: bots fill hidden fields, humans don't ---------------
+    if (website or "").strip():
+        return _err("We hit a glitch saving your request — please try again or use the get-started form.", status=400)
+
+    # --- field validation (name + (phone OR email) + address) ----------
+    name = (name or "").strip()
+    phone = (phone or "").strip()
     email = (email or "").strip()
-    if not email:
-        ctx["error"] = "Please add your email — we'll send your quote there."
-        return templates.TemplateResponse(request=request, name="instant_quote.html", context=ctx)
+    address = (address or "").strip()
+
+    if not name:
+        return _err("Please add your name so we know who to call back.")
+    if not phone and not email:
+        return _err("Please add your phone number or email — we need one way to reach you.")
+    if not address:
+        return _err("Please add the property address so we can look up the square footage.")
+
+    # --- save lead FIRST, before computing any quote -------------------
+    lead_id = None
+    created = False
+    try:
+        res = lead_intake.intake_lead(
+            db, company="construction", source="instant_quote",
+            status="new",
+            name=name, phone=phone, email=email, address=address,
+            project_type=project_type,
+            description=f"Instant-quote request — ballpark pending.",
+            extra={"rental_intent": rental_intent or None},
+        )
+        lead_id, created = res["lead_id"], res["created"]
+    except Exception as e:
+        print(f"⚠️ instant quote lead save failed: {e}", flush=True)
+
+    if not lead_id:
+        # Lead not persisted — must NOT show any quote.
+        return _err(
+            "We hit a glitch saving your request — please try again or use the get-started form.",
+            status=400,
+        )
+
+    # --- pipeline hook (best-effort, never blocks the quote) -----------
+    try:
+        lead_pipeline.on_lead_created(db, lead_id)
+    except Exception as e:
+        print(f"⚠️ [lead-notify] instant-quote on_lead_created failed for lead {lead_id}: {e}", flush=True)
+
+    # --- now compute the estimate --------------------------------------
     prop = property_service.lookup_address(address)
-    manual_sqft = 0
+    manual_sqft = 0.0
     try:
         manual_sqft = float(sqft or 0)
     except ValueError:
-        manual_sqft = 0
+        manual_sqft = 0.0
 
     est = None
     if prop and prop.get("sqft"):
@@ -10008,34 +10285,23 @@ async def instant_quote_submit(
     elif manual_sqft and manual_sqft > 0:
         est = estimating_service.estimate(project_type, None, manual_sqft)
     if est is None:
-        ctx["error"] = "We couldn't auto-detect this property. Please enter your square footage to continue."
+        # We have the lead saved but can't produce a number. Return the
+        # lead_id so the user knows we got their info.
+        ctx["lead_id"] = lead_id
+        ctx["error"] = "We saved your info — but we couldn't auto-detect this property. Please enter your square footage to continue."
         return templates.TemplateResponse(request=request, name="instant_quote.html", context=ctx)
 
-    lead_id = None
-    created = False
+    # Update the lead description with the actual estimate data now that
+    # we have it (we saved first with a placeholder description).
     try:
-        res = lead_intake.intake_lead(
-            db, company="construction", source="instant_quote", name=name,
-            phone=phone, email=email, address=address, project_type=project_type,
-            description=f"Instant ballpark {est['label']} on a {est['sqft']:,} sq ft property.",
-            extra={
-                "property_sqft": est["sqft"] or None,
-                "estimate_low_cents": est["low_cents"],
-                "estimate_high_cents": est["high_cents"],
-                "estimate_json": json.dumps(est),
-                "rental_intent": rental_intent or None,
-            },
-        )
-        lead_id, created = res["lead_id"], res["created"]
+        from bizstack_leads import store as _lead_store
+        _lead_store.update_lead_fields(db, lead_id, {
+            "description": f"Instant ballpark {est['label']} on a {est['sqft']:,} sq ft property.",
+        })
     except Exception as e:
-        print(f"⚠️ instant quote lead save failed: {e}", flush=True)
+        print(f"⚠️ instant quote lead description update failed (non-fatal): {e}", flush=True)
 
-    if not lead_id:
-        # No lead saved: leave the on-page quote in place so they can retry or
-        # use /get-started instead.
-        return templates.TemplateResponse(request=request, name="instant_quote.html", context={**ctx, "error": "We hit a glitch saving your request — please try again or use the get-started form."})
-
-    # --- SQLite mirror + instant email alert ---------------------------------
+    # --- SQLite mirror (isolated from notification failures) -----------
     try:
         sqlite_id = leads_db.insert_lead(
             name=name, phone=phone, email=email, address=address,
@@ -10045,6 +10311,11 @@ async def instant_quote_submit(
             source="instant_quote",
             ip=_client_ip(request), user_agent=(request.headers.get("user-agent") or ""),
         )
+    except Exception as e:
+        print(f"⚠️ [lead-notify] instant-quote SQLite mirror failed for lead {lead_id}: {e}", flush=True)
+        sqlite_id = lead_id  # fallback to Postgres ID for alert
+
+    try:
         lead_alert.send_lead_alert(
             lead_id=sqlite_id, name=name, phone=phone, email=email,
             address=address, project_type=project_type,
@@ -10052,14 +10323,29 @@ async def instant_quote_submit(
             source="instant_quote",
         )
     except Exception as e:
-        print(f"⚠️ instant-quote SQLite/alert failed (non-fatal): {e}", flush=True)
+        print(f"⚠️ [lead-alert] instant-quote email alert failed for lead {lead_id}: {e}", flush=True)
 
+    # --- owner notification (isolated from tidy enrichment) -------------
     try:
         auto_reply.notify_owner_email(
             "construction", lead_id=lead_id, name=name, phone=phone, email=email,
             service=project_type, address=address, source="instant_quote",
         )
-        asyncio.create_task(
+    except Exception as e:
+        print(f"⚠️ [lead-notify] instant-quote owner notify failed for lead {lead_id}: {e}", flush=True)
+
+    def _iq_tidy_done(task):
+        try:
+            exc = task.exception()
+            if exc:
+                print(f"⚠️ [lead-notify] instant-quote tidy enrichment failed for lead {lead_id}: {exc}", flush=True)
+        except asyncio.CancelledError:
+            pass
+        except Exception as cb_err:
+            print(f"⚠️ [lead-notify] instant-quote tidy callback error: {cb_err}", flush=True)
+
+    try:
+        tidy_task = asyncio.create_task(
             asyncio.to_thread(
                 tidy_service.enrich_and_sync_tidy,
                 lead_id=lead_id,
@@ -10071,12 +10357,12 @@ async def instant_quote_submit(
                 goal="Instant Quote",
             )
         )
+        tidy_task.add_done_callback(_iq_tidy_done)
     except Exception as e:
-        print(f"⚠️ instant quote owner notify failed: {e}", flush=True)
+        print(f"⚠️ [lead-notify] instant-quote tidy task creation failed for lead {lead_id}: {e}", flush=True)
 
+    # --- auto-reply + follow-up (new leads only) -----------------------
     if created:
-        # A merged/duplicate quote request already has a bot draft and a
-        # follow-up scheduled; staging a second one would double send.
         try:
             auto_reply.auto_reply_to_lead(
                 db, "construction", name=name, phone=phone, email=email,
@@ -10085,12 +10371,12 @@ async def instant_quote_submit(
                 source="instant_quote", sqft=est.get("sqft"), lead_id=lead_id,
             )
         except Exception as e:
-            print(f"⚠️ instant quote auto-reply failed: {e}", flush=True)
+            print(f"⚠️ [lead-notify] instant-quote auto-reply failed for lead {lead_id}: {e}", flush=True)
 
         try:
             _follow_up_new_lead(lead_id)
         except Exception as e:
-            print(f"⚠️ instant quote follow-up failed: {e}", flush=True)
+            print(f"⚠️ [lead-notify] instant-quote follow-up failed for lead {lead_id}: {e}", flush=True)
 
     ctx.update({"quote": est, "lead_id": lead_id, "prop": prop})
     return templates.TemplateResponse(request=request, name="instant_quote.html", context=ctx)
@@ -10193,7 +10479,10 @@ async def embed_quote_submit(
     except Exception as e:
         print(f"⚠️ embed quote intake failed: {e}", flush=True)
         return back("We hit a glitch saving your request — please try again.", 500)
-    await asyncio.to_thread(zoho_sync.after_intake, db, lead_id)
+    try:
+        await asyncio.to_thread(zoho_sync.after_intake, db, lead_id)
+    except Exception as e:
+        print(f"⚠️ [lead-notify] embed quote zoho_sync.after_intake failed for lead {lead_id}: {e}", flush=True)
 
     # Same notifications as the full form. Guarded individually so one failure
     # does not cost the lead.

@@ -48,6 +48,7 @@
                         <a href="/letters" class="nav-dropdown-item {{ act('/letters') }}">Letters</a>
                         <a href="/materials/suppliers" class="nav-dropdown-item {{ act('/materials') }}">Price lists</a>
                         <a href="/portal/inbox" class="nav-dropdown-item {{ act('/portal/inbox') }}">Portal inbox</a>
+                        <a href="/admin/tax/import" class="nav-dropdown-item {{ act('/admin/tax') }}">Import PNC CSV</a>
                     </div>
                 </div>
                 <a href="/bids" class="nav-link {{ act('/bids') }}">Bids</a>
@@ -96,6 +97,7 @@
                    Swapped: phone wherever the desktop nav shows, login only on
                    the widest screens (owner can always type /login). #}
                 <a href="tel:{{ co.phone_e164 }}" class="text-sm font-semibold text-white hover:text-blue-300 transition-colors whitespace-nowrap">{{ co.phone }}</a>
+                <a href="sms:{{ co.phone_e164 }}" class="text-sm font-semibold text-white hover:text-blue-300 transition-colors whitespace-nowrap hidden 2xl:inline">Text</a>
                 <a href="/login" class="text-sm font-semibold text-slate-400 hover:text-blue-300 transition-colors hidden 2xl:inline">Owner Login</a>
                 <a href="/quote" class="inline-flex items-center justify-center px-4 py-2 text-sm font-semibold text-white bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-700 hover:to-blue-700 rounded-xl transition-all shadow-md shadow-indigo-500/20">Get a Free Quote</a>
                 {% endif %}
@@ -132,13 +134,16 @@
             <a href="/payments" class="mobile-link {{ act('/payments') }}">Payments</a>
             <a href="/books" class="mobile-link {{ act('/books') }}">Books</a>
             <a href="/letters" class="mobile-link {{ act('/letters') }}">Letters</a>
+            <a href="/materials/suppliers" class="mobile-link {{ act('/materials') }}">Price lists</a>
             <a href="/bids" class="mobile-link {{ act('/bids') }}">Bids</a>
             <a href="/portal/inbox" class="mobile-link {{ act('/portal/inbox') }}">Portal inbox</a>
+            <a href="/admin/tax/import" class="mobile-link {{ act('/admin/tax') }}">Import PNC CSV</a>
         </div>
         <p class="mobile-section-label">Crew</p>
         <div class="grid gap-0.5">
             <a href="/crew/admin" class="mobile-link {{ act('/crew/admin') }}">Crew members</a>
             <a href="/messages" class="mobile-link {{ act('/messages') }}">Messages</a>
+            <a href="/crew/access" class="mobile-link {{ act('/crew/access') }}">App access &amp; bulletin</a>
             <a href="/settings" class="mobile-link {{ act('/settings') }}">Settings</a>
         </div>
         <div class="mt-4 pt-4 border-t border-white/10 flex flex-col gap-3">
@@ -159,6 +164,7 @@
         </div>
         <div class="mt-4 pt-4 border-t border-white/10 flex flex-col gap-3">
             <a href="tel:{{ co.phone_e164 }}" class="text-center text-sm font-semibold text-slate-300">Call {{ co.phone }}</a>
+            <a href="sms:{{ co.phone_e164 }}" class="text-center text-sm font-semibold text-slate-300">Text {{ co.phone }}</a>
             <a href="/quote" class="text-center px-4 py-3 text-sm font-semibold text-white bg-gradient-to-r from-indigo-600 to-blue-600 rounded-xl shadow-md shadow-indigo-500/20">Get a Free Quote</a>
         </div>
         {% endif %}

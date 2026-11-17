@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% set co = company() %}
-{% block title %}Instant Ballpark Quote | {{ co.name }}{% endblock %}
+{% block title %}Instant Ballpark Quote | Hampton Roads General Contractor{% endblock %}
+{% block meta %}<meta name="description" content="Get an instant ballpark price for your renovation, addition, or repair project. Serving Hampton Roads VA and Currituck County NC. No sign-up required.">{% endblock %}
 
 {% block content %}
 <section class="py-12 bg-slate-50">
@@ -12,7 +13,11 @@
         </div>
 
         <div class="bg-white rounded-3xl border border-slate-200 shadow-sm p-6 sm:p-8">
-            <form method="POST" action="/instant-quote" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <form method="POST" action="/instant-quote" id="iq-form" class="grid grid-cols-1 md:grid-cols-2 gap-4" novalidate>
+                <!-- honeypot: bots fill this, humans don't see it -->
+                <input type="text" name="website" tabindex="-1" autocomplete="off"
+                       style="position:absolute;left:-9999px;top:-9999px;height:0;width:0;overflow:hidden"
+                       aria-hidden="true">
                 <div class="md:col-span-2">
                     <label class="block text-sm font-semibold text-slate-700 mb-1.5">Project type</label>
                     <select name="project_type" required class="w-full px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500">
@@ -71,6 +76,12 @@
             <div class="mt-5 px-4 py-3 rounded-2xl bg-amber-50 border border-amber-200 text-sm font-semibold text-amber-800">{{ error }}</div>
             {% endif %}
 
+            {% if quote and lead_id %}
+            <div id="iq-confirmation" class="mt-5 px-4 py-3 rounded-2xl bg-emerald-50 border border-emerald-200 text-sm font-semibold text-emerald-800">
+                ✅ We saved your info — Shaun will call you within 2 hours during business hours.
+            </div>
+            {% endif %}
+
             <p class="mt-6 text-xs text-slate-400 leading-relaxed">
                 Ballpark ranges are generated from public property data and our own price book. They are <strong>not bids</strong> and are <strong>not binding</strong>. Every project gets a free on-site walkthrough and a written, fixed-price scope before any work begins.
             </p>
@@ -113,7 +124,8 @@
                 {% endif %}
                 <div class="mt-5 px-4 py-3 rounded-2xl bg-slate-50 border border-slate-100 text-sm text-slate-600 leading-relaxed">{{ quote.disclaimer }}</div>
                 <div class="mt-6 flex flex-col sm:flex-row gap-3">
-                    <a href="tel:{{ co.phone_e164 }}" class="flex-1 text-center px-5 py-3.5 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-2xl transition-colors">⚡ Fast-Pass: free on-site walkthrough → Call {{ co.phone }}</a>
+                    <a href="tel:+17579087121" class="flex-1 text-center px-5 py-3.5 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-2xl transition-colors">📞 Call {{ co.phone }}</a>
+                    <a href="sms:+17579087121?body=Hi%20BuildStack%2C%20I'd%20like%20a%20free%20estimate." class="flex-1 text-center px-5 py-3.5 text-sm font-bold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 rounded-2xl transition-colors">💬 Text Us</a>
                     <a href="/contact" class="flex-1 text-center px-5 py-3.5 text-sm font-bold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 rounded-2xl transition-colors">Send us the details</a>
                 </div>
                 <p class="mt-3 text-xs text-slate-400 text-center">This is a ballpark from public records — not a bid. We'll verify it in person at your free walkthrough and lock a fixed price in writing.</p>
@@ -121,6 +133,129 @@
             </div>
         </div>
         {% endif %}
+    </div>
+</section>
+
+<!-- ============ WHY OUR BIDS WIN ============ -->
+<section class="py-16 bg-white">
+    <div class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="text-center mb-12">
+            <p class="text-sm font-bold text-indigo-600 uppercase tracking-widest">The BuildStack Difference</p>
+            <h2 class="text-3xl sm:text-4xl font-black tracking-tight text-slate-900 mt-2">Why Our Bids Win</h2>
+            <p class="mt-3 text-base text-slate-500 max-w-2xl mx-auto">Most contractors lowball to get in the door, then jack the price with change orders. We give you a fixed written scope and price before a single nail is pulled.</p>
+        </div>
+
+        <div class="rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
+            <!-- Column headers -->
+            <div class="grid grid-cols-1 sm:grid-cols-2">
+                <div class="bg-indigo-600 px-6 py-4 sm:border-r border-indigo-500">
+                    <p class="text-sm font-black text-white uppercase tracking-wider">✅ BuildStack Construction</p>
+                </div>
+                <div class="bg-slate-700 px-6 py-4">
+                    <p class="text-sm font-black text-white uppercase tracking-wider">❌ Typical Lowball Contractor</p>
+                </div>
+            </div>
+
+            <!-- Comparison rows -->
+            <div class="divide-y divide-slate-100">
+                <div class="grid grid-cols-1 sm:grid-cols-2">
+                    <div class="px-6 py-4 bg-emerald-50/50 sm:border-r border-slate-100 flex items-start gap-3">
+                        <span class="text-emerald-600 text-lg leading-none mt-0.5 shrink-0">✓</span>
+                        <span class="text-sm font-semibold text-slate-800">Fixed written price — no surprises</span>
+                    </div>
+                    <div class="px-6 py-4 bg-slate-50 flex items-start gap-3">
+                        <span class="text-red-500 text-lg leading-none mt-0.5 shrink-0">✗</span>
+                        <span class="text-sm text-slate-600">Low initial bid, inflated later</span>
+                    </div>
+                </div>
+                <div class="grid grid-cols-1 sm:grid-cols-2">
+                    <div class="px-6 py-4 bg-white sm:border-r border-slate-100 flex items-start gap-3">
+                        <span class="text-emerald-600 text-lg leading-none mt-0.5 shrink-0">✓</span>
+                        <span class="text-sm font-semibold text-slate-800">One licensed crew, all trades</span>
+                    </div>
+                    <div class="px-6 py-4 bg-slate-50/60 flex items-start gap-3">
+                        <span class="text-red-500 text-lg leading-none mt-0.5 shrink-0">✗</span>
+                        <span class="text-sm text-slate-600">Subcontractor roulette</span>
+                    </div>
+                </div>
+                <div class="grid grid-cols-1 sm:grid-cols-2">
+                    <div class="px-6 py-4 bg-emerald-50/50 sm:border-r border-slate-100 flex items-start gap-3">
+                        <span class="text-emerald-600 text-lg leading-none mt-0.5 shrink-0">✓</span>
+                        <span class="text-sm font-semibold text-slate-800">Former federal inspector standards</span>
+                    </div>
+                    <div class="px-6 py-4 bg-slate-50 flex items-start gap-3">
+                        <span class="text-red-500 text-lg leading-none mt-0.5 shrink-0">✗</span>
+                        <span class="text-sm text-slate-600">"Good enough" to pass</span>
+                    </div>
+                </div>
+                <div class="grid grid-cols-1 sm:grid-cols-2">
+                    <div class="px-6 py-4 bg-white sm:border-r border-slate-100 flex items-start gap-3">
+                        <span class="text-emerald-600 text-lg leading-none mt-0.5 shrink-0">✓</span>
+                        <span class="text-sm font-semibold text-slate-800">Detailed written scope before work</span>
+                    </div>
+                    <div class="px-6 py-4 bg-slate-50/60 flex items-start gap-3">
+                        <span class="text-red-500 text-lg leading-none mt-0.5 shrink-0">✗</span>
+                        <span class="text-sm text-slate-600">Vague handshake agreements</span>
+                    </div>
+                </div>
+                <div class="grid grid-cols-1 sm:grid-cols-2">
+                    <div class="px-6 py-4 bg-emerald-50/50 sm:border-r border-slate-100 flex items-start gap-3">
+                        <span class="text-emerald-600 text-lg leading-none mt-0.5 shrink-0">✓</span>
+                        <span class="text-sm font-semibold text-slate-800">Change orders require your OK</span>
+                    </div>
+                    <div class="px-6 py-4 bg-slate-50 flex items-start gap-3">
+                        <span class="text-red-500 text-lg leading-none mt-0.5 shrink-0">✗</span>
+                        <span class="text-sm text-slate-600">Surprise charges mid-project</span>
+                    </div>
+                </div>
+                <div class="grid grid-cols-1 sm:grid-cols-2">
+                    <div class="px-6 py-4 bg-white sm:border-r border-slate-100 flex items-start gap-3">
+                        <span class="text-emerald-600 text-lg leading-none mt-0.5 shrink-0">✓</span>
+                        <span class="text-sm font-semibold text-slate-800">32 years in the trade</span>
+                    </div>
+                    <div class="px-6 py-4 bg-slate-50/60 flex items-start gap-3">
+                        <span class="text-red-500 text-lg leading-none mt-0.5 shrink-0">✗</span>
+                        <span class="text-sm text-slate-600">"Trust me bro"</span>
+                    </div>
+                </div>
+                <div class="grid grid-cols-1 sm:grid-cols-2">
+                    <div class="px-6 py-4 bg-emerald-50/50 sm:border-r border-slate-100 flex items-start gap-3">
+                        <span class="text-emerald-600 text-lg leading-none mt-0.5 shrink-0">✓</span>
+                        <span class="text-sm font-semibold text-slate-800">Clean job site, every day</span>
+                    </div>
+                    <div class="px-6 py-4 bg-slate-50 flex items-start gap-3">
+                        <span class="text-red-500 text-lg leading-none mt-0.5 shrink-0">✗</span>
+                        <span class="text-sm text-slate-600">Leave the mess for you</span>
+                    </div>
+                </div>
+                <div class="grid grid-cols-1 sm:grid-cols-2">
+                    <div class="px-6 py-4 bg-white sm:border-r border-slate-100 flex items-start gap-3">
+                        <span class="text-emerald-600 text-lg leading-none mt-0.5 shrink-0">✓</span>
+                        <span class="text-sm font-semibold text-slate-800">We pull the permits</span>
+                    </div>
+                    <div class="px-6 py-4 bg-slate-50/60 flex items-start gap-3">
+                        <span class="text-red-500 text-lg leading-none mt-0.5 shrink-0">✗</span>
+                        <span class="text-sm text-slate-600">"You handle that"</span>
+                    </div>
+                </div>
+                <div class="grid grid-cols-1 sm:grid-cols-2">
+                    <div class="px-6 py-4 bg-emerald-50/50 sm:border-r border-slate-100 flex items-start gap-3">
+                        <span class="text-emerald-600 text-lg leading-none mt-0.5 shrink-0">✓</span>
+                        <span class="text-sm font-semibold text-slate-800">Stand behind our work in writing</span>
+                    </div>
+                    <div class="px-6 py-4 bg-slate-50 flex items-start gap-3">
+                        <span class="text-red-500 text-lg leading-none mt-0.5 shrink-0">✗</span>
+                        <span class="text-sm text-slate-600">Disappear after final payment</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- CTA -->
+        <div class="mt-12 text-center">
+            <p class="text-xl font-black text-slate-900">Stop guessing. Get a real fixed-price scope.</p>
+            <a href="/quote" class="mt-5 inline-block px-8 py-4 text-base font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-2xl shadow-lg shadow-indigo-200 transition-colors">Get Your Free Written Estimate →</a>
+        </div>
     </div>
 </section>
 {% endblock %}
@@ -209,5 +344,113 @@ document.addEventListener('DOMContentLoaded', function() {
     addr.addEventListener('change', detect);
     addr.addEventListener('blur', detect);
 });
+</script>
+<script>
+(function(){
+    var form = document.getElementById('iq-form');
+    if (!form) return;
+    var btn = form.querySelector('button[type="submit"]');
+
+    function getErrorBox() {
+        return form.parentElement.querySelector('.bg-amber-50');
+    }
+
+    function showClientError(msg) {
+        var errorBox = getErrorBox();
+        if (errorBox) {
+            errorBox.textContent = msg;
+            errorBox.classList.remove('hidden');
+        } else {
+            var d = document.createElement('div');
+            d.className = 'mt-5 px-4 py-3 rounded-2xl bg-amber-50 border border-amber-200 text-sm font-semibold text-amber-800';
+            d.textContent = msg;
+            form.parentElement.insertBefore(d, form.nextSibling);
+        }
+    }
+
+    function hideError() {
+        var errorBox = getErrorBox();
+        if (errorBox) { errorBox.textContent = ''; errorBox.classList.add('hidden'); }
+    }
+
+    function markInvalid(el, bad) {
+        if (!el) return;
+        if (bad) {
+            el.style.borderColor = '#ef4444';
+            el.style.boxShadow = '0 0 0 1px #ef4444';
+        } else {
+            el.style.borderColor = '';
+            el.style.boxShadow = '';
+        }
+    }
+
+    function validateClient() {
+        var nameEl = form.querySelector('input[name="name"]');
+        var phoneEl = form.querySelector('input[name="phone"]');
+        var emailEl = form.querySelector('input[name="email"]');
+        var addrEl = form.querySelector('input[name="address"]');
+        var nameV = (nameEl && nameEl.value || '').trim();
+        var phoneV = (phoneEl && phoneEl.value || '').trim();
+        var emailV = (emailEl && emailEl.value || '').trim();
+        var addrV = (addrEl && addrEl.value || '').trim();
+        var ok = true;
+
+        markInvalid(nameEl, !nameV);
+        markInvalid(addrEl, !addrV);
+        markInvalid(emailEl, !emailV && !phoneV);
+        markInvalid(phoneEl, !phoneV && !emailV);
+
+        if (!nameV) { showClientError('Please add your name so we know who to call back.'); return false; }
+        if (!phoneV && !emailV) { showClientError('Please add your phone number or email — we need one way to reach you.'); return false; }
+        if (!addrV) { showClientError('Please add the property address so we can look up the square footage.'); return false; }
+        return true;
+    }
+
+    form.addEventListener('submit', async function(e) {
+        e.preventDefault();
+        hideError();
+        if (!validateClient()) return;
+
+        // Duplicate-submission prevention
+        if (btn) { btn.disabled = true; btn.textContent = 'Calculating…'; }
+
+        try {
+            var res = await fetch('/instant-quote', {
+                method: 'POST',
+                body: new FormData(form),
+            });
+            var html = await res.text();
+
+            if (!res.ok) {
+                // Server returned an error — extract the error message from the HTML
+                var doc = new DOMParser().parseFromString(html, 'text/html');
+                var errEl = doc.querySelector('.bg-amber-50');
+                var serverMsg = errEl ? errEl.textContent.trim() : 'We hit a glitch — please try again or use the get-started form.';
+                showClientError(serverMsg);
+                return;
+            }
+
+            // Success: replace the page with the server-rendered response
+            // (it contains the quote section + confirmation banner)
+            var doc = new DOMParser().parseFromString(html, 'text/html');
+            var newForm = doc.getElementById('iq-form');
+            if (newForm) {
+                // Swap in the full page content
+                document.documentElement.innerHTML = doc.documentElement.innerHTML;
+                // Scroll to the quote section
+                var quoteSection = document.querySelector('.border-indigo-600');
+                if (quoteSection) quoteSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            } else {
+                // Fallback: just show the full page
+                document.documentElement.innerHTML = doc.documentElement.innerHTML;
+            }
+        } catch (err) {
+            showClientError('Could not connect — please check your internet and try again.');
+        } finally {
+            var liveBtn = document.querySelector('#iq-form button[type="submit"]');
+            if (liveBtn) { liveBtn.disabled = false; liveBtn.textContent = 'Get My Ballpark →'; }
+        }
+    });
+})();
 </script>
 {% endblock %}

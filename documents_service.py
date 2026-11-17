@@ -9,8 +9,10 @@ import brand
 import asyncio
 import io
 import re
+import json
 from email.message import EmailMessage
 from email.utils import formataddr
+from pathlib import Path
 
 from fpdf import FPDF
 
@@ -18,6 +20,95 @@ try:
     import aiosmtplib
 except ImportError:  # pragma: no cover
     aiosmtplib = None
+
+
+# ---------------------------------------------------------------------------
+# Failed email retry queue
+# ---------------------------------------------------------------------------
+
+FAILED_EMAILS_PATH = Path("/tmp/failed_emails.jsonl")
+
+
+def queue_failed_email(to: str, subject: str, body: str, reason: str, cfg: dict = None) -> None:
+    """Append a failed email to the retry queue.
+
+    This is called when send_email returns False or raises an exception. The
+    queue is a simple JSONL file that the daily health check reads and retries.
+    """
+    try:
+        import datetime
+        entry = {
+            "to": to,
+            "subject": subject,
+            "body": body,
+            "reason": reason,
+            "attempted_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        }
+        # Don't queue the full cfg (it may contain passwords), just the sender
+        if cfg:
+            entry["from"] = cfg.get("SMTP_FROM", "")
+        with open(FAILED_EMAILS_PATH, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+        print(f"[email-retry] queued failed email to {to}: {reason}", flush=True)
+    except Exception as e:
+        # A failure in the retry queue must not break the caller
+        print(f"[email-retry] could not queue failed email: {e}", flush=True)
+
+
+def retry_failed_emails(max_retries: int = 10) -> int:
+    """Attempt to resend queued failed emails.
+
+    Reads /tmp/failed_emails.jsonl, tries to send each one, and removes
+    successful ones from the queue. Returns the number of emails retried.
+    """
+    if not FAILED_EMAILS_PATH.exists():
+        return 0
+
+    try:
+        lines = FAILED_EMAILS_PATH.read_text().strip().split("\n")
+        entries = [json.loads(line) for line in lines if line.strip()]
+    except Exception as e:
+        print(f"[email-retry] could not read queue: {e}", flush=True)
+        return 0
+
+    if not entries:
+        return 0
+
+    retried = 0
+    remaining = []
+
+    for entry in entries[:max_retries]:
+        try:
+            cfg = smtp_config_from_env()
+            if not smtp_configured(cfg):
+                print(f"[email-retry] SMTP not configured; cannot retry", flush=True)
+                remaining.append(entry)
+                continue
+
+            # Attempt to send
+            ok = asyncio.run(send_email(cfg, entry["to"], entry["subject"], entry["body"]))
+            if ok:
+                print(f"[email-retry] resent email to {entry['to']}", flush=True)
+                retried += 1
+            else:
+                print(f"[email-retry] retry failed for {entry['to']}", flush=True)
+                remaining.append(entry)
+        except Exception as e:
+            print(f"[email-retry] retry exception for {entry.get('to', '?')}: {e}", flush=True)
+            remaining.append(entry)
+
+    # Write back any emails that still failed
+    try:
+        if remaining:
+            with open(FAILED_EMAILS_PATH, "w") as f:
+                for entry in remaining:
+                    f.write(json.dumps(entry) + "\n")
+        else:
+            FAILED_EMAILS_PATH.unlink()
+    except Exception as e:
+        print(f"[email-retry] could not update queue: {e}", flush=True)
+
+    return retried
 
 
 # A routing/account pair must never leave in an email body. This is a hard stop
@@ -957,6 +1048,7 @@ async def send_email(cfg: dict, to: str, subject: str, body: str, attachment: by
         # change. Set EMAIL_FALLBACK_SMTP=0 to restore the old hard stop.
         if not _fallback_smtp_enabled(cfg):
             print("[EMAIL] Gmail transport unavailable; no fallback transport is enabled", flush=True)
+            queue_failed_email(to, subject, body, "all transports unavailable (Gmail + no fallback)", cfg)
             return False
         print("[EMAIL] Gmail transport unavailable; degrading to the SMTP ladder", flush=True)
         degraded_to_fallback = True
@@ -1080,4 +1172,6 @@ async def send_email(cfg: dict, to: str, subject: str, body: str, attachment: by
             except Exception as e:
                 last_error = e
                 print(f"[EMAIL] SMTP {host} ({ip}):{port}/{mode} attempt failed: {e}")
+    # All transports failed — queue for retry and raise
+    queue_failed_email(to, subject, body, f"all SMTP attempts failed: {last_error}", cfg)
     raise last_error or RuntimeError(f"SMTP {host} is unreachable (no candidates left to try).")

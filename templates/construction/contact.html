@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% set co = company() %}
-{% block title %}Contact | {{ co.name }} — We answer 24/7{% endblock %}
-{% block meta %}<meta name="description" content="Contact {{ co.name }} by phone, text, or email. We answer 24/7 and serve {{ co.service_area }}.">{% endblock %}
+{% block title %}Contact BuildStack Construction | Call (757) 908-7121 | Hampton Roads{% endblock %}
+{% block meta %}<meta name="description" content="Call (757) 908-7121 or email hello@bizstackperks.com. We answer 24/7. Serving Hampton Roads VA and Currituck County NC. Free estimates.">{% endblock %}
 
 {% block content %}
 <section class="bg-gradient-to-br from-slate-900 to-indigo-900 text-white">
@@ -13,12 +13,18 @@
 </section>
 
 <section class="py-16 bg-white">
-    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 grid grid-cols-1 md:grid-cols-3 gap-8">
-        <a href="tel:{{ co.phone_e164 }}" class="rounded-3xl border border-slate-200 p-8 text-center hover:shadow-xl hover:-translate-y-0.5 transition-all">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8">
+        <a href="tel:+17579087121" class="rounded-3xl border border-slate-200 p-8 text-center hover:shadow-xl hover:-translate-y-0.5 transition-all">
             <div class="w-14 h-14 mx-auto rounded-2xl bg-indigo-50 flex items-center justify-center text-2xl">📞</div>
-            <h2 class="mt-4 font-bold text-slate-900">Call or text</h2>
+            <h2 class="mt-4 font-bold text-slate-900">Call</h2>
             <p class="mt-1 text-lg font-semibold text-indigo-600 hover:text-indigo-700">{{ co.phone }}</p>
             <p class="mt-2 text-sm text-slate-500">Answered 24/7 by our assistant.</p>
+        </a>
+        <a href="sms:+17579087121?body=Hi%20BuildStack%2C%20I'd%20like%20a%20free%20estimate." class="rounded-3xl border border-slate-200 p-8 text-center hover:shadow-xl hover:-translate-y-0.5 transition-all">
+            <div class="w-14 h-14 mx-auto rounded-2xl bg-indigo-50 flex items-center justify-center text-2xl">💬</div>
+            <h2 class="mt-4 font-bold text-slate-900">Text</h2>
+            <p class="mt-1 text-lg font-semibold text-indigo-600 hover:text-indigo-700">{{ co.phone }}</p>
+            <p class="mt-2 text-sm text-slate-500">Quick replies, day or night.</p>
         </a>
         <a href="mailto:{{ co.email }}" class="rounded-3xl border border-slate-200 p-8 text-center hover:shadow-xl hover:-translate-y-0.5 transition-all">
             <div class="w-14 h-14 mx-auto rounded-2xl bg-indigo-50 flex items-center justify-center text-2xl">📧</div>

@@ -145,8 +145,11 @@ def _notify_owner_sms(*, lead_id, name="", phone="", service="", address="", goa
         lines.append(f"Address: {address}")
     lines.append("Call them now — first GC to respond wins.")
     body = "\n".join(lines)
-    sw.send_sms(mobile, body)
-    print(f"[notify-owner] SMS alert sent to owner (lead #{lead_id})", flush=True)
+    sent = sw.send_sms(mobile, body)
+    if sent:
+        print(f"[notify-owner] SMS alert sent to owner (lead #{lead_id})", flush=True)
+    else:
+        print(f"⚠️ [lead-alert] SMS to owner failed (SignalWire returned False) for lead #{lead_id}", flush=True)
 
 COMPANIES = {
     "construction": {"name": brand.short_name(), "legal_name": brand.name(), "cta": "Call or text us at (757) 908-7121 anytime."},

@@ -1,5 +1,11 @@
 # Memory
 
+> **Deployment note (2026-11-16):** This project is deployed to **DigitalOcean** (Droplet
+> `bizstack-prod` at `159.203.175.39`, Docker Compose with Caddy). **Render and Railway are
+> not used.** Any references to Railway or Render elsewhere in this file are historical
+> context from past incidents — they do not reflect the current deployment. Env vars are now
+> in `/opt/bizstack/construction.env` on the Droplet, not in Railway/Render dashboards.
+
 ## The legal entity is BuildStack Construction LLC (since 2026-10-28)
 
 Organized with the Virginia State Corporation Commission on 2026-10-28:

@@ -8,5 +8,8 @@
   },
   "devDependencies": {
     "tailwindcss": "^3.4.17"
+  },
+  "dependencies": {
+    "zoho-extension-toolkit": "^1.0.30"
   }
 }

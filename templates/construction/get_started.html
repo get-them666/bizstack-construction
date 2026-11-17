@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% set co = company() %}
-{% block title %}Get Started | {{ co.name }}{% endblock %}
-{% block meta %}<meta name="description" content="Tell us about your renovation, addition, or repair and get started with {{ co.name }} in minutes. Free estimates, financing available."><meta name="robots" content="index, follow">{% endblock %}
+{% block title %}Get a Free Estimate | BuildStack Construction Hampton Roads VA{% endblock %}
+{% block meta %}<meta name="description" content="Tell us about your renovation, addition, or repair. Free estimates, same-day response, financing available. Licensed contractor serving Hampton Roads VA."><meta name="robots" content="index, follow">{% endblock %}
 {% block content %}
 <section class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-16">
     <div class="text-center mb-12">
@@ -29,7 +29,7 @@
     <div class="max-w-2xl mx-auto rounded-2xl border border-emerald-200 bg-emerald-50 p-6 text-center mb-8">
         <p class="text-lg font-bold text-emerald-800">Request received!</p>
         <p class="mt-1 text-emerald-700">We'll reach out within one business day. Urgent?</p>
-        <a href="tel:{{ co.phone_e164 }}" class="mt-2 inline-block text-sm font-semibold text-indigo-600 hover:text-indigo-700">Call or text {{ co.phone }}</a>
+        <a href="tel:+17579087121" class="mt-2 inline-block text-sm font-semibold text-indigo-600 hover:text-indigo-700">Call {{ co.phone }}</a> or <a href="sms:+17579087121?body=Hi%20BuildStack%2C%20I'd%20like%20a%20free%20estimate." class="mt-2 inline-block text-sm font-semibold text-indigo-600 hover:text-indigo-700">Text us</a>
     </div>
     {% elif request.query_params.get("error") %}
     <div class="max-w-2xl mx-auto rounded-2xl border border-rose-200 bg-rose-50 p-6 text-center mb-8">
@@ -117,7 +117,7 @@
         <p class="text-2xl">🤝</p>
         <h2 class="mt-2 text-xl font-extrabold text-slate-900">Know someone getting work done?</h2>
         <p class="mt-2 text-sm text-slate-600 max-w-lg mx-auto">Refer an owner or contractor in our area and we'll take care of the rest. Ask our team for your personal referral link and earn a reward on every project that books.</p>
-        <p class="mt-4 text-sm font-semibold text-slate-900"><a href="tel:{{ co.phone_e164 }}" class="text-indigo-600 hover:text-indigo-700">Call or text {{ co.phone }}</a> for your referral link.</p>
+        <p class="mt-4 text-sm font-semibold text-slate-900"><a href="tel:+17579087121" class="text-indigo-600 hover:text-indigo-700">Call {{ co.phone }}</a> or <a href="sms:+17579087121?body=Hi%20BuildStack%2C%20I'd%20like%20a%20free%20estimate." class="text-indigo-600 hover:text-indigo-700">Text us</a> for your referral link.</p>
     </div>
 </section>
 {% endblock %}
