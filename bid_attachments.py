@@ -44,10 +44,13 @@ _QUOTE_HINTS = ("quote", "quotation", "proposal", "bid form", "bidform",
 _RFI_HINTS = ("rfi", "request for information", "information request", "clarification")
 _ADDENDA_HINTS = ("addenda", "addendum", "bulletin", "amendment")
 _SPECS_HINTS = ("specification", "specs", "technical", "product data", "submittal",
-                "leed", "sustain", "recycl")
+                "leed", "sustain", "recycl", "commissioning")
 _INSPECTION_HINTS = ("inspection", "punch list", "punchlist", "deficiency",
                      "asbestos", "esa", "phase i", "phase ii", "environmental")
-_PERMIT_HINTS = ("permit", "application", "approval", "certificate", "co", "cco")
+# "co" and "cco" were removed: a two-letter hint matches the start of
+# "Commissioning" and "Connections" and filed them as permits.
+_PERMIT_HINTS = ("permit", "application", "approval", "certificate",
+                 "notice of commencement", "occupancy")
 _CORRESPONDENCE_HINTS = ("letter", "memo", "email", "correspondence", "note")
 _SCHEDULE_HINTS = ("schedule", "timeline", "gantt", "milestone", "phasing")
 
@@ -84,6 +87,15 @@ def classify(filename: str, content_type: str = "") -> str:
     # with six digits that look like a CSI section but are a project number.
     if ext in _DRAWING_EXT or "bid set" in name:
         return "plans"
+    # An explicit word in the title beats the number in front of it: "007200 -
+    # GENERAL CONDITIONS" is a contract, and "006313 - REQUEST FOR INFORMATION
+    # FORM" is an RFI, even though both carry a division-00 prefix.
+    if any(_hits(name, h) for h in _CONTRACT_HINTS):
+        return "contract"
+    if any(_hits(name, h) for h in _RFI_HINTS):
+        return "rfi"
+    if any(_hits(name, h) for h in _ADDENDA_HINTS):
+        return "addenda"
     # A spec book arrives as "270000 - STRUCTURED CABLING.pdf": CSI MasterFormat
     # section numbers. This is a stronger signal than a word in the section title
     # -- "221316 - STORM DRAINAGE" is plumbing, not a site plan -- so it is
@@ -104,16 +116,10 @@ def classify(filename: str, content_type: str = "") -> str:
         return "plans"
     if any(_hits(name, h) for h in _SOW_HINTS):
         return "sow"
-    if any(_hits(name, h) for h in _CONTRACT_HINTS):
-        return "contract"
     if any(_hits(name, h) for h in _ITEMIZED_HINTS):
         return "itemized"
     if any(_hits(name, h) for h in _QUOTE_HINTS):
         return "quote"
-    if any(_hits(name, h) for h in _RFI_HINTS):
-        return "rfi"
-    if any(_hits(name, h) for h in _ADDENDA_HINTS):
-        return "addenda"
     if any(_hits(name, h) for h in _SPECS_HINTS):
         return "specs"
     if any(_hits(name, h) for h in _INSPECTION_HINTS):

@@ -104,6 +104,9 @@ def test_auto_sort_routes_by_filename():
         ("Building Permit Application.pdf", "Permits"),
         ("Schedule - Phase 1.pdf", "Schedules"),
         ("IMG_2043.JPG", "Photos"),
+        ("007200 - GENERAL CONDITIONS v20.3.pdf", "Contracts & Proposals"),
+        ("006313 - REQUEST FOR INFORMATION FORM v20.3.pdf", "RFIs & Addenda"),
+        ("ExN-Commissioning-CXRequirements.pdf", "Scope & Specifications"),
         ("data.csv", "Other"),
     ]
     for filename, expected in cases:
