@@ -12615,7 +12615,7 @@ async def bid_files_upload(bid_id: int, request: Request,
                      folder_safe, _owner_email()),
                 )
                 row = cur.fetchone()
-                new_id = row[0] if row else None
+                new_id = row["id"] if row else None
             db.commit()
         except Exception as e:
             db.rollback()
