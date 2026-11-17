@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from fpdf import FPDF
@@ -29,6 +29,42 @@ class ProposalPDF(FPDF):
         self.cell(0, 10, 'BuildStack Construction LLC - Thank you for the opportunity', align='C')
 
 
+def _pretty_date(value) -> str:
+    """A due date written the same way as every other date on the page."""
+    if not value:
+        return ""
+    if isinstance(value, (date, datetime)):
+        return value.strftime("%B %d, %Y")
+    try:
+        return date.fromisoformat(str(value)[:10]).strftime("%B %d, %Y")
+    except (TypeError, ValueError):
+        return str(value)[:10]
+
+
+def _fit(pdf: FPDF, text: str, width: float) -> str:
+    """Trim to the column without cutting a word in half.
+
+    The breakdown used a flat 40-character slice, so a GC read lines like
+    "Selective demolition - partitions, ceili". Cutting on a word boundary
+    costs a few characters and reads as a sentence instead.
+    """
+    text = " ".join(str(text or "").split())
+    if pdf.get_string_width(text) <= width:
+        return text
+    trimmed = text
+    while trimmed and pdf.get_string_width(trimmed + "...") > width:
+        if " " not in trimmed:
+            trimmed = trimmed[:-1]
+            continue
+        trimmed = trimmed.rsplit(" ", 1)[0]
+    return (trimmed + "...") if trimmed else ""
+
+
+def _is_reconciliation(line: dict) -> bool:
+    """True for the card's own rounding line, which is not scope."""
+    return (line.get("description") or "").strip().lower().startswith("rounding")
+
+
 def generate_proposal_pdf(bid: dict, costs: list, summary: dict, markup_pct: float = 0,
                           signature: dict | None = None) -> bytes:
     pdf = ProposalPDF()
@@ -48,28 +84,36 @@ def generate_proposal_pdf(bid: dict, costs: list, summary: dict, markup_pct: flo
     if bid.get('owner'):
         pdf.cell(0, 6, f'GC/Owner: {bid["owner"]}', ln=True)
     if bid.get('due_date'):
-        pdf.cell(0, 6, f'Bid Due: {bid["due_date"]}', ln=True)
+        pdf.cell(0, 6, f'Bid Due: {_pretty_date(bid["due_date"])}', ln=True)
     pdf.ln(8)
     
-    # Cost breakdown
+    # Cost breakdown. Entry order, not category order: the lines were priced in
+    # job sequence (demolition, then finishes, then general conditions), so
+    # sorting by category alphabetically buried the O&P lines in the middle of
+    # the scope and printed the demolition in three separate clumps.
     pdf.set_font('Helvetica', 'B', 12)
     pdf.cell(0, 10, 'Cost Breakdown', ln=True)
     pdf.ln(2)
     
     pdf.set_font('Helvetica', 'B', 9)
     pdf.set_fill_color(245, 245, 245)
-    pdf.cell(60, 8, 'Category', border=1, fill=True)
-    pdf.cell(80, 8, 'Description', border=1, fill=True)
+    pdf.cell(34, 8, 'Category', border=1, fill=True)
+    pdf.cell(106, 8, 'Description', border=1, fill=True)
     pdf.cell(50, 8, 'Amount', border=1, fill=True, ln=True)
     
     pdf.set_font('Helvetica', '', 9)
     subtotal = 0.0
-    for c in costs:
+    for c in sorted(costs, key=lambda x: x.get('id') or 0):
         est = float(c.get('estimated') or 0)
         subtotal += est
-        pdf.cell(60, 7, str(c.get('category', '')).title(), border=1)
-        desc = (c.get('description') or '')[:40]
-        pdf.cell(80, 7, desc, border=1)
+        # "Rounding / prior bid reconciliation" is how the card makes the total
+        # a whole dollar. It belongs in the arithmetic but not on a customer's
+        # page: a -$0.12 row reads as a mistake. Anything large enough to move
+        # the price by a dollar is shown instead of absorbed.
+        if _is_reconciliation(c) and abs(est) < 1:
+            continue
+        pdf.cell(34, 7, _fit(pdf, str(c.get('category', '')).title(), 32), border=1)
+        pdf.cell(106, 7, _fit(pdf, c.get('description') or '', 103), border=1)
         pdf.cell(50, 7, f'${est:,.2f}', border=1, ln=True, align='R')
 
     # No itemised lines (or a zero sum): price from the bid amount already on
@@ -136,9 +180,10 @@ def generate_proposal_pdf(bid: dict, costs: list, summary: dict, markup_pct: flo
 
 def build_proposal_email(bid: dict, total: float) -> tuple[str, str]:
     subject = f"Bid Proposal - {bid.get('name', 'Project')}"
-    body = f"""Subject: Bid Proposal for {bid.get('name', '')}
-
-Hello {bid.get('contact_name') or bid.get('owner') or 'there'},
+    # No "Subject:" line in the body: the subject is returned separately and set
+    # as the real header, so the copy that lived here arrived as the first line
+    # of the message itself.
+    body = f"""Hello {bid.get('contact_name') or bid.get('owner') or 'there'},
 
 Please find attached our proposal for the {bid.get('name', '')} project{' at ' + bid.get('location') if bid.get('location') else ''}.
 
