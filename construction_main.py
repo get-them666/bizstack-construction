@@ -12474,7 +12474,7 @@ _BID_FILES_ALLOWED_EXTS = {
 }
 _BID_FILES_DEFAULT_FOLDERS = [
     "Plans & Drawings", "Scope & Specifications", "Contracts & Proposals",
-    "Permits", "RFIs & Addenda", "Inspections", "Photos",
+    "Bid Documents", "Permits", "RFIs & Addenda", "Inspections", "Photos",
     "Correspondence", "Change Orders", "Schedules", "Other",
 ]
 # classify() returns the package vocabulary; the cabinet names its folders in
@@ -12493,6 +12493,7 @@ _BID_FILES_TYPE_FOLDER = {
     "inspection": "Inspections",
     "correspondence": "Correspondence",
     "schedule": "Schedules",
+    "bid_docs": "Bid Documents",
 }
 _BID_FILES_PHOTO_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".tif",
                          ".tiff", ".heic"}

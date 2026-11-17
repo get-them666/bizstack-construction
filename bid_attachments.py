@@ -31,8 +31,8 @@ import urllib.request
 # PDF called "Scope of Work" is not.
 _DRAWING_HINTS = (
     "plan", "drawing", "elevation", "floor", "section", "sheet", "blueprint",
-    "architect", "structural", "foundation", "framing", "mep", "site",
-    "detail", "a-1", "a1-", "s-1", "s1-", "sheet index", "plot",
+    "architect", "arch", "structural", "foundation", "framing", "mep", "site",
+    "detail", "a-1", "a1-", "s-1", "s1-", "sheet index", "plot", "bid set",
 )
 _SOW_HINTS = ("scope", "sow", "spec", "specification", "statement of work",
               "instructions to bidder", "bid instructions")
@@ -43,7 +43,8 @@ _QUOTE_HINTS = ("quote", "quotation", "proposal", "bid form", "bidform",
                 "price", "pricing")
 _RFI_HINTS = ("rfi", "request for information", "information request", "clarification")
 _ADDENDA_HINTS = ("addenda", "addendum", "bulletin", "amendment")
-_SPECS_HINTS = ("specification", "specs", "technical", "product data", "submittal")
+_SPECS_HINTS = ("specification", "specs", "technical", "product data", "submittal",
+                "leed", "sustain", "recycl")
 _INSPECTION_HINTS = ("inspection", "punch list", "punchlist", "deficiency",
                      "asbestos", "esa", "phase i", "phase ii", "environmental")
 _PERMIT_HINTS = ("permit", "application", "approval", "certificate", "co", "cco")
@@ -78,15 +79,28 @@ def classify(filename: str, content_type: str = "") -> str:
     """
     name = (filename or "").lower()
     ext = os.path.splitext(name)[1].lower()
+    # "Bid set" is an explicit statement that this file is the drawings, and it
+    # outranks a leading number: "254068 Hilltop ... _BID SET Arch.pdf" starts
+    # with six digits that look like a CSI section but are a project number.
+    if ext in _DRAWING_EXT or "bid set" in name:
+        return "plans"
     # A spec book arrives as "270000 - STRUCTURED CABLING.pdf": CSI MasterFormat
     # section numbers. This is a stronger signal than a word in the section title
     # -- "221316 - STORM DRAINAGE" is plumbing, not a site plan -- so it is
-    # checked before the drawing hints. Division 00/01 is bidding and general
-    # requirements, which is why the threshold is 02.
+    # checked before the rest of the drawing hints. Division 00 is the front end
+    # (invitation, bid form, instructions), 01 is general requirements, 02+ is
+    # the specification itself.
     csi = _CSI_SECTION.match(name)
-    if csi and int(csi.group(1)[:2]) >= 2:
-        return "specs"
-    if ext in _DRAWING_EXT or any(_hits(name, h) for h in _DRAWING_HINTS):
+    if csi:
+        division = int(csi.group(1)[:2])
+        if division == 0:
+            # A bid document, not the contract this job will be signed on.
+            # Filing it as "contract" would let a dropped folder supersede the
+            # real agreement on the card.
+            return "bid_docs"
+        if division >= 1:
+            return "specs"
+    if any(_hits(name, h) for h in _DRAWING_HINTS):
         return "plans"
     if any(_hits(name, h) for h in _SOW_HINTS):
         return "sow"

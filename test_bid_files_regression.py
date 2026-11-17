@@ -89,10 +89,15 @@ def test_auto_sort_routes_by_filename():
 
     cases = [
         ("A-101 Floor Plans.pdf", "Plans & Drawings"),
-        ("003153 - OWNER PAID TESTING AND INSPECTION SERVICES.pdf", "Inspections"),
+        ("254068  Hilltop Colonial Beach, VA (48100R032986)_BID SET Arch.pdf",
+         "Plans & Drawings"),
+        ("003153 - OWNER PAID TESTING AND INSPECTION SERVICES.pdf", "Bid Documents"),
+        ("ExJ - Limited Asbestos Screen Report.pdf", "Inspections"),
         ("RFI 014 - Slab edge.pdf", "RFIs & Addenda"),
         ("270000 - RETAIL STRUCTURED CABLING.pdf", "Scope & Specifications"),
-        ("001116 - INVITATION TO BID.pdf", "Other"),
+        ("013000 - ADMINISTRATIVE REQUIREMENTS v20.3.pdf", "Scope & Specifications"),
+        ("ExO-NationalRecyclingProgram.pdf", "Scope & Specifications"),
+        ("001116 - INVITATION TO BID.pdf", "Bid Documents"),
         ("Addendum 2.pdf", "RFIs & Addenda"),
         ("Scope of Work - Demolition.pdf", "Scope & Specifications"),
         ("Contract - Revised.pdf", "Contracts & Proposals"),
