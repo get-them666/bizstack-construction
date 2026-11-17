@@ -865,6 +865,28 @@ async def lifecycle(app: FastAPI):
                 """)
                 cur.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS coupon_code VARCHAR(120);")
                 cur.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS discount_amount NUMERIC(12,2) DEFAULT 0;")
+                # --- Bid files (per-bid file cabinet with folder categories) ----
+                # Stored on the filesystem under /uploads/bids/{bid_id}/{folder}/.
+                # The row is the index; the file is the content. Separated from
+                # bid_opportunities.documents on purpose: that table tracks the
+                # SOW/quote/contract/p plans package that goes to the GC; this
+                # one is the owner's working files (permits, photos, inspection
+                # reports, correspondence) that do not belong in the package.
+                cur.execute("""
+                CREATE TABLE IF NOT EXISTS bid_files (
+                    id SERIAL PRIMARY KEY,
+                    bid_id INTEGER NOT NULL,
+                    filename VARCHAR(500) NOT NULL,
+                    original_filename VARCHAR(500) NOT NULL,
+                    file_path VARCHAR(1000) NOT NULL,
+                    file_size BIGINT NOT NULL DEFAULT 0,
+                    mime_type VARCHAR(120),
+                    folder VARCHAR(120) NOT NULL DEFAULT 'Other',
+                    uploaded_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    uploaded_by VARCHAR(255)
+                );
+                """)
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_bid_files_bid ON bid_files(bid_id, folder);")
             conn.commit()
         print("✅ Schema ready.")
     except Exception as e:
@@ -903,6 +925,15 @@ async def lifecycle(app: FastAPI):
         photo_store.startup_check()
     except Exception as e:
         print(f"⚠️ photo storage check failed: {e}", flush=True)
+
+    # Bid file cabinet lives on the filesystem. Create the root once so the
+    # first upload does not have to discover that the directory is missing.
+    try:
+        _bid_files_root = os.environ.get("BID_FILES_ROOT", "/opt/bizstack/construction/uploads/bids")
+        os.makedirs(_bid_files_root, exist_ok=True)
+        print(f"📁 bid files root ready: {_bid_files_root}")
+    except Exception as e:
+        print(f"⚠️ bid files root check failed: {e}", flush=True)
 
     # Bid board is its own module with its own idempotent DDL, so it is not in
     # the startup block above -- that block is one transaction and an ordering
@@ -4946,7 +4977,7 @@ async def takeoff_get(sheet_id: int, request: Request, db=Depends(get_db)):
 
 
 @app.post("/api/takeoffs/{sheet_id}/lines")
-async def takeoff_add_line(sheet_id: int, request: Request, description: str = Form(...),
+async def takeoff_add_line(sheet_id: int, request: Request, description: str = Form(""),
                            qty: float = Form(1.0), item_number: str = Form(""),
                            uom: str = Form("each"), supplier: str = Form(""),
                            group_name: str = Form("other"), note: str = Form(""),
@@ -12035,6 +12066,17 @@ async def bid_detail_page(bid_id: int, request: Request, db=Depends(get_db)):
     except Exception as exc:
         print(f"[bids] portal messages unavailable for bid {bid_id}: {exc}", flush=True)
 
+    # The bid's file cabinet: permits, photos, inspection reports, change
+    # orders, correspondence -- everything that belongs to the job but is not
+    # part of the SOW/quote/contract package sent to the GC.
+    bid_files: list = []
+    bid_folders: list = []
+    try:
+        bid_files = _bid_files_list(db, bid_id)
+        bid_folders = _bid_files_folders(db, bid_id)
+    except Exception as exc:
+        print(f"[bids] files unavailable for bid {bid_id}: {exc}", flush=True)
+
     response = templates.TemplateResponse(
         request=request, name="bid_detail.html",
         context={
@@ -12070,6 +12112,11 @@ async def bid_detail_page(bid_id: int, request: Request, db=Depends(get_db)):
             "cost_categories": ["material", "labor", "sub", "equipment", "other"],
             "portal_messages": portal_messages,
             "portal_account": portal_account,
+            "bid_files": bid_files,
+            "bid_folders": bid_folders,
+            "files_saved": request.query_params.get("files_saved", ""),
+            "files_errors": request.query_params.get("files_errors", ""),
+            "files_error_msg": request.query_params.get("files_error_msg", ""),
         })
     # A bid page is per-record money data. no-store is the belt to the database's
     # braces: a browser or intermediate cache must never hand back bid A's HTML
@@ -12249,38 +12296,44 @@ async def bid_delete(bid_id: int, request: Request, db=Depends(get_db)):
 
 
 @app.post("/api/bids/{bid_id}/documents")
-async def bid_document_upload(bid_id: int, request: Request, doc: UploadFile = Form(...),
-                              doc_type: str = Form("other"), db=Depends(get_db)):
+async def bid_document_upload(bid_id: int, request: Request, doc: list[UploadFile] = Form(...),
+                              doc_type: str = Form("other"), folder: str = Form(""), db=Depends(get_db)):
     require_admin(request)
     bid_opportunities.ensure_schema(db)
     bid = bid_opportunities.get_bid(db, bid_id, _BID_COMPANY)
     if not bid:
         raise HTTPException(status_code=404, detail="Bid not found")
-    raw = await doc.read()
-    if not raw:
-        raise HTTPException(status_code=400, detail="Empty file")
-    ext = os.path.splitext(doc.filename or "")[1][:10] or ".pdf"
-    fname = f"bid-{bid_id}-{uuid.uuid4().hex[:12]}{ext.lower()}"
-    # The dropdown is a human choice and humans mis-file revisions. When they
-    # leave it on "Other", read the filename so "03-Contract-Revised" does not
-    # land in the wrong slot.
-    if (doc_type or "").strip().lower() in ("", "other"):
-        import bid_attachments
-        guessed = bid_attachments.classify(doc.filename or "")
-        if guessed != "other":
-            doc_type = guessed
-    try:
-        stored = photo_store.save(raw, fname, key_prefix=f"bids/{bid_id}")
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    bid_opportunities.add_document(db, bid_id, _BID_COMPANY,
-                                   filename=(doc.filename or fname)[:500],
-                                   key=stored["key"], url=stored["url"],
-                                   content_type=doc.content_type,
-                                   bytes_count=len(raw),
-                                   uploaded_by=_owner_email(),
-                                   document_type=doc_type,
-                                   supersede=True)
+    uploaded_count = 0
+    for single_doc in doc:
+        raw = await single_doc.read()
+        if not raw:
+            continue
+        ext = os.path.splitext(single_doc.filename or "")[1][:10] or ".pdf"
+        fname = f"bid-{bid_id}-{uuid.uuid4().hex[:12]}{ext.lower()}"
+        # The dropdown is a human choice and humans mis-file revisions. When they
+        # leave it on "Other", read the filename so "03-Contract-Revised" does not
+        # land in the wrong slot.
+        current_doc_type = doc_type
+        if (current_doc_type or "").strip().lower() in ("", "other"):
+            import bid_attachments
+            guessed = bid_attachments.classify(single_doc.filename or "")
+            if guessed != "other":
+                current_doc_type = guessed
+        try:
+            stored = photo_store.save(raw, fname, key_prefix=f"bids/{bid_id}")
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        bid_opportunities.add_document(db, bid_id, _BID_COMPANY,
+                                       filename=(single_doc.filename or fname)[:500],
+                                       key=stored["key"], url=stored["url"],
+                                       content_type=single_doc.content_type,
+                                       bytes_count=len(raw),
+                                       uploaded_by=_owner_email(),
+                                       document_type=current_doc_type,
+                                       folder=(folder or "General").strip()[:50],
+                                       supersede=True)
+        uploaded_count += 1
+    return RedirectResponse(url=f"/bids/{bid_id}?uploaded={uploaded_count}", status_code=status.HTTP_303_SEE_OTHER)
     # The first document is usually the point a real job starts. Make sure the
     # card exists (or top up the blank fields on the one that does) so the bid
     # number on the paperwork is the number crew, payroll and profit all use.
@@ -12365,6 +12418,290 @@ async def bid_document_restore(doc_id: int, request: Request, db=Depends(get_db)
     bid_opportunities.ensure_schema(db)
     bid_opportunities.restore_document(db, doc_id, _BID_COMPANY)
     back = request.headers.get("referer") or "/bids"
+    return RedirectResponse(url=back, status_code=status.HTTP_303_SEE_OTHER)
+
+
+# --- Bid file cabinet -------------------------------------------------------
+# Per-bid working files (permits, photos, inspection reports, correspondence,
+# change orders). Stored on the local filesystem under uploads/bids/{bid_id}/
+# {folder}/{filename}. Separate from the bid_opportunities.documents table,
+# which tracks the SOW/quote/contract package that goes to the GC; this is the
+# owner's filing cabinet for everything else that belongs to a job.
+#
+# Files are served from disk by the download route, not mounted statically:
+# require_admin gates every request so a direct URL cannot leak a permit or a
+# photo of someone's house to the public internet.
+
+_BID_FILES_ROOT = os.environ.get(
+    "BID_FILES_ROOT", "/opt/bizstack/construction/uploads/bids")
+_BID_FILES_MAX_BYTES = 50 * 1024 * 1024  # 50 MB per file
+_BID_FILES_ALLOWED_EXTS = {
+    ".pdf", ".jpg", ".jpeg", ".png",
+    ".doc", ".docx", ".xls", ".xlsx",
+}
+_BID_FILES_DEFAULT_FOLDERS = [
+    "Plans & Drawings", "Photos", "Permits",
+    "Contracts & Proposals", "Change Orders",
+    "Correspondence", "Inspections", "Other",
+]
+
+
+def _bid_files_ensure_schema(db) -> None:
+    """No-op when lifecycle() already created the table; safe to call twice."""
+    try:
+        with db.cursor() as cur:
+            cur.execute("""
+            CREATE TABLE IF NOT EXISTS bid_files (
+                id SERIAL PRIMARY KEY,
+                bid_id INTEGER NOT NULL,
+                filename VARCHAR(500) NOT NULL,
+                original_filename VARCHAR(500) NOT NULL,
+                file_path VARCHAR(1000) NOT NULL,
+                file_size BIGINT NOT NULL DEFAULT 0,
+                mime_type VARCHAR(120),
+                folder VARCHAR(120) NOT NULL DEFAULT 'Other',
+                uploaded_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                uploaded_by VARCHAR(255)
+            );
+            """)
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_bid_files_bid ON bid_files(bid_id, folder);")
+        db.commit()
+    except Exception as e:
+        print(f"[bid_files] schema ensure skipped: {e}", flush=True)
+
+
+def _sanitize_bid_filename(name: str) -> str:
+    """Strip path separators and leading dots so a malicious upload cannot
+    escape the per-bid directory or masquerade as a dotfile."""
+    base = os.path.basename(name or "file")
+    # Collapse any remaining weirdness: keep only safe printable chars.
+    safe = "".join(c for c in base if c.isprintable() and c not in {'/', '\\', '\0'})
+    return safe or "file"
+
+
+def _bid_files_list(db, bid_id: int) -> list:
+    """All file rows for a bid, newest first. Returns [] on any error."""
+    try:
+        _bid_files_ensure_schema(db)
+        with db.cursor() as cur:
+            cur.execute(
+                "SELECT id, bid_id, filename, original_filename, file_path, "
+                "file_size, mime_type, folder, uploaded_at, uploaded_by "
+                "FROM bid_files WHERE bid_id = %s ORDER BY uploaded_at DESC, id DESC",
+                (bid_id,),
+            )
+            cols = [d.name for d in cur.description]
+            return [dict(zip(cols, row)) for row in cur.fetchall()]
+    except Exception as e:
+        print(f"[bid_files] list unavailable for bid {bid_id}: {e}", flush=True)
+        return []
+
+
+def _bid_files_folders(db, bid_id: int) -> list:
+    """Distinct folder names on the bid, default folders first in their order
+    then any custom ones the owner added, alphabetical."""
+    rows = _bid_files_list(db, bid_id)
+    seen = {r.get("folder") for r in rows if r.get("folder")}
+    ordered: list = []
+    for f in _BID_FILES_DEFAULT_FOLDERS:
+        if f in seen:
+            ordered.append(f)
+            seen.discard(f)
+    # Keep the defaults that have no files yet too -- the dropdown needs them.
+    for f in _BID_FILES_DEFAULT_FOLDERS:
+        if f not in ordered:
+            ordered.append(f)
+    for f in sorted(seen):
+        ordered.append(f)
+    return ordered
+
+
+@app.get("/api/bids/{bid_id}/files")
+async def bid_files_list(bid_id: int, request: Request, db=Depends(get_db)):
+    """JSON list of files on a bid. Used by the upload UI to refresh."""
+    require_admin(request)
+    return JSONResponse({"files": _bid_files_list(db, bid_id),
+                         "folders": _bid_files_folders(db, bid_id)})
+
+
+@app.post("/api/bids/{bid_id}/files/upload")
+async def bid_files_upload(bid_id: int, request: Request,
+                           files: list[UploadFile] = File(...),
+                           folder: str = Form("Other"),
+                           db=Depends(get_db)):
+    """Upload one or more files to a bid. Stores on the local filesystem.
+
+    Each UploadFile is validated against size and extension, then written into
+    /uploads/bids/{bid_id}/{folder}/{uuid-prefix}-{sanitized-name}. A row is
+    inserted per file so the list endpoint can show them. If one file in a
+    multi-file upload fails validation, the others still land -- partial
+    success is better than losing a batch because one docx was named wrong.
+    """
+    require_admin(request)
+    if not bid_opportunities.get_bid(db, bid_id, _BID_COMPANY):
+        raise HTTPException(status_code=404, detail="Bid not found")
+    _bid_files_ensure_schema(db)
+
+    folder_raw = (folder or "Other").strip()[:120] or "Other"
+    # Folder name becomes part of the on-disk path; keep it filesystem-safe.
+    folder_safe = "".join(
+        c for c in folder_raw if c.isprintable() and c not in {'/', '\\', '\0', ':'}
+    ).strip() or "Other"
+
+    saved: list = []
+    errors: list = []
+    for up in files:
+        original = _sanitize_bid_filename(up.filename or "file")
+        ext = os.path.splitext(original)[1].lower()
+        if ext not in _BID_FILES_ALLOWED_EXTS:
+            errors.append({"filename": original,
+                           "error": f"file type {ext or '(none)'} not allowed"})
+            continue
+        try:
+            data = await up.read()
+        except Exception as e:
+            errors.append({"filename": original, "error": f"read failed: {e}"})
+            continue
+        if not data:
+            errors.append({"filename": original, "error": "empty file"})
+            continue
+        if len(data) > _BID_FILES_MAX_BYTES:
+            errors.append({"filename": original,
+                           "error": f"file too large (max 50 MB)"})
+            continue
+        dest_dir = os.path.join(_BID_FILES_ROOT, str(bid_id), folder_safe)
+        try:
+            os.makedirs(dest_dir, exist_ok=True)
+        except Exception as e:
+            errors.append({"filename": original, "error": f"folder create failed: {e}"})
+            continue
+        stem = os.path.splitext(original)[0][:200]
+        disk_name = f"{uuid.uuid4().hex[:12]}-{stem}{ext}"
+        dest_path = os.path.join(dest_dir, disk_name)
+        try:
+            with open(dest_path, "wb") as fh:
+                fh.write(data)
+        except Exception as e:
+            errors.append({"filename": original, "error": f"write failed: {e}"})
+            continue
+        try:
+            with db.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO bid_files (bid_id, filename, original_filename, "
+                    "file_path, file_size, mime_type, folder, uploaded_by) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+                    (bid_id, disk_name, original,
+                     os.path.relpath(dest_path, _BID_FILES_ROOT),
+                     len(data), up.content_type or "",
+                     folder_safe, _owner_email()),
+                )
+                row = cur.fetchone()
+                new_id = row[0] if row else None
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            try:
+                os.remove(dest_path)
+            except OSError:
+                pass
+            errors.append({"filename": original, "error": f"db insert failed: {e}"})
+            continue
+        saved.append({"id": new_id, "filename": original,
+                      "folder": folder_safe, "size": len(data)})
+
+    if not saved and errors:
+        raise HTTPException(
+            status_code=400,
+            detail="; ".join(f"{e['filename']}: {e['error']}" for e in errors))
+
+    back = request.headers.get("referer") or f"/bids/{bid_id}"
+    from urllib.parse import quote
+    parts = [f"files_saved={len(saved)}", f"files_errors={len(errors)}"]
+    if errors:
+        parts.append("files_error_msg=" +
+                     quote("; ".join(f"{e['filename']}: {e['error']}"
+                                     for e in errors)[:300]))
+    sep = "&" if "?" in back else "?"
+    return RedirectResponse(url=f"{back}{sep}{'&'.join(parts)}",
+                            status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.get("/api/bids/{bid_id}/files/{file_id}/download")
+async def bid_files_download(bid_id: int, file_id: int,
+                             request: Request, db=Depends(get_db)):
+    """Serve a bid file from disk. require_admin keeps permit/inspection docs
+    out of the public web; the path is validated so a crafted file_id cannot
+    read anything outside /uploads/bids."""
+    require_admin(request)
+    _bid_files_ensure_schema(db)
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT id, filename, original_filename, file_path, mime_type "
+            "FROM bid_files WHERE id = %s AND bid_id = %s",
+            (file_id, bid_id),
+        )
+        row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="File not found")
+    rel_path = row[3]
+    abs_path = os.path.realpath(os.path.join(_BID_FILES_ROOT, rel_path))
+    root_real = os.path.realpath(_BID_FILES_ROOT)
+    # Defense in depth: even though rel_path came from our own table, refuse
+    # to serve anything that resolves outside the bids root.
+    if not abs_path.startswith(root_real + os.sep) and abs_path != root_real:
+        raise HTTPException(status_code=403, detail="Invalid file path")
+    if not os.path.isfile(abs_path):
+        raise HTTPException(status_code=404, detail="File missing from disk")
+    original = row[2] or row[1]
+    mime = row[4] or "application/octet-stream"
+    return StreamingResponse(
+        iter(_read_file_in_chunks(abs_path)),
+        media_type=mime,
+        headers={"Content-Disposition":
+                 f'attachment; filename="{original}"'})
+
+
+def _read_file_in_chunks(path: str, chunk: int = 64 * 1024):
+    with open(path, "rb") as fh:
+        while True:
+            data = fh.read(chunk)
+            if not data:
+                break
+            yield data
+
+
+@app.post("/api/bids/{bid_id}/files/{file_id}/delete")
+async def bid_files_delete(bid_id: int, file_id: int,
+                           request: Request, db=Depends(get_db)):
+    """Remove a file row and its on-disk contents. Idempotent: a missing file
+    on disk is not an error -- the row is what the UI lists, and if the disk
+    is already clean, deleting the row is still the right thing to do."""
+    require_admin(request)
+    _bid_files_ensure_schema(db)
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT id, file_path FROM bid_files WHERE id = %s AND bid_id = %s",
+            (file_id, bid_id),
+        )
+        row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="File not found")
+    rel_path = row[1]
+    abs_path = os.path.realpath(os.path.join(_BID_FILES_ROOT, rel_path))
+    root_real = os.path.realpath(_BID_FILES_ROOT)
+    if abs_path.startswith(root_real + os.sep) or abs_path == root_real:
+        try:
+            os.remove(abs_path)
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            print(f"[bid_files] delete disk failed for {abs_path}: {e}",
+                  flush=True)
+    with db.cursor() as cur:
+        cur.execute("DELETE FROM bid_files WHERE id = %s AND bid_id = %s",
+                    (file_id, bid_id))
+    db.commit()
+    back = request.headers.get("referer") or f"/bids/{bid_id}"
     return RedirectResponse(url=back, status_code=status.HTTP_303_SEE_OTHER)
 
 

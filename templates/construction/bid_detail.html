@@ -1013,14 +1013,15 @@
         {% endfor %}
         {% set doc_types = [('sow', 'Scope of Work'), ('quote', 'Quote'), ('itemized', 'Itemized Pricing'), ('contract', 'Contract'), ('plans', 'Plans & Specs'), ('other', 'Other')] %}
         <form method="post" action="/api/bids/{{ b.id }}/documents" enctype="multipart/form-data" class="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-4 border-t border-slate-100 mb-6">
-          <input id="doc-file" type="file" name="doc" accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.md,.txt,.jpg,.jpeg,.png" onchange="bzGuessDocType(this)" class="text-sm text-slate-600 sm:col-span-2">
+          <input id="doc-file" type="file" name="doc" accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.md,.txt,.jpg,.jpeg,.png" multiple webkitdirectory class="text-sm text-slate-600 sm:col-span-2" onchange="bzGuessDocType(this)">
           <select id="doc-type" name="doc_type" class="text-sm border border-slate-200 rounded-lg px-3 py-2 bg-white">
             {% for dt, label in doc_types %}
             <option value="{{ dt }}">{{ label }}</option>
             {% endfor %}
           </select>
-          <button class="text-sm font-semibold px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 sm:col-span-2">Upload document</button>
-          <p class="text-[11px] text-slate-400 sm:col-span-2">Uploading a new Scope of Work, Quote, Itemized Pricing or Contract replaces the previous one in that slot. Plans and Other are kept as a set.</p>
+          <input type="text" name="folder" placeholder="Folder (e.g. Provost-Chase)" class="text-sm border border-slate-200 rounded-lg px-3 py-2 bg-white sm:col-span-2">
+          <button class="text-sm font-semibold px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700">Upload files</button>
+          <p class="text-[11px] text-slate-400 sm:col-span-3">Select multiple files or an entire folder. Uploading a new Scope of Work, Quote, Itemized Pricing or Contract replaces the previous one in that slot. Plans and Other are kept as a set.</p>
         </form>
         {% for dt, label in doc_types %}
         {% set tdocs = docs_by_type.get(dt, []) %}
@@ -1081,6 +1082,87 @@
         if (type) sel.value = type;
       }
       </script>
+
+      {# ── File cabinet (permits, photos, inspections, etc.) ─────────── #}
+      <section id="bid-files" class="bg-white rounded-2xl border border-slate-200 p-5">
+        <h2 class="text-sm font-bold uppercase tracking-wide text-slate-500 mb-3">File Cabinet</h2>
+        <p class="text-xs text-slate-500 mb-4">Upload permits, photos, inspection reports, change orders, correspondence, and other files for this bid. Files are organized by folder.</p>
+
+        {% if files_saved %}
+        <div class="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs text-emerald-900">
+          <b>{{ files_saved }}</b> file{{ '' if files_saved == '1' else 's' }} uploaded.
+          {% if files_errors and files_errors != '0' %}
+          <span class="text-amber-800">{{ files_errors }} could not be uploaded{% if files_error_msg %}: {{ files_error_msg }}{% endif %}.</span>
+          {% endif %}
+        </div>
+        {% elif files_errors and files_errors != '0' %}
+        <div class="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900">
+          <b>{{ files_errors }}</b> file{{ '' if files_errors == '1' else 's' }} could not be uploaded{% if files_error_msg %}: {{ files_error_msg }}{% endif %}.
+        </div>
+        {% endif %}
+
+        <form method="post" action="/api/bids/{{ b.id }}/files/upload" enctype="multipart/form-data" class="mb-6">
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
+            <div>
+              <label class="block text-xs font-bold text-slate-600 mb-1">Folder</label>
+              <select name="folder" class="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 bg-white">
+                {% for f in bid_folders %}
+                <option value="{{ f }}" {% if f == 'Other' %}selected{% endif %}>{{ f }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div>
+              <label class="block text-xs font-bold text-slate-600 mb-1">Files (max 50 MB each)</label>
+              <input type="file" name="files" multiple accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx" class="w-full text-sm text-slate-600 file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100">
+            </div>
+          </div>
+          <button class="text-sm font-semibold px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700">Upload files</button>
+          <p class="text-[11px] text-slate-400 mt-2">Allowed: PDF, JPG, PNG, DOC, DOCX, XLS, XLSX</p>
+        </form>
+
+        {% if bid_files %}
+        {% set files_by_folder = {} %}
+        {% for f in bid_files %}
+        {% set _ = files_by_folder.setdefault(f.folder, []).append(f) %}
+        {% endfor %}
+
+        {% for folder in bid_folders %}
+        {% set folder_files = files_by_folder.get(folder, []) %}
+        {% if folder_files %}
+        <div class="mb-5">
+          <h3 class="text-xs font-bold text-slate-600 uppercase tracking-wide mb-2 border-b border-slate-100 pb-1">{{ folder }} <span class="text-slate-400 font-normal">({{ folder_files|length }})</span></h3>
+          <ul class="space-y-1.5">
+            {% for f in folder_files %}
+            <li class="flex items-center justify-between gap-2 py-1.5 px-2 rounded-lg hover:bg-slate-50">
+              <div class="flex items-center gap-2 min-w-0 flex-1">
+                <span class="text-slate-400 text-xs">
+                  {% if f.mime_type and 'image' in f.mime_type %}🖼️
+                  {% elif f.mime_type and 'pdf' in f.mime_type %}📄
+                  {% elif f.mime_type and ('excel' in f.mime_type or 'spreadsheet' in f.mime_type) %}📊
+                  {% elif f.mime_type and ('word' in f.mime_type or 'document' in f.mime_type) %}📝
+                  {% else %}📎{% endif %}
+                </span>
+                <a href="/api/bids/{{ b.id }}/files/{{ f.id }}/download" target="_blank" rel="noopener" class="text-sm font-semibold text-indigo-700 hover:underline truncate" title="{{ f.original_filename }}">
+                  {{ f.original_filename }}
+                </a>
+                <span class="text-[11px] text-slate-400 whitespace-nowrap">
+                  {{ '{:,.1f}'.format(f.file_size / 1024) }} KB
+                  {% if f.uploaded_at %}· {{ f.uploaded_at.strftime('%b %d') }}{% endif %}
+                </span>
+              </div>
+              <form method="post" action="/api/bids/{{ b.id }}/files/{{ f.id }}/delete" class="flex-shrink-0" onsubmit="return confirm('Delete this file?')">
+                <button class="text-xs font-semibold text-red-600 hover:text-red-700 px-2 py-1 rounded hover:bg-red-50">Delete</button>
+              </form>
+            </li>
+            {% endfor %}
+          </ul>
+        </div>
+        {% endif %}
+        {% endfor %}
+        {% else %}
+        <p class="text-sm text-slate-500">No files uploaded yet.</p>
+        {% endif %}
+      </section>
 
       
     </div>
@@ -1186,6 +1268,7 @@
     <a href="#bid-job" class="px-3 py-2 text-xs font-bold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 rounded-lg">Price &amp; proposal</a>
     <a href="#pnc" class="px-3 py-2 text-xs font-bold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 rounded-lg">Send to PNC</a>
     <a href="#job-docs" class="px-3 py-2 text-xs font-bold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 rounded-lg">Upload</a>
+    <a href="#bid-files" class="px-3 py-2 text-xs font-bold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 rounded-lg">Files</a>
   </div>
 </div>
 {% endblock %}
