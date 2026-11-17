@@ -94,6 +94,17 @@
                     <option>Just getting a price — not ready yet</option>
                 </select>
             </div>
+            <div>
+                <label class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Coupon Code</label>
+                <div class="flex gap-2">
+                    <input type="text" name="coupon_display" id="coupon-input" placeholder="Enter code" autocomplete="off"
+                           class="flex-1 px-4 py-3 rounded-xl bg-white border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                    <button type="button" id="coupon-apply-btn" class="px-4 py-3 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition-colors uppercase tracking-wider shrink-0">Apply</button>
+                </div>
+                <input type="hidden" name="coupon_code" id="coupon-code-hidden" value="">
+                <input type="hidden" name="discount_amount" id="discount-amount-hidden" value="">
+                <p id="coupon-msg" class="mt-1.5 text-xs font-semibold hidden"></p>
+            </div>
             <div id="lead-result" class="hidden rounded-2xl p-4 text-sm"></div>
             <button type="submit" class="w-full py-4 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-2xl transition-all uppercase tracking-wider shadow-lg shadow-indigo-100">
                 Request My Free Estimate
@@ -111,6 +122,62 @@ document.addEventListener('DOMContentLoaded', function() {
     if (!form) return;
     const submitBtn = form.querySelector('button[type="submit"]');
     const ORIGINAL_BTN_TEXT = submitBtn ? submitBtn.textContent.trim() : 'Request My Free Estimate';
+
+    // --- Coupon code validation ------------------------------------------
+    const couponInput = document.getElementById('coupon-input');
+    const couponApplyBtn = document.getElementById('coupon-apply-btn');
+    const couponCodeHidden = document.getElementById('coupon-code-hidden');
+    const discountAmountHidden = document.getElementById('discount-amount-hidden');
+    const couponMsg = document.getElementById('coupon-msg');
+    let couponValid = false;
+
+    function showCouponMsg(text, isError) {
+        if (!couponMsg) return;
+        couponMsg.textContent = text;
+        couponMsg.classList.remove('hidden', 'text-emerald-600', 'text-red-600');
+        couponMsg.classList.add(isError ? 'text-red-600' : 'text-emerald-600');
+    }
+
+    async function applyCoupon() {
+        const code = (couponInput ? couponInput.value : '').trim();
+        if (!code) {
+            showCouponMsg('Please enter a coupon code', true);
+            return;
+        }
+        if (couponApplyBtn) { couponApplyBtn.disabled = true; couponApplyBtn.textContent = 'Checking…'; }
+        try {
+            const res = await fetch('/api/validate-coupon', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({code: code, project_amount: 0}),
+            });
+            const json = await res.json();
+            if (json.valid) {
+                couponValid = true;
+                if (couponCodeHidden) couponCodeHidden.value = code.toUpperCase();
+                if (discountAmountHidden) discountAmountHidden.value = String(json.discount || 0);
+                showCouponMsg('✓ ' + json.message, false);
+            } else {
+                couponValid = false;
+                if (couponCodeHidden) couponCodeHidden.value = '';
+                if (discountAmountHidden) discountAmountHidden.value = '';
+                showCouponMsg(json.message || 'Invalid code', true);
+            }
+        } catch (e) {
+            couponValid = false;
+            showCouponMsg('Could not verify coupon. Please try again.', true);
+        } finally {
+            if (couponApplyBtn) { couponApplyBtn.disabled = false; couponApplyBtn.textContent = 'Apply'; }
+        }
+    }
+
+    if (couponApplyBtn) couponApplyBtn.addEventListener('click', applyCoupon);
+    if (couponInput) {
+        couponInput.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') { e.preventDefault(); applyCoupon(); }
+        });
+    }
+
     function clearFieldErrors() {
         form.querySelectorAll('.border-red-500').forEach(function(el) { el.classList.remove('border-red-500'); });
         form.querySelectorAll('.field-error').forEach(function(el) { el.remove(); });

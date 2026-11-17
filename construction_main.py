@@ -849,10 +849,47 @@ async def lifecycle(app: FastAPI):
                 """)
                 cur.execute("ALTER TABLE worker_quiz_results ADD COLUMN IF NOT EXISTS test_slug VARCHAR(60);")
                 cur.execute("ALTER TABLE worker_quiz_results ADD COLUMN IF NOT EXISTS test_title VARCHAR(255);")
+                # --- Coupon codes ------------------------------------------------
+                cur.execute("""
+                CREATE TABLE IF NOT EXISTS coupons (
+                    code TEXT PRIMARY KEY,
+                    discount_type TEXT NOT NULL,
+                    discount_value NUMERIC NOT NULL,
+                    min_project_amount NUMERIC DEFAULT 0,
+                    max_uses INTEGER DEFAULT 0,
+                    uses_count INTEGER DEFAULT 0,
+                    active BOOLEAN DEFAULT TRUE,
+                    expires_at TIMESTAMPTZ,
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                );
+                """)
+                cur.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS coupon_code VARCHAR(120);")
+                cur.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS discount_amount NUMERIC(12,2) DEFAULT 0;")
             conn.commit()
         print("✅ Schema ready.")
     except Exception as e:
         print(f"⚠️ Database init skipped: {e}")
+
+    # --- Seed the 4 promo coupons (idempotent) -------------------------------
+    try:
+        with psycopg.connect(db_url) as conn:
+            with conn.cursor() as cur:
+                coupons = [
+                    ("NEWBUILD25", "flat", 250.00, 5000.00, 0, "New-build discount"),
+                    ("FALL2026",   "flat", 500.00, 0,     0, "Free permit handling"),
+                    ("REFER200",   "flat", 200.00, 0,     0, "Referral discount"),
+                    ("BOOK5",      "percent", 5.0, 0,     0, "5% off any project"),
+                ]
+                for code, dtype, value, min_amt, max_uses, _desc in coupons:
+                    cur.execute(
+                        "INSERT INTO coupons (code, discount_type, discount_value, min_project_amount, max_uses) "
+                        "VALUES (%s, %s, %s, %s, %s) ON CONFLICT (code) DO NOTHING;",
+                        (code, dtype, value, min_amt, max_uses),
+                    )
+            conn.commit()
+        print(f"🎟️ coupons seeded ({len(coupons)} codes).")
+    except Exception as e:
+        print(f"⚠️ coupons seed skipped: {e}")
 
     try:
         with psycopg.connect(db_url) as conn:
@@ -3449,6 +3486,85 @@ def _is_form_bot(honeypot: str, source: str = "") -> bool:
     return False
 
 
+# --- Coupon validation endpoint --------------------------------------------
+@app.post("/api/validate-coupon")
+async def validate_coupon(request: Request, db=Depends(get_db)):
+    """Validate a coupon code and return discount details."""
+    try:
+        body = await request.json()
+        code = (body.get("code") or "").strip().upper()
+        project_amount = float(body.get("project_amount") or 0)
+    except Exception:
+        return JSONResponse(status_code=400, content={"valid": False, "message": "Invalid request"})
+
+    if not code:
+        return JSONResponse(content={"valid": False, "message": "Please enter a coupon code"})
+
+    try:
+        with db.cursor() as cur:
+            cur.execute(
+                "SELECT code, discount_type, discount_value, min_project_amount, max_uses, uses_count, active, expires_at "
+                "FROM coupons WHERE code = %s;",
+                (code,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return JSONResponse(content={"valid": False, "message": "Invalid coupon code"})
+
+            coupon = dict(row)
+
+            # Check if active
+            if not coupon["active"]:
+                return JSONResponse(content={"valid": False, "message": "This coupon is no longer active"})
+
+            # Check expiration
+            if coupon["expires_at"]:
+                from datetime import datetime, timezone
+                if datetime.now(timezone.utc) > coupon["expires_at"]:
+                    return JSONResponse(content={"valid": False, "message": "This coupon has expired"})
+
+            # Check usage limit
+            if coupon["max_uses"] > 0 and coupon["uses_count"] >= coupon["max_uses"]:
+                return JSONResponse(content={"valid": False, "message": "This coupon has reached its usage limit"})
+
+            # Check minimum amount
+            if coupon["min_project_amount"] > 0 and project_amount < coupon["min_project_amount"]:
+                return JSONResponse(content={
+                    "valid": False,
+                    "message": f"Minimum project amount is ${coupon['min_project_amount']:,.0f}"
+                })
+
+            # Calculate discount
+            discount = 0
+            if coupon["discount_type"] == "flat":
+                discount = float(coupon["discount_value"])
+            elif coupon["discount_type"] == "percent":
+                discount = (project_amount * float(coupon["discount_value"])) / 100
+
+            # Increment uses_count
+            cur.execute(
+                "UPDATE coupons SET uses_count = uses_count + 1 WHERE code = %s;",
+                (code,),
+            )
+            db.commit()
+
+            # Build success message
+            if coupon["discount_type"] == "flat":
+                msg = f"${discount:,.0f} discount applied"
+            else:
+                msg = f"{coupon['discount_value']}% discount applied (${discount:,.0f})"
+
+            return JSONResponse(content={
+                "valid": True,
+                "discount": discount,
+                "type": coupon["discount_type"],
+                "message": msg,
+            })
+    except Exception as e:
+        print(f"⚠️ coupon validation error: {e}", flush=True)
+        return JSONResponse(status_code=500, content={"valid": False, "message": "Validation failed"})
+
+
 @app.post("/submit-lead")
 async def submit_lead(
     request: Request,
@@ -3463,6 +3579,8 @@ async def submit_lead(
     goal: str = Form(""),
     source: str = Form("website"),
     company_website: str = Form(""),
+    coupon_code: str = Form(""),
+    discount_amount: str = Form(""),
     db=Depends(get_db),
 ):
     # --- Honeypot: fake success so bots don't learn which field tripped ---
@@ -3504,11 +3622,36 @@ async def submit_lead(
     full_description = description
     if goal:
         full_description = f"Goal: {goal}. {description}".strip()
+    extra_fields = {"budget": budget, "timeline": timeline, "goal": goal}
+    # Store coupon info if a valid code was applied client-side
+    cc = (coupon_code or "").strip().upper()
+    if cc:
+        # Lightweight server-side check: coupon exists and is active
+        try:
+            with db.cursor() as cur:
+                cur.execute(
+                    "SELECT active, expires_at FROM coupons WHERE code = %s;",
+                    (cc,),
+                )
+                crow = cur.fetchone()
+                if crow and crow["active"]:
+                    from datetime import datetime, timezone
+                    expired = crow["expires_at"] and datetime.now(timezone.utc) > crow["expires_at"]
+                    if not expired:
+                        extra_fields["coupon_code"] = cc
+                        try:
+                            da = float(discount_amount or 0)
+                            if da > 0:
+                                extra_fields["discount_amount"] = da
+                        except (ValueError, TypeError):
+                            pass
+        except Exception as e:
+            print(f"⚠️ coupon check on submit-lead failed (non-fatal): {e}", flush=True)
     res = lead_intake.intake_lead(
         db, company="construction", source=src, name=name_clean, phone=phone_clean,
         email=email_clean, address=address, description=full_description,
         project_type=project_type,
-        extra={"budget": budget, "timeline": timeline, "goal": goal},
+        extra=extra_fields,
     )
     lead_id = res["lead_id"]
     created = res["created"]
@@ -10207,6 +10350,8 @@ async def instant_quote_submit(
     sqft: str = Form(""),
     rental_intent: str = Form(""),
     website: str = Form(""),  # honeypot — must be empty
+    coupon_code: str = Form(""),
+    discount_amount: str = Form(""),
     db=Depends(get_db),
 ):
     ctx = {
@@ -10215,6 +10360,7 @@ async def instant_quote_submit(
         "name": name, "phone": phone, "email": email, "sqft": sqft,
         "rental_intent": rental_intent,
         "error": None, "quote": None, "prop": None,
+        "coupon_code": "", "discount_amount": 0,
     }
 
     def _err(msg, status=200):
@@ -10244,6 +10390,33 @@ async def instant_quote_submit(
     # --- save lead FIRST, before computing any quote -------------------
     lead_id = None
     created = False
+    cc = (coupon_code or "").strip().upper()
+    iq_extra = {"rental_intent": rental_intent or None}
+    da = 0.0
+    try:
+        da = float(discount_amount or 0)
+    except (ValueError, TypeError):
+        da = 0.0
+    if cc:
+        # Lightweight server-side check: coupon exists and is active
+        try:
+            with db.cursor() as cur:
+                cur.execute(
+                    "SELECT active, expires_at FROM coupons WHERE code = %s;",
+                    (cc,),
+                )
+                crow = cur.fetchone()
+                if crow and crow["active"]:
+                    from datetime import datetime, timezone
+                    expired = crow["expires_at"] and datetime.now(timezone.utc) > crow["expires_at"]
+                    if not expired:
+                        iq_extra["coupon_code"] = cc
+                        if da > 0:
+                            iq_extra["discount_amount"] = da
+                        ctx["coupon_code"] = cc
+                        ctx["discount_amount"] = da
+        except Exception as e:
+            print(f"⚠️ coupon check on instant-quote failed (non-fatal): {e}", flush=True)
     try:
         res = lead_intake.intake_lead(
             db, company="construction", source="instant_quote",
@@ -10251,7 +10424,7 @@ async def instant_quote_submit(
             name=name, phone=phone, email=email, address=address,
             project_type=project_type,
             description=f"Instant-quote request — ballpark pending.",
-            extra={"rental_intent": rental_intent or None},
+            extra=iq_extra,
         )
         lead_id, created = res["lead_id"], res["created"]
     except Exception as e:

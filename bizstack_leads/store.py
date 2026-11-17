@@ -28,6 +28,7 @@ WRITABLE_FIELDS = (
     "budget", "timeline", "referral_code", "partner_id", "created_at",
     "funding_needed", "funding_use", "funding_amount_cents", "analysis_json",
     "property_sqft", "estimate_low_cents", "estimate_high_cents", "estimate_json",
+    "coupon_code", "discount_amount",
 )
 
 
