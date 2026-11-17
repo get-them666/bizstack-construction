@@ -201,6 +201,25 @@ def _labelled(pdf: BidPackagePDF, label: str, value: str) -> None:
     pdf.cell(0, 5.2, _txt(value), new_x="LMARGIN", new_y="NEXT")
 
 
+def _pretty_date(value) -> str:
+    """A due date a GC can read at a glance.
+
+    The card stores ISO dates, so the package printed "Bid due 2026-12-02"
+    underneath "Proposal date: November 17, 2026". On a document going to a
+    general contractor those two lines should not disagree about how dates are
+    written. Anything unparseable falls back to the raw string rather than
+    dropping the field.
+    """
+    if not value:
+        return ""
+    if isinstance(value, (date, datetime)):
+        return value.strftime("%B %d, %Y")
+    try:
+        return date.fromisoformat(str(value)[:10]).strftime("%B %d, %Y")
+    except (TypeError, ValueError):
+        return str(value)[:10]
+
+
 def generate_bid_package_pdf(bid: dict, costs: list[dict], markup_pct: float = 0,
                              summary: dict | None = None,
                              signature: dict | None = None) -> bytes:
@@ -262,7 +281,7 @@ def generate_bid_package_pdf(bid: dict, costs: list[dict], markup_pct: float = 0
     if bid.get("trade"):
         _labelled(pdf, "Trade", bid["trade"])
     if bid.get("due_date"):
-        _labelled(pdf, "Bid due", str(bid["due_date"])[:10])
+        _labelled(pdf, "Bid due", _pretty_date(bid["due_date"]))
 
     # ---- scope -----------------------------------------------------------
     _heading(pdf, "Scope of work")
