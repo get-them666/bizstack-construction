@@ -12296,63 +12296,59 @@ async def bid_delete(bid_id: int, request: Request, db=Depends(get_db)):
 
 
 @app.post("/api/bids/{bid_id}/documents")
-async def bid_document_upload(bid_id: int, request: Request, doc: list[UploadFile] = Form(...),
-                              doc_type: str = Form("other"), folder: str = Form(""), db=Depends(get_db)):
+async def bid_document_upload(bid_id: int, request: Request,
+                              doc: list[UploadFile] = File(...),
+                              doc_type: str = Form("other"),
+                              db=Depends(get_db)):
+    """Attach one or more package documents to a bid.
+
+    These are the documents the send-documents flow emails, so they live in
+    photo_store and in bid_documents -- the File Cabinet is the separate,
+    disk-backed store for permits, photos and everything else. Accepts a whole
+    folder so a plan set can be dropped in one go; when the dropdown is left on
+    "Other" each file is classified from its own name.
+    """
     require_admin(request)
     bid_opportunities.ensure_schema(db)
     bid = bid_opportunities.get_bid(db, bid_id, _BID_COMPANY)
     if not bid:
         raise HTTPException(status_code=404, detail="Bid not found")
+    import bid_attachments
+    # Only these slots exist on the card. classify() knows more vocabulary
+    # (rfi, addenda, permit, ...) for the File Cabinet; anything outside the
+    # package set has to fall back to "other" or the card silently hides it.
+    package_types = ("sow", "quote", "itemized", "contract", "plans", "other")
     uploaded_count = 0
     for single_doc in doc:
         raw = await single_doc.read()
         if not raw:
             continue
-        ext = os.path.splitext(single_doc.filename or "")[1][:10] or ".pdf"
+        original = single_doc.filename or f"bid-{bid_id}.pdf"
+        ext = os.path.splitext(original)[1][:10] or ".pdf"
         fname = f"bid-{bid_id}-{uuid.uuid4().hex[:12]}{ext.lower()}"
         # The dropdown is a human choice and humans mis-file revisions. When they
         # leave it on "Other", read the filename so "03-Contract-Revised" does not
         # land in the wrong slot.
-        current_doc_type = doc_type
-        current_folder = folder
-        if (current_doc_type or "").strip().lower() in ("", "other"):
-            import bid_attachments
-            guessed = bid_attachments.classify(single_doc.filename or "")
-            if guessed != "other":
+        current_doc_type = (doc_type or "").strip().lower() or "other"
+        if current_doc_type == "other":
+            guessed = bid_attachments.classify(original)
+            if guessed in package_types:
                 current_doc_type = guessed
-        # Auto-assign folder based on document type if not specified
-        if not current_folder or current_folder.strip().lower() in ("", "general"):
-            folder_map = {
-                "plans": "Plans & Drawings",
-                "sow": "Scope of Work",
-                "contract": "Contracts",
-                "itemized": "Pricing",
-                "quote": "Proposals",
-                "rfi": "RFIs",
-                "addenda": "Addenda",
-                "specs": "Specifications",
-                "inspection": "Inspections",
-                "permit": "Permits",
-                "correspondence": "Correspondence",
-                "schedule": "Schedules",
-                "other": "General"
-            }
-            current_folder = folder_map.get(current_doc_type, "General")
+        if current_doc_type not in package_types:
+            current_doc_type = "other"
         try:
             stored = photo_store.save(raw, fname, key_prefix=f"bids/{bid_id}")
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
         bid_opportunities.add_document(db, bid_id, _BID_COMPANY,
-                                       filename=(single_doc.filename or fname)[:500],
+                                       filename=original[:500],
                                        key=stored["key"], url=stored["url"],
                                        content_type=single_doc.content_type,
                                        bytes_count=len(raw),
                                        uploaded_by=_owner_email(),
                                        document_type=current_doc_type,
-                                       folder=current_folder.strip()[:50],
                                        supersede=True)
         uploaded_count += 1
-    return RedirectResponse(url=f"/bids/{bid_id}?uploaded={uploaded_count}", status_code=status.HTTP_303_SEE_OTHER)
     # The first document is usually the point a real job starts. Make sure the
     # card exists (or top up the blank fields on the one that does) so the bid
     # number on the paperwork is the number crew, payroll and profit all use.
@@ -12362,8 +12358,8 @@ async def bid_document_upload(bid_id: int, request: Request, doc: list[UploadFil
     except Exception as e:
         # An upload must never be lost because the job card could not be made.
         print(f"[bids] job card unavailable for bid {bid_id}: {e}", flush=True)
-    back = request.headers.get("referer") or f"/bids/{bid_id}"
-    return RedirectResponse(url=back, status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(url=f"/bids/{bid_id}?uploaded={uploaded_count}",
+                            status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.post("/api/bids/{bid_id}/documents/from-email")
@@ -12455,14 +12451,57 @@ _BID_FILES_ROOT = os.environ.get(
     "BID_FILES_ROOT", "/opt/bizstack/construction/uploads/bids")
 _BID_FILES_MAX_BYTES = 50 * 1024 * 1024  # 50 MB per file
 _BID_FILES_ALLOWED_EXTS = {
-    ".pdf", ".jpg", ".jpeg", ".png",
-    ".doc", ".docx", ".xls", ".xlsx",
+    ".pdf", ".jpg", ".jpeg", ".png", ".gif", ".webp", ".tif", ".tiff", ".heic",
+    ".doc", ".docx", ".xls", ".xlsx", ".csv", ".txt", ".md",
+    ".dwg", ".dxf", ".rvt", ".ifc", ".zip", ".msg", ".eml",
 }
 _BID_FILES_DEFAULT_FOLDERS = [
-    "Plans & Drawings", "Photos", "Permits",
-    "Contracts & Proposals", "Change Orders",
-    "Correspondence", "Inspections", "Other",
+    "Plans & Drawings", "Scope & Specifications", "Contracts & Proposals",
+    "Permits", "RFIs & Addenda", "Inspections", "Photos",
+    "Correspondence", "Change Orders", "Schedules", "Other",
 ]
+# classify() returns the package vocabulary; the cabinet names its folders in
+# human terms. Keeping the map here means a new classify() type cannot silently
+# land in "Other" without someone deciding where it belongs.
+_BID_FILES_TYPE_FOLDER = {
+    "plans": "Plans & Drawings",
+    "sow": "Scope & Specifications",
+    "specs": "Scope & Specifications",
+    "contract": "Contracts & Proposals",
+    "quote": "Contracts & Proposals",
+    "itemized": "Contracts & Proposals",
+    "permit": "Permits",
+    "rfi": "RFIs & Addenda",
+    "addenda": "RFIs & Addenda",
+    "inspection": "Inspections",
+    "correspondence": "Correspondence",
+    "schedule": "Schedules",
+}
+_BID_FILES_PHOTO_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".tif",
+                         ".tiff", ".heic"}
+_BID_FILES_AUTO = {"", "auto", "auto-sort"}
+
+
+def _bid_files_folder_for(filename: str, requested: str) -> str:
+    """Which folder a single upload belongs in.
+
+    A named folder always wins -- the owner picked it. "Other"/blank/"Auto" means
+    read the filename: a photo is a photo even if it is called "site plan.jpg",
+    and everything else goes through the same classifier the bid card uses for
+    solicitation attachments.
+    """
+    chosen = (requested or "").strip()
+    if chosen and chosen.lower() not in _BID_FILES_AUTO:
+        return chosen[:120]
+    ext = os.path.splitext(filename or "")[1].lower()
+    if ext in _BID_FILES_PHOTO_EXTS:
+        return "Photos"
+    try:
+        import bid_attachments
+        kind = bid_attachments.classify(filename or "")
+    except Exception:
+        kind = "other"
+    return _BID_FILES_TYPE_FOLDER.get(kind, "Other")
 
 
 def _bid_files_ensure_schema(db) -> None:
@@ -12499,7 +12538,13 @@ def _sanitize_bid_filename(name: str) -> str:
 
 
 def _bid_files_list(db, bid_id: int) -> list:
-    """All file rows for a bid, newest first. Returns [] on any error."""
+    """All file rows for a bid, newest first. Returns [] on any error.
+
+    get_db() connects with row_factory=dict_row, so rows arrive as dicts. Do not
+    re-zip them against cur.description: iterating a dict yields its *keys*, so
+    every value becomes its own column name and the template compares a string
+    to an int. Normalise once here and let callers trust the shape.
+    """
     try:
         _bid_files_ensure_schema(db)
         with db.cursor() as cur:
@@ -12509,8 +12554,17 @@ def _bid_files_list(db, bid_id: int) -> list:
                 "FROM bid_files WHERE bid_id = %s ORDER BY uploaded_at DESC, id DESC",
                 (bid_id,),
             )
-            cols = [d.name for d in cur.description]
-            return [dict(zip(cols, row)) for row in cur.fetchall()]
+            rows = cur.fetchall()
+        out = []
+        for row in rows:
+            item = dict(row)
+            try:
+                item["file_size"] = int(item.get("file_size") or 0)
+            except (TypeError, ValueError):
+                item["file_size"] = 0
+            item["size_kb"] = item["file_size"] / 1024
+            out.append(item)
+        return out
     except Exception as e:
         print(f"[bid_files] list unavailable for bid {bid_id}: {e}", flush=True)
         return []
@@ -12562,14 +12616,18 @@ async def bid_files_upload(bid_id: int, request: Request,
     _bid_files_ensure_schema(db)
 
     folder_raw = (folder or "Other").strip()[:120] or "Other"
-    # Folder name becomes part of the on-disk path; keep it filesystem-safe.
-    folder_safe = "".join(
-        c for c in folder_raw if c.isprintable() and c not in {'/', '\\', '\0', ':'}
-    ).strip() or "Other"
+
+    def _safe_folder(name: str) -> str:
+        # Folder name becomes part of the on-disk path; keep it filesystem-safe.
+        return "".join(
+            c for c in name if c.isprintable() and c not in {'/', '\\', '\0', ':'}
+        ).strip() or "Other"
 
     saved: list = []
     errors: list = []
     for up in files:
+        if not (up.filename or "").strip():
+            continue  # an untouched file input submits an empty part
         original = _sanitize_bid_filename(up.filename or "file")
         ext = os.path.splitext(original)[1].lower()
         if ext not in _BID_FILES_ALLOWED_EXTS:
@@ -12586,8 +12644,9 @@ async def bid_files_upload(bid_id: int, request: Request,
             continue
         if len(data) > _BID_FILES_MAX_BYTES:
             errors.append({"filename": original,
-                           "error": f"file too large (max 50 MB)"})
+                           "error": "file too large (max 50 MB)"})
             continue
+        folder_safe = _safe_folder(_bid_files_folder_for(original, folder_raw))
         dest_dir = os.path.join(_BID_FILES_ROOT, str(bid_id), folder_safe)
         try:
             os.makedirs(dest_dir, exist_ok=True)
@@ -12662,7 +12721,7 @@ async def bid_files_download(bid_id: int, file_id: int,
         row = cur.fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="File not found")
-    rel_path = row[3]
+    rel_path = row["file_path"]
     abs_path = os.path.realpath(os.path.join(_BID_FILES_ROOT, rel_path))
     root_real = os.path.realpath(_BID_FILES_ROOT)
     # Defense in depth: even though rel_path came from our own table, refuse
@@ -12671,13 +12730,19 @@ async def bid_files_download(bid_id: int, file_id: int,
         raise HTTPException(status_code=403, detail="Invalid file path")
     if not os.path.isfile(abs_path):
         raise HTTPException(status_code=404, detail="File missing from disk")
-    original = row[2] or row[1]
-    mime = row[4] or "application/octet-stream"
+    original = row["original_filename"] or row["filename"] or "download"
+    mime = row["mime_type"] or "application/octet-stream"
+    # A filename with a quote or an accent would break the raw header, so send
+    # the ASCII-safe name plus the RFC 5987 form browsers actually honour.
+    from urllib.parse import quote
+    ascii_name = original.encode("ascii", "ignore").decode() or "download"
+    ascii_name = ascii_name.replace('"', "")
+    disposition = (f'attachment; filename="{ascii_name}"; '
+                   f"filename*=UTF-8''{quote(original)}")
     return StreamingResponse(
         iter(_read_file_in_chunks(abs_path)),
         media_type=mime,
-        headers={"Content-Disposition":
-                 f'attachment; filename="{original}"'})
+        headers={"Content-Disposition": disposition})
 
 
 def _read_file_in_chunks(path: str, chunk: int = 64 * 1024):
@@ -12705,7 +12770,7 @@ async def bid_files_delete(bid_id: int, file_id: int,
         row = cur.fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="File not found")
-    rel_path = row[1]
+    rel_path = row["file_path"]
     abs_path = os.path.realpath(os.path.join(_BID_FILES_ROOT, rel_path))
     root_real = os.path.realpath(_BID_FILES_ROOT)
     if abs_path.startswith(root_real + os.sep) or abs_path == root_real:

@@ -44,14 +44,29 @@ _QUOTE_HINTS = ("quote", "quotation", "proposal", "bid form", "bidform",
 _RFI_HINTS = ("rfi", "request for information", "information request", "clarification")
 _ADDENDA_HINTS = ("addenda", "addendum", "bulletin", "amendment")
 _SPECS_HINTS = ("specification", "specs", "technical", "product data", "submittal")
-_INSPECTION_HINTS = ("inspection", "report", "punch list", "punchlist", "deficiency")
+_INSPECTION_HINTS = ("inspection", "punch list", "punchlist", "deficiency",
+                     "asbestos", "esa", "phase i", "phase ii", "environmental")
 _PERMIT_HINTS = ("permit", "application", "approval", "certificate", "co", "cco")
 _CORRESPONDENCE_HINTS = ("letter", "memo", "email", "correspondence", "note")
 _SCHEDULE_HINTS = ("schedule", "timeline", "gantt", "milestone", "phasing")
 
 _DRAWING_EXT = {".dwg", ".dxf", ".ifc", ".rvt"}
+_CSI_SECTION = re.compile(r"^(\d{6})(?:\s|-|\.|$)")
 
 MAX_FILES = 40
+
+
+def _hits(name: str, hint: str) -> bool:
+    """Does `hint` appear in `name` as a word, not inside a longer word?
+
+    A short hint has to start at a word boundary: plain substring matching let
+    "spec" fire on "in*spec*tion", so a testing-and-inspection spec was filed as
+    a scope of work, and "co" fired on "dis*co*nnects". Longer hints stay plain
+    substrings so "elevation" still matches "elevations".
+    """
+    if len(hint) <= 4:
+        return re.search(r"(?<![a-z0-9])" + re.escape(hint), name) is not None
+    return hint in name
 
 
 def classify(filename: str, content_type: str = "") -> str:
@@ -63,29 +78,35 @@ def classify(filename: str, content_type: str = "") -> str:
     """
     name = (filename or "").lower()
     ext = os.path.splitext(name)[1].lower()
-    if ext in _DRAWING_EXT or any(h in name for h in _DRAWING_HINTS):
+    if ext in _DRAWING_EXT or any(_hits(name, h) for h in _DRAWING_HINTS):
         return "plans"
-    if any(h in name for h in _SOW_HINTS):
-        return "sow"
-    if any(h in name for h in _CONTRACT_HINTS):
-        return "contract"
-    if any(h in name for h in _ITEMIZED_HINTS):
-        return "itemized"
-    if any(h in name for h in _QUOTE_HINTS):
-        return "quote"
-    if any(h in name for h in _RFI_HINTS):
-        return "rfi"
-    if any(h in name for h in _ADDENDA_HINTS):
-        return "addenda"
-    if any(h in name for h in _SPECS_HINTS):
+    # A spec book arrives as "270000 - STRUCTURED CABLING.pdf": CSI MasterFormat
+    # section numbers. Division 00/01 is bidding and general requirements, which
+    # is why the threshold is 02, not 01.
+    csi = _CSI_SECTION.match(name)
+    if csi and int(csi.group(1)[:2]) >= 2:
         return "specs"
-    if any(h in name for h in _INSPECTION_HINTS):
+    if any(_hits(name, h) for h in _SOW_HINTS):
+        return "sow"
+    if any(_hits(name, h) for h in _CONTRACT_HINTS):
+        return "contract"
+    if any(_hits(name, h) for h in _ITEMIZED_HINTS):
+        return "itemized"
+    if any(_hits(name, h) for h in _QUOTE_HINTS):
+        return "quote"
+    if any(_hits(name, h) for h in _RFI_HINTS):
+        return "rfi"
+    if any(_hits(name, h) for h in _ADDENDA_HINTS):
+        return "addenda"
+    if any(_hits(name, h) for h in _SPECS_HINTS):
+        return "specs"
+    if any(_hits(name, h) for h in _INSPECTION_HINTS):
         return "inspection"
-    if any(h in name for h in _PERMIT_HINTS):
+    if any(_hits(name, h) for h in _PERMIT_HINTS):
         return "permit"
-    if any(h in name for h in _CORRESPONDENCE_HINTS):
+    if any(_hits(name, h) for h in _CORRESPONDENCE_HINTS):
         return "correspondence"
-    if any(h in name for h in _SCHEDULE_HINTS):
+    if any(_hits(name, h) for h in _SCHEDULE_HINTS):
         return "schedule"
     return "other"
 

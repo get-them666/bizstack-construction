@@ -1008,22 +1008,19 @@
         </details>
         {% endif %}
         {% set docs_by_type = {} %}
-        {% set docs_by_folder = {} %}
         {% for d in docs %}
         {% set _ = docs_by_type.setdefault(d.document_type or 'other', []).append(d) %}
-        {% set _ = docs_by_folder.setdefault(d.folder or 'General', []).append(d) %}
         {% endfor %}
         {% set doc_types = [('sow', 'Scope of Work'), ('quote', 'Quote'), ('itemized', 'Itemized Pricing'), ('contract', 'Contract'), ('plans', 'Plans & Specs'), ('other', 'Other')] %}
-        <form method="post" action="/api/bids/{{ b.id }}/files/upload" enctype="multipart/form-data" class="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-4 border-t border-slate-100 mb-6">
-          <input id="doc-file" type="file" name="files" accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.md,.txt,.jpg,.jpeg,.png" multiple webkitdirectory class="text-sm text-slate-600 sm:col-span-2" onchange="bzGuessDocType(this)">
+        <form method="post" action="/api/bids/{{ b.id }}/documents" enctype="multipart/form-data" class="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-4 border-t border-slate-100 mb-6">
+          <input id="doc-file" type="file" name="doc" accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.md,.txt,.jpg,.jpeg,.png" multiple class="text-sm text-slate-600 sm:col-span-2" onchange="bzGuessDocType(this)">
           <select id="doc-type" name="doc_type" class="text-sm border border-slate-200 rounded-lg px-3 py-2 bg-white">
             {% for dt, label in doc_types %}
             <option value="{{ dt }}">{{ label }}</option>
             {% endfor %}
           </select>
-          <input type="text" name="folder" placeholder="Custom folder (optional - auto-assigned)" class="text-sm border border-slate-200 rounded-lg px-3 py-2 bg-white sm:col-span-2">
-          <button class="text-sm font-semibold px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700">Upload files</button>
-          <p class="text-[11px] text-slate-400 sm:col-span-3">Select multiple files or an entire folder. Files auto-sort into folders (Plans, RFIs, Permits, etc.) based on filename. Leave folder blank for auto-sort.</p>
+          <button class="text-sm font-semibold px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700">Upload documents</button>
+          <p class="text-[11px] text-slate-400 sm:col-span-2">Pick as many files as you like. These are the documents that get emailed with the package. Uploading a new Scope of Work, Quote, Itemized Pricing or Contract replaces the previous one in that slot; Plans and Other are kept as a set.</p>
         </form>
         {% for dt, label in doc_types %}
         {% set tdocs = docs_by_type.get(dt, []) %}
@@ -1108,18 +1105,26 @@
             <div>
               <label class="block text-xs font-bold text-slate-600 mb-1">Folder</label>
               <select name="folder" class="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 bg-white">
+                <option value="">Auto-sort by filename</option>
                 {% for f in bid_folders %}
-                <option value="{{ f }}" {% if f == 'Other' %}selected{% endif %}>{{ f }}</option>
+                <option value="{{ f }}">{{ f }}</option>
                 {% endfor %}
               </select>
+              <p class="text-[11px] text-slate-400 mt-1">Auto-sort files plans, scopes, RFIs, permits and inspection reports from the filename.</p>
             </div>
             <div>
               <label class="block text-xs font-bold text-slate-600 mb-1">Files (max 50 MB each)</label>
-              <input type="file" name="files" multiple accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx" class="w-full text-sm text-slate-600 file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100">
+              <input type="file" name="files" multiple class="w-full text-sm text-slate-600 file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100">
+              <p class="text-[11px] text-slate-400 mt-1">Pick as many files as you like.</p>
+            </div>
+            <div class="sm:col-span-2">
+              <label class="block text-xs font-bold text-slate-600 mb-1">…or upload a whole folder</label>
+              <input type="file" name="files" webkitdirectory multiple class="w-full text-sm text-slate-600 file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-slate-100 file:text-slate-700 hover:file:bg-slate-200">
+              <p class="text-[11px] text-slate-400 mt-1">Every file in the folder is uploaded and sorted. Use the folder picker on its own — do not also add files above in the same submit.</p>
             </div>
           </div>
           <button class="text-sm font-semibold px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700">Upload files</button>
-          <p class="text-[11px] text-slate-400 mt-2">Allowed: PDF, JPG, PNG, DOC, DOCX, XLS, XLSX</p>
+          <p class="text-[11px] text-slate-400 mt-2">PDF, images, Word, Excel, CSV, DWG/DXF, RVT/IFC, ZIP and email files.</p>
         </form>
 
         {% if bid_files %}
@@ -1148,7 +1153,7 @@
                   {{ f.original_filename }}
                 </a>
                 <span class="text-[11px] text-slate-400 whitespace-nowrap">
-                  {{ '{:,.1f}'.format(f.file_size / 1024) }} KB
+                  {{ '%.1f'|format(f.size_kb or 0) }} KB
                   {% if f.uploaded_at %}· {{ f.uploaded_at.strftime('%b %d') }}{% endif %}
                 </span>
               </div>

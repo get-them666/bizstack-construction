@@ -55,8 +55,10 @@ def test_bid_files():
     # Use a test database connection
     try:
         import psycopg
+        from psycopg.rows import dict_row
         db_url = os.environ.get("DATABASE_URL", "postgresql://localhost/bz_test")
-        with psycopg.connect(db_url) as db:
+        # dict_row matches get_db(): the app's row shape, not a tuple.
+        with psycopg.connect(db_url, row_factory=dict_row) as db:
             _bid_files_ensure_schema(db)
             
             # Verify table exists
@@ -67,7 +69,7 @@ def test_bid_files():
                         WHERE table_name = 'bid_files'
                     )
                 """)
-                exists = cur.fetchone()[0]
+                exists = cur.fetchone()["exists"]
                 assert exists, "bid_files table was not created"
             print("✓ bid_files table created successfully")
             
@@ -100,7 +102,7 @@ def test_bid_files():
                       f"{test_bid_id}/{test_folder}/{disk_filename}",
                       len(test_file_content), "application/pdf",
                       test_folder, "test@example.com"))
-                file_id = cur.fetchone()[0]
+                file_id = cur.fetchone()["id"]
             db.commit()
             print(f"✓ Test file uploaded with ID {file_id}")
             
@@ -166,7 +168,7 @@ def test_bid_files():
                     """, (test_bid_id, disk_name, filename,
                           f"{test_bid_id}/{folder}/{disk_name}",
                           12, "application/octet-stream", folder))
-                    file_ids.append(cur.fetchone()[0])
+                    file_ids.append(cur.fetchone()["id"])
             db.commit()
             
             # Verify folders are listed correctly
