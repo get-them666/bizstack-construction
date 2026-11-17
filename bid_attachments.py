@@ -41,6 +41,13 @@ _ITEMIZED_HINTS = ("itemized", "line item", "line-item", "takeoff", "take-off",
                    "quantity", "pricing schedule")
 _QUOTE_HINTS = ("quote", "quotation", "proposal", "bid form", "bidform",
                 "price", "pricing")
+_RFI_HINTS = ("rfi", "request for information", "information request", "clarification")
+_ADDENDA_HINTS = ("addenda", "addendum", "bulletin", "amendment")
+_SPECS_HINTS = ("specification", "specs", "technical", "product data", "submittal")
+_INSPECTION_HINTS = ("inspection", "report", "punch list", "punchlist", "deficiency")
+_PERMIT_HINTS = ("permit", "application", "approval", "certificate", "co", "cco")
+_CORRESPONDENCE_HINTS = ("letter", "memo", "email", "correspondence", "note")
+_SCHEDULE_HINTS = ("schedule", "timeline", "gantt", "milestone", "phasing")
 
 _DRAWING_EXT = {".dwg", ".dxf", ".ifc", ".rvt"}
 
@@ -66,6 +73,20 @@ def classify(filename: str, content_type: str = "") -> str:
         return "itemized"
     if any(h in name for h in _QUOTE_HINTS):
         return "quote"
+    if any(h in name for h in _RFI_HINTS):
+        return "rfi"
+    if any(h in name for h in _ADDENDA_HINTS):
+        return "addenda"
+    if any(h in name for h in _SPECS_HINTS):
+        return "specs"
+    if any(h in name for h in _INSPECTION_HINTS):
+        return "inspection"
+    if any(h in name for h in _PERMIT_HINTS):
+        return "permit"
+    if any(h in name for h in _CORRESPONDENCE_HINTS):
+        return "correspondence"
+    if any(h in name for h in _SCHEDULE_HINTS):
+        return "schedule"
     return "other"
 
 

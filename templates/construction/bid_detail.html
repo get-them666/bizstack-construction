@@ -1008,8 +1008,10 @@
         </details>
         {% endif %}
         {% set docs_by_type = {} %}
+        {% set docs_by_folder = {} %}
         {% for d in docs %}
         {% set _ = docs_by_type.setdefault(d.document_type or 'other', []).append(d) %}
+        {% set _ = docs_by_folder.setdefault(d.folder or 'General', []).append(d) %}
         {% endfor %}
         {% set doc_types = [('sow', 'Scope of Work'), ('quote', 'Quote'), ('itemized', 'Itemized Pricing'), ('contract', 'Contract'), ('plans', 'Plans & Specs'), ('other', 'Other')] %}
         <form method="post" action="/api/bids/{{ b.id }}/documents" enctype="multipart/form-data" class="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-4 border-t border-slate-100 mb-6">
@@ -1019,9 +1021,9 @@
             <option value="{{ dt }}">{{ label }}</option>
             {% endfor %}
           </select>
-          <input type="text" name="folder" placeholder="Folder (e.g. Provost-Chase)" class="text-sm border border-slate-200 rounded-lg px-3 py-2 bg-white sm:col-span-2">
+          <input type="text" name="folder" placeholder="Custom folder (optional - auto-assigned)" class="text-sm border border-slate-200 rounded-lg px-3 py-2 bg-white sm:col-span-2">
           <button class="text-sm font-semibold px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700">Upload files</button>
-          <p class="text-[11px] text-slate-400 sm:col-span-3">Select multiple files or an entire folder. Uploading a new Scope of Work, Quote, Itemized Pricing or Contract replaces the previous one in that slot. Plans and Other are kept as a set.</p>
+          <p class="text-[11px] text-slate-400 sm:col-span-3">Select multiple files or an entire folder. Files auto-sort into folders (Plans, RFIs, Permits, etc.) based on filename. Leave folder blank for auto-sort.</p>
         </form>
         {% for dt, label in doc_types %}
         {% set tdocs = docs_by_type.get(dt, []) %}

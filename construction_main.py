@@ -12314,11 +12314,30 @@ async def bid_document_upload(bid_id: int, request: Request, doc: list[UploadFil
         # leave it on "Other", read the filename so "03-Contract-Revised" does not
         # land in the wrong slot.
         current_doc_type = doc_type
+        current_folder = folder
         if (current_doc_type or "").strip().lower() in ("", "other"):
             import bid_attachments
             guessed = bid_attachments.classify(single_doc.filename or "")
             if guessed != "other":
                 current_doc_type = guessed
+        # Auto-assign folder based on document type if not specified
+        if not current_folder or current_folder.strip().lower() in ("", "general"):
+            folder_map = {
+                "plans": "Plans & Drawings",
+                "sow": "Scope of Work",
+                "contract": "Contracts",
+                "itemized": "Pricing",
+                "quote": "Proposals",
+                "rfi": "RFIs",
+                "addenda": "Addenda",
+                "specs": "Specifications",
+                "inspection": "Inspections",
+                "permit": "Permits",
+                "correspondence": "Correspondence",
+                "schedule": "Schedules",
+                "other": "General"
+            }
+            current_folder = folder_map.get(current_doc_type, "General")
         try:
             stored = photo_store.save(raw, fname, key_prefix=f"bids/{bid_id}")
         except ValueError as e:
@@ -12330,7 +12349,7 @@ async def bid_document_upload(bid_id: int, request: Request, doc: list[UploadFil
                                        bytes_count=len(raw),
                                        uploaded_by=_owner_email(),
                                        document_type=current_doc_type,
-                                       folder=(folder or "General").strip()[:50],
+                                       folder=current_folder.strip()[:50],
                                        supersede=True)
         uploaded_count += 1
     return RedirectResponse(url=f"/bids/{bid_id}?uploaded={uploaded_count}", status_code=status.HTTP_303_SEE_OTHER)
