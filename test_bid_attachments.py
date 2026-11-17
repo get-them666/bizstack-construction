@@ -25,7 +25,8 @@ def test_classify_prefers_drawings_over_incidental_words():
         ("Bid Form.pdf", "quote"),
         ("Itemized Pricing.xlsx", "itemized"),
         ("Contract Agreement.docx", "contract"),
-        ("addendum-2.pdf", "other"),
+        # An addendum is its own slot now; it used to fall through to "other".
+        ("addendum-2.pdf", "addenda"),
     ]
     for name, want in cases:
         got = ba.classify(name)
