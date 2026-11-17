@@ -12107,6 +12107,7 @@ async def bid_detail_page(bid_id: int, request: Request, db=Depends(get_db)):
             "source_emails": source_emails,
             "source_body": source_body,
             "pulled": request.query_params.get("pulled", ""),
+            "saved_details": request.query_params.get("saved_details", ""),
             "pull_skipped": request.query_params.get("skipped", ""),
             "pull_errors": request.query_params.get("pull_errors", ""),
             "pull_msg": request.query_params.get("pull_msg", ""),
@@ -12250,6 +12251,49 @@ async def bid_set_amount(bid_id: int, request: Request, amount: str = Form(...),
         raise HTTPException(status_code=404, detail="Bid not found")
     back = request.headers.get("referer") or "/bids"
     return RedirectResponse(url=back, status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/api/bids/{bid_id}/details")
+async def bid_details_update(bid_id: int, request: Request,
+                             name: str = Form(""), location: str = Form(""),
+                             trade: str = Form(""), reference: str = Form(""),
+                             db=Depends(get_db)):
+    """Name the job and set its address.
+
+    A bid pulled from a BidPrime/ConstructConnect digest arrives named after the
+    digest email -- "Bid Alert: 8 new matched leads (11/17/2026)" -- which is
+    useless on a board of real jobs and gets worse once a second digest lands.
+    The card had no way to correct it, so the owner was stuck with an
+    unsearchable name on the one row the money hangs off.
+    """
+    require_admin(request)
+
+    def back(msg_key: str, message: str) -> RedirectResponse:
+        from urllib.parse import quote
+        return RedirectResponse(
+            url=f"/bids/{bid_id}?{msg_key}=" + quote(message[:300]),
+            status_code=status.HTTP_303_SEE_OTHER)
+
+    new_name = (name or "").strip()
+    if not new_name:
+        return back("error", "Job title cannot be empty.")
+    try:
+        with db.cursor() as cur:
+            cur.execute(
+                "UPDATE bid_opportunities SET name = %s, location = %s, "
+                "trade = %s, reference = %s, updated_at = now() "
+                "WHERE id = %s AND company = %s",
+                (new_name[:300], (location or "").strip()[:300],
+                 (trade or "").strip()[:120], (reference or "").strip()[:120],
+                 bid_id, _BID_COMPANY),
+            )
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        # The dedupe index is (company, reference, trade). Renaming a row onto
+        # another's key is the one failure worth explaining rather than 500ing.
+        return back("error", f"Could not save the job details: {str(e)[:160]}")
+    return back("saved_details", "1")
 
 
 @app.post("/api/bids/{bid_id}/note")

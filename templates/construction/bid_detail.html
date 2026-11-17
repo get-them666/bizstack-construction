@@ -46,6 +46,20 @@
         {% if b.reference %}<span class="text-xs font-mono text-slate-400">{{ b.reference }}</span>{% endif %}
         {% if b.source %}<span class="text-xs text-slate-400">via {{ b.source }}</span>{% endif %}
       </div>
+      <details class="mt-3">
+        <summary class="cursor-pointer text-[11px] font-semibold text-slate-400 hover:text-slate-600">Edit job title &amp; address</summary>
+        <form method="post" action="/api/bids/{{ b.id }}/details" class="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2 max-w-2xl">
+          <input name="name" value="{{ b.name }}" required placeholder="Job title — what this job is called on the board"
+                 class="text-sm border border-slate-200 rounded-lg px-3 py-2 sm:col-span-2">
+          <input name="location" value="{{ b.location or '' }}" placeholder="Address"
+                 class="text-sm border border-slate-200 rounded-lg px-3 py-2">
+          <input name="trade" value="{{ b.trade or '' }}" placeholder="Trade"
+                 class="text-sm border border-slate-200 rounded-lg px-3 py-2">
+          <input name="reference" value="{{ b.reference or '' }}" placeholder="GC / bid reference"
+                 class="text-sm border border-slate-200 rounded-lg px-3 py-2 sm:col-span-2">
+          <button class="text-sm font-semibold px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 sm:col-span-2">Save job details</button>
+        </form>
+      </details>
     </div>
     <a href="/bids" class="px-4 py-2.5 text-sm font-semibold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 rounded-xl transition-colors">&larr; Board</a>
   </div>
@@ -58,6 +72,11 @@
   {% if saved_revision %}
   <div class="mb-6 rounded-xl bg-amber-50 border border-amber-200 px-4 py-3 text-sm text-amber-800">
     Saved as <b>Revision {{ saved_revision }}</b>. The card and every generated document now state that revision, so this price cannot be confused with the one before it.
+  </div>
+  {% endif %}
+  {% if saved_details %}
+  <div class="mb-6 rounded-xl bg-emerald-50 border border-emerald-200 px-4 py-3 text-sm text-emerald-800">
+    Job title and address saved. Every document and email now uses <b>{{ b.name }}</b>.
   </div>
   {% endif %}
   {% if documents_sent %}
