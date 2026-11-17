@@ -70,6 +70,7 @@ import permit_enricher
 import permit_stats
 import email_fetcher
 import bid_costing
+import bid_scope_skeleton
 import bid_contact
 import bid_notes
 import direct_deposit
@@ -5713,6 +5714,41 @@ async def bid_cost_create(bid_id: int, request: Request, description: str = Form
     if back.startswith("/bids/"):
         return RedirectResponse(url=back, status_code=status.HTTP_303_SEE_OTHER)
     return RedirectResponse(url="/books", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/api/bids/{bid_id}/takeoff/from-specs")
+async def bid_takeoff_from_specs(bid_id: int, request: Request, db=Depends(get_db)):
+    """Add one unpriced line per trade the uploaded spec book covers.
+
+    Brooke White's scope note on the Chase job was explicit that a bid off the
+    demo plan alone is short: flooring, walls and finishes are in. Rather than
+    retyping a trade list, this reads the CSI section numbers on the files the
+    owner already dropped in. It adds nothing else -- no quantities, no rates,
+    no recalculated bid amount -- and it only ever inserts, so a re-run cannot
+    undo a line that was priced or taken out.
+    """
+    require_admin(request)
+    if not bid_opportunities.get_bid(db, bid_id, _BID_COMPANY):
+        raise HTTPException(status_code=404, detail="Bid not found")
+    try:
+        result = bid_scope_skeleton.seed_bid(db, bid_id, _BID_COMPANY)
+    except Exception as exc:
+        db.rollback()
+        message = urllib.parse.quote(f"Could not build the takeoff: {str(exc)[:160]}")
+        return RedirectResponse(url=f"/bids/{bid_id}?error={message}",
+                                status_code=status.HTTP_303_SEE_OTHER)
+    if not result["added"]:
+        note = ("Nothing to add: the skeleton is already on this bid."
+                if result["skipped"] else
+                "No spec sections found on this bid. Upload the spec book to the "
+                "File Cabinet first, or add lines by hand.")
+        return RedirectResponse(
+            url=f"/bids/{bid_id}?takeoff_note={urllib.parse.quote(note)}#takeoff",
+            status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(
+        url=f"/bids/{bid_id}?takeoff_seeded={result['added']}"
+            f"&takeoff_skipped={result['skipped']}#takeoff",
+        status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.post("/api/bids/{bid_id}/costs/{line_id}/update")
@@ -12091,6 +12127,13 @@ async def bid_detail_page(bid_id: int, request: Request, db=Depends(get_db)):
     except Exception as exc:
         print(f"[bids] files unavailable for bid {bid_id}: {exc}", flush=True)
 
+    # The spec book is the honest source for a takeoff skeleton: it says which
+    # trades are actually in the job. Counted here so the card can offer the
+    # button only when there is something to read.
+    spec_section_count = len(bid_scope_skeleton.parse_spec_sections(
+        [f.get("original_filename") or "" for f in (bid_files or [])]
+        + [d.get("filename") or "" for d in (docs or [])]))
+
     response = templates.TemplateResponse(
         request=request, name="bid_detail.html",
         context={
@@ -12130,6 +12173,10 @@ async def bid_detail_page(bid_id: int, request: Request, db=Depends(get_db)):
             "bid_files": bid_files,
             "bid_folders": bid_folders,
             "file_folder_stats": _bid_files_folder_stats(bid_files),
+            "spec_section_count": spec_section_count,
+            "takeoff_seeded": request.query_params.get("takeoff_seeded", ""),
+            "takeoff_skipped": request.query_params.get("takeoff_skipped", ""),
+            "takeoff_note": request.query_params.get("takeoff_note", ""),
             "files_saved": request.query_params.get("files_saved", ""),
             "files_errors": request.query_params.get("files_errors", ""),
             "files_error_msg": request.query_params.get("files_error_msg", ""),

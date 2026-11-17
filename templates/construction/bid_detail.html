@@ -158,6 +158,30 @@
         </div>
         <p class="text-[11px] text-slate-400 mb-3">Enter <b>quantity × unit cost</b> and the line total calculates automatically. The bid amount and generated documents price from these lines; an uploaded <b>Itemized Pricing</b> or <b>Quote</b> in Job documents is the file actually sent to the GC.</p>
 
+        {% if takeoff_seeded %}
+        <div class="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs text-emerald-900">
+          Added <b>{{ takeoff_seeded }}</b> unpriced line{{ '' if takeoff_seeded == '1' else 's' }} from the spec book
+          {% if takeoff_skipped %}— {{ takeoff_skipped }} already on the bid and left alone{% endif %}.
+          Fill in quantity and rate on the ones this job needs, and take out the trades it does not.
+        </div>
+        {% elif takeoff_note %}
+        <div class="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900">
+          {{ takeoff_note }}
+        </div>
+        {% endif %}
+
+        {% if spec_section_count %}
+        <form method="post" action="/api/bids/{{ b.id }}/takeoff/from-specs" class="mb-4 flex flex-wrap items-center gap-2"
+              onsubmit="return confirm('Add one line per trade in the uploaded spec book?\n\nEvery line lands with no quantity and no rate. Lines already on this bid are left untouched.')">
+          <button class="text-xs font-bold px-3 py-2 bg-slate-100 text-slate-700 rounded-lg hover:bg-slate-200">
+            ＋ Build takeoff from spec book
+          </button>
+          <span class="text-[11px] text-slate-400">
+            {{ spec_section_count }} spec section{{ '' if spec_section_count == 1 else 's' }} found — adds the trades this job is missing, priced at nothing until you fill it in.
+          </span>
+        </form>
+        {% endif %}
+
         {% if costs %}
         <table class="w-full text-sm">
           <thead><tr class="text-left text-xs uppercase tracking-wide text-slate-400 border-b border-slate-100">
