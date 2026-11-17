@@ -9,6 +9,8 @@ from fpdf import FPDF
 
 from documents_service import send_email, smtp_config_from_env
 
+import pdf_stamp
+
 
 class ProposalPDF(FPDF):
     def header(self):
@@ -68,6 +70,9 @@ def _is_reconciliation(line: dict) -> bool:
 def generate_proposal_pdf(bid: dict, costs: list, summary: dict, markup_pct: float = 0,
                           signature: dict | None = None) -> bytes:
     pdf = ProposalPDF()
+    # Same bid row, same bytes, so the emailed proposal can be matched against
+    # the copy on the card instead of differing by a render timestamp.
+    pdf_stamp.stamp(pdf, bid)
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
     
@@ -77,7 +82,7 @@ def generate_proposal_pdf(bid: dict, costs: list, summary: dict, markup_pct: flo
     pdf.ln(2)
     
     pdf.set_font('Helvetica', '', 10)
-    pdf.cell(0, 6, f'Proposal Date: {datetime.now().strftime("%B %d, %Y")}', ln=True)
+    pdf.cell(0, 6, f'Proposal Date: {pdf_stamp.day_text(bid)}', ln=True)
     pdf.cell(0, 6, f'Project: {bid.get("name", "")}', ln=True)
     if bid.get('location'):
         pdf.cell(0, 6, f'Location: {bid["location"]}', ln=True)

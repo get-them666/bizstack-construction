@@ -37,6 +37,8 @@ from pathlib import Path
 
 from fpdf import FPDF
 
+import pdf_stamp
+
 # Shared so the four documents cannot quote different terms. These are private
 # names in that module, but duplicating them here is how the package PDF and the
 # contract end up disagreeing about the deposit.
@@ -192,9 +194,12 @@ class BidDocPDF(BidPackagePDF):
 # helpers
 # --------------------------------------------------------------------------
 
-def _new_pdf(title: str) -> BidDocPDF:
+def _new_pdf(title: str, bid: dict | None = None) -> BidDocPDF:
     pdf = BidDocPDF(format="letter")
     pdf.doc_title = title
+    # Reproducible bytes: the same bid must render the same document, or the
+    # hash stored against a signing request cannot prove anything later.
+    pdf_stamp.stamp(pdf, bid)
     pdf.set_auto_page_break(auto=True, margin=18)
     pdf.set_margins(15, 15, 15)
     pdf.add_page()
@@ -226,7 +231,7 @@ def _title_block(pdf: BidDocPDF, title: str, bid: dict, subtitle: str = "") -> N
     pdf.cell(0, 5, f"Bid #{bid.get('id', '')}   |   "
                    f"{revision}   |   "
                    f"Reference: {_txt(bid.get('reference') or '-')}   |   "
-                   f"Date: {date.today().strftime('%B %d, %Y')}",
+                   f"Date: {pdf_stamp.day_text(bid)}",
              new_x="LMARGIN", new_y="NEXT")
     if subtitle:
         pdf.cell(0, 5, _txt(subtitle), new_x="LMARGIN", new_y="NEXT")
@@ -352,7 +357,7 @@ def _contact_sheet(pdf: BidDocPDF, photos: list[Path], cols: int = 3,
 # --------------------------------------------------------------------------
 
 def build_scope_of_work(bid: dict, costs: list[dict], photos: list[Path]) -> bytes:
-    pdf = _new_pdf("Scope of work")
+    pdf = _new_pdf("Scope of work", bid)
     subtitle = (bid.get("name") or bid.get("location") or "").strip()
     _title_block(pdf, "SCOPE OF WORK", bid,
                  subtitle if subtitle else "Renovation scope of work")
@@ -456,7 +461,7 @@ def _fmt_qty(v) -> str:
 
 
 def build_itemized_pricing(bid: dict, costs: list[dict]) -> bytes:
-    pdf = _new_pdf("Itemized pricing")
+    pdf = _new_pdf("Itemized pricing", bid)
     _title_block(pdf, "ITEMIZED PRICING", bid,
                  "Hallway, runner and bathroom renovation")
     _party_block(pdf, bid)
@@ -591,7 +596,7 @@ def build_itemized_pricing(bid: dict, costs: list[dict]) -> bytes:
 def build_contract(bid: dict, costs: list[dict], photos: list[Path],
                    signature: dict | None = None,
                    client_signature: dict | None = None) -> bytes:
-    pdf = _new_pdf("Renovation agreement")
+    pdf = _new_pdf("Renovation agreement", bid)
     # bill the CUSTOMER the bid amount, not the raw cost lines. bid_amount is
     # base x (1 + markup), which is what the bid card and the deposit invoice
     # use; summing costs here produced a contract priced at cost, so a
@@ -640,7 +645,7 @@ def build_contract(bid: dict, costs: list[dict], photos: list[Path],
     _heading(pdf, "Terms")
     _paragraphs(pdf, [
         (head, body.format(
-            date=date.today().strftime("%B %d, %Y"),
+            date=pdf_stamp.day_text(bid),
             total=_money(total),
             dep=DEPOSIT_PCT, dep_amt=_money(dep_amt),
             prog=PROGRESS_PCT, prog_amt=_money(prog_amt),

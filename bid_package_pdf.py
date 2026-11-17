@@ -25,6 +25,8 @@ from datetime import date, datetime
 
 from fpdf import FPDF
 
+import pdf_stamp
+
 COMPANY = "BuildStack Construction LLC"
 # Full street address, not just the city. A contract that names no address for
 # the contractor is weaker than one that does, and MEMORY.md records this as the
@@ -250,6 +252,9 @@ def generate_bid_package_pdf(bid: dict, costs: list[dict], markup_pct: float = 0
         total = subtotal + markup
 
     pdf = BidPackagePDF(format="letter")
+    # Same bid row, same bytes: the package is regenerated per request, and the
+    # hash a signing request stores has to hold across those regenerations.
+    pdf_stamp.stamp(pdf, bid)
     pdf.set_auto_page_break(auto=True, margin=18)
     pdf.set_margins(15, 15, 15)
     pdf.add_page()
@@ -264,7 +269,7 @@ def generate_bid_package_pdf(bid: dict, costs: list[dict], markup_pct: float = 0
         _number = 0
     _revision = f"Revision {_number}" if _number > 0 else "Original"
     pdf.cell(0, 5, f"Bid #{bid.get('id', '')}   |   {_revision}   |   "
-                   f"Proposal date: {date.today().strftime('%B %d, %Y')}   |   "
+                   f"Proposal date: {pdf_stamp.day_text(bid)}   |   "
                    f"Valid {VALID_DAYS} days",
              new_x="LMARGIN", new_y="NEXT")
     pdf.ln(4)
