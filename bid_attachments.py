@@ -78,14 +78,16 @@ def classify(filename: str, content_type: str = "") -> str:
     """
     name = (filename or "").lower()
     ext = os.path.splitext(name)[1].lower()
-    if ext in _DRAWING_EXT or any(_hits(name, h) for h in _DRAWING_HINTS):
-        return "plans"
     # A spec book arrives as "270000 - STRUCTURED CABLING.pdf": CSI MasterFormat
-    # section numbers. Division 00/01 is bidding and general requirements, which
-    # is why the threshold is 02, not 01.
+    # section numbers. This is a stronger signal than a word in the section title
+    # -- "221316 - STORM DRAINAGE" is plumbing, not a site plan -- so it is
+    # checked before the drawing hints. Division 00/01 is bidding and general
+    # requirements, which is why the threshold is 02.
     csi = _CSI_SECTION.match(name)
     if csi and int(csi.group(1)[:2]) >= 2:
         return "specs"
+    if ext in _DRAWING_EXT or any(_hits(name, h) for h in _DRAWING_HINTS):
+        return "plans"
     if any(_hits(name, h) for h in _SOW_HINTS):
         return "sow"
     if any(_hits(name, h) for h in _CONTRACT_HINTS):

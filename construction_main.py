@@ -5671,12 +5671,20 @@ def _cost_number(raw):
 
 
 @app.post("/api/bids/{bid_id}/costs")
-async def bid_cost_create(bid_id: int, request: Request, description: str = Form(...),
+async def bid_cost_create(bid_id: int, request: Request, description: str = Form(""),
                           category: str = Form("material"), vendor: str = Form(""),
                           estimated: str = Form(""), actual: str = Form(""),
                           qty: str = Form(""), unit: str = Form(""), unit_cost: str = Form(""),
                           back: str = Form(""),
                           db=Depends(get_db)):
+    """Add a takeoff line.
+
+    description used to be Form(...) while the input carried no `required`
+    attribute, so pressing "Add takeoff line" with only a quantity and rate
+    returned a raw 422 JSON page and the line never landed. The input is
+    required in the browser now; the route stays tolerant so an empty post
+    still records the numbers instead of losing them.
+    """
     require_admin(request)
     try:
         qty_f = _cost_number(qty)
@@ -5684,11 +5692,17 @@ async def bid_cost_create(bid_id: int, request: Request, description: str = Form
         est_f = _cost_number(estimated)
         if qty_f is not None and rate_f is not None:
             est_f = round(qty_f * rate_f, 2)
+        if qty_f is None and rate_f is None and est_f is None and not (actual or "").strip():
+            raise ValueError("Enter a quantity × unit cost, a line total, or an actual cost.")
         lid = bid_costing.add_cost_line(db, bid_id, category, description, vendor,
                                         qty=qty_f, unit_cost=rate_f,
                                         estimated=est_f, actual=actual or None,
                                         unit=unit, company=_BID_COMPANY)
     except ValueError as e:
+        message = urllib.parse.quote(str(e)[:200])
+        if back.startswith("/bids/"):
+            return RedirectResponse(url=f"{back}?error={message}",
+                                    status_code=status.HTTP_303_SEE_OTHER)
         raise HTTPException(status_code=400, detail=str(e))
     ledger_sync.ensure_schema(db)
     if actual:
@@ -12114,9 +12128,12 @@ async def bid_detail_page(bid_id: int, request: Request, db=Depends(get_db)):
             "portal_account": portal_account,
             "bid_files": bid_files,
             "bid_folders": bid_folders,
+            "file_folder_stats": _bid_files_folder_stats(bid_files),
             "files_saved": request.query_params.get("files_saved", ""),
             "files_errors": request.query_params.get("files_errors", ""),
             "files_error_msg": request.query_params.get("files_error_msg", ""),
+            "files_purged": request.query_params.get("files_purged", ""),
+            "files_freed_mb": request.query_params.get("files_freed_mb", ""),
         })
     # A bid page is per-record money data. no-store is the belt to the database's
     # braces: a browser or intermediate cache must never hand back bid A's HTML
@@ -12589,6 +12606,28 @@ def _bid_files_folders(db, bid_id: int) -> list:
     return ordered
 
 
+def _bid_files_folder_stats(bid_files: list) -> list:
+    """Per-folder file count and size, for the post-placement purge panel.
+
+    Only folders that actually hold files are returned: a purge checklist full
+    of empty rows is noise, and an empty row is a way to fat-finger nothing.
+    """
+    totals: dict = {}
+    for f in bid_files or []:
+        name = f.get("folder") or "Other"
+        entry = totals.setdefault(name, {"name": name, "count": 0, "bytes": 0})
+        entry["count"] += 1
+        entry["bytes"] += int(f.get("file_size") or 0)
+    ordered = []
+    for name in _BID_FILES_DEFAULT_FOLDERS:
+        if name in totals:
+            ordered.append(totals.pop(name))
+    ordered.extend(totals[name] for name in sorted(totals))
+    for entry in ordered:
+        entry["mb"] = entry["bytes"] / 1048576
+    return ordered
+
+
 @app.get("/api/bids/{bid_id}/files")
 async def bid_files_list(bid_id: int, request: Request, db=Depends(get_db)):
     """JSON list of files on a bid. Used by the upload UI to refresh."""
@@ -12615,7 +12654,11 @@ async def bid_files_upload(bid_id: int, request: Request,
         raise HTTPException(status_code=404, detail="Bid not found")
     _bid_files_ensure_schema(db)
 
-    folder_raw = (folder or "Other").strip()[:120] or "Other"
+    # An empty folder means "auto-sort by filename"; do NOT default it to
+    # "Other" here or the auto-sort branch never runs and the whole batch lands
+    # in Other. _bid_files_folder_for() resolves blanks and still falls back to
+    # Other when nothing matches.
+    folder_raw = (folder or "").strip()[:120]
 
     def _safe_folder(name: str) -> str:
         # Folder name becomes part of the on-disk path; keep it filesystem-safe.
@@ -12787,6 +12830,84 @@ async def bid_files_delete(bid_id: int, file_id: int,
     db.commit()
     back = request.headers.get("referer") or f"/bids/{bid_id}"
     return RedirectResponse(url=back, status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/api/bids/{bid_id}/files/purge")
+async def bid_files_purge(bid_id: int, request: Request,
+                          folders: list[str] = Form([]),
+                          confirm: str = Form(""),
+                          db=Depends(get_db)):
+    """Delete whole folders of job files once the bid has been placed (won).
+
+    A won job keeps its paperwork for years, but the vendor spec book, the plan
+    set and the site photos that won it are dead weight. Deliberately manual and
+    typed-confirmed: these are real job records and there is no undo. The panel
+    only appears on a won bid, folders are ticked one by one, and the word
+    PURGE has to be typed.
+    """
+    require_admin(request)
+    bid = bid_opportunities.get_bid(db, bid_id, _BID_COMPANY)
+    if not bid:
+        raise HTTPException(status_code=404, detail="Bid not found")
+
+    def back_to_card(msg: str = "") -> RedirectResponse:
+        from urllib.parse import quote
+        url = f"/bids/{bid_id}"
+        if msg:
+            url += "?files_error_msg=" + quote(msg[:300])
+        return RedirectResponse(url=url, status_code=status.HTTP_303_SEE_OTHER)
+
+    if (bid.get("status") or "") != "won":
+        return back_to_card("Purge is only available after the bid is won. "
+                            "Mark the bid won first so the files stay on the "
+                            "record while the job is still live.")
+    if (confirm or "").strip().upper() != "PURGE":
+        return back_to_card("Type PURGE to confirm. Nothing was deleted.")
+
+    chosen = {f.strip() for f in (folders or []) if f and f.strip()}
+    if not chosen:
+        return back_to_card("Tick at least one folder. Nothing was deleted.")
+
+    _bid_files_ensure_schema(db)
+    rows = _bid_files_list(db, bid_id)
+    root_real = os.path.realpath(_BID_FILES_ROOT)
+    purged, freed = 0, 0
+    for row in rows:
+        if (row.get("folder") or "Other") not in chosen:
+            continue
+        rel_path = row.get("file_path") or ""
+        abs_path = os.path.realpath(os.path.join(_BID_FILES_ROOT, rel_path))
+        # Same guard as the single-file delete: a row can only ever point inside
+        # the bids root, but a purge is bulk and deserves the check again.
+        if abs_path.startswith(root_real + os.sep):
+            try:
+                os.remove(abs_path)
+            except FileNotFoundError:
+                pass
+            except OSError as e:
+                print(f"[bid_files] purge could not remove {abs_path}: {e}",
+                      flush=True)
+                continue
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM bid_files WHERE id = %s AND bid_id = %s",
+                        (row["id"], bid_id))
+        purged += 1
+        freed += int(row.get("file_size") or 0)
+    db.commit()
+    # Drop the now-empty folders so the picker does not list dead categories.
+    for name in chosen:
+        safe = "".join(c for c in name if c.isprintable()
+                       and c not in {'/', '\\', '\0', ':'}).strip()
+        if not safe:
+            continue
+        try:
+            os.rmdir(os.path.join(_BID_FILES_ROOT, str(bid_id), safe))
+        except OSError:
+            pass  # not empty, or never existed -- both fine
+    return RedirectResponse(
+        url=f"/bids/{bid_id}?files_purged={purged}"
+            f"&files_freed_mb={freed / 1048576:.1f}",
+        status_code=status.HTTP_303_SEE_OTHER)
 
 
 PNC_DOCS_EMAIL_KEY = "pnc_docs_email"

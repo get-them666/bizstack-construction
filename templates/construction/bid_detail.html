@@ -237,15 +237,37 @@
           <select name="category" class="text-sm border border-slate-200 rounded-lg px-2 py-2 bg-white">
             {% for c in cost_categories %}<option value="{{ c }}">{{ c }}</option>{% endfor %}
           </select>
-          <input name="description" placeholder="what it's for" class="text-sm border border-slate-200 rounded-lg px-3 py-2 sm:col-span-2">
-          <input name="qty" placeholder="qty" inputmode="decimal" class="text-sm border border-slate-200 rounded-lg px-3 py-2">
+          <input name="description" placeholder="what it's for" required class="text-sm border border-slate-200 rounded-lg px-3 py-2 sm:col-span-2">
+          <input name="qty" placeholder="qty" inputmode="decimal" class="text-sm border border-slate-200 rounded-lg px-3 py-2" data-takeoff-qty>
           <input name="unit" placeholder="unit (sf, lf, hr, ea)" class="text-sm border border-slate-200 rounded-lg px-3 py-2">
-          <input name="unit_cost" placeholder="unit cost" inputmode="decimal" class="text-sm border border-slate-200 rounded-lg px-3 py-2">
-          <input name="estimated" placeholder="line total (auto)" inputmode="decimal" class="text-sm border border-slate-200 rounded-lg px-3 py-2">
+          <input name="unit_cost" placeholder="unit cost" inputmode="decimal" class="text-sm border border-slate-200 rounded-lg px-3 py-2" data-takeoff-rate>
+          <input name="estimated" placeholder="line total (auto)" inputmode="decimal" class="text-sm border border-slate-200 rounded-lg px-3 py-2" data-takeoff-total>
           <input name="actual" placeholder="actual" inputmode="decimal" class="text-sm border border-slate-200 rounded-lg px-3 py-2">
           <input type="hidden" name="back" value="/bids/{{ b.id }}">
           <button class="text-sm font-semibold px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-500 sm:col-span-2">Add takeoff line</button>
         </form>
+        <script>
+        // qty × unit cost fills the line total, so the price is visible before
+        // the line is submitted and a mistyped rate is obvious immediately.
+        (function () {
+          var form = document.querySelector('form[action$="/costs"]');
+          if (!form) return;
+          var qty = form.querySelector('[data-takeoff-qty]');
+          var rate = form.querySelector('[data-takeoff-rate]');
+          var total = form.querySelector('[data-takeoff-total]');
+          if (!qty || !rate || !total) return;
+          function num(v) {
+            var n = parseFloat(String(v || '').replace(/[$,]/g, ''));
+            return isFinite(n) ? n : NaN;
+          }
+          function recalc() {
+            var q = num(qty.value), r = num(rate.value);
+            if (!isNaN(q) && !isNaN(r)) total.value = (q * r).toFixed(2);
+          }
+          qty.addEventListener('input', recalc);
+          rate.addEventListener('input', recalc);
+        })();
+        </script>
       </section>
 
       {# ── Revisions: the numbered price the customer was shown ────────── #}
@@ -1087,6 +1109,11 @@
         <h2 class="text-sm font-bold uppercase tracking-wide text-slate-500 mb-3">File Cabinet</h2>
         <p class="text-xs text-slate-500 mb-4">Upload permits, photos, inspection reports, change orders, correspondence, and other files for this bid. Files are organized by folder.</p>
 
+        {% if files_purged %}
+        <div class="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs text-emerald-900">
+          Purged <b>{{ files_purged }}</b> file{{ '' if files_purged == '1' else 's' }} and freed <b>{{ files_freed_mb }} MB</b>.
+        </div>
+        {% endif %}
         {% if files_saved %}
         <div class="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs text-emerald-900">
           <b>{{ files_saved }}</b> file{{ '' if files_saved == '1' else 's' }} uploaded.
@@ -1168,6 +1195,37 @@
         {% endfor %}
         {% else %}
         <p class="text-sm text-slate-500">No files uploaded yet.</p>
+        {% endif %}
+
+        {% if b.status == 'won' and file_folder_stats %}
+        <details class="mt-5 rounded-xl border border-red-200 bg-red-50/60">
+          <summary class="cursor-pointer px-4 py-3 text-xs font-bold text-red-800">
+            Purge files from this job — the bid is won, the paperwork is placed
+          </summary>
+          <form method="post" action="/api/bids/{{ b.id }}/files/purge" class="px-4 pb-4"
+                onsubmit="return confirm('Delete the ticked folders and their files permanently? There is no undo.')">
+            <p class="text-[11px] text-red-800/80 mb-3">
+              Keep the records a finished job needs — contracts, permits, change orders, inspections.
+              Tick what is safe to lose: the vendor spec book, the plan set, the site photos.
+              Deleting is permanent.
+            </p>
+            <ul class="space-y-1 mb-3">
+              {% for f in file_folder_stats %}
+              <li class="flex items-center gap-2 text-xs text-slate-700">
+                <input type="checkbox" name="folders" value="{{ f.name }}" id="purge-{{ loop.index }}" class="rounded border-slate-300">
+                <label for="purge-{{ loop.index }}" class="cursor-pointer">
+                  <b>{{ f.name }}</b> — {{ f.count }} file{{ '' if f.count == 1 else 's' }}, {{ '%.1f'|format(f.mb) }} MB
+                </label>
+              </li>
+              {% endfor %}
+            </ul>
+            <div class="flex flex-wrap items-center gap-2">
+              <input name="confirm" placeholder="Type PURGE to confirm" autocomplete="off"
+                     class="text-sm border border-red-200 rounded-lg px-3 py-2 bg-white">
+              <button class="text-sm font-semibold px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700">Delete ticked folders</button>
+            </div>
+          </form>
+        </details>
         {% endif %}
       </section>
 

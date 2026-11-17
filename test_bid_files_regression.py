@@ -125,6 +125,29 @@ def test_template_does_not_do_math_on_the_raw_size():
     assert "f.size_kb" in html
 
 
+def test_folder_stats_bucket_sizes_and_order():
+    from construction_main import _bid_files_folder_stats
+
+    rows = [
+        {"folder": "Photos", "file_size": 2 * 1048576},
+        {"folder": "Photos", "file_size": 1048576},
+        {"folder": "Plans & Drawings", "file_size": 512},
+        {"folder": "Vendor Boilerplate", "file_size": 1024},
+        {"folder": None, "file_size": 0},
+    ]
+    stats = {s["name"]: s for s in _bid_files_folder_stats(rows)}
+    assert stats["Photos"]["count"] == 2
+    assert stats["Photos"]["mb"] == 3.0
+    assert stats["Plans & Drawings"]["count"] == 1
+    assert stats["Other"]["count"] == 1
+    # Default folders come first, custom ones after, per the shared order.
+    names = [s["name"] for s in _bid_files_folder_stats(rows)]
+    assert names.index("Plans & Drawings") < names.index("Vendor Boilerplate")
+    # Empty input must not invent rows -- the purge checklist only lists files
+    # that exist.
+    assert _bid_files_folder_stats([]) == []
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
