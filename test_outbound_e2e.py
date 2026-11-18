@@ -150,6 +150,12 @@ class FakeDB:
             return
         if "from outbound_campaign_runs" in q:
             return
+        if "select 1 from bot_calls" in q:
+            lead_id = params[0] if params else None
+            hit = any(c.get("lead_id") is not None and int(c["lead_id"]) == int(lead_id)
+                      for c in self.bot_calls)
+            self._one = {"?column?": 1} if hit else None
+            return
         if "from bot_calls" in q:
             self._one = {"n": self.calls_today}
             return
@@ -337,6 +343,8 @@ def test_apply_without_the_enable_flag_refuses_before_signalwire(monkeypatch):
 def test_apply_dials_inside_the_window_and_records_bot_calls_and_comms_logs(monkeypatch):
     monkeypatch.setenv("OUTBOUND_CAMPAIGN_ENABLED", "1")
     monkeypatch.setattr(oc, "in_call_window", lambda now=None: (True, ""))
+    monkeypatch.setattr(oc, "_claim", lambda *a, **k: True)
+    monkeypatch.setattr(oc, "_release", lambda *a, **k: None)
 
     db = FakeDB(leads=[_lead()])
     wire = _install_wire(monkeypatch, FakeSignalWire(sid="CA_fake_sid_123"))
@@ -455,6 +463,8 @@ def test_spoken_stop_is_detected_and_honor_opt_out_is_the_required_follow_up():
 def test_cold_permit_calling_is_held_without_a_scrub_while_inbound_is_dialled(monkeypatch):
     monkeypatch.setenv("OUTBOUND_CAMPAIGN_ENABLED", "1")
     monkeypatch.setattr(oc, "in_call_window", lambda now=None: (True, ""))
+    monkeypatch.setattr(oc, "_claim", lambda *a, **k: True)
+    monkeypatch.setattr(oc, "_release", lambda *a, **k: None)
 
     permit = _lead(lead_id=21, phone="757-623-0142", source="permit_finder")
     inbound = _lead(lead_id=22, phone=PHONE, source="quotes_page")
@@ -488,20 +498,12 @@ def test_cold_permit_calling_is_held_without_a_scrub_while_inbound_is_dialled(mo
     assert "DNC scrub" in fresh_why
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "KNOWN DEFECT (outbound_campaign.run -> _sources): when "
-        "OUTBOUND_CAMPAIGN_SOURCES names a permit source, the configured "
-        "allow-list overrides the include_permits=False downgrade performed "
-        "after cold_calling_allowed() denies, so a permit lead is dialled on "
-        "a campaign whose report says cold calling is held."
-    ),
-)
 def test_configured_source_allowlist_cannot_bypass_the_cold_calling_hold(monkeypatch):
     monkeypatch.setenv("OUTBOUND_CAMPAIGN_ENABLED", "1")
     monkeypatch.setenv("OUTBOUND_CAMPAIGN_SOURCES", "permit_finder,quotes_page")
     monkeypatch.setattr(oc, "in_call_window", lambda now=None: (True, ""))
+    monkeypatch.setattr(oc, "_claim", lambda *a, **k: True)
+    monkeypatch.setattr(oc, "_release", lambda *a, **k: None)
 
     permit = _lead(lead_id=21, phone="757-623-0142", source="permit_finder")
     inbound = _lead(lead_id=22, phone=PHONE, source="quotes_page")
