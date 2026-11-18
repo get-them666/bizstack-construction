@@ -70,16 +70,40 @@ def ensure_schema(conn, force: bool = False) -> None:
 
 # --- the list ---------------------------------------------------------------------
 
-# A lead is worth ringing when there is a number that is not a placeholder and
-# the job is not closed. `phone NOT IN (...)` uses lower() because the permit
-# imports wrote "Unknown" and "N/A" as well as the empty string.
+# A lead is worth ringing when there is a number that is not a placeholder, the
+# job is not closed, and the number is not on the suppression list. `phone NOT
+# IN (...)` uses lower() because the permit imports wrote "Unknown" and "N/A" as
+# well as the empty string.
+#
+# The suppression check is the same one the dialler must pass, done in SQL so
+# LIMIT still returns a full list of callable people: a crew member holding a
+# phone he was told never to ring is the failure this prevents. A phone is
+# matched on the stored E.164 form *or* on the last ten digits, because the list
+# holds both "+17579087121" (written by this app) and "7579087121" (from an
+# imported DNC scrub, or typed by hand). Channel matching mirrors
+# suppression._channel_blocked for a voice call: an entry filed `any`, `phone`
+# or `voice` blocks the call; an email-only entry does not hide the number.
+def _not_suppressed(alias: str = "l") -> str:
+    digits = f"RIGHT(REGEXP_REPLACE({alias}.phone, '[^0-9]', '', 'g'), 10)"
+    return f"""
+    NOT EXISTS (
+        SELECT 1 FROM suppression_list s
+         WHERE s.active
+           AND s.value_type = 'phone'
+           AND LOWER(COALESCE(s.channel, 'any')) IN ('any', 'phone', 'voice')
+           AND (   s.value = '+1' || {digits}
+                OR RIGHT(REGEXP_REPLACE(s.value, '[^0-9]', '', 'g'), 10) = {digits})
+    )
+    """
+
+
 _CALLABLE = """
     COALESCE(TRIM(l.phone), '') <> ''
     AND LOWER(TRIM(l.phone)) NOT IN ('unknown', 'n/a', 'na', 'none', '-')
     AND LENGTH(REGEXP_REPLACE(l.phone, '[^0-9]', '', 'g')) >= 10
     AND LOWER(COALESCE(l.status, 'new')) NOT IN
         ('won', 'lost', 'closed', 'cancelled', 'canceled', 'archived')
-"""
+    AND """ + _not_suppressed("l")
 
 
 def _priority_sql() -> str:
@@ -174,17 +198,25 @@ def assign(conn, crew_id: int, company: str = "construction", limit: int = 25,
 
 
 def list_for(conn, crew_id: int, company: str = "construction", for_date=None) -> list[dict]:
-    """The frozen list, in the order it was assigned."""
+    """The frozen list, in the order it was assigned.
+
+    A number suppressed *after* the list was frozen is filtered out here as well
+    as in :func:`candidates`. Freezing protects the assignment, not the phone
+    number: an opt-out is permanent and beats a list built yesterday. The row
+    stays in ``call_assignments`` so the history is intact; it just is not shown
+    to somebody who would ring it.
+    """
     ensure_schema(conn)
     day = for_date or _dt.date.today()
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT a.id AS assignment_id, a.state, a.note, a.position,"
-            "       l.id AS lead_id, l.name, l.phone, l.address, l.email, l.source,"
-            "       l.status, l.project_type"
-            "  FROM call_assignments a JOIN leads l ON l.id = a.lead_id"
-            " WHERE a.company = %s AND a.crew_id = %s AND a.for_date = %s"
-            " ORDER BY a.position, a.id;",
+            f"SELECT a.id AS assignment_id, a.state, a.note, a.position,"
+            f"       l.id AS lead_id, l.name, l.phone, l.address, l.email, l.source,"
+            f"       l.status, l.project_type"
+            f"  FROM call_assignments a JOIN leads l ON l.id = a.lead_id"
+            f" WHERE a.company = %s AND a.crew_id = %s AND a.for_date = %s"
+            f"   AND {_not_suppressed('l')}"
+            f" ORDER BY a.position, a.id;",
             (company, int(crew_id), day),
         )
         rows = cur.fetchall() or []
