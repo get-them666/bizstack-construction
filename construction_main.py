@@ -9319,12 +9319,20 @@ def _follow_up_new_lead(lead_id: int) -> None:
         try:
             with db.cursor() as cur:
                 cur.execute(
-                    "SELECT id, name, phone, project_type FROM leads WHERE id = %s;",
+                    "SELECT id, name, phone, email, project_type FROM leads WHERE id = %s;",
                     (lead_id,),
                 )
                 row = cur.fetchone()
             if not row:
                 return
+            # Marketing list: every new lead joins Kit and starts the estimate
+            # sequence. Best-effort; a Kit outage must not affect the lead.
+            try:
+                import kit_service
+                kit_service.sync_lead(row.get("name") or "", row.get("email") or "",
+                                      row.get("phone") or "")
+            except Exception as exc:
+                print(f"📧[kit] lead sync failed: {exc}", flush=True)
             from zoneinfo import ZoneInfo
 
             now = datetime.now(ZoneInfo(_CALL_TZ))
