@@ -507,6 +507,32 @@ def _notification_health_check():
     except Exception as e:
         print(f"[transport-health] email retry failed: {e}", flush=True)
 
+    # Deliverability probe: a provider can start refusing mail while every
+    # inbound poll still succeeds, which is how the 2026-11-18 Zoho block went
+    # unnoticed. One real send a day; if it fails, text the owner immediately.
+    try:
+        import transport_health
+        import zoho_mail
+        to = (os.getenv("NOTIFY_EMAIL") or os.getenv("ADMIN_EMAIL")
+              or (os.getenv("SMTP_FROM") or "")).strip()
+        if to and zoho_mail.available():
+            ok = zoho_mail.send(
+                to, "BuildStack mail check (automated)",
+                "Daily send check — no action needed.",
+                sender=os.getenv("SMTP_FROM") or "",
+                sender_name=os.getenv("SMTP_NAME") or "")
+            transport_health.record("email", bool(ok), "daily Zoho probe")
+            print(f"[transport-health] Zoho probe: {'ok' if ok else 'FAILED'}", flush=True)
+            if not ok:
+                mobile = (os.getenv("OWNER_MOBILE") or "").strip()
+                if mobile:
+                    signalwire.send_sms(
+                        mobile,
+                        "BuildStack email is DOWN: Zoho refused the daily send "
+                        "check. Replies and invoices are not going out.")
+    except Exception as e:
+        print(f"[transport-health] Zoho probe failed: {e}", flush=True)
+
 
 @asynccontextmanager
 async def lifecycle(app: FastAPI):
