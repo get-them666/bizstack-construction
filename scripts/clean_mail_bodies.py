@@ -67,7 +67,7 @@ _CSS_DECL = re.compile(
     r"border|font|font-size|font-family|font-weight|line-height|letter-spacing|"
     r"text-align|text-decoration|text-transform|vertical-align|display|"
     r"table-layout|word-break|white-space|overflow|mso-[a-z-]+)"
-    r"\s*:\s*[^;{}]+")
+    r"[\w-]*\s*:\s*[^;{}]+")
 # One or more simple selectors with combinators (".a", "body", "td, th",
 # ".a > .b"). A bare-word descendant ("div p") is rejected on purpose: that
 # shape is indistinguishable from prose, and leaving a selector behind is

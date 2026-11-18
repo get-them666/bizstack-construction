@@ -157,6 +157,19 @@ def test_repair_handles_generated_selectors_and_glued_prose():
     assert "font-family" not in out and out.endswith("Your account was used.")
 
 
+def test_repair_handles_hyphenated_properties_and_keeps_the_body():
+    strip_css = _strip_css()
+    stored = ("Tomorrow: MongoDB 9.0 in action\n\n"
+              "div.zm_3095277270518060795_parse_3873648759517561530 table td "
+              "{ border-collapse: collapse }\n"
+              "div.zm_3095277270518060795_parse_3873648759517561530 table "
+              "{ border-spacing: 0 }\nThen the real body starts here.")
+    out = strip_css(stored)
+    assert "border-collapse" not in out and "border-spacing" not in out
+    assert out.startswith("Tomorrow: MongoDB 9.0 in action")
+    assert out.endswith("Then the real body starts here.")
+
+
 if __name__ == "__main__":
     import sys
     import traceback
