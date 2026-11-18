@@ -552,6 +552,13 @@ def run(db, limit=None, apply: bool = False, include_permits: bool = False,
         if not to or not _plausible(to):
             report["skipped"].append({**label, "reason": "no usable phone"})
             continue
+        # Never ring the business's own line. The old single-lead follow-up
+        # checked this; the campaign did not, and the production dry run
+        # produced the SignalWire number itself as a "lead".
+        own = re.sub(r"\D", "", str(getattr(wire, "from_number", "") or ""))
+        if own and to[-10:] == own[-10:]:
+            report["skipped"].append({**label, "reason": "that is our own business line"})
+            continue
         try:
             allowed, why = suppression.check_outbound(
                 db, suppression.CHANNEL_VOICE, to, lead_id=lead_id,

@@ -2180,6 +2180,19 @@ f"The mail transport did not accept the message. This usually means the "
         # account credit, and buying a number needed a card. The app already
         # serves its own SWML agent at /comms/outbound-voice.swml, which greets
         # the lead by name and runs on the SignalWire number we already pay for.
+        try:
+            import outbound_campaign
+            ok_window, why_window = outbound_campaign.in_call_window()
+            if not ok_window:
+                return {"ok": False, "error": f"Not calling now: {why_window}."}
+            used = outbound_campaign.calls_made_today(db)
+            cap = outbound_campaign.daily_limit()
+            if used < 0:
+                return {"ok": False, "error": "Could not verify today's call count; not dialling."}
+            if used >= cap:
+                return {"ok": False, "error": f"Daily call cap reached ({used}/{cap})."}
+        except Exception as exc:
+            return {"ok": False, "error": f"Could not verify calling rules: {exc}"}
         if not signalwire.is_configured():
             return {"ok": False, "error": "The phone line is not configured (SignalWire credentials missing)."}
         base = _absolute_app_base()
@@ -2198,6 +2211,15 @@ f"The mail transport did not accept the message. This usually means the "
                     (e164, f"[AI outbound call] {str(notes or '')[:500]}"),
                 )
                 db.commit()
+        except Exception:
+            pass
+        try:
+            with db.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO bot_calls (call_sid, lead_id, direction, status) "
+                    "VALUES (%s, NULL, 'outbound', 'dialed') ON CONFLICT (call_sid) DO NOTHING;",
+                    (sid,))
+            db.commit()
         except Exception:
             pass
         return {"ok": True, "call_sid": sid, "to": e164}
@@ -9698,6 +9720,16 @@ VOICE_AGENT_PROMPT = f"""\
 You are the {company()['name']} voice assistant, answering calls 24/7.
 Speak naturally, warmly, and concisely: short sentences, conversational, human-sounding.
 
+CALL CONDUCT — required on every call
+- If asked whether you are a person, a robot or a recording, answer truthfully that you
+  are the automated assistant.
+- Tell the caller once, early, that they can say "stop" or "remove me" and you will take
+  them off the list.
+- Never invent a price, date, availability, permit outcome or commitment. Quote only the
+  range quote_project returns.
+- If they say stop, do not call, remove me or take me off the list: apologise, confirm the
+  number is removed, end the call, and do not try to save the sale.
+
 ABOUT THE COMPANY
 - {company()['name']} is a licensed, insured general contractor serving {company()['service_area']}.
 - We do whole-home renovations and repairs: kitchens, baths, drywall, roofing, plumbing, electrical, carpentry, tile, flooring, decks, and fences.
@@ -9733,6 +9765,11 @@ _VOICE_KNOWLEDGE_FILES = [
 def _voice_prompt() -> str:
     """Combine the live knowledge base files with the construction voice prompt at request time."""
     parts = [VOICE_AGENT_PROMPT]
+    try:
+        from con_ai_agent import BusinessAIAgent
+        parts.append(BusinessAIAgent._honesty_rules())
+    except Exception:
+        pass
     for path in _VOICE_KNOWLEDGE_FILES:
         try:
             text = path.read_text(encoding="utf-8").strip()
@@ -10172,7 +10209,8 @@ def _voice_openai_tools() -> list:
 def _voice_tool_dispatch(db, name: str, args: dict) -> str:
     """Run one voice tool and turn its result into spoken text."""
     if name not in VOICE_ALLOWED_TOOLS:
-        return "I'm not able to do that yet, but the team will follow up by text."
+        return (f"That isn't something I can do on this call. Call or text us at "
+                f"{company()['phone']} and the office will help.")
     if not isinstance(args, dict):
         return "I didn't catch all the details. Could you repeat the date and time?"
     try:
@@ -10317,7 +10355,8 @@ def _vapi_assistant_text(client, model, messages, tools, db,
                 result = _voice_tool_dispatch(db, tc.function.name, args)
             except Exception as e:
                 print(f"⚠️ VAPI-TOOL {tc.function.name} crash: {e}", flush=True)
-                result = "That hit a snag — the team will follow up by text."
+                result = (f"That didn't go through. Call or text us at {company()['phone']} "
+                          f"and the office will sort it out.")
             messages.append({"role": "tool", "tool_call_id": tc.id, "content": str(result)})
     return last_text or "Let me pass this to the team to get you squared away — they'll follow up by text."
 
@@ -10456,7 +10495,8 @@ VOICE_ALLOWED_TOOLS = {
 
 def _swaig_tool_response_text(name: str, result) -> str:
     if isinstance(result, dict) and result.get("ok") is False:
-        return str(result.get("error") or result.get("message") or "That didn't work — the team will follow up.")
+        return str(result.get("error") or result.get("message")
+                   or f"That didn't work. Call or text us at {company()['phone']} for help.")
     if name == "register_lead":
         return "Got it — I saved your project details and our estimator will call you back to schedule a free estimate."
     if name == "lookup_leads":
@@ -10664,7 +10704,9 @@ async def voice_tool(request: Request, db=Depends(get_db)):
     print(f"VOICE-TOOL call={function_name} args={json.dumps(args) if args is not None else None}", flush=True)
 
     if not function_name or function_name not in VOICE_ALLOWED_TOOLS:
-        return JSONResponse({"response": "I'm not able to do that yet, but the team will follow up by text."})
+        return JSONResponse({"response": (
+            f"That isn't something I can do on this call. Call or text us at "
+            f"{company()['phone']} and the office will help.")})
     if not isinstance(args, dict):
         return JSONResponse({"response": "I didn't catch the details. Could you repeat that?"})
 
@@ -14813,7 +14855,7 @@ async def worker_app_login(request: Request, phone: str = Form(...), pin: str = 
 
 @app.get("/api/crew/app/me")
 async def worker_app_me(request: Request, db=Depends(get_db)):
-    worker = require_worker(request)
+    worker = require_worker(request, db=db)
     with db.cursor() as cur:
         cur.execute("SELECT id, name, phone, role, pay_type, pay_rate, is_active FROM crew WHERE id = %s;",
                     (worker.get("id"),))
@@ -14987,7 +15029,7 @@ async def worker_app_hours(request: Request, project_id: int = Form(0), work_dat
 
 @app.post("/api/crew/app/hours/{sheet_id}/delete")
 async def worker_app_hours_delete(sheet_id: int, request: Request, db=Depends(get_db)):
-    worker = require_worker(request)
+    worker = require_worker(request, db=db)
     _require_crew_feature(db, "hours")
     with db.cursor() as cur:
         cur.execute("SELECT id FROM timesheets WHERE id = %s AND crew_id = %s AND status = 'submitted';",
@@ -15000,7 +15042,12 @@ async def worker_app_hours_delete(sheet_id: int, request: Request, db=Depends(ge
 
 
 @app.post("/api/crew/app/logout")
-async def worker_app_logout():
+async def worker_app_logout(request: Request):
+    origin = (request.headers.get("origin") or "").strip()
+    if origin:
+        host = origin.split("//", 1)[-1].split("/", 1)[0]
+        if host != (request.headers.get("host") or ""):
+            raise HTTPException(status_code=403, detail="Cross-site logout refused")
     resp = JSONResponse(content={"status": "ok"})
     resp.delete_cookie(WORKER_COOKIE)
     return resp
@@ -15012,7 +15059,7 @@ BULLETIN_KEY = "crew_bulletin"
 
 @app.get("/api/crew/app/bulletin")
 async def worker_app_bulletin(request: Request, db=Depends(get_db)):
-    require_worker(request)
+    require_worker(request, db=db)
     text = _get_setting(db, BULLETIN_KEY, "")
     return JSONResponse(content={"text": text or None})
 
@@ -15020,7 +15067,7 @@ async def worker_app_bulletin(request: Request, db=Depends(get_db)):
 # --- Crew app: Photos ----------------------------------------------------------
 @app.get("/api/crew/app/photos")
 async def worker_app_photos(request: Request, project_id: int = 0, db=Depends(get_db)):
-    worker = require_worker(request)
+    worker = require_worker(request, db=db)
     _require_crew_feature(db, "photos")
     with db.cursor() as cur:
         if project_id:
@@ -15059,7 +15106,7 @@ async def worker_app_photos(request: Request, project_id: int = 0, db=Depends(ge
 @app.post("/api/crew/app/photos")
 async def worker_app_photos_upload(request: Request, project_id: int = Form(0), caption: str = Form(""),
                                    punchlist: str = Form(""), photo: UploadFile = Form(...), db=Depends(get_db)):
-    worker = require_worker(request)
+    worker = require_worker(request, db=db)
     _require_crew_feature(db, "photos")
     with db.cursor() as cur:
         cur.execute("SELECT id FROM crew WHERE id = %s;", (worker.get("id"),))
@@ -15126,7 +15173,7 @@ async def _push_message(row: dict) -> None:
 
 @app.get("/api/crew/app/messages")
 async def worker_app_messages(request: Request, after: int = 0, db=Depends(get_db)):
-    worker = require_worker(request)
+    worker = require_worker(request, db=db)
     _require_crew_feature(db, "messages")
     actor = team_messages.normalize_actor(None, worker)
     return JSONResponse(content={"messages": team_messages.list_after(db, after, actor)})
@@ -15134,7 +15181,7 @@ async def worker_app_messages(request: Request, after: int = 0, db=Depends(get_d
 
 @app.post("/api/crew/app/messages")
 async def worker_app_messages_send(request: Request, body: str = Form(...), db=Depends(get_db)):
-    worker = require_worker(request)
+    worker = require_worker(request, db=db)
     _require_crew_feature(db, "messages")
     actor = team_messages.normalize_actor(None, worker)
     try:
@@ -15396,7 +15443,7 @@ async def crew_training_ppt(request: Request, db=Depends(get_db), deck: str = "c
 
 @app.get("/crew/training/content")
 async def crew_training_content(request: Request, db=Depends(get_db)):
-    worker = require_worker(request)
+    worker = require_worker(request, db=db)
     _require_crew_feature(db, "training")
     with db.cursor() as cur:
         cur.execute(
@@ -15419,7 +15466,7 @@ async def crew_training_content(request: Request, db=Depends(get_db)):
         "tests": [
             {"slug": t["slug"], "title": t["title"], "count": len(t["questions"]),
              "questions": [{"q": q["q"], "options": q.get("options"), "topic": q.get("topic"),
-                            "type": q.get("type"), "accept": q.get("accept")} for q in t["questions"]]}
+                            "type": q.get("type")} for q in t["questions"]]}
             for t in training_service.ALL_TRAININGS
         ],
         "history": history,
