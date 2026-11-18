@@ -4,12 +4,11 @@ BuildStack Construction — a small construction-business back office and public
 FastAPI + Postgres + Jinja, deployed to **DigitalOcean** (Docker on Droplet `bizstack-prod`).
 ~190 flat Python modules at the repo root.
 
-> **Production is DigitalOcean, not Render or Railway.** The Droplet is `bizstack-prod`
-> at `159.203.175.39`, running Docker Compose with Caddy as reverse proxy. Two apps
-> (`bizstack-construction` and `bizstack-hosts`) each with their own Postgres 18 database
-> (pgvector-enabled). Deploy is `rsync` + `docker compose build` + `docker compose up -d`.
-> Render and Railway are **not used** — any references to them elsewhere in this file are
-> historical and should be ignored.
+> **Production is DigitalOcean.** The Droplet is `bizstack-prod` at `159.203.175.39`,
+> running Docker Compose with Caddy as reverse proxy. Two apps (`bizstack-construction`
+> and `bizstack-hosts`) each with their own Postgres 18 database (pgvector-enabled).
+> Deploy is `rsync` + `docker compose build` + `docker compose up -d`. There is no other
+> hosting path.
 
 **Read `MEMORY.md` before touching business logic.** It documents decisions that are not
 recoverable from the code: phone numbers, the business-contacts-only boundary, Stripe
@@ -287,7 +286,7 @@ Much of this repo is real money and real people's data and is **not reproducible
 ## Deploy
 
 **DigitalOcean Droplet `bizstack-prod`** at `159.203.175.39`. Docker Compose with Caddy
-reverse proxy. No Render. No Railway. No auto-deploy.
+reverse proxy. No auto-deploy.
 
 - **Deploy steps:**
   1. `rsync -avz --exclude='venv' --exclude='__pycache__' --exclude='.git' --exclude='uploads' --exclude='outbox' --exclude='*.pyc' --exclude='.env' --delete -e "ssh" . root@159.203.175.39:/opt/bizstack/construction/`
@@ -302,7 +301,3 @@ reverse proxy. No Render. No Railway. No auto-deploy.
   one: `doctl compute ssh bizstack-prod`, edit the file, then `docker compose restart construction`.
 - **Backups:** `/opt/bizstack/backup.sh` dumps both databases daily; backups go to
   `/opt/bizstack/backups/`.
-
-Historical: this project used to be on Render (`RENDER.md`, `render.yaml`) and before that
-Railway (`railway.json`). Both are deleted. Any AI assistant that references Render or Railway
-for this project is reading stale docs.

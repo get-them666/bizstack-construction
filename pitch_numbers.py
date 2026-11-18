@@ -11,7 +11,7 @@ Usage:
     export DATABASE_URL="postgresql://user:pass@host:5432/dbname"
     python pitch_numbers.py
 
-Get DATABASE_URL from your Railway project: Postgres service -> Variables -> DATABASE_URL.
+Get DATABASE_URL from /opt/bizstack/construction.env on the Droplet.
 """
 
 import os

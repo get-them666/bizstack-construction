@@ -181,7 +181,7 @@ async def send_email(to: str, cc: str, subject: str, body: str, run_in_thread: b
     """Send lender mail through the shared mailer (Resend -> SES -> SMTP ladder).
 
     This used to talk smtplib directly, which only works while the host has
-    outbound SMTP egress. Railway firewalls that, so the cadence silently
+    outbound SMTP egress. Cloud hosts firewall that, so the cadence silently
     failed there; the HTTPS paths keep working.
     """
     try:

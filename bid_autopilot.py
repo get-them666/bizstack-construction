@@ -16,7 +16,7 @@ every active bid:
 Each bid+kind is logged in bid_autopilot_log and not retried for 7 days, so a
 bad address cannot cost a credit every hour. BID_AUTOPILOT_MAX caps traces per
 pass (default 10). DISABLE_BID_AUTOPILOT=1 turns it off; parsed explicitly
-because Railway stores an unset flag as the string "false".
+because an unset flag can arrive as the string "false".
 """
 from __future__ import annotations
 

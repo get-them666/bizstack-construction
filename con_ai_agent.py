@@ -117,7 +117,7 @@ class BusinessAIAgent:
 
     # Opt-in retarget at OpenCode Zen. Scoped to THIS client on purpose: the
     # OpenAI SDK reads OPENAI_BASE_URL from the process environment, so setting
-    # that variable in Railway would silently redirect the live voice agent
+    # that variable in the process environment would silently redirect the live voice agent
     # (construction_main.py builds its own client) and web_search's Responses
     # API call at the same time. Zen speaks chat-completions, not Responses, so
     # that second one would break rather than merely change behaviour.
@@ -1578,7 +1578,7 @@ OPERATING MANUAL:
             if self._subset == "copilot" and self._auth_failure(e):
                 raise ModelUnavailable(
                     f"{'OpenCode Zen' if self._on_zen() else 'OpenAI'} rejected the "
-                    "API key (401). Rotate OPENAI_API_KEY in Railway — the phone "
+                    "API key (401). Rotate OPENAI_API_KEY on the server — the phone "
                     "line, site chat and Copilot all share it and are down until "
                     "you do."
                 ) from e

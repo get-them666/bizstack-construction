@@ -31,7 +31,7 @@ peopledatalabs>=6.4.13
 # reads the results. Requires a local Chrome install and a display.
 #
 # Deliberately NOT listed here. No module in this repo imports selenium, so
-# listing it only installed a browser-automation stack into the Railway image on
+# listing it only installed a browser-automation stack into the production image on
 # every build -- build time and image size for a package nothing imports, and
 # from a file whose own comment says it must never reach the container. Install
 # it locally when you need the tool: pip install selenium

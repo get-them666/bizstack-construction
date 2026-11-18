@@ -10,7 +10,7 @@
 //     npm run css:watch    # rebuild on save while editing templates
 //
 // The built file IS committed: the Docker image has no node, so the build
-// cannot run on Railway. Rebuild and commit whenever a template gains a class
+// cannot run in the production image. Rebuild and commit whenever a template gains a class
 // the sheet does not yet contain (a missing class shows up as unstyled).
 module.exports = {
   content: [

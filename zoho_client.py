@@ -28,7 +28,7 @@ def get_access_token(force_refresh: bool = False) -> Optional[str]:
         return _token_cache["access_token"]
     
     # A token connected from Settings (zoho_oauth) wins over the one pasted
-    # into Railway: it is newer and carries the Mail/Calendar scopes.
+    # into the environment: it is newer and carries the Mail/Calendar scopes.
     try:
         import zoho_oauth
         refresh_token = zoho_oauth.stored_refresh_token()

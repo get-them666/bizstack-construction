@@ -7,7 +7,7 @@ configured and the owner has completed the Autodesk sign-in; otherwise it
 logs once and waits. Every run is recorded in bid_pull_runs exactly like a
 manual pull, so a failing sync is visible on /bids rather than silent.
 
-DISABLE_BID_SYNC kills it (explicit parsing -- Railway's string "false" is
+DISABLE_BID_SYNC kills it (explicit parsing -- the string "false" is
 not ON).
 """
 from __future__ import annotations

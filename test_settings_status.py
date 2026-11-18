@@ -2,7 +2,7 @@
 
     venv/bin/python -m pytest test_settings_status.py -v
 
-The flag parser is the important part: Railway stores an unset toggle as the
+The flag parser is the important part: an unset toggle can arrive as the
 string "false", which is truthy, so bare os.getenv() truthiness reported
 every background job as switched off (the bug test_flag_semantics.py was
 written for). The OpenAI probe is exercised with urlopen patched.
@@ -19,7 +19,7 @@ import settings_status as ss
     ("false", False), ("False", False), ("0", False), ("", False), ("off", False),
     ("true", True), ("1", True), ("on", True), ("YES", True),
 ])
-def test_railway_false_string_is_off(monkeypatch, raw, expected):
+def test_false_string_is_off(monkeypatch, raw, expected):
     monkeypatch.setenv("DISABLE_LEAD_SCAN", raw)
     assert ss.flag_on("DISABLE_LEAD_SCAN") is expected
     job = next(j for j in ss.background_jobs() if j["switch"] == "DISABLE_LEAD_SCAN")

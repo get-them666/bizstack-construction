@@ -2,8 +2,8 @@
 
 Why this exists
 ---------------
-The production database is Postgres on Render. If Postgres is unreachable or the
-Render deploy is mid-roll, a lead form submission could be lost. This module
+The production database is Postgres on the Droplet. If Postgres is unreachable or
+a deploy is mid-roll, a lead form submission could be lost. This module
 writes every lead to a local SQLite file (`leads.db`) as a secondary record, so
 even if the main pipeline fails, the inquiry is on disk.
 

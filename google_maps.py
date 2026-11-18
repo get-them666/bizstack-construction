@@ -19,7 +19,7 @@ from typing import Optional, List, Dict, Any
 
 
 # Prefer the server-side key. Resolved per call rather than at import so a
-# Railway variable change does not require a redeploy to take effect.
+# server env-var change does not require a redeploy to take effect.
 MAPS_API_KEY = (
     os.getenv("GOOGLE_MAPS_SERVER_KEY")
     or os.getenv("GOOGLE_MAPS_API_KEY")

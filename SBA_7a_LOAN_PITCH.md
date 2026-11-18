@@ -33,7 +33,7 @@ a live accounting ledger. This loan buys fuel for a machine that's already assem
 
 ## Reality check — your live, verified numbers (Sept 16, 2026)
 
-Pulled from both Railway databases, with back-logged 2026 work entered on its real dates.
+Pulled from both production databases, with back-logged 2026 work entered on its real dates.
 No invented figures:
 
 > **Updated Sept 30, 2026 — the pipeline gap below is now closed.** The revenue figures
@@ -396,14 +396,14 @@ lender channels — is in **`LOAN_OUTREACH_SEQUENCE.md`**. Start there. Short ve
 
 ## Numbers & how they were pulled
 
-The figures in this doc were read directly from your live Railway Postgres databases on
+The figures in this doc were read directly from your live Postgres databases on
 **Sept 16, 2026** using `pitch_numbers.py`. 2026 work was back-logged on its real dates.
 No invented figures anywhere in the file.
 
 - **Broom Service**: pulled from the "BizStack Hosts" project.
 - **Buildstack Construction**: pulled from the "courteous-wisdom" project.
-- Two data corrections were made during this pass: a **test lead** ("Railway Tester",
-  $45K fake pipeline) was deleted, and a **fake host** ("Linkedin · Matt Redmon",
+- Two data corrections were made during this pass: a **test lead** ($45K fake
+  pipeline) was deleted, and a **fake host** ("Linkedin · Matt Redmon",
   `@lead.local` placeholder) was removed. Host count is now 3 real hosts.
 
 ### Documentation — the real constraint

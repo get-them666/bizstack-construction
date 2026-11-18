@@ -13,12 +13,12 @@ does three things every time:
   2. Defaults to a DRY RUN. ``--commit`` is required to delete anything.
   3. Prints the exact counts and the selection rules before touching a row.
 
-Run it against a Railway tunnel, never ``postgres.railway.internal`` directly:
+Run it inside the app container on the Droplet; the database is never exposed to
+the internet:
 
-    railway connect Postgres --tunnel-only      # prints the local port
-    export DATABASE_URL='postgresql://postgres:PASSWORD@127.0.0.1:PORT/construction'
-    ./venv/bin/python tools/purge_mock_data.py
-    ./venv/bin/python tools/purge_mock_data.py --commit
+    doctl compute ssh bizstack-prod
+    cd /opt/bizstack && docker compose exec construction python tools/purge_mock_data.py
+    cd /opt/bizstack && docker compose exec construction python tools/purge_mock_data.py --commit
 
 What is selected
 ----------------
@@ -103,11 +103,6 @@ def main() -> int:
     if not args.database_url:
         print("DATABASE_URL is not set. Pass --database-url or export it.", file=sys.stderr)
         return 2
-    if "railway.internal" in args.database_url:
-        print("Refusing to run against *.railway.internal from this machine. "
-              "Open a tunnel and use 127.0.0.1.", file=sys.stderr)
-        return 2
-
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     outdir = Path(args.backup_dir).expanduser() / f"purge-{stamp}"
     outdir.mkdir(parents=True, exist_ok=True)

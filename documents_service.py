@@ -1001,7 +1001,7 @@ async def send_email(cfg: dict, to: str, subject: str, body: str, attachment: by
     # Gmail is the PREFERRED transport. The operator retired SES, Resend and
     # Zoho as primaries: SES sits in a sandbox that cannot mail external
     # recipients, Resend's daily quota is shared with the lead bot and gets
-    # exhausted, and Zoho times out on every port from Railway's egress. Gmail is
+    # exhausted, and Zoho times out on every port from cloud-host egress. Gmail is
     # HTTPS and rides the OAuth token already stored for inbound mail.
     #
     # That makes Gmail the first attempt, not the only one. It stopped working
@@ -1055,7 +1055,7 @@ async def send_email(cfg: dict, to: str, subject: str, body: str, attachment: by
 
     # --- legacy ladder below, retained behind EMAIL_TRANSPORT=legacy ---
 
-    # Cloud hosts (Railway) frequently block outbound SMTP egress entirely.
+    # Cloud hosts frequently block outbound SMTP egress entirely.
     # Prefer the Resend HTTPS REST API when a key is available, then fall back
     # to the SMTP ladder below.
     if resend_key and (cfg.get("SMTP_FROM") or "") and not internal_recipient:

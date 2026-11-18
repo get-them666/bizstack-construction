@@ -1,7 +1,7 @@
 """DISABLE_* flags must only switch something OFF when explicitly asked to.
 
 THE BUG THIS GUARDS
-Railway stored an unset flag as the STRING "false" on at least one service.
+An unset flag was stored as the STRING "false" on at least one service.
 `if not os.getenv("DISABLE_LOAN_OUTREACH")` then evaluated to False, so the
 scheduler never started while the log still read "started" -- indistinguishable
 from a healthy campaign. It cost weeks before anyone noticed. SESSION_NOTES.md

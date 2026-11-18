@@ -296,7 +296,7 @@ hello@bizstackperks.com · bizstackperks.com
       2. VCC → `jbarnes@vccva.org`
       3. VSBFA → `VSBFA@sbsd.virginia.gov`
 - [x] **SENT Sept 19, 2026** — **Day 1 nudge** to LISC, VCC, VSBFA — sent automatically by the
-      cadence scheduler (`loan_outreach.py` on Railway) via the Resend HTTPS API.
+      cadence scheduler (`loan_outreach.py` on the Droplet) via the Resend HTTPS API.
 - [ ] **Day 3 (email 2)** — due **Sept 21** — auto-fired by scheduler
 - [ ] **Day 7 (text 2)** — due **Sept 25** — auto-fired by scheduler
 - [ ] **Day 14 (email 3, close loop)** — due **Oct 2** — auto-fired, then stop; revisit in 60 days

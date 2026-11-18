@@ -1,7 +1,7 @@
 """The founder's own copy must survive a deploy.
 
 Background: the hero paragraph, the "32 years" badge, the meta description and
-the About page all lost their founder copy once, when a manual `railway up` from
+the About page all lost their founder copy once, when a manual deploy from
 an uncommitted working tree was replaced by a build from git. Nothing had it
 committed, so it was gone. These assertions exist so that cannot happen quietly
 again -- if someone edits this copy, they have to mean it.

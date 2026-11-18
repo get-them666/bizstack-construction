@@ -1,7 +1,7 @@
 """Tests for the outbound mail ladder in documents_service.send_email.
 
 The regression these guard: Resend's daily quota is shared by every consumer in
-the Railway project and the lead auto-reply bot can exhaust it on its own. The
+the production environment and the lead auto-reply bot can exhaust it on its own. The
 mailer used to hard-stop all external sends for the rest of the day, which
 silently disabled the business-critical lender sequence. It must now degrade to
 the SES/SMTP ladder instead.

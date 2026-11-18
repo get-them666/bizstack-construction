@@ -15,7 +15,7 @@ draft next to each one.
 WHY THE LOCAL MAIL STORE AND NOT THE GMAIL API
 -----------------------------------------------
 The OAuth tokens for hello@bizstackperks.com live in the production database,
-which is only reachable from inside Railway's network. Mail.app keeps a full
+which is only reachable from inside the production network. Mail.app keeps a full
 copy of every message it has downloaded as .emlx files under
 ~/Library/Mail/V10, so reading them needs no credentials at all and cannot
 fail on a token refresh. The trade-off is that it only sees mail already

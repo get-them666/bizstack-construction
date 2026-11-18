@@ -80,7 +80,7 @@ def first_touch_draft(name, address) -> tuple:
 def _env_flag(name: str) -> bool:
     """True when the flag says OFF. Explicit on purpose.
 
-    Railway stores an unset flag as the STRING "false", which bare os.getenv
+    An unset flag can arrive as the STRING "false", which bare os.getenv
     truthiness reads as ON and silently disables everything. Only an explicit
     1/true/yes/on disables the loop.
     """

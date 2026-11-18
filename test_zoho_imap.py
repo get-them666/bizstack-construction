@@ -48,7 +48,7 @@ class _FakeIMAP:
 @pytest.mark.parametrize("value,expected", [("on", True), ("1", True), ("", True),
                                             ("false", False), ("off", False), ("0", False)])
 def test_kill_switch_parses_explicitly(monkeypatch, value, expected):
-    """Railway stores an unset flag as the string "false", which is truthy."""
+    """An unset flag can arrive as the string "false", which is truthy."""
     monkeypatch.setenv("SMTP_USER", "hello@bizstackperks.com")
     monkeypatch.setenv("SMTP_PASS", "x")
     monkeypatch.setenv("ZOHO_IMAP_INBOUND", value)

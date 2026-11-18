@@ -6,7 +6,7 @@ Zoho match the books on the site. Everything is idempotent: a zoho_invoice_id
 is stored on the bid_invoices row so a re-save never creates a duplicate.
 
 Requires the Zoho OAuth connection (from /settings → Connect Zoho) with the
-ZohoBooks.fullaccess.all scope, and ZOHO_BOOKS_ORG_ID in Railway.
+ZohoBooks.fullaccess.all scope, and ZOHO_BOOKS_ORG_ID in construction.env.
 """
 from __future__ import annotations
 

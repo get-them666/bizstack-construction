@@ -1,6 +1,6 @@
 """Zoho OAuth: connect once from Settings, store the refresh token, know its scopes.
 
-The deploy started with a refresh token pasted into Railway. It works, but
+The deploy started with a refresh token pasted into the environment. It works, but
 its scopes are CRM + Books + Campaigns only -- Mail and Calendar answer
 INVALID_OAUTHSCOPE -- and widening a self-client token means generating a new
 one by hand. This module gives the owner a Connect button instead: the

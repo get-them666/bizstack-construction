@@ -6,7 +6,7 @@ exists because on 2026-10-28 the OpenAI key was rejected and the phone line,
 site chat and Copilot all went dark with no visible signal anywhere an
 owner would look. Settings is where an owner looks.
 
-Flags are parsed explicitly: Railway stores an unset toggle as the string
+Flags are parsed explicitly: an unset toggle can arrive as the string
 "false", which is truthy, so bare os.getenv() truthiness is wrong here.
 """
 from __future__ import annotations
@@ -61,7 +61,7 @@ def openai_health(force: bool = False) -> dict:
                 result["detail"] = f"key accepted, {model} available"
         except urllib.error.HTTPError as e:
             if e.code == 401:
-                result["detail"] = "key rejected (401) — rotate OPENAI_API_KEY in Railway; phone bot, site chat and Copilot are down"
+                result["detail"] = "key rejected (401) — rotate OPENAI_API_KEY on the server; phone bot, site chat and Copilot are down"
             elif e.code == 404:
                 # Auth passed (a bad key is a 401 first), the model name did not.
                 result["detail"] = f"key accepted, but model {model!r} was not found — check COPILOT_MODEL"

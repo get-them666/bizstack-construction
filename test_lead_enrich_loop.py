@@ -4,7 +4,7 @@
 
 What this pins, and why each one costs real money if it drifts:
 
-  - the kill switch parses Railway's string "false" as OFF, not ON
+  - the kill switch parses the string "false" as OFF, not ON
   - the once-per-day marker is consulted before any provider is reached
   - Skip Sherpa is never called without a full ZIP (a billed wrong-door match)
   - the PDL step is gone from the waterfall (that account is not in use)
@@ -65,8 +65,8 @@ class _Db:
 
 # --- flags and caps ---------------------------------------------------------
 
-def test_railway_string_false_does_not_disable(monkeypatch):
-    """Railway stores an unset flag as 'false'. Bare truthiness would read that
+def test_string_false_does_not_disable(monkeypatch):
+    """An unset flag can arrive as 'false'. Bare truthiness would read that
     as ON and the autopilot would never start -- the exact bug test_flag_semantics
     exists for elsewhere."""
     monkeypatch.setenv("DISABLE_LEAD_ENRICH", "false")

@@ -13,7 +13,7 @@ keeps this on PCI SAQ-A terms. The flow is:
    **retrieve it from Zoho's API** before touching the invoice. A browser can
    lie about a payment id; Zoho cannot lie about a payment it captured.
 
-Configuration (Railway / .env):
+Configuration (env / .env):
     ZOHO_PAYMENTS_ACCOUNT_ID   from Zoho Payments > Settings
     ZOHO_PAYMENTS_API_KEY      from Zoho Payments > Settings > Developer Space
                                (public widget key; it is expected in the page)
@@ -43,7 +43,7 @@ def _value(setting, setting_key: str, env_key: str) -> str:
 
     The widget key is public (it can create a session, not move money), so it
     is safe to keep in app_settings and let the owner paste it in the app
-    instead of opening Render.
+    instead of opening the Zoho console.
     """
     raw = (os.getenv(env_key) or "").strip()
     if raw:

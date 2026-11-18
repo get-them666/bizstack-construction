@@ -2,9 +2,9 @@
 
 Why this exists
 ---------------
-Uploads were written straight to ``uploads/`` on the app's own disk. On
-Railway that disk is ephemeral unless a volume is mounted, and the only volume
-attached was Postgres -- so every deploy deleted the crew's site photos. The
+Uploads were written straight to ``uploads/`` on the app's own disk. Container
+disks are ephemeral -- the only durable volume was Postgres -- so every deploy
+deleted the crew's site photos. The
 bug was invisible because the write succeeded and the URL came back fine; the
 file was simply gone by the next deploy.
 

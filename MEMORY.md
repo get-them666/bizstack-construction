@@ -1,10 +1,8 @@
 # Memory
 
-> **Deployment note (2026-11-16):** This project is deployed to **DigitalOcean** (Droplet
-> `bizstack-prod` at `159.203.175.39`, Docker Compose with Caddy). **Render and Railway are
-> not used.** Any references to Railway or Render elsewhere in this file are historical
-> context from past incidents — they do not reflect the current deployment. Env vars are now
-> in `/opt/bizstack/construction.env` on the Droplet, not in Railway/Render dashboards.
+> **Deployment note (2026-11-18):** This project is deployed to **DigitalOcean** (Droplet
+> `bizstack-prod` at `159.203.175.39`, Docker Compose with Caddy). Env vars live in
+> `/opt/bizstack/construction.env` on the Droplet. There is no other hosting path.
 
 ## The legal entity is BuildStack Construction LLC (since 2026-10-28)
 
@@ -19,7 +17,7 @@ EIN 20-1755044).
 `brand.py` is the single source for the name (`name()`, `short_name()`,
 `entity_id()`, `entity_line()`, `mailing_address()`), defaulting to the LLC
 and overridable by `COMPANY_NAME` / `COMPANY_ENTITY_ID` /
-`SENDER_PHYSICAL_ADDRESS` — all three set to the LLC in Railway on
+`SENDER_PHYSICAL_ADDRESS` — all three set to the LLC in the production environment on
 2026-10-29, along with `SMTP_NAME`. Every customer-facing string (emails,
 SMS, Stripe product, PDFs, quote seller, Zoho company, knowledge files,
 templates) reads from it. `short_name()` ("BuildStack Construction") is for
@@ -51,8 +49,8 @@ greetings and subject lines; the legal page and footer carry `entity_line()`.
 
 **Construction and Hosts are now two separate companies.** On 2026-10-11 the
 owner split them: separate domains (`construction.bizstackperks.com` /
-`bizstackperks.com`), separate Railway projects (`281375d7-…` /
-`d5ed0396-…`), separate Postgres databases, and no shared package. This repo is
+`bizstackperks.com`), separate Docker services and Postgres
+databases, and no shared package. This repo is
 Construction. It imports nothing from `../bizstack-hosts` and `requirements.txt`
 must never name a git URL. See the topology table in `AGENTS.md`.
 
@@ -116,9 +114,9 @@ request drafted in `docs/records-request.md`, which is still unsigned.
 Found by reading the 2026-10-28 deploy logs, not by any alert — nothing in
 this app pages the owner. All four were silent from the outside.
 
-- **`OPENAI_API_KEY` is revoked.** The Railway value is still the `sk-proj-x-Dy…`
+- **`OPENAI_API_KEY` is revoked.** The stored value is still the `sk-proj-x-Dy…`
   key the 2026-10-20 audit recorded, well-formed, but OpenAI answers 401
-  "Incorrect API key" (verified live from `railway run`). That one key powers
+  "Incorrect API key" (verified live from the server). That one key powers
   the Vapi phone line, the site chat widget and the Copilot, so all three went
   down together. The phone failure is the worst: `/vapi/llm` let the
   `AuthenticationError` escape as a 500, and Vapi's behaviour on a failed
@@ -127,10 +125,10 @@ this app pages the owner. All four were silent from the outside.
   widget answers `guest_fallback()` with the phone number instead of promising
   a follow-up nobody is told about; the Copilot raises `ModelUnavailable`
   naming the variable). **Only the owner can fix the cause: a new key at
-  platform.openai.com → Railway `OPENAI_API_KEY`.**
-- **`EMAIL_TRANSPORT=legacy` was left set in Railway.** `sessions.md` calls it a
+  platform.openai.com → `OPENAI_API_KEY` in `construction.env`.**
+- **`EMAIL_TRANSPORT=legacy` was left set in the production environment.** `sessions.md` calls it a
   debugging switch and says "Don't". It forced every send onto Zoho SMTP,
-  which times out on 587/465/25 from Railway egress, while the same boot's
+  which times out on 587/465/25 from cloud-host egress, while the same boot's
   preflight logged `Gmail send verified`. Owner lead notifications, homeowner
   auto-replies and fired drafts were all dying. Set to `gmail` 2026-10-29.
 - **Stripe deposit links 502'd on every click.** `stripe>=16` pins API
@@ -148,10 +146,10 @@ insured" with no number (Virginia DPOR requires it on advertising). And the
 is injected by Cloudflare at the edge, not by this app.
 
 **And a fifth, which hid the other four: no git push had deployed since
-2026-10-08.** Railway's "Wait for CI" was skipping every commit because a
+2026-10-08.** The old platform's "Wait for CI" was skipping every commit because a
 `Deploy to Cloud Run` GitHub workflow (no GCP vars, fails in 8s) ran on each
 push. Every "fix" committed in that window only reached production if someone
-also ran `railway up` by hand. The workflow is manual-only now. Both this and
+also deployed by hand. The workflow is manual-only now. Both this and
 the watchPatterns story are in AGENTS.md under Deploy.
 
 The live **appearance theme** (set from `/appearance`, stored in the DB) is a
@@ -161,13 +159,13 @@ custom one as of 2026-10-29: body `#0a0a0a`, accent `#48413d`, Georgia serif,
 
 ## Zoho + Autodesk connected end-to-end (2026-10-30, early hours)
 
-Both integrations were dead for the same reason: the credentials in Railway
+Both integrations were dead for the same reason: the stored credentials
 belonged to clients the owner had deleted/replaced in the vendor consoles.
 
 - **Zoho**: the owner recreated the API-console client as a **Self Client**
-  `1000.1ESJ…` (29 Oct); Railway still held `1000.5Z7…`, so every token call
+  `1000.1ESJ…` (29 Oct); the server still held `1000.5Z7…`, so every token call
   answered `invalid_client` and every grant code "didn't work" — 30 tries.
-  New client id/secret are in Railway. A grant code was generated with the
+  New client id/secret are in `construction.env`. A grant code was generated with the
   full scope list (CRM, Books, Campaigns, Mail, Calendar; portals
   "BuildStack Construction" for both Campaigns and CRM) and exchanged;
   `ZOHO_REFRESH_TOKEN` + `ZOHO_TOKEN_SCOPES` hold the result. Verified live
@@ -189,7 +187,7 @@ belonged to clients the owner had deleted/replaced in the vendor consoles.
   for *any* redirect URI. Created **"BuildStack Bid Board"**, a Traditional
   Web App in the `buildingconnected` hub, client id `4CEicd4t…`, callback
   `https://construction.bizstackperks.com/oauth/autodesk/callback`, default
-  API set (23). Railway `APS_CLIENT_ID/SECRET` updated; owner consent
+  API set (23). `APS_CLIENT_ID/SECRET` updated on the server; owner consent
   granted; tokens stored for `ADMIN_EMAIL=soleary0006@gmail.com`;
   `bid_sync.run_once` fetched 23 opportunities (all already present → updated).
 - **How it was done without the owner clicking**: a second Chrome instance
@@ -203,7 +201,7 @@ belonged to clients the owner had deleted/replaced in the vendor consoles.
 
 ## Zoho is the owner's suite now (2026-10-29) — not Google
 
-Owner: "I use Zoho now, not Google." The Railway refresh token works and
+Owner: "I use Zoho now, not Google." The stored refresh token works and
 carries `ZohoCRM.modules.ALL ZohoCRM.settings.READ ZohoBooks.settings.READ
 ZohoBooks.fullaccess.all ZohoCampaigns.contact.ALL` — CRM and Campaigns answer,
 Mail and Calendar answer INVALID_OAUTHSCOPE. `zoho_oauth.py` adds a Connect
@@ -236,7 +234,7 @@ Self Client cannot do redirects; it must be a Server-based client).
 
 - **OpenAI** — key rotated AGAIN 2026-10-29 (suffix `_v0A`) after the `sk-proj-x-Dy…`
   key was rejected with 401 for at least a day (phone bot, chat and Copilot all
-  dark). Verified live: chat and `/vapi/llm` answer. Earlier history: new project key (`sk-proj-x-Dy…`) in Railway; the old
+  dark). Verified live: chat and `/vapi/llm` answer. Earlier history: new project key (`sk-proj-x-Dy…`) in the production env; the old
   key was retired with `credit_balance_exhausted`. Copilot is back on OpenAI
   (`COPILOT_MODEL=gpt-4o-mini`, `COPILOT_BASE_URL` deleted). Voice and web_search
   share this key. Verified with a live tool call.
@@ -258,12 +256,12 @@ Self Client cannot do redirects; it must be a Server-based client).
   `_DEFAULT_FREE_MODELS` in `con_ai_agent.py` was refreshed (space-bunny-free and
   ling-3.1-flash-free had rotted off the model list).
 - **Skip Sherpa** — FUNDED and verified live 2026-10-20: returns owner name,
-  emails, and phones with DNC flags. The Railway key was rotated (`d431d7e2-…`);
+  emails, and phones with DNC flags. The Skip Sherpa key was rotated (`d431d7e2-…`);
   the old `7e5446…` got a 401 after the account change. This is now the contact
   provider of record. `SKIPTRACE_ENRICH_MAX` raised 1 → 25.
 - **PDL** — RETIRED 2026-10-20. The Copilot's `pdl_contact` tool was renamed
   `contact_lookup` and rebacked by Skip Sherpa; `PDL_API_KEY` was deleted from
-  Railway (backed up in the owner's local `.env`), so the leftover PDL web
+  the server (backed up in the owner's local `.env`), so the leftover PDL web
   routes honestly report not-configured. `data_enrichment` no longer imports
   `enrichment` at all. Do not reintroduce it — the owner's instruction was
   "not pdl", and Skip Sherpa is the fundable provider.
@@ -320,7 +318,7 @@ Self Client cannot do redirects; it must be a Server-based client).
   `CON_GOOGLE_*` OAuth login client + Gmail send). The Maps key answers
   `REQUEST_DENIED`: **billing is not enabled** on the project, so every Maps API
   call fails until billing is attached at console.cloud.google.com.
-- **Railway cleanup** — 17 unused variables deleted (HOSPITABLE_PAT,
+- **Environment cleanup** — 17 unused variables deleted (HOSPITABLE_PAT,
   CHECK_*, EMAIL_BOT_*, X_API_KEY with a literal trailing tab, etc.). Full
   pre-cleanup dump lives in the owner's local gitignored `.env`.
 
@@ -332,14 +330,15 @@ stale shebang, no `pip` module). Working interpreter for DB and PDF work:
     python3 -m venv /tmp/lettersenv
     /tmp/lettersenv/bin/pip install "fpdf2==2.8.8" "psycopg[binary]" jinja2 stripe pypdf
 
-`railway run` executes **locally**, not in the container, so `pgbouncer.railway.internal`
-never resolves from this machine. To reach the live DB, open a tcp-proxy
-(`railway tcp-proxy create --port 5432 -s Postgres --json`) and build the URL from
-the `PGUSER`/`PGPASSWORD`/`PGDATABASE` vars on the Postgres service. Close it and
-delete the URL afterwards.
+The production database is not exposed to this machine. Reach it over SSH through
+the Droplet and run queries inside the database container:
 
-`railway ssh` does not work (no key registered). `docker build` cannot run — the
-Docker daemon is not running, so Dockerfile changes are unverified.
+    doctl compute ssh bizstack-prod
+    docker exec -it bizstack-db-construction-1 psql -U postgres construction
+
+Never open the Postgres port to the internet, and never paste the production URL
+into a laptop shell history. `docker build` cannot run here — the Docker daemon is
+not running, so Dockerfile changes are verified by building on the Droplet.
 
 Outbound TLS from this machine needs `SSL_CERT_FILE=/etc/ssl/cert.pem`; the
 system Python has no CA bundle. The same gap is why commit ff8e842 added
@@ -454,7 +453,7 @@ so lookups are cached on the normalized address forever, misses included; a
 repeat lookup is a table read. And the endpoint is POST, so homeowner PII never
 lands in access logs or a Referer header.
 
-`RENTCAST_API_KEY` must be set in the Railway environment. The local tool at
+`RENTCAST_API_KEY` must be set in the production environment. The local tool at
 `~/skipTraced/main.py` has the key **hardcoded in source** at `main.py:99` —
 that is the leak to fix if this repo or that file is ever shared.
 
@@ -516,8 +515,8 @@ email is the channel that sends today; SignalWire SMS is submitted and pending 1
 carrier review (brand
 `460486de-…`, campaign `a76073da-…`, number order `0932cce2-…`, all `pending`
 as of 2026-10-21 — see the Account map).
-`DISABLE_LEAD_ENRICH` kills it (explicit parsing — Railway's string "false" is
-not ON). First live run: 10 examined, 7 contacts, 7 drafts, 10 Skip Sherpa
+`DISABLE_LEAD_ENRICH` kills it (explicit parsing — an unset flag can arrive as the
+string "false", which is not ON). First live run: 10 examined, 7 contacts, 7 drafts, 10 Skip Sherpa
 lookups.
 
 ## Accurate Append — the contact step, currently blocked on billing
@@ -794,7 +793,7 @@ shows the bank account instead of a Stripe status card.
 ### 2026-11-03: Zoho "Invalid Redirect Uri" is the client, not the app
 
 - **The connection itself is healthy.** Verified against production
-  2026-11-03: the Railway `ZOHO_REFRESH_TOKEN` returns a fresh access token and
+  2026-11-03: the stored `ZOHO_REFRESH_TOKEN` returns a fresh access token and
   grants all five products (CRM, Books, Campaigns, Mail, Calendar), and
   `zoho_oauth.status()` reports `connected: true`, `token_ok: true` with
   `source: environment`. `app_settings` holds no `zoho_refresh_token`, so the
@@ -820,8 +819,8 @@ shows the bank account instead of a Stripe status card.
 
 ## 2026-11-02: Copilot model compatibility and the missing quote tables
 
-Two live failures were found in the production logs and deployed in Railway deployment
-`1c8f1570-0ed0-4052-85c4-47759a95f135` (`SUCCESS`):
+Two live failures were found in the production logs and fixed in the deployed
+release:
 
 - The configured Copilot model rejected every Chat Completions call with HTTP 400:
   `max_tokens` is unsupported and `max_completion_tokens` is required. The generic
@@ -1114,23 +1113,19 @@ sent a real message through Zoho to hello@bizstackperks.com and returned
 `{'ok': True, 'sent_to': 'hello@bizstackperks.com'}`. The public website widget
 still does not get the tool; it remains copilot-only.
 
-## 2026-11-08: migrating to Render, and the login route that shadowed itself
+## 2026-11-08: the move to DigitalOcean, and the login route that shadowed itself
 
-The owner is leaving Railway for Render. `render.yaml` at the repo root is the
-Blueprint: web service `bizstack-construction`, Postgres `bizstack-construction-db`,
-both in **virginia**. Region is not cosmetic — a service and its database in
-different regions cannot use Render's private network, and the app then fails
-with `failed to resolve host 'dpg-...'` on every database init while the health
-check still passes.
+Production moved to the DigitalOcean Droplet `bizstack-prod` (159.203.175.39,
+NYC3): Docker Compose, Caddy as reverse proxy, one app container and one
+Postgres 18 database per company. The old platform's free database was deleted
+30 days after creation and its free web services spun down after 15 idle
+minutes, which killed the daemon threads started in `lifecycle()` — the app
+looked healthy and quietly stopped importing permits. Neither tier was usable
+for this app; the Droplet has no idle spin-down.
 
-Render's **free Postgres is deleted 30 days after creation**, and **free web
-services spin down after 15 idle minutes**, which kills the daemon threads
-started in `lifecycle()` — the app looks healthy and quietly stops importing
-permits. Neither tier is usable for this app.
-
-Production on Railway runs **PostgreSQL 18.6** and has the **pgvector**
-extension, which `CREATE EXTENSION vector` in the dump requires. Dump with a
-client of the same major version or the restore fails on extensions.
+The database is **PostgreSQL 18** with the **pgvector** extension, which
+`CREATE EXTENSION vector` in a dump requires. Dump with a client of the same
+major version or the restore fails on extensions.
 
 **The login shadowing bug.** `POST /api/auth/login` was registered twice: the
 Auth0 Action bridge (`auth_login_check`, added a7261a5 on 2026-10-15) and the
@@ -1142,12 +1137,12 @@ valid, just doubled. The bridge now owns `/api/auth/auth0/check`, and
 configured, the tenant's Action must point at the new path — that URL lives
 outside this repo and will not update itself.
 
-During the migration the Render service runs in a deliberately inert mode
+During the cutover the new deployment ran in a deliberately inert mode
 (`LEAD_AUTO_SEND=0`, `BOT_AUTO_SEND_EMAIL=false`, `LEAD_SOURCE_AUTO_EMAIL=0`,
 `LEAD_SOURCE_OWNER_DIGEST=0`, `SKIPTRACE_ENRICH_MAX=0` and all five `DISABLE_*`
-flags) because its database is a copy of production. Railway is still live and
-still sending, so those must stay on until Railway is stopped — enabling them
-first means two systems emailing the same leads.
+flags) because its database was a copy of production. The old deployment was
+still live and still sending, so those had to stay off until it was stopped —
+enabling them first would have meant two systems emailing the same leads.
 
 ## Open threads
 
@@ -1373,6 +1368,6 @@ over `status='new'` and capped at 150 address-without-ZIP rows.
 - Never merge the two stages into one button. Stage 1 is free and unbounded;
   stage 2 spends credits per hit.
 
-Production is now the DigitalOcean droplet `bizstack-prod` (159.203.175.39,
+Production is the DigitalOcean droplet `bizstack-prod` (159.203.175.39,
 NYC3, 4 GB, $24/mo), running Construction, Broom Service/Hosts, two Postgres
-containers and Caddy. Render  services are suspended, Railway is retired.
+containers and Caddy. There is no other deployment.

@@ -4336,7 +4336,7 @@ async def api_logout():
 async def zoho_oauth_start(request: Request):
     """Connect Zoho with every scope the app uses (CRM, Books, Campaigns, Mail,
     Calendar). One click from Settings; the refresh token is stored in
-    app_settings and preferred over the one in Railway."""
+    app_settings and preferred over the one in the environment."""
     require_admin(request)
     if not zoho_oauth.configured():
         raise HTTPException(status_code=400, detail="ZOHO_CLIENT_ID / ZOHO_CLIENT_SECRET are not set")
@@ -7222,7 +7222,7 @@ def _zoho_mail_status() -> dict:
 
     Outbound has three possible paths, in the order documents_service tries
     them: the Zoho Mail REST API (needs the mail OAuth scope), the Gmail API
-    (works today), then SMTP (unreachable -- Railway blocks 25/465/587).
+    (works today), then SMTP (usually blocked -- cloud hosts close 25/465/587).
     Inbound is separate: replies land in Zoho because that is where MX points,
     and only IMAP or the Mail API can read them.
     """
@@ -15743,7 +15743,7 @@ async def payroll_run_nacha(run_id: int, request: Request, db=Depends(get_db)):
         raise HTTPException(
             status_code=409,
             detail="PNC ACH file-header IDs are not set: " + ", ".join(missing)
-                   + ". The file would be rejected; set these on Railway first.",
+                   + ". The file would be rejected; set these in construction.env first.",
         )
     try:
         text, summary = direct_deposit.nacha(
