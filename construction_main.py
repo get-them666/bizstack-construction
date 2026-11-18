@@ -9184,6 +9184,46 @@ def _notify_owner_call(from_number: str, call_sid: str) -> None:
     threading.Thread(target=_send, daemon=True).start()
 
 
+@app.post("/api/voice/vapi-events")
+async def vapi_events(request: Request, db=Depends(get_db)):
+    """Vapi call events: log the call and alert the owner.
+
+    Vapi owns 757-908-7121 and answers it with the custom-LLM assistant. Without
+    this webhook the call existed only inside Vapi: no row in /monitor and no
+    text or email to the owner.
+    """
+    expected = (os.getenv("VAPI_WEBHOOK_SECRET")
+                or os.getenv("INBOUND_WEBHOOK_SECRET") or "").strip()
+    if expected and request.query_params.get("key") != expected:
+        raise HTTPException(status_code=401, detail="bad webhook key")
+    try:
+        payload = await request.json()
+    except Exception:
+        return {"ok": True}
+    msg = payload.get("message") or payload
+    kind = str(msg.get("type") or "")
+    call = msg.get("call") or {}
+    customer = ((call.get("customer") or {}).get("number")
+                or msg.get("customer", {}).get("number") or "").strip()
+    if customer and kind in ("call-start", "end-of-call-report", "status-update"):
+        _notify_owner_call(customer, str(call.get("id") or ""))
+    if kind == "end-of-call-report":
+        analysis = msg.get("analysis") or {}
+        artifact = msg.get("artifact") or {}
+        body = (analysis.get("summary") or artifact.get("transcript")
+                or "Vapi call completed")[:4000]
+        try:
+            with db.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO comms_logs (direction, channel, sender, recipient, message_body) "
+                    "VALUES ('inbound', 'voice', %s, %s, %s);",
+                    (customer or "unknown", SIGNALWIRE_NUMBER, body))
+            db.commit()
+        except Exception as exc:
+            print(f"[vapi-events] could not log call: {exc}", flush=True)
+    return {"ok": True}
+
+
 # --- SignalWire voice webhooks ----------------------------------------------
 @app.post("/comms/voice-webhook")
 async def voice_webhook(request: Request, db=Depends(get_db)):
