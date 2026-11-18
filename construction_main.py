@@ -10197,6 +10197,8 @@ async def outbound_voice_swml(request: Request, db=Depends(get_db)):
     greeting = ""
     lead_name = ""
     project_type = ""
+    call_name = (request.query_params.get("name") or "").strip()
+    call_topic = (request.query_params.get("topic") or "").strip()
     if len(digits) >= 10:
         try:
             with db.cursor() as cur:
@@ -10222,12 +10224,22 @@ async def outbound_voice_swml(request: Request, db=Depends(get_db)):
                         break
         except Exception as e:
             print(f"⚠️ OUTBOUND-SWML lead lookup failed: {e}", flush=True)
+    if not greeting and (call_name or call_topic):
+        greeting = (
+            f"OUTBOUND CALL — you are the {company()['name']} voice assistant, calling "
+            f"{call_name or 'this contact'} about {call_topic or 'a bid we sent'}. "
+            "This is a business follow-up: be brief and professional, confirm they received "
+            "the bid, ask who is reviewing it and when a decision is expected, and offer to "
+            "answer scope questions. Do not invent pricing or dates."
+        )
+        lead_name = lead_name or call_name
     first = lead_name.split()[0] if lead_name else ""
     static_greeting = (
         f"Hi{', ' + first if first else ''}, this is Rachel, the automated assistant at "
         f"{company()['name']}."
         + (f" I'm calling about your {project_type} request." if project_type
-           else " I'm calling about your project request.")
+           else (f" I'm following up on {call_topic}." if call_topic
+                 else " I'm calling about your project request."))
         + " Is now an okay time to talk for a minute?"
     )
     prompt = (greeting + "\n\n" if greeting else "") + _voice_prompt()
