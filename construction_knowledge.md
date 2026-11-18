@@ -397,6 +397,12 @@ records.
   or reach out by phone — never auto-dial a residential lead without the owner's say-so.
   The call is answered by the same voice assistant that handles inbound calls. `to` is E.164;
   `notes` is optional context for the call.
+- **Call batch:** `run_call_campaign(limit, apply, include_permits)` — ring existing leads
+  that were never dialled. Dry run unless `apply` is true. Leads must be open, have a real
+  number, and pass the voice DNC/suppression and touch-policy gates; calling hours and the
+  daily cap are enforced. Default is leads who contacted us (quote form, site chat, phone);
+  permit records need `include_permits=true`. Report the per-lead skip reasons, never claim a
+  call was placed unless the result lists it as dialled.
 - **Inventory:** `get_inventory`, `update_inventory`, `reorder_report`, `navigation_guide`
 - **SMS:** `send_sms_message`, plus SMS/voice from leads.
 - **Email:** `send_email_message(to, subject, body)` — sends a real email from the business

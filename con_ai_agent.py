@@ -700,6 +700,26 @@ OPERATING MANUAL:
             {
                 "type": "function",
                 "function": {
+                    "name": "run_call_campaign",
+                    "description": (
+                        "Call a batch of existing leads that the AI has never dialled. "
+                        "Dry run by default, listing exactly who would be called and who is "
+                        "skipped and why. Set apply=true to place the calls; that only works "
+                        "when OUTBOUND_CAMPAIGN_ENABLED is on, inside calling hours, and under "
+                        "the daily cap. Every lead passes the voice DNC/suppression and touch "
+                        "policy first. Defaults to leads who contacted us; permit records need "
+                        "include_permits=true."
+                    ),
+                    "parameters": self._props(
+                        {"limit": "integer", "apply": "boolean", "include_permits": "boolean"},
+                        [],
+                        "limit (default 5, hard max 25 per run), apply, include_permits.",
+                    ),
+                },
+            },
+            {
+                "type": "function",
+                "function": {
                     "name": "create_deposit_links",
                     "description": (
                         "Batch: create Zelle/ACH deposit links for up to `limit` "

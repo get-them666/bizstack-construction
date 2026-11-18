@@ -3095,6 +3095,27 @@ def build_copilot_handlers(db, owner_email: str):
     handlers.update(copilot_ops.build_web_search_tools())
     handlers.update(copilot_ops.build_contact_tools(db, owner_email))
     handlers.update(_bid_document_tools(db, owner_email))
+
+    def run_call_campaign(limit: int = 5, apply: bool = False,
+                          include_permits: bool = False) -> dict:
+        """Dial a bounded batch of existing leads that were never called.
+
+        Dry run unless ``apply`` is true, and live dialling additionally needs
+        ``OUTBOUND_CAMPAIGN_ENABLED`` on the server. Every lead still passes
+        the voice suppression/cadence gate inside the module, so a refusal is
+        reported per lead instead of skipped silently.
+        """
+        def _bool(value):
+            if isinstance(value, str):
+                return value.strip().lower() in ("1", "true", "yes", "on")
+            return bool(value)
+
+        import outbound_campaign
+        return outbound_campaign.run(
+            db, limit=limit, apply=_bool(apply),
+            include_permits=_bool(include_permits))
+
+    handlers["run_call_campaign"] = run_call_campaign
     handlers["calculate"] = copilot_ops.calculate
     return handlers
 
@@ -9303,6 +9324,41 @@ def _bot_lead_context(lead):
 
 
 def _outbound_turn(db, sid, to, text, turns):
+    # A stop said out loud on a call is the opt-out that matters most. Honour it
+    # before any model turn: record it, suppress the number, end the call.
+    try:
+        import outbound_campaign
+        wants_stop = outbound_campaign.wants_stop(text)
+    except Exception:
+        wants_stop = False
+    if wants_stop:
+        try:
+            suppression.honor_opt_out(db, phone=to, reason="asked to stop on a call",
+                                      actor="voice-bot")
+            recorded = True
+        except Exception as exc:
+            print(f"📞[call] opt-out could not be recorded for {to}: {exc}", flush=True)
+            recorded = False
+        try:
+            with db.cursor() as cur:
+                cur.execute("INSERT INTO comms_logs (direction, channel, sender, recipient, message_body) "
+                            "VALUES ('inbound', 'voice', %s, %s, %s);",
+                            (sid, SIGNALWIRE_NUMBER, text))
+                cur.execute("INSERT INTO comms_logs (direction, channel, sender, recipient, message_body) "
+                            "VALUES ('outbound', 'voice', 'system', %s, %s);",
+                            (sid, "Opt-out requested on the call; number suppressed." if recorded
+                             else "Opt-out requested but could not be recorded — check suppression."))
+                cur.execute("UPDATE bot_calls SET status = 'opted_out' WHERE call_sid = %s;", (sid,))
+            db.commit()
+        except Exception as exc:
+            print(f"📞[call] could not log opt-out for {to}: {exc}", flush=True)
+        twiml = """<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="Polly.Joanna-Neural">Understood. I'm sorry for the interruption. I've removed this number from our call list, and we won't call it again. Have a good day.</Say>
+    <Hangup/>
+</Response>"""
+        return Response(content=twiml, media_type="application/xml")
+
     max_turns = int(os.getenv("OUTBOUND_MAX_TURNS", "6"))
     lead = _bot_lead_for_call(db, to)
     context = _bot_lead_context(lead)
@@ -9483,36 +9539,65 @@ def _swaig_parameters(props: dict, required: list, notes: str = ""):
     }
 
 
-def _build_voice_swml(prompt: str, ai_params_extra: dict | None = None) -> dict:
-    ai_params = {"ai_model": "gpt-4.1", "temperature": 0.7, "frequency_penalty": 0.3}
+def _build_voice_swml(prompt: str, ai_params_extra: dict | None = None,
+                      static_greeting: str = "") -> dict:
+    # Latency and turn-taking, tuned from SignalWire's AI params reference:
+    #   ai_model            gpt-4.1 was a slow first token on every turn;
+    #                       4.1-mini answers in roughly half the time and still
+    #                       calls tools reliably.
+    #   end_of_speech_timeout 700ms default + model + TTS is the >2s stall.
+    #                       500ms keeps it under two seconds without clipping
+    #                       the last word.
+    #   wait_for_user       false: the agent speaks first on an outbound call.
+    #                       true was leaving dead air until the person talked.
+    #   enable_barge        "complete" only yields to a finished utterance,
+    #                       not to a cough or a TV.
+    #   interrupt_on_noise  false (explicit): background noise must never stop
+    #                       the agent mid-sentence.
+    #   barge_min_words     2: a single "uh" does not interrupt.
+    #   energy_level/VAD    less sensitive than default, so room noise is not
+    #                       transcribed as speech.
+    ai_params = {
+        "ai_model": (os.getenv("VOICE_AI_MODEL") or "gpt-4.1-mini").strip(),
+        "temperature": 0.6,
+        "frequency_penalty": 0.2,
+        "end_of_speech_timeout": 500,
+        "turn_detection_timeout": 700,
+        "energy_level": 62,
+        "vad_config": "65",
+        "interrupt_on_noise": False,
+        "enable_barge": "complete",
+        "barge_min_words": 2,
+        "acknowledge_interruptions": 1,
+        "transparent_barge": True,
+        "attention_timeout": 4000,
+        "wait_for_user": False,
+        "double_turns": False,
+        "enable_thinking": False,
+        "initial_sleep_ms": 0,
+    }
     if ai_params_extra:
         ai_params.update(ai_params_extra)
-    return {
-        "version": "1.0.0",
-        "sections": {
-            "main": [
-                {"answer": {}},
-                {
-                    "ai": {
-                        "prompt": {"text": prompt},
-                        "languages": [
-                            {
-                                "name": "English",
-                                "code": "en-US",
-                                "voice": "elevenlabs.rachel",
-                                "speech_fillers": ["one moment please,", "hmm...", "let's see,"],
-                            }
-                        ],
-                        "params": ai_params,
-                        "post_prompt_url": (os.getenv("APP_BASE_URL", "") or "") + "/api/voice/debug",
-                        "pronounce": [
-                            {"replace": "Buildstack", "with": "build stack", "ignore_case": True},
-                            {"replace": "Vrbo", "with": "virbo", "ignore_case": True},
-                            {"replace": "Airbnb", "with": "air bnb", "ignore_case": True},
-                        ],
-                        "SWAIG": {
-                            "defaults": {"web_hook_url": VOICE_TOOL_URL},
-                            "functions": [
+    ai_block = {
+        "prompt": {"text": prompt},
+        "languages": [
+            {
+                "name": "English",
+                "code": "en-US",
+                "voice": "elevenlabs.rachel",
+                "speech_fillers": ["one sec,", "sure,"],
+            }
+        ],
+        "params": ai_params,
+        "post_prompt_url": (os.getenv("APP_BASE_URL", "") or "") + "/api/voice/debug",
+        "pronounce": [
+            {"replace": "Buildstack", "with": "build stack", "ignore_case": True},
+            {"replace": "Vrbo", "with": "virbo", "ignore_case": True},
+            {"replace": "Airbnb", "with": "air bnb", "ignore_case": True},
+        ],
+        "SWAIG": {
+            "defaults": {"web_hook_url": VOICE_TOOL_URL},
+            "functions": [
                                 {
                                     "function": "register_lead",
                                     "description": "Save a new project request / lead with the caller's details. Use as soon as you have a name and phone number.",
@@ -9753,11 +9838,14 @@ def _build_voice_swml(prompt: str, ai_params_extra: dict | None = None) -> dict:
                                     ),
                                 },
                             ],
-                        },
-                    }
-                },
-            ]
         },
+    }
+    if static_greeting:
+        ai_block["params"]["static_greeting"] = static_greeting
+        ai_block["params"]["static_greeting_no_barge"] = False
+    return {
+        "version": "1.0.0",
+        "sections": {"main": [{"answer": {}}, {"ai": ai_block}]},
     }
 
 
@@ -9778,6 +9866,8 @@ async def outbound_voice_swml(request: Request, db=Depends(get_db)):
             pass
     digits = "".join(ch for ch in str(to or "") if ch.isdigit())
     greeting = ""
+    lead_name = ""
+    project_type = ""
     if len(digits) >= 10:
         try:
             with db.cursor() as cur:
@@ -9788,25 +9878,55 @@ async def outbound_voice_swml(request: Request, db=Depends(get_db)):
                 for r in cur.fetchall():
                     p = "".join(ch for ch in str(r.get("phone") or "") if ch.isdigit())
                     if p and p[-10:] == digits[-10:]:
+                        lead_name = (r.get("name") or "").strip()
+                        project_type = (r.get("project_type") or "").strip()
                         greeting = (
                             f"OUTBOUND CALL — you are the {company()['name']} voice assistant. "
                             f"You are calling {r.get('name') or 'this lead'}"
                             + (f" ({r.get('email') or r.get('phone')})" if (r.get('email') or r.get('phone')) else "")
                             + (f" about a {r.get('project_type')} project" if r.get("project_type") else "")
                             + (f" at {r.get('address')}" if r.get("address") else "")
-                            + f" (lead #{r['id']}). Greet them by first name, briefly remind them why you are calling, "
-                              f"and keep it quick, friendly, and low-pressure. Work the conversation from there — it is a live human."
+                            + f" (lead #{r['id']}). The greeting already went out and identified you as the "
+                              f"automated assistant. Do not repeat it. Answer what they actually say, keep it "
+                              f"quick, friendly, low-pressure, and work toward a free walkthrough."
                         )
                         break
         except Exception as e:
             print(f"⚠️ OUTBOUND-SWML lead lookup failed: {e}", flush=True)
+    first = lead_name.split()[0] if lead_name else ""
+    static_greeting = (
+        f"Hi{', ' + first if first else ''}, this is Rachel, the automated assistant at "
+        f"{company()['name']}."
+        + (f" I'm calling about your {project_type} request." if project_type
+           else " I'm calling about your project request.")
+        + " Is now an okay time to talk for a minute?"
+    )
     prompt = (greeting + "\n\n" if greeting else "") + _voice_prompt()
+    # Legally required behaviour on every outbound call. This is not a style
+    # preference: the assistant must identify itself as automated, tell the
+    # person they can opt out, and stop the moment they do.
+    prompt = (
+        "LEGAL REQUIRED BEHAVIOUR FOR THIS OUTBOUND CALL: you are an automated AI "
+        "assistant, not a person. The greeting has already said so; do not repeat it. "
+        "If asked whether you are a human, a robot or a recording, answer truthfully "
+        "that you are an AI assistant. Tell them once, early, that they can say 'stop' "
+        "at any time and you will remove their number. Never invent a price, date, "
+        "availability, permit outcome or commitment. If they say stop, do not call, "
+        "remove me or take me off the list: apologise, confirm the number is removed, "
+        "end the call, and do not try to save the sale.\n\n"
+        "SOUND LIKE A PERSON: use contractions and short sentences; keep most replies "
+        "under 25 words; answer the question they asked instead of restating it; ask one "
+        "question at a time; never list options like a menu. If you hear background "
+        "noise, a TV or a side conversation, stay quiet and wait — never stop mid-sentence "
+        "for a noise, and never say 'I didn't catch that' twice in a row. If the line is "
+        "bad, say you'll call back and end it.\n\n" + prompt)
     return JSONResponse(content=_build_voice_swml(
         prompt,
+        static_greeting=static_greeting,
         ai_params_extra={
             "direction": "outbound",
-            "wait_for_user": True,
-            "outbound_attention_timeout": 20000,
+            "wait_for_user": False,
+            "outbound_attention_timeout": 10000,
         },
     ))
 
@@ -11343,6 +11463,16 @@ def _start_lead_source_scheduler():
             print(f"[call-list] loop started for crew {call_list.crew_ids_from_env()}", flush=True)
         except Exception as exc:
             print(f"[call-list] could not start: {exc}", flush=True)
+
+    # Outbound AI calling: the bot rings leads, it is not only a crew task.
+    # Off unless OUTBOUND_CAMPAIGN_ENABLED and OUTBOUND_CAMPAIGN_SCHEDULED are
+    # both set; every call is DNC/suppression and touch-policy gated, inside
+    # calling hours, under a daily cap, and dialled once per lead.
+    try:
+        import outbound_campaign
+        outbound_campaign.start_scheduler()
+    except Exception as exc:
+        print(f"📞[campaign] could not start: {exc}", flush=True)
 
     # Zoho mailbox first: that is where replies actually arrive (MX -> Zoho).
     # The Mail REST API path needs no IMAP toggle and no IMAP credentials --
