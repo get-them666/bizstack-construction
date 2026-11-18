@@ -428,11 +428,17 @@ def _hard_daily_ceiling(channel: str) -> int:
         # switch the whole bot off.
         return _outbound_cap(channel, default=30)
     raw = _outbound_cap(channel, default=30)
-    # 200 emails/day is the owner's deliberate setting (2026-11-15): the book is
-    # ~1,400 permit leads and 50/day would take a month to work through. The
-    # ceiling still exists so a mistyped env var cannot uncap the channel -- the
-    # 39,222-message incident is why it is a clamp and not a default.
-    ceiling = 200 if channel == "email" else 20
+    # Owner raised the email ceiling to 10,000/day on 2026-11-18 (the book is
+    # ~1,400 leads and the old 200/day clamp was the bottleneck). It is still a
+    # clamp, not a default: EMAIL_HARD_CEILING can lower it, and a nonsense
+    # value falls back to 10,000 rather than uncapping the channel.
+    if channel == "email":
+        try:
+            ceiling = max(1, int(os.getenv("EMAIL_HARD_CEILING", "10000") or 10000))
+        except (TypeError, ValueError):
+            ceiling = 10000
+    else:
+        ceiling = 20
     if raw <= 0:
         # 0 means "no automated contact" in _channel_allowed, so a non-positive
         # configured cap must not be reinterpreted as unlimited.
