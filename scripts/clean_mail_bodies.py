@@ -66,14 +66,21 @@ _CSS_DECL = re.compile(
     r"(?:margin|padding|color|background|width|height|max-width|min-width|"
     r"border|font|font-size|font-family|font-weight|line-height|letter-spacing|"
     r"text-align|text-decoration|text-transform|vertical-align|display|"
-    r"table-layout|word-break|white-space|overflow|mso-[a-z-]+)"
+    r"table-layout|word-break|white-space|overflow|mso-[a-z-]+|"
+    r"box-sizing|box-shadow|position|top|right|bottom|left|z-index|float|clear|"
+    r"opacity|visibility|cursor|outline|list-style|transform|transition|"
+    r"animation|appearance|object-fit|gap|order|grid|background-image|"
+    r"background-position|background-repeat|background-size|text-shadow|"
+    r"word-spacing|text-indent|resize|pointer-events|user-select|content|"
+    r"direction|filter)"
     r"[\w-]*\s*:\s*[^;{}]+")
 # One or more simple selectors with combinators (".a", "body", "td, th",
 # ".a > .b"). A bare-word descendant ("div p") is rejected on purpose: that
 # shape is indistinguishable from prose, and leaving a selector behind is
 # cheaper than deleting a sentence.
 _SIMPLE_SELECTOR = (
-    r"[.#*]?[A-Za-z][\w.-]*(?:\[[^\]]*\])?(?::[a-z-]+(?:\([^)]*\))?)?")
+    r"(?:\*|\[[^\]]*\]|[.#*]?[A-Za-z][\w.-]*(?:\[[^\]]*\])?)"
+    r"(?::[a-z-]+(?:\([^)]*\))?)*")
 _SEL_LIST = re.compile(
     r"^" + _SIMPLE_SELECTOR +
     r"(?:(?:\s*[,>+~]\s*|\s+)" + _SIMPLE_SELECTOR + r")*$")

@@ -170,6 +170,23 @@ def test_repair_handles_hyphenated_properties_and_keeps_the_body():
     assert out.endswith("Then the real body starts here.")
 
 
+def test_repair_handles_star_attribute_and_not_selectors():
+    strip_css = _strip_css()
+    stored = (
+        "d Pay for everyday expenses [4/4]\n\n"
+        "div.zm_3843806615186623705_parse_2026625326010030421 * { box-sizing: border-box }\n"
+        "div.zm_3060074072870246929_parse_891447574999114833 #x_850975021body "
+        "#x_850975021main [x-apple-data-detectors-type] { color: inherit !important }\n"
+        "div.zm_69714918961899_parse_3804686813532052404 "
+        "*:not(html):not(style):not(br):not(tr):not(code) { font-family: Roboto }\n"
+        "Real text.")
+    out = strip_css(stored)
+    for bad in ("zm_", "box-sizing", "color: inherit", "font-family", "x_850975021"):
+        assert bad not in out, (bad, out)
+    assert out.startswith("d Pay for everyday expenses [4/4]")
+    assert out.endswith("Real text.")
+
+
 if __name__ == "__main__":
     import sys
     import traceback
