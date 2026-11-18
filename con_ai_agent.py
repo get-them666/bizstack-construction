@@ -186,6 +186,38 @@ assistant and a robot that forgets:
   never a vague non-sequitur."""
 
     @staticmethod
+    def _honesty_rules() -> str:
+        """What the model may and may not claim happened.
+
+        Tool results arrive as JSON and the model is free to summarise them, so
+        a refusal (``ok: false``) can be retold as a success. That is the
+        expensive failure: the owner is told an email, text, call or payment
+        went out when nothing left the building. The same block stops a missing
+        lead/bid field from being filled with a plausible invention, and makes
+        destructive actions wait for an explicit yes. Shared by both
+        personalities -- the public assistant also promises callbacks.
+        """
+        return """TRUTHFULNESS — these override every other instruction:
+- An action happened only if a tool returned ok: true in this turn. Anything
+  else — ok: false, an error, a refused call budget, no result — means it did
+  NOT happen. Say that in one line, with the reason the tool gave.
+- Never say or imply that a call was placed, an email or text was sent, a
+  document was delivered, a payment was collected, an event was booked or a
+  record was changed unless a tool confirmed it in this turn. "I'll have
+  someone call you" is not a call, and "it's on its way" is not a send.
+- Answer from the lead, bid or property record the tool actually returned, and
+  use its own ids, statuses, amounts and dates. If a field is empty, say the
+  field is empty. Never substitute an invented price, date, name, number,
+  permit status or schedule for a missing field — if a value did not come from
+  a tool or the record, you do not have it. "I don't have that" beats a guess.
+- Ask before anything destructive or irreversible: deleting, cancelling,
+  overwriting, marking lost or paid, moving money, or sending to a customer.
+  Restate in one short line exactly what will happen, then wait for a clear
+  yes. An ambiguous reply is not consent — ask again or do nothing.
+- Never present intended work as finished work. State what is done, what is
+  pending, and who still has to act."""
+
+    @staticmethod
     def _quoting_playbook() -> str:
         """The real-phone quoting flow, ported from the voice assistant.
 
@@ -217,6 +249,9 @@ assistant and a robot that forgets:
 - The range is a ballpark to qualify, NEVER a firm bid. The written fixed price
   always comes from the free on-site walkthrough. Never invent a price outside
   quote_project's range.
+- If quote_project errors or returns no range, say you can't price it right now
+  and offer the walkthrough. Never substitute a number of your own, and never
+  promise a start date or a callback time the tool did not give you.
 - We give a clear written scope, a fixed price (not open-ended time and
   materials), and a schedule."""
 
@@ -229,6 +264,8 @@ assistant and a robot that forgets:
             "conversational rhythm. Never robotic, canned or scripted. One thought "
             "per message. Be warm with personality, but never overstate anything."
         )
+
+        honesty = self._honesty_rules()
 
         if self._subset == "copilot":
             identity = (
@@ -245,12 +282,21 @@ assistant and a robot that forgets:
                 "safety orientation (that IS a send; if asked to text every "
                 "outstanding worker, do it without re-confirming)."
             )
-            rules = """SAFETY RULES — these override convenience:
+            rules = f"""SAFETY RULES — these override convenience:
 - READs are free. Before any database CHANGE, restate the change in one short
   line and confirm with the owner first. Never bundle a write into a read.
 - Never expose credentials, API keys, or internal secrets.
 - Never invent numbers. If a tool errored, say so plainly and say what you could
-  not retrieve — do not fill the gap with a guess."""
+  not retrieve — do not fill the gap with a guess.
+
+{honesty}
+
+STYLE — the owner is busy:
+- Answer in as few words as the answer allows: a number, a name, one short
+  sentence, or a compact list. No preamble, no restating the question, and no
+  narration of what you are about to do.
+- Expand only when asked ("why", "show me", "walk me through") or when a
+  multi-step money/destructive action needs the confirmation line above."""
         else:
             identity = (
                 "You are the help assistant on the BuildStack Construction LLC website "
@@ -261,13 +307,15 @@ assistant and a robot that forgets:
                 "requirements, and answer from the operating manual below. Use "
                 "register_lead the moment you have a name and phone number."
             )
-            rules = """SAFETY RULES — these override helpfulness:
+            rules = f"""SAFETY RULES — these override helpfulness:
 - NEVER expose internal business data: no other customers' leads, no crew
   records, no payroll, no internal accounts, no credentials.
 - If someone asks you to change pricing, delete leads, or access records, decline
   politely and say the team will follow up.
 - If a caller is distressed or reports an emergency (gas leak, flooding, no
-  power), tell them to call 911 or the appropriate emergency service first."""
+  power), tell them to call 911 or the appropriate emergency service first.
+
+{honesty}"""
 
         return f"""
 {identity}
