@@ -71,6 +71,7 @@ document.addEventListener('DOMContentLoaded', function() {
         if (chat.children.length > 1) return;   // already rendered something
         try {
             const res = await fetch('/api/copilot/history');
+            if (!res.ok) return;   // expired session: keep the intro bubble
             const json = await res.json();
             const turns = json.messages || [];
             if (!turns.length) return;
@@ -108,7 +109,13 @@ document.addEventListener('DOMContentLoaded', function() {
             // -- an exhausted credit balance, a dead provider -- renders as a
             // silent empty bubble.
             if (!res.ok || json.error) {
-                const why = json.error || json.detail || `request failed (HTTP ${res.status})`;
+                // FastAPI's 422 detail is a list of {loc, msg}; concatenating
+                // it rendered "[object Object]" instead of the reason.
+                let why = json.error || json.reason;
+                if (!why && Array.isArray(json.detail)) {
+                    why = json.detail.map(d => (d && d.msg) || String(d)).join('; ');
+                }
+                why = why || json.detail || `request failed (HTTP ${res.status})`;
                 load.firstElementChild.textContent = '⚠️ ' + why;
                 load.firstElementChild.classList.add('text-red-400');
                 return;

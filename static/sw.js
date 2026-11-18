@@ -1,4 +1,4 @@
-const CACHE = "buildstack-crew-v14";
+const CACHE = "buildstack-crew-v15";
 const SHELL = [
   "/manifest.webmanifest",
   "/static/css/tailwind.css",

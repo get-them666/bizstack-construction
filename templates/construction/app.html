@@ -688,6 +688,14 @@
                 if (btn) { btn.disabled = false; btn.textContent = '🕐 Clock In'; }
                 return;
             }
+            // The clock endpoints report business refusals as HTTP 200
+            // {status:'error', message}. Checking only res.ok made "Already
+            // clocked in" look like success and hid the message.
+            if (result.data && result.data.status === 'error') {
+                alert(result.data.message || 'Could not clock in.');
+                if (btn) { btn.disabled = false; btn.textContent = '🕐 Clock In'; }
+                return;
+            }
             await loadMe();
             startTracking();
         }
@@ -709,6 +717,13 @@
                 // Queue the clock-out so it can be retried when back online.
                 queuePendingAction({ action: 'out', project_id: id || 0, lat, lng, ts: Date.now() });
                 alert('Clock-out failed' + (data && data.message ? ': ' + data.message : '') + '. It will retry when you are back online.');
+            } else if (data && data.status === 'error') {
+                // A refusal is not a network failure: do not queue a retry.
+                alert(data.message || 'Could not clock out.');
+            } else if (data && data.too_short && data.message) {
+                // The backend writes the too-short explanation for the app; the
+                // old res.ok-only check discarded it.
+                alert(data.message);
             }
             await loadMe();
         }
