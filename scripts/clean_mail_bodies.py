@@ -75,6 +75,12 @@ _CSS_DECL = re.compile(
 _SIMPLE_SELECTOR = r"[.#*]?[A-Za-z][\w-]*"
 _SEL_LIST = re.compile(
     r"^" + _SIMPLE_SELECTOR + r"(?:\s*[,>+~]\s*" + _SIMPLE_SELECTOR + r")*$")
+# The same shape, anchored to the END of a string: finds the trailing selector
+# in "Yelp body, table, td {…}" so the prose before it survives.
+_TRAILING_SELECTOR = re.compile(
+    r"(" + _SIMPLE_SELECTOR +
+    r"(?:\s*[,>+~]\s*" + _SIMPLE_SELECTOR + r")*)\s*$")
+_AT_RULE = re.compile(r"@(?:media|font-face|import|keyframes|page|supports)\b", re.I)
 
 
 def _selector_only(text: str) -> bool:
@@ -89,21 +95,25 @@ def _selector_only(text: str) -> bool:
 def _cut_point(s: str, i: int, j: int) -> int:
     """Index from which to delete, so the selector goes and prose stays.
 
-    A stored lead note looks like `[reply ...] Roof quote: body{...}`; cutting
-    at the line start would delete the note itself, so cut after the last
-    structural boundary when the whole line is not a selector.
+    Stored rows glue everything onto one line: a lead note is
+    `[reply ...] Roof quote: body{...}` and a bad tag-strip produced
+    `New login to your Yelp account Yelp body, table, td {…}`. Cutting at the
+    line start would delete the note or the sentence, so keep the prose and cut
+    only the trailing selector.
     """
     line_start = s.rfind("\n", i, j)
     start = line_start + 1 if line_start >= 0 else i
-    if _selector_only(s[start:j]):
+    prefix = s[start:j]
+    if _selector_only(prefix):
         return start
-    cut = start
-    for ch in "]};:":
-        pos = s.rfind(ch, start, j)
-        if pos >= 0:
-            cut = max(cut, pos + 1)
-    if cut > start and _selector_only(s[cut:j]):
-        return cut
+    at = None
+    for m in _AT_RULE.finditer(prefix):
+        at = m.start()
+    if at is not None:
+        return start + at
+    m = _TRAILING_SELECTOR.search(prefix)
+    if m:
+        return start + m.start(1)
     return j
 
 
