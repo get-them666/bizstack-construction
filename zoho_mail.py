@@ -1,6 +1,6 @@
 """Send mail through the Zoho Mail REST API (HTTPS), not SMTP.
 
-Zoho's SMTP ports time out from Railway's egress on 25/465/587 -- that is why
+Zoho's SMTP ports time out from cloud-host egress on 25/465/587 -- that is why
 EMAIL_TRANSPORT=legacy left the business with no outbound mail. The REST API
 is plain HTTPS and works from anywhere. It needs the ZohoMail.messages.CREATE
 and ZohoMail.accounts.READ scopes, granted by the Connect Zoho button.
@@ -224,18 +224,20 @@ def attachment_bytes(account_id: str, folder_id: str, message_id: str,
 # matching, STOP handling and the reply bot are shared with every other path.
 
 def _html_to_text(html_body: str) -> str:
-    """Same cleaning the Gmail/IMAP paths get, so STOP detection sees one shape."""
+    """Zoho serves bodies as HTML. Flatten it so the inbox shows prose.
+
+    A tag-strip regex alone left the contents of `<style>` behind -- the owner
+    read a page of `.externalclass{font-family:Arial}` before every message.
+    """
     try:
-        import email.message
-        import inbound_email
-        msg = email.message.EmailMessage()
-        msg.set_content(html_body or "", subtype="html")
-        return inbound_email._body_text(msg)
+        import html_text
+        return html_text.to_text(html_body or "")
     except Exception:
-        import html as _h
         import re
-        text = re.sub(r"<[^>]+>", " ", html_body or "")
-        return re.sub(r"\s+", " ", _h.unescape(text)).strip()[:8000]
+        text = re.sub(r"(?is)<(style|script|head|title)[^>]*>.*?</\1>", " ", html_body or "")
+        text = re.sub(r"<[^>]+>", " ", text)
+        text = re.sub(r"[ \t\r\f\v]+", " ", _html.unescape(text))
+        return text.strip()[:8000]
 
 
 def inbox_status() -> dict:

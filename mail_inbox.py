@@ -42,6 +42,7 @@ from email.utils import parseaddr
 from typing import Optional
 
 import brand
+import html_text
 
 # A single list call feeds every conversation in the left column. One minute is
 # short enough that a mail arriving mid-session shows up on the next refresh and
@@ -49,6 +50,12 @@ import brand
 LIST_TTL_SECONDS = 60
 _MAX_BODY = 12000
 _MAX_THREAD_BODIES = 10
+
+# Zoho's /content endpoint is HTML; a body that still carries these tags has not
+# been flattened. Deliberately does not sniff bare `<` (a customer writing
+# "5 < 10" is prose, not markup).
+_HTML_SNIFF = re.compile(
+    r"<\s*(?:!doctype|html|head|body|style|script|div|br|table|td|tr)\b", re.I)
 
 _SUBJECT_PREFIX = re.compile(r"^\s*(?:(?:re|fw|fwd|aw|sv|tr)\s*:\s*)+", re.I)
 _WS = re.compile(r"\s+")
@@ -112,6 +119,23 @@ def conversation_id(party: str, key: str) -> str:
 def _summary(text: str, limit: int = 150) -> str:
     s = _WS.sub(" ", (text or "").strip())
     return s[:limit] + ("…" if len(s) > limit else "")
+
+
+def _plain_body(raw: str) -> str:
+    """Guarantee the reader gets prose, whoever fetched the body.
+
+    `zoho_mail.message_text` already flattens HTML, but the page promises plain
+    text and that promise should not depend on every caller remembering. An
+    uncleaned body put a stylesheet above the message once; this is the second
+    line of defence.
+    """
+    s = raw or ""
+    if _HTML_SNIFF.search(s):
+        try:
+            return html_text.to_text(s, limit=0)
+        except Exception:
+            return s
+    return s
 
 
 # ──────────────────────────────────────────────
@@ -300,7 +324,7 @@ def thread(party: str, key: str, days: int = 90, limit: int = 200) -> dict:
             "subject": h.get("subject") or "",
             "date": h.get("date") or "",
             "received_ms": h.get("received_ms") or 0,
-            "body": (body or "")[:_MAX_BODY],
+            "body": _plain_body(body)[:_MAX_BODY],
             "truncated": len(body or "") > _MAX_BODY,
         })
     latest_in = next((m for m in reversed(messages) if m["direction"] == "in"), None)

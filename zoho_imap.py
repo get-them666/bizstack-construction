@@ -5,7 +5,7 @@ BuildStack email lands in Zoho Mail. The Gmail poller cannot see it, which
 means the contact policy never learns that someone answered, a STOP is never
 honoured, and the reply bot stays silent. This closes that hole.
 
-Why IMAP and not the Mail API: Railway blocks Zoho's SMTP ports (25, 465 and
+Why IMAP and not the Mail API: the host blocks Zoho's SMTP ports (25, 465 and
 587 all time out from the container) but IMAP on 993 is reachable and the
 mailbox password authenticates. The Mail REST API remains the better path for
 *sending* and takes over automatically once the connection carries
@@ -33,12 +33,11 @@ DEFAULT_HOST = "imap.zoho.com"
 DEFAULT_PORT = 993
 
 _STATUS: Dict[str, Any] = {"checked_at": 0.0, "ok": False, "reason": "not checked"}
-_TAG_RE = re.compile(r"<[^>]+>")
 _MSGID_RE = re.compile(r"<[^>]+>")
 
 
 def _flag(name: str, default: str = "") -> str:
-    """Explicit boolean parsing: Railway stores an unset flag as the *string*
+    """Explicit boolean parsing: an unset flag can arrive as the *string*
     "false", which is truthy. Same trap `test_flag_semantics.py` guards."""
     return (os.getenv(name) or default).strip().lower()
 
@@ -148,16 +147,26 @@ def _body_text(msg) -> str:
         import inbound_email
         return inbound_email._body_text(msg)
     except Exception:
+        import html_text
         text = ""
+        html = ""
         if msg.is_multipart():
             for part in msg.walk():
-                if part.get_content_type() == "text/plain" and not text:
+                ctype = part.get_content_type()
+                if ctype == "text/plain" and not text and not html:
                     text = (part.get_payload(decode=True) or b"").decode(
                         part.get_content_charset() or "utf-8", "replace")
+                elif ctype == "text/html" and not text and not html:
+                    html = (part.get_payload(decode=True) or b"").decode(
+                        part.get_content_charset() or "utf-8", "replace")
         else:
-            text = (msg.get_payload(decode=True) or b"").decode(
+            raw = (msg.get_payload(decode=True) or b"").decode(
                 msg.get_content_charset() or "utf-8", "replace")
-        return _TAG_RE.sub(" ", text).strip()[:8000]
+            if msg.get_content_type() == "text/html":
+                html = raw
+            else:
+                text = raw
+        return (text if text else html_text.to_text(html)).strip()[:8000]
 
 
 def fetch_recent(days: int = 7, limit: int = 30) -> List[Dict[str, str]]:

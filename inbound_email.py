@@ -23,8 +23,8 @@ from email.utils import parseaddr
 import psycopg
 from psycopg.rows import dict_row
 
-_TAG_RE = re.compile(r"<[^>]+>")
-_ENT_RE = re.compile(r"&(?:amp|lt|gt|quot|#39|nbsp);")
+import html_text
+
 _MULTI_WS = re.compile(r"[ \t\r\f\v]+")
 _NEWLINES = re.compile(r"\n{3,}")
 # Notification robots, not people. They must still be recorded, but they can
@@ -74,6 +74,12 @@ def _subject_header(raw):
 
 
 def _body_text(msg):
+    """Plain text of a message.
+
+    HTML parts go through `html_text` rather than a tag-strip, because the CSS
+    inside `<style>` is not a tag: it used to be printed above every message in
+    the owner inbox. STOP detection and lead notes read this same text.
+    """
     text = ""
     if msg.is_multipart():
         for part in msg.walk():
@@ -81,16 +87,14 @@ def _body_text(msg):
             if ctype == "text/plain" and not text:
                 text = _decode_part(part)
             elif ctype == "text/html" and not text:
-                html = _decode_part(part)
-                text = _TAG_RE.sub(" ", html)
+                text = html_text.to_text(_decode_part(part))
     else:
         ctype = msg.get_content_type()
         if ctype == "text/html":
-            text = _TAG_RE.sub(" ", _decode_part(msg))
+            text = html_text.to_text(_decode_part(msg))
         else:
             text = _decode_part(msg)
-    text = _ENT_RE.sub(" ", text)
-    text = _MULTI_WS.sub(" ", text).replace(" > ", "> ").replace(" < ", "< ")
+    text = _MULTI_WS.sub(" ", text)
     text = _NEWLINES.sub("\n\n", text)
     return text.strip()[:8000]
 
@@ -418,9 +422,8 @@ def _resend_fetch_body(email_id):
     if not text:
         return ""
     if not data.get("text"):
-        text = _TAG_RE.sub(" ", text)
-        text = _ENT_RE.sub(" ", text)
-        text = _MULTI_WS.sub(" ", text)
+        # HTML-only payload: strip the stylesheet blocks too, not just tags.
+        text = html_text.to_text(text)
     return text[:8000]
 
 
