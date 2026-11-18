@@ -9149,6 +9149,41 @@ async def inbound_sms_webhook(request: Request, db=Depends(get_db)):
     return Response(content=sxml_payload, media_type="application/xml")
 
 
+def _notify_owner_call(from_number: str, call_sid: str) -> None:
+    """Alert the owner when a call lands on the business line.
+
+    /monitor lists calls, but the owner is usually on a job site, not
+    refreshing a page. SMS may be blocked while 10DLC registration is pending,
+    so the same alert also goes by email to the owner inbox.
+    """
+    mobile = (os.getenv("OWNER_MOBILE") or "").strip()
+    subject = f"Call on the business line from {from_number}"
+    body = (f"An inbound call reached the business line from {from_number}.\n\n"
+            f"The assistant is answering it. The transcript and outcome appear "
+            f"on https://{company()['domain']}/monitor\n\nCall SID: {call_sid}")
+
+    def _send():
+        if mobile:
+            try:
+                signalwire.send_sms(mobile, subject + ". The assistant is answering; "
+                                           "details are on /monitor.")
+            except Exception as exc:
+                print(f"[call-notify] SMS to owner failed: {exc}", flush=True)
+        try:
+            import documents_service
+            from auto_reply import run_coro
+            cfg = documents_service.smtp_config_from_env()
+            if documents_service.smtp_configured(cfg):
+                to = (os.getenv("NOTIFY_EMAIL") or os.getenv("ADMIN_EMAIL")
+                      or company().get("email") or "").strip()
+                if to:
+                    run_coro(documents_service.send_email(cfg, to, subject, body))
+        except Exception as exc:
+            print(f"[call-notify] email to owner failed: {exc}", flush=True)
+
+    threading.Thread(target=_send, daemon=True).start()
+
+
 # --- SignalWire voice webhooks ----------------------------------------------
 @app.post("/comms/voice-webhook")
 async def voice_webhook(request: Request, db=Depends(get_db)):
@@ -9161,6 +9196,8 @@ async def voice_webhook(request: Request, db=Depends(get_db)):
     with db.cursor() as cur:
         cur.execute("INSERT INTO comms_logs (direction, channel, sender, recipient, message_body) VALUES ('inbound', 'voice', %s, %s, %s);", (From, To, f"Voice call received - SID: {CallSid}"))
         db.commit()
+
+    _notify_owner_call(From, CallSid)
 
     greeting = (
         f"Thank you for calling {company()['name']}! I'm the automated assistant. "
