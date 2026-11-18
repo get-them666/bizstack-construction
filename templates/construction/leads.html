@@ -29,6 +29,67 @@
             </p>
         </div>
 
+        {% if lane != 'permits' %}
+        {# ── Outbound calls ───────────────────────────────────────────────
+           One row per lead in the work queue, with its number and the call
+           status the outbound log reports. The buttons and chips are inert
+           until /static/js/outbound-calls.js loads: it owns the POST to
+           /api/outbound/call and refreshes every data-call-status chip, so
+           this markup never guesses whether a call happened. #}
+        <section class="mb-6 bg-white rounded-3xl border border-slate-200 overflow-hidden" aria-label="Outbound calls">
+            <div class="px-5 py-4 border-b border-slate-100 flex flex-wrap items-center justify-between gap-3">
+                <div>
+                    <h2 class="font-bold text-slate-900">Outbound calls</h2>
+                    <p class="mt-0.5 text-xs text-slate-500">Call straight from the queue. The chip updates from the call log.</p>
+                </div>
+                {# Campaign summary: filled by outbound-calls.js from
+                   GET /api/outbound/campaign. The fallback text is honest
+                   about not having loaded rather than showing a fake 0. #}
+                <div data-outbound-summary class="text-right px-4 py-2.5 rounded-xl bg-slate-50 border border-slate-100">
+                    <p class="text-xs font-bold text-slate-500 uppercase tracking-wider">Calls today</p>
+                    <p class="mt-0.5 text-sm font-bold text-slate-800">
+                        <span data-outbound-dialed>—</span> placed
+                        <span class="text-slate-300">·</span>
+                        <span data-outbound-remaining>—</span> left
+                    </p>
+                </div>
+            </div>
+
+            {% if buckets %}
+            <ul class="divide-y divide-slate-100">
+                {% for bucket in buckets %}
+                {% for lead in bucket.leads %}
+                <li class="px-5 py-3 flex flex-wrap items-center gap-x-3 gap-y-2">
+                    <div class="flex-1 min-w-[180px]">
+                        <p class="font-semibold text-slate-900 truncate">{{ lead.name }}</p>
+                        <p class="text-xs text-slate-500">
+                            {% if lead.phone %}
+                            <a href="tel:{{ lead.phone }}" class="font-semibold text-slate-700 hover:text-indigo-700">{{ lead.phone }}</a>
+                            {% else %}
+                            <span class="text-slate-400">no phone on file</span>
+                            {% endif %}
+                            <span class="text-slate-300">·</span>
+                            {{ lead.project_type or '—' }}
+                        </p>
+                    </div>
+                    <span data-call-status="{{ lead.id }}"
+                          class="shrink-0 inline-flex items-center gap-1 px-2.5 py-1 text-xs font-bold rounded-full border bg-slate-50 text-slate-500 border-slate-200">not called</span>
+                    {% if lead.phone %}
+                    <button type="button" data-call-lead="{{ lead.id }}"
+                            class="shrink-0 px-4 py-2 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition-colors">📞 Call now</button>
+                    {% else %}
+                    <span class="shrink-0 text-xs text-slate-400">Add a number first</span>
+                    {% endif %}
+                </li>
+                {% endfor %}
+                {% endfor %}
+            </ul>
+            {% else %}
+            <div class="px-5 py-6 text-center text-sm text-slate-500">Nothing in the queue to call right now.</div>
+            {% endif %}
+        </section>
+        {% endif %}
+
         {% if lane == 'permits' %}
         {% include "_permits_lane.html" %}
         {% else %}
@@ -57,6 +118,11 @@
         {% endif %}
     </div>
 </section>
+
+{# Loaded last so the buttons above already exist when outbound-calls.js runs.
+   api-client.js must come first: outbound-calls.js uses its fetch wrapper. #}
+<script src="/static/js/api-client.js"></script>
+<script src="/static/js/outbound-calls.js"></script>
 {% endblock %}
 
 {% block scripts %}

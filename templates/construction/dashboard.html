@@ -38,6 +38,20 @@
             </div>
         </div>
 
+        <!-- Outbound calls today: filled by outbound-calls.js from
+             GET /api/outbound/campaign. A dash means "not loaded", never zero. -->
+        <div data-outbound-summary class="mt-4 flex flex-wrap items-center justify-between gap-3 bg-white rounded-3xl border border-slate-200 px-6 py-4">
+            <div>
+                <p class="text-xs font-bold text-slate-500 uppercase tracking-wider">Outbound calls today</p>
+                <p class="mt-0.5 text-xs text-slate-400">Placed against the daily cold-call cap.</p>
+            </div>
+            <p class="text-sm font-bold text-slate-800">
+                <span data-outbound-dialed>—</span> placed
+                <span class="text-slate-300">·</span>
+                <span data-outbound-remaining>—</span> remaining
+            </p>
+        </div>
+
         <!-- Recent leads -->
         <div class="mt-10 bg-white rounded-3xl border border-slate-200">
             <div class="px-6 py-5 border-b border-slate-100 flex items-center justify-between">
@@ -98,4 +112,9 @@
         </div>
     </div>
 </section>
+
+{# Loaded last so the summary panel above already exists when
+   outbound-calls.js runs. api-client.js must come first. #}
+<script src="/static/js/api-client.js"></script>
+<script src="/static/js/outbound-calls.js"></script>
 {% endblock %}
