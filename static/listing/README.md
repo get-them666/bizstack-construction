@@ -34,7 +34,7 @@ verification video and a review from the same person.
 
 Everything here is drawn from your own repo, not invented:
 
-- Phone **(757) 908-7121** — the business line. `MEMORY.md` records that
+- Phone **(757) 846-9275** — the business line. `MEMORY.md` records that
   **252-665-5891** is your personal mobile and appears **only** in lending material.
   It is deliberately absent from all three listings. Keep it that way unless you ask.
 - Website, service area, trades, 25 years in the trade — from `sessions.md`,

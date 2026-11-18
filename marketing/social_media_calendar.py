@@ -8,7 +8,7 @@ POSTS = [
     {
         "day": 1,
         "type": "Before/After",
-        "caption": "Another kitchen transformation complete! 🏠✨ Hampton Roads homeowners — what's your next project? Free estimates: (757) 908-7121",
+        "caption": "Another kitchen transformation complete! 🏠✨ Hampton Roads homeowners — what's your next project? Free estimates: (757) 846-9275",
         "hashtags": "#HamptonRoadsContractor #VirginiaBeach #KitchenRemodel #BuildStackConstruction"
     },
     {
@@ -44,7 +44,7 @@ POSTS = [
     {
         "day": 7,
         "type": "Weekend Project Tip",
-        "caption": "Weekend DIY tip: Always check for permits before starting! When in doubt, call us for a free consultation. (757) 908-7121",
+        "caption": "Weekend DIY tip: Always check for permits before starting! When in doubt, call us for a free consultation. (757) 846-9275",
         "hashtags": "#DIYTips #HomeownerTips #VirginiaBeach"
     },
     
@@ -182,13 +182,13 @@ POSTS = [
     {
         "day": 29,
         "type": "FAQ",
-        "caption": "FAQ: Do you offer free estimates? YES! Call (757) 908-7121 or DM us. No obligation, honest pricing.",
+        "caption": "FAQ: Do you offer free estimates? YES! Call (757) 846-9275 or DM us. No obligation, honest pricing.",
         "hashtags": "#FreeEstimate #NoObligation #HonestPricing"
     },
     {
         "day": 30,
         "type": "Call to Action",
-        "caption": "Ready to start your project? We have 2 estimate slots open next week. Comment 'ESTIMATE' or call (757) 908-7121! 🔨",
+        "caption": "Ready to start your project? We have 2 estimate slots open next week. Comment 'ESTIMATE' or call (757) 846-9275! 🔨",
         "hashtags": "#BookNow #FreeConsultation #HamptonRoadsBuilder"
     }
 ]

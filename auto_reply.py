@@ -152,7 +152,7 @@ def _notify_owner_sms(*, lead_id, name="", phone="", service="", address="", goa
         print(f"⚠️ [lead-alert] SMS to owner failed (SignalWire returned False) for lead #{lead_id}", flush=True)
 
 COMPANIES = {
-    "construction": {"name": brand.short_name(), "legal_name": brand.name(), "cta": "Call or text us at (757) 908-7121 anytime."},
+    "construction": {"name": brand.short_name(), "legal_name": brand.name(), "cta": "Call or text us at (757) 846-9275 anytime."},
 }
 
 
@@ -1317,7 +1317,7 @@ def build_bid_inquiry(company_key, *, title="", solicitation="", contact_name=""
         "Thank you for your time.",
         "",
         f"— {co_name}",
-        "hello@bizstackperks.com · (757) 908-7121",
+        "hello@bizstackperks.com · (757) 846-9275",
     ]
     if url:
         lines.append(f"Opportunity: {url}")

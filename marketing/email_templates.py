@@ -13,7 +13,7 @@ TEMPLATES = {
 
 Thinking about a renovation? We're offering free estimates this month.
 
-📞 (757) 908-7121
+📞 (757) 846-9275
 🌐 construction.bizstackperks.com
 
 Stay building,
@@ -28,7 +28,7 @@ We noticed a new building permit was filed at {address}.
 
 If you're planning work in the area, we'd love to provide a free, no-obligation estimate.
 
-📞 (757) 908-7121
+📞 (757) 846-9275
 🌐 construction.bizstackperks.com
 
 — BuildStack Construction LLC"""
@@ -56,7 +56,7 @@ Just checking in — saw you were looking into {project_type}.
 
 No pressure at all, but if you have any questions I'm happy to help. We're doing free estimates this month.
 
-📞 (757) 908-7121
+📞 (757) 846-9275
 
 — Shaun"""
     }

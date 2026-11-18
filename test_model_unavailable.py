@@ -112,7 +112,7 @@ def test_customer_assistant_keeps_its_fallback(monkeypatch):
         out = _agent(exc, subset="guest").process_conversation([], "hi")
         assert out == guest_fallback()
         assert "follow up" not in out
-        assert "908-7121" in out, "must hand the visitor a channel that works"
+        assert "846-9275" in out, "must hand the visitor a channel that works"
 
 
 def test_endpoint_maps_it_to_503():

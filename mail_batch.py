@@ -42,7 +42,7 @@ they start to matter:
     have been re-mailed on the next batch. This checks before every send.
 
   * The owner's personal mobile can never appear. 252-665-5891 belongs in
-    lending material only; 757-908-7121 is the line on customer-facing work.
+    lending material only; 757-846-9275 is the line on customer-facing work.
     .env.example still sets LETTER_BRAND_PHONE to the personal number, and
     mail_letters.py reads that env var, so preflight hard-fails on it.
 
@@ -703,7 +703,7 @@ def preflight(out_dir: Path) -> tuple:
                 problems.append(
                     f"LETTER_BRAND_{field.upper()} is {val!r}, which contains {frag} — "
                     "the owner's personal number must not go on cold mail. Set it to "
-                    "the business line (757) 908-7121 and rebuild.")
+                    "the business line (757) 846-9275 and rebuild.")
 
     if not mail_letters.BRAND.get("email"):
         problems.append("LETTER_BRAND_EMAIL is empty — the letter's opt-out names that "

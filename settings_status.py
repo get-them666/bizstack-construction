@@ -127,7 +127,7 @@ def email_status(mail_status: dict | None) -> dict:
 
 def phone_status(vapi_configured: bool, signalwire_configured: bool) -> dict:
     return {
-        "business_line": env("COMPANY_PHONE", "+1 (757) 908-7121"),
+        "business_line": env("COMPANY_PHONE", "+1 (757) 846-9275"),
         "vapi_ok": vapi_configured,
         "vapi_assistant": env("VAPI_ASSISTANT_ID")[:8] + "…" if env("VAPI_ASSISTANT_ID") else "",
         "sms_ok": signalwire_configured,

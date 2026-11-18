@@ -223,7 +223,7 @@ def test_first_touch_draft_carries_the_business_line_only():
     subject, body = loop.first_touch_draft("Bruce Oleary", "123 Main St")
     assert subject == loop.SUBJECT
     assert "Hi Bruce," in body
-    assert "908-7121" in body
+    assert "846-9275" in body
     # The personal mobile belongs to lending material only.
     assert "252-665-5891" not in body
     assert "2526655891" not in body

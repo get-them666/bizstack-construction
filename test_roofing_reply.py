@@ -52,7 +52,7 @@ def test_it_does_not_quote_blind():
 
 def test_it_keeps_the_business_line_in_the_footer():
     body = _msg(service="roofing")
-    assert "(757) 908-7121" in body
+    assert "(757) 846-9275" in body
     assert "252-665-5891" not in body, "the personal mobile is lending material only"
 
 

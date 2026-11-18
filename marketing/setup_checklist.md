@@ -18,7 +18,7 @@
 - [ ] Address: 701 Dana Dr, Chesapeake, VA 23321
 - [ ] Service area: Add cities (Virginia Beach, Norfolk, Chesapeake, Hampton, Newport News)
 - [ ] Category: General Contractor
-- [ ] Phone: (757) 908-7121
+- [ ] Phone: (757) 846-9275
 - [ ] Website: https://construction.bizstackperks.com
 - [ ] Hours: Mon-Fri 7am-6pm (adjust as needed)
 - [ ] Add 10+ project photos
@@ -49,7 +49,7 @@ Submit to each (use same business info):
 
 **For each directory:**
 - Business name: BuildStack Construction LLC
-- Phone: (757) 908-7121
+- Phone: (757) 846-9275
 - Website: https://construction.bizstackperks.com
 - Address: 701 Dana Dr, Chesapeake, VA 23321
 - Category: General Contractor
@@ -77,7 +77,7 @@ Submit to each (use same business info):
 - [ ] Switch to business account
 - [ ] Category: General Contractor
 - [ ] Add logo + 3 project photos
-- [ ] Bio: "Licensed GC | Hampton Roads, VA | Free estimates 📞 (757) 908-7121"
+- [ ] Bio: "Licensed GC | Hampton Roads, VA | Free estimates 📞 (757) 846-9275"
 - [ ] Link: construction.bizstackperks.com
 
 #### Nextdoor Business

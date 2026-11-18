@@ -37,9 +37,9 @@ BRAND = {
     "legal": os.getenv("LETTER_BRAND_LEGAL", brand.name()),
     # Full contact block on the letter: phone, email, website and return
     # address, which is also what a homeowner needs in order to call back.
-    # 757-908-7121 is the business line on both live sites. 252-665-5891 is the
+    # 757-846-9275 is the business line on both live sites. 252-665-5891 is the
     # owner's personal mobile and must not appear on cold mail.
-    "phone": os.getenv("LETTER_BRAND_PHONE", "(757) 908-7121"),
+    "phone": os.getenv("LETTER_BRAND_PHONE", "(757) 846-9275"),
     "email": os.getenv("LETTER_BRAND_EMAIL", "hello@bizstackperks.com"),
     "web": os.getenv("LETTER_BRAND_WEB", "bizstackperks.com"),
     # Street is the owner's supplied return address. Still env-overridable.

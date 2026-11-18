@@ -381,7 +381,7 @@ OUTPUT RULES — these are not style suggestions:
 - Answer the most recent email specifically — address what that person actually
   asked, in the order they asked it. Do not send a generic intro.
 - Keep it to roughly 3–8 sentences unless the thread genuinely needs more.
-- Sign as the owner with the business phone: {os.getenv("COMPANY_PHONE") or "(757) 908-7121"}.
+- Sign as the owner with the business phone: {os.getenv("COMPANY_PHONE") or "(757) 846-9275"}.
   Do not invent a signature block, title, or address.
 
 TRUTH RULES — a wrong number is worse than a holding reply:

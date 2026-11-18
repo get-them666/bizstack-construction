@@ -234,7 +234,7 @@ def _first_name(name: str) -> str:
 def followup_email(lead: dict, step: int, link: str) -> tuple[str, str]:
     first = _first_name(lead.get("name"))
     project = (lead.get("project_type") or "your project").strip().lower()
-    phone = (os.getenv("COMPANY_PHONE") or "+1 (757) 908-7121").strip()
+    phone = (os.getenv("COMPANY_PHONE") or "+1 (757) 846-9275").strip()
     co = brand.short_name()
     if step == 0:
         subject = f"Your free walkthrough — pick a time that works"

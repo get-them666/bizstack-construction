@@ -351,8 +351,8 @@ def company() -> dict:
         "entity_id": brand.entity_id(),
         "entity_line": brand.entity_line(),
         "address": brand.mailing_address(),
-        "phone": os.getenv("COMPANY_PHONE", "+1 (757) 908-7121"),
-        "phone_e164": os.getenv("VAPI_PHONE", "+17579087121"),
+        "phone": os.getenv("COMPANY_PHONE", "+1 (757) 846-9275"),
+        "phone_e164": os.getenv("VAPI_PHONE", "+17578469275"),
         "email": os.getenv("COMPANY_EMAIL", "hello@bizstackperks.com"),
         "domain": os.getenv("COMPANY_DOMAIN", "construction.bizstackperks.com"),
         "license": os.getenv("CONTRACTOR_LICENSE", ""),
@@ -2936,18 +2936,18 @@ f"The mail transport did not accept the message. This usually means the "
         guide = {
             "employee": [
                 "Construction site: construction.bizstackperks.com — crew tools at /construction/crew (roles, timesheets, schedule, training) and your app at /construction/app (Training, jobs, clock in/out).",
-                "Text the office any time at +1 (757) 908-7121.",
+                "Text the office any time at +1 (757) 846-9275.",
             ],
             "customer": [
                 "Construction site: construction.bizstackperks.com — free-estimate form at /quote and the instant-quote tool that ballparks a range in minutes from an address.",
-                "Call or text the same number any time: +1 (757) 908-7121.",
+                "Call or text the same number any time: +1 (757) 846-9275.",
             ],
             "owner": [
                 "Construction dashboard: construction.bizstackperks.com — project pipeline, deposits, crew, accounting, permits, radar at /dashboard, /leads, /payments.",
             ],
             "anyone": [
                 "Construction: construction.bizstackperks.com — instant-quote from an address, free-estimate form at /quote, portfolio, crew app.",
-                "Call or text the same number any time: +1 (757) 908-7121.",
+                "Call or text the same number any time: +1 (757) 846-9275.",
             ],
         }
         if company:
@@ -3944,7 +3944,7 @@ async def book_walkthrough_submit(token: str, request: Request, slot: str = Form
                 body = (f"Hi {followups._first_name(lead.get('name'))},\n\nYou're booked: {label}.\n"
                         f"Address on file: {lead.get('address') or 'we will confirm'}.\n\n"
                         f"Shaun will text when he's on the way. Need to change it? Reply to this email or call/text "
-                        f"{os.getenv('COMPANY_PHONE', '+1 (757) 908-7121')}.\n\n{brand.name()}")
+                        f"{os.getenv('COMPANY_PHONE', '+1 (757) 846-9275')}.\n\n{brand.name()}")
                 await documents_service.send_email(cfg, to, f"Walkthrough booked — {label}", body.replace("\n", "<br>"))
         except Exception as e:
             print(f"⚠️ booking confirmation failed: {e}", flush=True)
@@ -8313,7 +8313,7 @@ async def draft_email_route(lead_id: int, request: Request, db=Depends(get_db)):
         f"If you're considering any renovations or improvements, we'd love to help "
         f"you with your project.\n\n"
         f"Feel free to reply to this email or give us a call at "
-        f"+1 (757) 908-7121 to discuss your ideas!\n\n"
+        f"+1 (757) 846-9275 to discuss your ideas!\n\n"
         f"Best regards,\n"
         f"{brand.short_name()}"
     )
@@ -15339,7 +15339,7 @@ async def inbox_page(request: Request):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Owner login required")
     return templates.TemplateResponse(request=request, name="inbox.html", context={
         "user": {"email": user_email},
-        "company_line": os.getenv("COMPANY_PHONE") or "(757) 908-7121",
+        "company_line": os.getenv("COMPANY_PHONE") or "(757) 846-9275",
     })
 
 

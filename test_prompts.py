@@ -140,7 +140,7 @@ def test_voice_does_not_repeat_didnt_catch_that(voice_knowledge):
 def test_voice_hands_off_to_a_human(voice_knowledge):
     assert "If they ask for a human" in voice_knowledge
     assert "stop selling" in voice_knowledge
-    assert "(757) 908-7121" in voice_knowledge
+    assert "(757) 846-9275" in voice_knowledge
 
 
 def test_voice_discloses_the_automated_assistant(voice_knowledge):

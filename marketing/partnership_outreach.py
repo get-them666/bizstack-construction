@@ -5,7 +5,7 @@ For realtors, property managers, insurance adjusters, architects
 
 PARTNERSHIP_TEMPLATES = {
     "realtor_intro": {
-        "subject": "Local contractor for your inspection repairs — (757) 908-7121",
+        "subject": "Local contractor for your inspection repairs — (757) 846-9275",
         "body": """Hi {name},
 
 I'm Shaun with BuildStack Construction LLC here in Hampton Roads.
@@ -21,7 +21,7 @@ We're licensed, insured, and understand the urgency of closing timelines.
 
 Would you be open to a quick coffee? I'd love to be your go-to contractor for inspection repairs.
 
-📞 (757) 908-7121
+📞 (757) 846-9275
 📧 hello@bizstackperks.com
 
 Best,
@@ -43,7 +43,7 @@ We understand rental timelines and tenant coordination. Fast response, fair pric
 
 Can I send you our rate card? Or schedule a quick call to discuss your properties?
 
-📞 (757) 908-7121
+📞 (757) 846-9275
 
 — Shaun"""
     },
@@ -65,7 +65,7 @@ Licensed, insured, and experienced with the claims process.
 
 Can we be on your preferred vendor list?
 
-📞 (757) 908-7121
+📞 (757) 846-9275
 
 — Shaun O'Leary"""
     },
@@ -86,7 +86,7 @@ We respect the design vision and communicate proactively throughout construction
 
 Would love to grab coffee and see if there's a fit for future projects.
 
-📞 (757) 908-7121
+📞 (757) 846-9275
 🌐 construction.bizstackperks.com
 
 — Shaun"""

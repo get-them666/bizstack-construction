@@ -57,7 +57,7 @@ def first_touch_draft(name, address) -> tuple:
     if first.lower() in ("permit", "project", "job", "application", "unknown", "owner"):
         first = "there"
     addr = str(address or "").strip()
-    phone = (os.getenv("COMPANY_PHONE") or "+1 (757) 908-7121").strip()
+    phone = (os.getenv("COMPANY_PHONE") or "+1 (757) 846-9275").strip()
     # Sent unattended, so it says plainly why we are writing (a public permit
     # record), what we do, and how to make it stop. "We noticed your property"
     # read like surveillance; the permit is public and naming it is honest.

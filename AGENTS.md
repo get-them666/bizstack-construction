@@ -271,8 +271,10 @@ Much of this repo is real money and real people's data and is **not reproducible
 
 ## Conventions
 
-- Two phone numbers; widening either is a real error: `757-908-7121` on every homeowner- and
-  customer-facing surface; `252-665-5891` is Shaun's personal mobile, **lending material only**.
+- Two phone numbers; widening either is a real error: `757-846-9275` (the SignalWire line the AI
+  answers and texts from) on every homeowner- and customer-facing surface; `252-665-5891` is
+  Shaun's personal mobile, **lending material only**. `757-908-7121` is the **retired legacy
+  number**: it appears on historical SBA/FTC paperwork only and must not go on new material.
 - Lead sourcing is **business contacts only**, enforced in
   `copilot_ops._BLOCKED_CONTACT_DOMAINS`. Skip Trace is the one owner-approved exception;
   every lookup is written to `skiptrace_audit`. `skip_sherpa_service` exposes `trace()`.

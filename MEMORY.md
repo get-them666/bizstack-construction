@@ -1159,6 +1159,19 @@ enabling them first would have meant two systems emailing the same leads.
   a letter as mailed is deliberate, via `record_manual_touch` (the four buttons
   on each lead card) or `lob_send.py` doing it automatically.
 
+## 2026-11-18: business line moved to 757-846-9275
+
+`757-908-7121` is retired: the owner does not have access to that line and calls to it are not
+reaching the business. **757-846-9275** is the live SignalWire number — the AI answers it, records
+it, and now texts and emails the owner on every inbound call. Every live surface (site, emails,
+PDFs, marketing, prompts) was switched to 846-9275 on 2026-11-18. The old number remains only on
+historical SBA/FTC paperwork.
+
+FTC DNC telemarketer account: Organization ID `10342776-65889` (BuildStack Construction LLC),
+authorized representative Shaun, downloader email hello@bizstackperks.com. The portal's B2C MFA
+loops in an automated browser; complete the final login/download in Safari. Cold permit calling
+stays held until `outbound_campaign.py --import-dnc <file>` records a fresh scrub (31-day window).
+
 ## 2026-11-13: client portal — signing, card payments, credentials
 
 The owner asked for one closed loop: send a contract from the bid board, have

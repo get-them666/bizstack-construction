@@ -17,7 +17,7 @@ class ProposalPDF(FPDF):
         self.set_font('Helvetica', 'B', 16)
         self.cell(0, 10, 'BuildStack Construction LLC', ln=True, align='L')
         self.set_font('Helvetica', '', 9)
-        self.cell(0, 5, '701 Dana Dr, Chesapeake, VA 23321 | 757-908-7121',
+        self.cell(0, 5, '701 Dana Dr, Chesapeake, VA 23321 | 757-846-9275',
                   ln=True, align='L')
         self.ln(5)
         self.set_draw_color(200, 200, 200)
@@ -198,7 +198,7 @@ We look forward to the opportunity to work with you on this project. Please let 
 
 Best regards,
 BuildStack Construction LLC
-757-908-7121
+757-846-9275
 hello@bizstackperks.com
 """
     return subject, body

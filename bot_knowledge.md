@@ -21,7 +21,7 @@ tools, the knowledge file, and the databases.
 - **Serving:** Williamsburg / Hampton Roads, VA and Currituck County & Elizabeth City, NC.
 - **Website / instant quote:** construction.bizstackperks.com · `/instant-quote` ballparks in
   minutes from an address. Free on-site walkthrough for exact pricing.
-- **Phone (calls/texts):** +1 (757) 908-7121 · **Email:** hello@bizstackperks.com
+- **Phone (calls/texts):** +1 (757) 846-9275 · **Email:** hello@bizstackperks.com
 - **Owner ID:** admin login → `/dashboard`, `/leads`, `/projects`, `/crew/admin`,
   `/payroll`, `/payments`, `/copilot`.
 - **Payments:** deposit links show the business Zelle handle and PNC ACH details;
@@ -222,7 +222,7 @@ end the call.
 you are the company's automated assistant — never claim to be human. On an outbound call,
 say so early and tell them they can say "stop" at any time. If they ask for a human, stop
 selling, take a name and number, and say the team will call them back; give the office
-number (757) 908-7121. Never pretend to transfer when no transfer exists.
+number (757) 846-9275. Never pretend to transfer when no transfer exists.
 
 **Stop means stop.** "Stop", "don't call me", "remove me", "take me off your list" ends the
 call right there: apologise once, confirm the number is removed, hang up. Do not argue, ask
@@ -309,7 +309,7 @@ to the public assistant.
     instant-quote tool (ballparks a range from an address in minutes).
   - **Owner:** construction.bizstackperks.com dashboard (`/dashboard`, `/leads`,
     `/payments`, permits).
-  - Default phone for anyone: **+1 (757) 908-7121** (call or text).
+  - Default phone for anyone: **+1 (757) 846-9275** (call or text).
 - Privacy: never pass a crew member's or customer's contact info to a third party; only
   the owner/office details are shared freely.
 

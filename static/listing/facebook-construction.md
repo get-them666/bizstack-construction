@@ -18,7 +18,7 @@ Create at `facebook.com/pages/create`.
 |---|---|
 | Page name | **Buildstack Construction** |
 | Category | General Contractor (secondary: Home Improvement Contractor) |
-| Phone | **(757) 908-7121** |
+| Phone | **(757) 846-9275** |
 | Website | `https://construction.bizstackperks.com` |
 | Hours | Open 24 hours |
 | Service area | Williamsburg–Hampton Roads, VA · Currituck County & Elizabeth City, NC |
@@ -29,7 +29,7 @@ Create at `facebook.com/pages/create`.
 
 ```
 Licensed GC in Hampton Roads. Whole-home renos, kitchens/baths, roofing, decks.
-One written scope, one fixed price. Free on-site estimate. Call/text 24/7: (757) 908-7121
+One written scope, one fixed price. Free on-site estimate. Call/text 24/7: (757) 846-9275
 ```
 
 ## 3. About — long description (paste verbatim)
@@ -53,7 +53,7 @@ How we work:
 We also do short-term rental make-readies — turning a house into an Airbnb that earns
 between guests, which is a lot of homeowners' second income.
 
-Call or text (757) 908-7121 any time, or request a free estimate at
+Call or text (757) 846-9275 any time, or request a free estimate at
 construction.bizstackperks.com/quote.
 ```
 
@@ -93,7 +93,7 @@ Hampton Roads and the Outer Banks.
 One rule the way I work: one written scope, one fixed price, before anything starts.
 No open-ended billing, no surprise line items at the end.
 
-Free on-site estimate, day or evening. Call or text any time: (757) 908-7121
+Free on-site estimate, day or evening. Call or text any time: (757) 846-9275
 ```
 
 **Post 2 — the differentiator**
@@ -111,7 +111,7 @@ Garage → one-bedroom apartment. Full build, down to studs and back to move-in 
 [photo after]
 
 This is what "done right the first time" looks like. If you've got a garage, basement,
-or room sitting empty, call me: (757) 908-7121
+or room sitting empty, call me: (757) 846-9275
 ```
 
 ## 7. Checklist

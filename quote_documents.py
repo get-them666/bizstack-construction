@@ -182,7 +182,7 @@ def values_from_quote(quote: dict, lines: list[dict] | None = None) -> dict:
         "total_line": _money(total),
         "total_words": documents_service.amount_to_words(total),
         "seller": brand.name(),
-        "seller_phone": "757-908-7121",
+        "seller_phone": "757-846-9275",
         "item_count": f"{len(rows)} item(s)",
         "paid_line": _money(0),
         "balance_line": _money(total),

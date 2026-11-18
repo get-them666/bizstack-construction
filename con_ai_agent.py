@@ -63,7 +63,7 @@ def guest_fallback() -> str:
     site chat spent the day telling homeowners a callback was coming that
     never would. Point them at the two channels that do work instead.
     """
-    phone = (os.getenv("COMPANY_PHONE") or "(757) 908-7121").strip()
+    phone = (os.getenv("COMPANY_PHONE") or "(757) 846-9275").strip()
     return (
         "Our assistant is offline for a moment. Call or text us at "
         f"{phone}, or send the quote form on this page and we'll call you."
