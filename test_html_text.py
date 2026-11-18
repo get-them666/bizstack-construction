@@ -141,6 +141,22 @@ def test_repair_never_eats_prose_with_braces_or_labels():
         assert strip_css(prose) == prose
 
 
+def test_repair_handles_generated_selectors_and_glued_prose():
+    strip_css = _strip_css()
+    zoho_empty = ("div.zm_2509405415985501405_parse_7386470989916945559 table, "
+                  "div.zm_2509405415985501405_parse_7386470989916945559 td { }")
+    zoho_attr = ("div.zm_6793997775284739519_parse_3749184777660313051 "
+                 "a[x-apple-data-detectors] { color: inherit !important }")
+    yelp = ("New login to your Yelp account Yelp body, table, td, a, p, span, ul, "
+            "li {font-family: Arial, sans-serif!important;} 96 Your account was used.")
+    for raw in (zoho_empty, zoho_attr):
+        out = strip_css(raw)
+        assert "zm_" not in out and "color: inherit" not in out
+    out = strip_css(yelp)
+    assert out.startswith("New login to your Yelp account")
+    assert "font-family" not in out and out.endswith("Your account was used.")
+
+
 if __name__ == "__main__":
     import sys
     import traceback

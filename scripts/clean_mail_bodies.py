@@ -72,15 +72,26 @@ _CSS_DECL = re.compile(
 # ".a > .b"). A bare-word descendant ("div p") is rejected on purpose: that
 # shape is indistinguishable from prose, and leaving a selector behind is
 # cheaper than deleting a sentence.
-_SIMPLE_SELECTOR = r"[.#*]?[A-Za-z][\w-]*"
+_SIMPLE_SELECTOR = (
+    r"[.#*]?[A-Za-z][\w.-]*(?:\[[^\]]*\])?(?::[a-z-]+(?:\([^)]*\))?)?")
 _SEL_LIST = re.compile(
-    r"^" + _SIMPLE_SELECTOR + r"(?:\s*[,>+~]\s*" + _SIMPLE_SELECTOR + r")*$")
+    r"^" + _SIMPLE_SELECTOR +
+    r"(?:(?:\s*[,>+~]\s*|\s+)" + _SIMPLE_SELECTOR + r")*$")
 # The same shape, anchored to the END of a string: finds the trailing selector
-# in "Yelp body, table, td {…}" so the prose before it survives.
+# in "Yelp body, table, td {…}" so the prose before it survives. Only
+# combinators separate tokens here: a sentence full of spaces must not match.
 _TRAILING_SELECTOR = re.compile(
     r"(" + _SIMPLE_SELECTOR +
     r"(?:\s*[,>+~]\s*" + _SIMPLE_SELECTOR + r")*)\s*$")
 _AT_RULE = re.compile(r"@(?:media|font-face|import|keyframes|page|supports)\b", re.I)
+# Text that only a generated stylesheet produces. Used for an EMPTY block
+# (`div.zm_123 td { }`), where there is no declaration to confirm CSS.
+_CSS_SHAPED = re.compile(r"[.#\[\]_:]|-[a-z]|^(?:html|body|table|tbody|thead|tr|td|"
+                         r"th|div|p|a|span|img|ul|ol|li|h[1-6]|\*)$", re.I)
+# A sentence and a long selector list are the same shape once spaces are
+# allowed between tokens; a real generated selector is short. Above this many
+# words, treat it as prose and cut only a comma-separated suffix.
+_MAX_SELECTOR_TOKENS = 12
 
 
 def _selector_only(text: str) -> bool:
@@ -89,6 +100,8 @@ def _selector_only(text: str) -> bool:
         return True
     if t.startswith("@"):
         return True
+    if len(t) > 240 or len(t.split()) > _MAX_SELECTOR_TOKENS:
+        return False
     return bool(_SEL_LIST.match(t))
 
 
@@ -118,9 +131,16 @@ def _cut_point(s: str, i: int, j: int) -> int:
 
 
 def _css_like(selector: str, inside: str) -> bool:
-    if _selector_only(selector) and selector.strip():
+    """A brace pair is CSS only when a declaration proves it, or it is empty
+    and the selector is stylesheet-shaped. Prose keeps its braces."""
+    if _CSS_DECL.search(inside or ""):
         return True
-    return bool(_CSS_DECL.search(inside or ""))
+    sel = (selector or "").strip()
+    if (inside or "").strip():
+        return False
+    if not sel or sel.startswith("@"):
+        return True
+    return bool(_CSS_SHAPED.search(sel))
 
 
 def strip_css(text: str) -> str:
