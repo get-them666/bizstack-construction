@@ -6,8 +6,12 @@
 
 # virtualenvs — 1.3GB, and a different Python than the image
 venv/
+venv*/
 .venv/
 myenv/
+
+# local-only Node toolchain (MCP browser server); the app never imports it
+chrome-devtools-mcp/
 
 # Tailwind build toolchain. The image has no node and does not need it: the
 # built static/css/tailwind.css is committed.

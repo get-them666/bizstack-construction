@@ -289,7 +289,7 @@ Much of this repo is real money and real people's data and is **not reproducible
 reverse proxy. No auto-deploy.
 
 - **Deploy steps:**
-  1. `rsync -avz --exclude='venv' --exclude='__pycache__' --exclude='.git' --exclude='uploads' --exclude='outbox' --exclude='*.pyc' --exclude='.env' --delete -e "ssh" . root@159.203.175.39:/opt/bizstack/construction/`
+  1. `rsync -avz --exclude='venv*' --exclude='chrome-devtools-mcp' --exclude='__pycache__' --exclude='.git' --exclude='uploads' --exclude='outbox' --exclude='*.pyc' --exclude='.env' --delete -e "ssh" . root@159.203.175.39:/opt/bizstack/construction/`
   2. `doctl compute ssh bizstack-prod --ssh-command "cd /opt/bizstack && docker compose build construction && docker compose up -d construction"`
   3. Verify: `docker logs bizstack-construction-1 --tail 20` — look for `🎯 bid_opportunities ready.`
 - **Caddy** routes `construction.bizstackperks.com` → `construction:8000` and
