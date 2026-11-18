@@ -108,7 +108,10 @@ def test_every_template_compiles(app_jinja_env):
 @pytest.mark.parametrize("script", SHARED_SCRIPTS)
 def test_lead_templates_load_shared_script(template, script):
     source = _read(template)
-    count = source.count(script)
+    # Count real <script src="..."> tags, not comments that explain the bundle.
+    count = len(re.findall(
+        r"""<script\b[^>]*\bsrc\s*=\s*["']""" + re.escape(script) + r"""["']""",
+        source, re.I))
     bundle = ROOT / script.lstrip("/")
 
     if count == 0 and not bundle.exists():
