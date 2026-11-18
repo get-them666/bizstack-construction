@@ -367,6 +367,20 @@ def company() -> dict:
     }
 
 
+def _absolute_app_base() -> str:
+    """Public https base URL for carrier-fetched SWML and tool callbacks.
+
+    SignalWire fetches these URLs itself, so a relative path (what an empty
+    APP_BASE_URL produced) or an http one is unusable: the call connects but
+    the carrier has no instructions to run. Fall back to the public company
+    domain rather than sending the carrier a URL it cannot reach.
+    """
+    base = (os.getenv("APP_BASE_URL") or "").strip().rstrip("/")
+    if not base.lower().startswith("https://"):
+        base = f"https://{company()['domain']}".rstrip("/")
+    return base
+
+
 def _money(value):
     try:
         return f"${float(value or 0) / 100:,.0f}"
@@ -2168,7 +2182,7 @@ f"The mail transport did not accept the message. This usually means the "
         # the lead by name and runs on the SignalWire number we already pay for.
         if not signalwire.is_configured():
             return {"ok": False, "error": "The phone line is not configured (SignalWire credentials missing)."}
-        base = (os.getenv("APP_BASE_URL") or f"https://{company()['domain']}").rstrip("/")
+        base = _absolute_app_base()
         swml_url = f"{base}/comms/outbound-voice.swml?to={urllib.parse.quote(e164)}"
         try:
             sid = signalwire.create_ai_outbound_call(e164, swml_url)
@@ -9246,7 +9260,7 @@ def _follow_up_new_lead(lead_id: int) -> None:
                 if not signalwire.is_configured():
                     print(f"📞[followup] SignalWire not configured, skipping dial for lead {lead_id}", flush=True)
                     return
-                base = (os.getenv("APP_BASE_URL") or f"https://{company()['domain']}").rstrip("/")
+                base = _absolute_app_base()
                 swml_url = f"{base}/comms/outbound-voice.swml?to={urllib.parse.quote(to)}&lead_id={lead_id}"
                 sid = signalwire.create_ai_outbound_call(to, swml_url)
             except Exception as e:
@@ -9478,6 +9492,207 @@ async def outbound_voice_transcribe(request: Request, db=Depends(get_db)):
     return _outbound_turn(db, sid, to, text, turns)
 
 
+# --- Owner outbound calling --------------------------------------------------
+# One deliberately-placed call from a lead, not a campaign. The batch dialler
+# lives in outbound_campaign.py; every gate below is that module's gate, reused
+# rather than re-implemented: suppression/DNC, calling hours, the cold-call
+# scrub and the daily cap. A suppression hit or a reached cap refuses the call;
+# it never queues one.
+
+# Explicit env parsing: the string "false" is truthy in Python.
+def _outbound_flag(name: str) -> bool:
+    return (os.getenv(name) or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _outbound_zip(address) -> str:
+    tail = str(address or "").strip()[-5:]
+    return tail if tail.isdigit() else ""
+
+
+def _outbound_lead(db, lead_id: int):
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT id, name, phone, email, source, status, address, project_type "
+            "FROM leads WHERE id = %s AND company = 'construction' LIMIT 1;",
+            (lead_id,),
+        )
+        return cur.fetchone()
+
+
+@app.post("/api/outbound/call")
+async def outbound_call_route(request: Request, db=Depends(get_db)):
+    """Place one AI call to a lead, through every campaign gate.
+
+    The owner clicking "call" is an explicit action, so this does not require
+    OUTBOUND_CAMPAIGN_ENABLED (that flag arms the *batch*). It does honour the
+    DISABLE_OUTBOUND_CAMPAIGN kill switch, the calling window, the cold-call
+    scrub and the daily cap, because those are legal limits, not campaign
+    preferences.
+    """
+    require_admin(request)
+    import outbound_campaign as oc
+
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    try:
+        lead_id = int(payload.get("lead_id"))
+    except (TypeError, ValueError):
+        return JSONResponse(content={"ok": False, "reason": "lead_id must be an integer."})
+
+    try:
+        lead = _outbound_lead(db, lead_id)
+    except Exception as exc:
+        return JSONResponse(content={"ok": False,
+                                     "reason": f"Could not read the lead: {exc}"})
+    if not lead:
+        return JSONResponse(content={"ok": False, "reason": f"No construction lead #{lead_id}."})
+
+    status_value = str(lead.get("status") or "").strip().lower()
+    # outbound_campaign._OPEN_STATUSES is the *closed* list; the name is stale.
+    if status_value in oc._OPEN_STATUSES:
+        return JSONResponse(content={"ok": False,
+                                     "reason": f"Lead #{lead_id} is {status_value}; not dialling."})
+
+    to = oc.e164(lead.get("phone"))
+    if not to or not oc._plausible(to):
+        return JSONResponse(content={"ok": False,
+                                     "reason": f"Lead #{lead_id} has no usable phone number."})
+
+    if _outbound_flag("DISABLE_OUTBOUND_CAMPAIGN"):
+        return JSONResponse(content={"ok": False,
+                                     "reason": "Outbound dialling is off (DISABLE_OUTBOUND_CAMPAIGN)."})
+
+    inside, why = oc.in_call_window()
+    if not inside:
+        return JSONResponse(content={"ok": False, "reason": f"Not calling now: {why}."})
+
+    used = oc.calls_made_today(db)
+    cap = oc.daily_limit()
+    if used >= cap:
+        return JSONResponse(content={"ok": False,
+                                     "reason": f"Daily call cap reached ({used}/{cap})."})
+
+    source = str(lead.get("source") or "").strip()
+    # A permit record is an address, not an enquiry: it is a cold call and
+    # needs the same recent DNC scrub the campaign demands.
+    if source.lower() not in [s.lower() for s in oc._INBOUND_SOURCES]:
+        cold_ok, cold_why = oc.cold_calling_allowed(db)
+        if not cold_ok:
+            return JSONResponse(content={"ok": False,
+                                         "reason": f"Cold calling is held: {cold_why}"})
+
+    try:
+        allowed, why = suppression.check_outbound(
+            db, suppression.CHANNEL_VOICE, to, lead_id=lead_id,
+            name=str(lead.get("name") or ""), zipcode=_outbound_zip(lead.get("address")),
+            source=source)
+    except Exception as exc:
+        return JSONResponse(content={"ok": False,
+                                     "reason": f"Do-not-call check failed, not dialling: {exc}"})
+    if not allowed:
+        return JSONResponse(content={"ok": False, "reason": why or "suppressed"})
+
+    if not signalwire.is_configured():
+        missing = ", ".join(signalwire.missing()) or "credentials"
+        return JSONResponse(content={"ok": False,
+                                     "reason": f"SignalWire is not configured (missing {missing})."})
+
+    swml_url = (f"{_absolute_app_base()}/comms/outbound-voice.swml"
+                f"?to={urllib.parse.quote(to)}&lead_id={int(lead_id)}")
+    try:
+        sid = signalwire.create_ai_outbound_call(to, swml_url, raise_on_error=True)
+    except Exception as exc:
+        return JSONResponse(content={"ok": False, "reason": f"Call could not be placed: {exc}"})
+    if not sid:
+        return JSONResponse(content={"ok": False,
+                                     "reason": "The carrier did not accept the call."})
+
+    warning = ""
+    try:
+        oc._record(db, sid, lead_id, to)
+    except Exception as exc:
+        # The phone is already ringing. Reporting ok:false would invite a
+        # retry and a second call to the same person, so tell the truth and
+        # surface the bookkeeping failure separately.
+        print(f"📞[outbound] placed {sid} for lead {lead_id} but could not record it: {exc}",
+              flush=True)
+        warning = f"call placed but not recorded: {exc}"
+
+    body = {"ok": True, "call_sid": sid}
+    if warning:
+        body["warning"] = warning
+    return JSONResponse(content=body)
+
+
+@app.get("/api/outbound/status")
+async def outbound_status_route(request: Request, lead_id: int = 0,
+                                db=Depends(get_db)):
+    """Latest bot_calls state for a lead, in the vocabulary the owner UI uses."""
+    require_admin(request)
+    if lead_id <= 0:
+        return JSONResponse(content={"ok": False, "reason": "lead_id must be an integer."})
+
+    row = None
+    try:
+        with db.cursor() as cur:
+            cur.execute(
+                "SELECT call_sid, status, turns, created_at FROM bot_calls "
+                "WHERE lead_id = %s ORDER BY created_at DESC LIMIT 1;",
+                (lead_id,),
+            )
+            row = cur.fetchone()
+    except Exception:
+        # bot_calls is created on first use. Before that the honest answer is
+        # "never called", not a 500 on the lead page.
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        row = None
+
+    raw = str((row or {}).get("status") or "").strip().lower()
+    status_map = {
+        "": "not_called",
+        "dialed": "dialed",
+        "in_progress": "in_progress",
+        "answered": "answered",
+        # The webhook records "answering" the moment the carrier connects the
+        # call to the SWML agent; to the owner that is an answered call.
+        "answering": "answered",
+        "opted_out": "opted_out",
+    }
+    last_at = (row or {}).get("created_at")
+    if last_at is not None and hasattr(last_at, "isoformat"):
+        last_at = last_at.isoformat()
+    elif last_at is not None:
+        last_at = str(last_at)
+    return JSONResponse(content={
+        "ok": True,
+        "lead_id": lead_id,
+        "status": status_map.get(raw, "dialed"),
+        "last_at": last_at,
+    })
+
+
+@app.get("/api/outbound/campaign")
+async def outbound_campaign_route(request: Request, db=Depends(get_db)):
+    """Campaign readiness, from the helpers that actually enforce it."""
+    require_admin(request)
+    import outbound_campaign as oc
+    cold_ok, _cold_why = oc.cold_calling_allowed(db)
+    return JSONResponse(content={
+        "ok": True,
+        "dialed_today": oc.calls_made_today(db),
+        "daily_cap": oc.daily_limit(),
+        "enabled": oc.enabled(),
+        "cold_calling": bool(cold_ok),
+    })
+
+
 # --- SWML live voice agent (SignalWire AI conversation) ---------------------
 VOICE_AGENT_PROMPT = f"""\
 You are the {company()['name']} voice assistant, answering calls 24/7.
@@ -9507,7 +9722,7 @@ GENERAL
 - If a caller is distressed or reports an emergency (gas leak, flooding, no power), tell them to call 911 or the appropriate emergency service first.
 """
 
-VOICE_TOOL_URL = (os.getenv("APP_BASE_URL", "") or "") + "/api/voice/tool"
+VOICE_TOOL_URL = _absolute_app_base() + "/api/voice/tool"
 
 _VOICE_KNOWLEDGE_FILES = [
     Path(__file__).resolve().parent / "bot_knowledge.md",
@@ -9589,14 +9804,14 @@ def _build_voice_swml(prompt: str, ai_params_extra: dict | None = None,
             }
         ],
         "params": ai_params,
-        "post_prompt_url": (os.getenv("APP_BASE_URL", "") or "") + "/api/voice/debug",
+        "post_prompt_url": _absolute_app_base() + "/api/voice/debug",
         "pronounce": [
             {"replace": "Buildstack", "with": "build stack", "ignore_case": True},
             {"replace": "Vrbo", "with": "virbo", "ignore_case": True},
             {"replace": "Airbnb", "with": "air bnb", "ignore_case": True},
         ],
         "SWAIG": {
-            "defaults": {"web_hook_url": VOICE_TOOL_URL},
+            "defaults": {"web_hook_url": _absolute_app_base() + "/api/voice/tool"},
             "functions": [
                                 {
                                     "function": "register_lead",
@@ -10468,6 +10683,129 @@ async def voice_tool(request: Request, db=Depends(get_db)):
     return JSONResponse({"response": text})
 
 
+def _transcript_says_stop(call_log) -> bool:
+    """True when the person on the call asked us to stop.
+
+    Only the caller's turns count. The assistant's own legal prompt repeats
+    the word "stop" ("you can say stop at any time"), and scanning that would
+    suppress every number the bot ever dialled.
+    """
+    if not isinstance(call_log, list):
+        return False
+    try:
+        import outbound_campaign
+    except Exception:
+        return False
+    for entry in call_log:
+        if not isinstance(entry, dict):
+            continue
+        if str(entry.get("role") or "").strip().lower() not in ("user", "caller"):
+            continue
+        if outbound_campaign.wants_stop(str(entry.get("content") or "")):
+            return True
+    return False
+
+
+def _is_our_number(number) -> bool:
+    """True when the payload number is one of our own lines, not a lead's."""
+    digits = re.sub(r"\D", "", str(number or ""))[-10:]
+    if len(digits) < 10:
+        return False
+    ours = {re.sub(r"\D", "", str(value or ""))[-10:] for value in
+            (getattr(signalwire, "from_number", ""), SIGNALWIRE_NUMBER,
+             company().get("phone_e164"))}
+    return digits in {num for num in ours if num}
+
+
+def _spoken_opt_out_number(db, data: dict, call_id):
+    """The number that opted out, best source first.
+
+    The bot_calls row for this call knows lead_id and direction. Falling back
+    to the payload's "from" on an outbound call would suppress our own line
+    instead of the lead's number.
+    """
+    direction = str(data.get("direction") or "").strip().lower()
+    lead_id = None
+    if call_id:
+        try:
+            with db.cursor() as cur:
+                cur.execute(
+                    "SELECT lead_id, direction FROM bot_calls WHERE call_sid = %s LIMIT 1;",
+                    (str(call_id),))
+                row = cur.fetchone() or {}
+            lead_id = row.get("lead_id")
+            direction = direction or str(row.get("direction") or "").strip().lower()
+        except Exception as exc:
+            print(f"⚠️ VOICE-DEBUG opt-out lookup failed: {exc}", flush=True)
+            try:
+                db.rollback()
+            except Exception:
+                pass
+
+    from_number = str(data.get("from") or data.get("From")
+                      or data.get("caller_number")
+                      or data.get("caller_id_number")
+                      or data.get("caller") or "").strip()
+    global_data = data.get("global_data") if isinstance(data.get("global_data"), dict) else {}
+    caller_id = str(global_data.get("caller_id_number") or "").strip()
+    to_number = str(data.get("to") or data.get("To")
+                    or data.get("destination_number")
+                    or data.get("customer_number") or "").strip()
+    if not direction:
+        # No direction and no bot_calls row: our own line tells us which end
+        # the other party is on.
+        if _is_our_number(from_number) and not _is_our_number(to_number):
+            direction = "outbound"
+        elif _is_our_number(to_number) and not _is_our_number(from_number):
+            direction = "inbound"
+
+    if direction == "outbound":
+        number = to_number
+        if not number or _is_our_number(number):
+            number = ""
+        if not number and lead_id:
+            try:
+                with db.cursor() as cur:
+                    cur.execute("SELECT phone FROM leads WHERE id = %s;", (lead_id,))
+                    number = str((cur.fetchone() or {}).get("phone") or "").strip()
+            except Exception as exc:
+                print(f"⚠️ VOICE-DEBUG lead phone lookup failed: {exc}", flush=True)
+        return number
+    # Inbound: the caller is who asked us to stop. caller_id_number is the
+    # post-prompt payload's own field for that; from/caller are older shapes.
+    return from_number or caller_id
+
+
+def _record_spoken_opt_out(db, data: dict, call_id) -> bool:
+    """Suppress a number that said stop, so no later campaign can dial it."""
+    number = _spoken_opt_out_number(db, data, call_id)
+    digits = re.sub(r"\D", "", number)
+    if len(digits) < 10:
+        print(f"⚠️ VOICE-DEBUG spoken opt-out with no usable number: {number!r}", flush=True)
+        return False
+    if _is_our_number(number):
+        return False
+    try:
+        suppression.honor_opt_out(db, phone=number,
+                                  reason="said stop on an AI call", actor="voice-agent")
+    except Exception as exc:
+        print(f"⚠️ VOICE-DEBUG spoken opt-out could not be recorded for {number}: {exc}",
+              flush=True)
+        return False
+    if call_id:
+        try:
+            with db.cursor() as cur:
+                cur.execute("UPDATE bot_calls SET status = 'opted_out' WHERE call_sid = %s;",
+                            (str(call_id),))
+            db.commit()
+        except Exception as exc:
+            # The suppression entry is the thing that stops the next dial; a
+            # failed status update is cosmetic by comparison.
+            print(f"⚠️ VOICE-DEBUG could not mark {call_id} opted_out: {exc}", flush=True)
+    print(f"📞[call] spoken opt-out suppressed {number}", flush=True)
+    return True
+
+
 @app.api_route("/api/voice/debug", methods=["GET", "POST"], operation_id="voice_debug")
 async def voice_debug(request: Request, db=Depends(get_db)):
     raw = await request.body()
@@ -10509,7 +10847,15 @@ async def voice_debug(request: Request, db=Depends(get_db)):
             db.commit()
         except Exception as e:
             print(f"⚠️ VOICE-DEBUG log insert failed: {e}", flush=True)
+
+    # The SWML agent cannot write to the suppression list itself, and its
+    # "you can say stop" prompt is not an opt-out. If the caller's own turns
+    # contain one, suppress the number now: the model ending this call is not
+    # enough to keep the next campaign pass from dialling them again.
+    if _transcript_says_stop(call_log) or _transcript_says_stop(data.get("raw_call_log")):
+        _record_spoken_opt_out(db, data, call_id)
     return Response(content="", status_code=204)
+
 
 
 # --- Instant ballpark quote -------------------------------------------------

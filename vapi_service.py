@@ -153,22 +153,34 @@ class VapiService:
 
     @staticmethod
     def _e164(number: str) -> str:
+        """A usable E.164 number, or ``""``.
+
+        The old fallback returned ``"+" + digits`` for anything, so a lead with
+        a five-digit placeholder became ``"+12345"`` and was handed to the
+        carrier. Guessing is not acceptable on a residential number.
+        """
         digits = "".join(ch for ch in (number or "").strip() if ch.isdigit())
-        if digits.startswith("1") and len(digits) == 11:
+        if len(digits) == 11 and digits.startswith("1"):
             return "+" + digits
         if len(digits) == 10:
             return "+1" + digits
-        return "+" + digits
+        return ""
 
     def create_ai_outbound_call(self, to: str, context: str = "", notes: str = "") -> str:
         if not self.is_configured():
             raise RuntimeError("Vapi is not configured (VAPI_API_KEY missing).")
+        customer = self._e164(to)
+        if not customer:
+            # Validate before _ensure_assistant/_ensure_phone: those create a
+            # real assistant and buy a phone number, which must never happen
+            # just because someone passed a malformed lead number.
+            raise ValueError(f"Vapi: not a usable phone number: {to!r}")
         assistant_id = self._ensure_assistant()
         phone_id = self._ensure_phone(assistant_id)
         body = {
             "assistantId": assistant_id,
             "phoneNumberId": phone_id,
-            "customer": {"number": self._e164(to)},
+            "customer": {"number": customer},
         }
         seed = (context or "").strip() or (notes or "").strip()
         if seed:
