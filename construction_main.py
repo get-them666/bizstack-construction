@@ -71,6 +71,7 @@ import permit_stats
 import email_fetcher
 import bid_costing
 import bid_scope_skeleton
+import bid_takeoff
 import bid_contact
 import bid_notes
 import direct_deposit
@@ -6059,6 +6060,88 @@ async def bid_takeoff_from_specs(bid_id: int, request: Request, db=Depends(get_d
     return RedirectResponse(
         url=f"/bids/{bid_id}?takeoff_seeded={result['added']}"
             f"&takeoff_skipped={result['skipped']}#takeoff",
+        status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/api/bids/{bid_id}/takeoff/extract")
+async def bid_takeoff_extract(bid_id: int, request: Request, db=Depends(get_db)):
+    """Extract line items from uploaded PDFs using AI/OCR.
+
+    Reads text from every PDF in the bid's file cabinet, sends it to OpenAI
+    to parse into structured line items (quantities, materials, units, costs),
+    and inserts them as bid_costs rows. Complements the filename-based CSI
+    section parsing in /takeoff/from-specs — that seeds a trade checklist;
+    this fills in quantities and pricing from the document content.
+    """
+    require_admin(request)
+    if not bid_opportunities.get_bid(db, bid_id, _BID_COMPANY):
+        raise HTTPException(status_code=404, detail="Bid not found")
+
+    # Collect PDF file paths from the bid's file cabinet
+    _bid_files_ensure_schema(db)
+    file_paths = []
+    try:
+        with db.cursor() as cur:
+            cur.execute(
+                "SELECT file_path FROM bid_files WHERE bid_id = %s "
+                "AND LOWER(filename) LIKE '%%.pdf' ORDER BY uploaded_at DESC;",
+                (bid_id,),
+            )
+            for row in cur.fetchall():
+                full_path = os.path.join(_BID_FILES_ROOT, row["file_path"])
+                if os.path.isfile(full_path):
+                    file_paths.append(full_path)
+    except Exception as exc:
+        print(f"[takeoff] file lookup failed for bid {bid_id}: {exc}", flush=True)
+
+    # Also check bid_documents for uploaded PDFs
+    try:
+        docs = bid_opportunities.list_documents(db, bid_id, _BID_COMPANY)
+        for doc in docs:
+            fpath = doc.get("file_path") or ""
+            if fpath.lower().endswith(".pdf") and os.path.isfile(fpath):
+                if fpath not in file_paths:
+                    file_paths.append(fpath)
+    except Exception:
+        pass
+
+    if not file_paths:
+        return RedirectResponse(
+            url=f"/bids/{bid_id}?takeoff_note=" + urllib.parse.quote(
+                "No PDF documents found. Upload spec books or bid documents to the "
+                "File Cabinet first, then run the AI takeoff."),
+            status_code=status.HTTP_303_SEE_OTHER)
+
+    try:
+        result = bid_takeoff.extract_and_seed(db, bid_id, _BID_COMPANY, file_paths)
+    except Exception as exc:
+        db.rollback()
+        return RedirectResponse(
+            url=f"/bids/{bid_id}?error=" + urllib.parse.quote(
+                f"AI takeoff extraction failed: {str(exc)[:160]}"),
+            status_code=status.HTTP_303_SEE_OTHER)
+
+    # Recalculate the bid total from the new cost lines
+    _recalc_bid_amount(db, bid_id)
+
+    extracted = result.get("extracted", 0)
+    inserted = result.get("inserted", 0)
+    errors = result.get("errors", [])
+
+    if not extracted:
+        return RedirectResponse(
+            url=f"/bids/{bid_id}?takeoff_note=" + urllib.parse.quote(
+                "AI could not extract line items from the uploaded documents. "
+                "The documents may be image-only scans (no text layer) or may not "
+                "contain itemized quantities. Add lines manually or upload clearer documents."),
+            status_code=status.HTTP_303_SEE_OTHER)
+
+    note = f"AI extracted {extracted} line items ({inserted} added to the bid)."
+    if errors:
+        note += f" ({len(errors)} error(s): {'; '.join(errors[:3])})"
+    return RedirectResponse(
+        url=f"/bids/{bid_id}?takeoff_extracted={inserted}#"
+            f"takeoff",
         status_code=status.HTTP_303_SEE_OTHER)
 
 
@@ -13402,6 +13485,7 @@ async def bid_detail_page(bid_id: int, request: Request, db=Depends(get_db)):
             "recalculated": request.query_params.get("recalculated", ""),
             "saved_revision": request.query_params.get("revision", ""),
             "documents_sent": request.query_params.get("documents_sent", ""),
+            "contractor_sent": request.query_params.get("contractor_sent", ""),
             "pnc_docs_email": _docs_recipient(db),
             "revisions": revisions, "revision_dirty": revision_dirty,
             "revision_label": bid_costing.revision_label(dict(bid)),
@@ -13436,6 +13520,7 @@ async def bid_detail_page(bid_id: int, request: Request, db=Depends(get_db)):
             "takeoff_seeded": request.query_params.get("takeoff_seeded", ""),
             "takeoff_skipped": request.query_params.get("takeoff_skipped", ""),
             "takeoff_note": request.query_params.get("takeoff_note", ""),
+            "takeoff_extracted": request.query_params.get("takeoff_extracted", ""),
             "files_saved": request.query_params.get("files_saved", ""),
             "files_errors": request.query_params.get("files_errors", ""),
             "files_error_msg": request.query_params.get("files_error_msg", ""),
@@ -14373,6 +14458,107 @@ async def bid_send_documents(bid_id: int, request: Request, to_email: str = Form
         raise HTTPException(status_code=502, detail=f"Email send failed: {e}")
     return RedirectResponse(
         url=f"/bids/{bid_id}?documents_sent={urllib.parse.quote(recipient)}",
+        status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/api/bids/{bid_id}/send-to-contractor")
+async def bid_send_to_contractor(bid_id: int, request: Request,
+                                  to_email: str = Form(""),
+                                  db=Depends(get_db)):
+    """Email the contractor the bid package + signing link in one message.
+
+    Combines the SOW, itemized pricing, and contract PDFs with a secure
+    click-and-sign link, all in a single email to the contractor's contact
+    address. The signing link is generated fresh if one does not already exist.
+    """
+    require_admin(request)
+    bid = bid_opportunities.get_bid(db, bid_id, _BID_COMPANY)
+    if not bid:
+        raise HTTPException(status_code=404, detail="Bid not found")
+    recipient = (to_email or bid.get("contact_email") or "").strip()
+    if not recipient or "@" not in recipient or " " in recipient:
+        return RedirectResponse(
+            url=f"/bids/{bid_id}?error=Add+a+contractor+email+before+sending+the+bid+package",
+            status_code=status.HTTP_303_SEE_OTHER)
+
+    # Build the document attachments
+    try:
+        bid_costing.ensure_accounting_schema(db)
+        costs = bid_costing.cost_lines(db, bid_id, _BID_COMPANY)
+    except Exception:
+        costs = []
+    try:
+        attachments = _bid_email_attachments(db, bid, bid_id, costs)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Could not build documents: {e}")
+
+    # Create or reuse a signing link
+    contract_signing.ensure_schema(db)
+    signing_request = contract_signing.active(db, bid_id, _BID_COMPANY)
+    if not signing_request:
+        try:
+            pdf_for_hash = build_bid_documents.build_contract(
+                dict(bid), costs, [],
+                signature=_package_signature(db, bid_id), client_signature=None)
+            digest = bid_signing.sha256_of(pdf_for_hash)
+        except Exception:
+            digest = ""
+        signing_request = contract_signing.create_request(
+            db, bid_id, sent_to=recipient, document_sha256=digest,
+            company=_BID_COMPANY)
+
+    sign_link = f"https://{company()['domain']}/sign/{signing_request['token']}"
+    expires = signing_request.get("expires_at")
+    when = expires.strftime("%B %d, %Y") if hasattr(expires, "strftime") else str(expires or "")
+
+    # Build the email body
+    total = float(bid.get("contract_value") or bid.get("bid_amount") or 0)
+    label = bid_costing.revision_label(dict(bid))
+    contact_name = bid.get("contact_name") or "there"
+    subject = (f"Bid #{bid_id} — {bid.get('name') or 'Your Project'} — "
+               f"Scope, Pricing & Agreement for Signature")
+    body = (
+        f"Hi {contact_name.split()[0] if contact_name else 'there'},\n\n"
+        f"{company()['name']} has prepared the bid package for "
+        f"{bid.get('name') or 'your project'} at {bid.get('location') or 'the property'}.\n\n"
+        f"Bid #{bid_id} — {label}\n"
+        f"Contract total: ${total:,.2f}\n\n"
+        "Attached: Scope of Work, Itemized Pricing, and the Renovation Agreement.\n\n"
+        "How to review and sign — it takes about two minutes:\n"
+        f"  1. Read the attached documents.\n"
+        f"  2. Open this private link to sign: {sign_link}\n"
+        "  3. Type your full name, draw your signature, tick the acceptance box, and press Sign.\n"
+        "  4. You will receive a signed copy and your client portal login straight away.\n\n"
+        f"The signing link expires on {when}. If it has expired, call or text "
+        f"{company()['phone']} and we will send a new one.\n\n"
+        f"— {company()['name']}\n{company()['phone']}\n{company()['email']}\n"
+    )
+
+    # Send the email
+    try:
+        cfg = documents_service.smtp_config_from_env()
+        ok = await documents_service.send_email(
+            cfg, recipient, subject, body, attachments=attachments)
+        if not ok:
+            raise HTTPException(status_code=502, detail="Email send failed")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Email send failed: {e}")
+
+    # Log the send
+    try:
+        with db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO comms_logs (direction, channel, sender, recipient, message_body, lead_id) "
+                "VALUES ('outbound', 'email', %s, %s, %s, NULL);",
+                (cfg.get("SMTP_FROM") or "", recipient, body[:4000]))
+        db.commit()
+    except Exception:
+        db.rollback()
+
+    return RedirectResponse(
+        url=f"/bids/{bid_id}?contractor_sent={urllib.parse.quote(recipient)}",
         status_code=status.HTTP_303_SEE_OTHER)
 
 

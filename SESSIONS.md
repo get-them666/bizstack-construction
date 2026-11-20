@@ -4,6 +4,68 @@
 
 ---
 
+## 2026-11-20 — Session 3: Bid Pipeline End-to-End Audit & Fixes
+
+### Problem
+Owner requested full audit and fix of the bidding and onboarding pipeline on `/bids`.
+
+### Audit Results — What Already Works
+
+| Step | Component | Route/Module | Status |
+|------|-----------|-------------|--------|
+| 1 | File upload | `POST /api/bids/{bid_id}/files/upload` | ✅ Working |
+| 1 | Takeoff from spec filenames | `POST /api/bids/{bid_id}/takeoff/from-specs` | ✅ Working (CSI section parsing from filenames) |
+| 2 | SOW PDF generation | `GET /bids/{bid_id}/sow.pdf` | ✅ Working |
+| 2 | Contract PDF generation | `GET /bids/{bid_id}/contract.pdf` | ✅ Working |
+| 2 | Owner signature embed | `bid_signing.py` | ✅ Working (drawn canvas, stamped on PDFs) |
+| 3 | Send docs to PNC | `POST /api/bids/{bid_id}/send-documents` | ✅ Working |
+| 3 | Sign request email | `POST /api/bids/{bid_id}/signing/send` | ✅ Working |
+| 4 | Signature submit | `POST /sign/{token}` | ✅ Working |
+| 4 | Post-signature automation | `_complete_signed_contract()` | ✅ Working (won status → project → deposit invoice → ledger → Zoho Books → portal account) |
+| 4 | Portal provisioning | `_send_portal_credentials()` | ✅ Working |
+
+### What Was Missing — Fixed
+
+#### Step 1: AI/OCR Takeoff Extraction
+- **Missing:** No AI extraction of quantities, materials, and line items from uploaded PDFs. Only filename-based CSI section parsing existed.
+- **Fix:** Created `bid_takeoff.py` module:
+  - Extracts text from uploaded PDFs using PyMuPDF (`pymupdf` already installed)
+  - Sends extracted text to OpenAI (gpt-4o-mini) with a construction estimator prompt
+  - Parses AI response into structured line items (description, quantity, unit, unit_cost, category)
+  - Inserts extracted items as `bid_costs` rows with estimated costs
+- **New route:** `POST /api/bids/{bid_id}/takeoff/extract`
+- **UI:** Added "✨ AI Takeoff Extraction" button on bid detail page
+
+#### Step 3: Combined Contractor Email
+- **Missing:** No single route that sends the contractor the full bid package + signing link. `send-documents` only goes to PNC/Bill.com; `signing/send` only sends a signing link without the bid package.
+- **Fix:** Added `POST /api/bids/{bid_id}/send-to-contractor` route:
+  - Builds SOW + itemized pricing + contract PDFs as attachments
+  - Creates a fresh signing link (or reuses existing active one)
+  - Sends one combined email to the contractor with all attachments + signing link + clear instructions
+  - Logs the send to comms_logs
+- **UI:** Added "✉️ Send Bid Package to Contractor" button on bid detail page (violet section)
+
+### Files Created
+- `bid_takeoff.py` — AI takeoff extraction module (PyMuPDF + OpenAI)
+
+### Files Modified
+- `construction_main.py` — Added `import bid_takeoff`, new route `/api/bids/{bid_id}/takeoff/extract`, new route `/api/bids/{bid_id}/send-to-contractor`, context variables `contractor_sent` and `takeoff_extracted`
+- `templates/construction/bid_detail.html` — Added AI Takeoff Extraction button, Send to Contractor section, success notices for both
+
+### Database Tables Used
+- `bid_files` — uploaded PDFs for takeoff extraction
+- `bid_costs` — extracted line items inserted here
+- `bid_opportunities` — bid record with contact_email for contractor send
+- `bid_sign_requests` — signing link creation/reuse
+- `bid_signatures` — owner and client signatures
+- `comms_logs` — email send audit trail
+- `portal_clients` — client portal account creation
+
+### Compile Status
+✅ All Python files compile with zero errors
+
+---
+
 ## 2026-11-20 — Session 2: Outbound Calling Fix
 
 ### Problem

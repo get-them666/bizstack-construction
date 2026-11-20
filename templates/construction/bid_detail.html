@@ -84,6 +84,11 @@
     Documents sent to <b>{{ documents_sent }}</b> — Scope of Work, itemized pricing and the contract, at {{ revision_label }}.
   </div>
   {% endif %}
+  {% if contractor_sent %}
+  <div class="mb-6 rounded-xl bg-violet-50 border border-violet-200 px-4 py-3 text-sm text-violet-800">
+    ✉️ Bid package + signing link sent to <b>{{ contractor_sent }}</b> — SOW, itemized pricing, contract, and a private click-and-sign link.
+  </div>
+  {% endif %}
   {% if error %}
   <div class="mb-6 rounded-xl bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">{{ error }}</div>
   {% endif %}
@@ -164,6 +169,11 @@
           {% if takeoff_skipped %}— {{ takeoff_skipped }} already on the bid and left alone{% endif %}.
           Fill in quantity and rate on the ones this job needs, and take out the trades it does not.
         </div>
+        {% elif takeoff_extracted %}
+        <div class="mb-4 rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-xs text-indigo-900">
+          ✨ AI extracted and added <b>{{ takeoff_extracted }}</b> line item{{ '' if takeoff_extracted == '1' else 's' }} from uploaded PDFs — quantities, materials, and AI-estimated pricing.
+          Review each line and adjust quantities or rates as needed.
+        </div>
         {% elif takeoff_note %}
         <div class="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900">
           {{ takeoff_note }}
@@ -181,6 +191,16 @@
           </span>
         </form>
         {% endif %}
+
+        <form method="post" action="/api/bids/{{ b.id }}/takeoff/extract" class="mb-4 flex flex-wrap items-center gap-2"
+              onsubmit="this.querySelector('button').disabled = true; this.querySelector('button').textContent = 'Extracting…'; return confirm('Extract line items from uploaded PDFs using AI?\n\nThis reads the document text and inserts quantities, materials, and pricing into the takeoff. Takes 30-60 seconds.')">
+          <button class="text-xs font-bold px-3 py-2 bg-indigo-100 text-indigo-700 rounded-lg hover:bg-indigo-200">
+            ✨ AI Takeoff Extraction
+          </button>
+          <span class="text-[11px] text-slate-400">
+            Reads uploaded PDFs and extracts quantities, materials, and line items with AI pricing.
+          </span>
+        </form>
 
         {% if costs %}
         <table class="w-full text-sm">
@@ -702,6 +722,22 @@
         {% else %}
         <p class="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">Add a contact email to this bid before sending it for signature.</p>
         {% endif %}
+        {% endif %}
+      </section>
+
+      {# ── Send the full bid package to the contractor ────────────── #}
+      <section class="bg-white rounded-2xl border border-violet-200 p-5">
+        <h2 class="text-sm font-bold uppercase tracking-wide text-violet-700 mb-2" id="contractor">Send to Contractor</h2>
+        <p class="text-xs text-slate-500 mb-3">Emails the contractor the full bid package — Scope of Work, itemized pricing, and contract — with a secure click-and-sign link in one message.</p>
+        {% if b.contact_email %}
+        <form method="post" action="/api/bids/{{ b.id }}/send-to-contractor"
+              onsubmit="return confirm('Send the bid package + signing link to {{ b.contact_email }}?');">
+          <input type="hidden" name="to_email" value="{{ b.contact_email }}">
+          <button class="w-full text-sm font-semibold px-4 py-2.5 bg-violet-600 text-white rounded-lg hover:bg-violet-700">✉️ Send Bid Package to Contractor</button>
+        </form>
+        <p class="text-[11px] text-slate-400 mt-2">Goes to <span class="font-mono">{{ b.contact_email }}</span>. Includes SOW, pricing, contract PDFs, and a private signing link.</p>
+        {% else %}
+        <p class="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">Add a contact email to this bid before sending the package.</p>
         {% endif %}
       </section>
 
