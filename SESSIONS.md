@@ -4,6 +4,64 @@
 
 ---
 
+## 2026-11-20 — Session 4: /bids UI Cleanup & Consolidation
+
+### Problem
+Owner reported redundant tools, duplicate buttons, and overlapping widgets on `/bids` page.
+
+### Audit Findings
+Read-only audit of all 1,418 lines of `bid_detail.html` identified 54 UI components. Found:
+- **Two document upload systems** (Job Documents + File Cabinet)
+- **Three "send" actions** (Send to Contractor + Send to PNC + Send bid to GC)
+- **Three pricing forms** (Recalculate + Pipeline amount + Bid This Job price)
+- **Two portal credential areas** (Client Signature section + Client Portal section)
+- **Two signing send actions** (Send for signature + Send to Contractor)
+- **Fixed bottom bar** with 9 links duplicating inline sections
+
+### Changes Made
+
+**Removed (129 lines deleted):**
+1. **Pipeline bid amount form** — duplicated Recalculate and Bid This Job price
+2. **"Send for signature" button** — duplicated Send to Contractor (which includes signing link)
+3. **"Resend signing link" button** — duplicated Send to Contractor
+4. **"Resend portal login" button** — duplicated Client Portal section
+5. **"New temporary password" button** — duplicated Client Portal section
+6. **Entire "Bid This Job" section** (65 lines) — duplicated Contract Package links, Recalculate, and Send to Contractor
+7. **Job Documents upload form** — merged into File Cabinet (which has folder sorting)
+8. **bzGuessDocType JavaScript** — was only used by removed upload form
+9. **Fixed bottom bar duplicates** — stripped from 9 links to 4 essentials
+
+**Kept (all working, no overlap):**
+- File Cabinet upload (primary upload, folder-sorted)
+- Send to Contractor (combined bid package + signing link)
+- Send to PNC (accounting copy, different recipient)
+- Client Portal section (single place for credential management)
+- Client Signature section (status display only, actions moved)
+- Revisions section
+- Payments section (30/40/30 schedule)
+- Contract Package section (PDF links)
+- Owner Signature canvas
+- Owner of Record lookup
+- Job section (project link)
+- All takeoff tools (spec book + AI extraction + cost line editing)
+
+**Simplified bottom bar to:**
+- 📦 Package PDF
+- ✉️ Send to Contractor
+- Send to PNC
+- 📁 File Cabinet
+
+### Result
+- **1,418 → 1,289 lines** (129 lines removed)
+- **One linear flow:** Upload → AI Takeoff → Price → Generate Docs → Send to Contractor → Sign → Portal
+- **Zero duplicate actions** — every button does something unique
+- **All Python compiles clean**
+
+### Git Commit
+`12713c5` — "Clean up /bids UI: remove redundant Bid This Job section, duplicate upload form, duplicate signing/portal buttons, and strip bottom bar to essentials"
+
+---
+
 ## 2026-11-20 — Session 3: Bid Pipeline End-to-End Audit & Fixes
 
 ### Problem
