@@ -4,7 +4,76 @@
 
 ---
 
-## 2026-11-20 — Full-Stack Audit & Automation (Session 1)
+## 2026-11-20 — Session 2: Outbound Calling Fix
+
+### Problem
+Owner reported: "nobody is making calls out."
+
+### Root Cause
+1. **scheduled_calls.py import bug:** Was doing `import signalwire` (the Python package) and calling `signalwire.is_configured()`, but the package doesn't have that method. Should import `SignalWireService` from `signalwire_service` module.
+2. **bizstack-hosts/main.py missing background loops:** Had `outbound_campaign.py` and `scheduled_calls.py` modules copied over but no background worker loops to tick them automatically. Only had manual `/api/outbound/call` endpoints.
+
+### Fix Applied
+
+**construction_main.py (this repo):**
+- Fixed `scheduled_calls.py` import: Changed `import signalwire` to `import signalwire_service` and instantiated `SignalWireService()`
+
+**bizstack-hosts/main.py:**
+- Added background loops in `lifecycle()` function (before the `yield`):
+  - `_scheduled_loop()` — ticks every 60 seconds, calls `scheduled_calls.run_due()` to process due callbacks
+  - `outbound_campaign.start_scheduler()` — starts the batch outbound AI calling scheduler
+- Both loops are guarded by `DISABLE_SCHEDULED_CALLS` and `DISABLE_OUTBOUND_CAMPAIGN` env flags
+- All guardrails preserved: calling hours (8am-7pm ET), suppression.py DNC/opt-out, claim-based dedup, daily caps
+
+### Production Verification
+```bash
+# Construction container logs:
+📞[campaign] daily scheduler started (hour 9 ET)
+📞 Scheduled calls ready.
+
+# Broom Service container logs:
+📞 Scheduled calls ready.
+📞 Outbound campaign scheduler ready.
+```
+
+Both containers now have autonomous outbound calling loops running.
+
+### Production Env Flags (159.203.175.39)
+
+**construction.env:**
+```
+OUTBOUND_CAMPAIGN_ENABLED=1 ✓
+OUTBOUND_CAMPAIGN_SCHEDULED=1 ✓
+OUTBOUND_CAMPAIGN_INCLUDE_PERMITS=1 ✓
+OUTBOUND_CAMPAIGN_MAX=10 ✓
+OUTBOUND_CAMPAIGN_DAILY=20 ✓
+OUTBOUND_CAMPAIGN_HOUR=9 ✓
+VAPI_API_KEY, VAPI_ASSISTANT_ID, VAPI_PHONE_NUMBER_ID all set ✓
+SIGNALWIRE_* all set ✓
+```
+
+**hosts.env:**
+```
+VAPI_API_KEY, VAPI_ASSISTANT_ID, VAPI_PHONE_NUMBER_ID all set ✓
+SIGNALWIRE_* all set ✓
+(OUTBOUND_CAMPAIGN_ENABLED not set — will need to add if Broom needs batch calling)
+```
+
+### Files Modified
+- `scheduled_calls.py` — Fixed signalwire import (both repos)
+- `../bizstack-hosts/main.py` — Added background loops for scheduled_calls and outbound_campaign
+
+### Compile Status
+✅ All Python files compile with zero errors
+
+### Deploy Status
+✅ Synced to 159.203.175.39 via rsync
+✅ Docker containers rebuilt and restarted
+✅ Verified loops are running in docker logs
+
+---
+
+## 2026-11-20 — Session 1: Full-Stack Audit & Automation
 
 ### Production Architecture
 - **Host:** DigitalOcean droplet `bizstack-prod` at `159.203.175.39`

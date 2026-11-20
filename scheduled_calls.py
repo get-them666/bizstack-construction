@@ -102,8 +102,10 @@ def run_due(conn) -> dict:
         )
         rows = [dict(r) for r in cur.fetchall()]
 
-    import signalwire
+    import signalwire_service
     import suppression
+
+    signalwire = signalwire_service.SignalWireService()
 
     summary = {"due": len(rows), "dialed": 0, "skipped": []}
     for row in rows:
