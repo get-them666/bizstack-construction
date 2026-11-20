@@ -17,6 +17,10 @@ import requests
 API = "https://api.kit.com/v4"
 TIMEOUT = 20
 NEW_ESTIMATE_SEQUENCE = int(os.getenv("KIT_SEQUENCE_NEW_ESTIMATE", "2977410") or 2977410)
+# The newsletter welcome built 2026-11-20: two published emails (welcome, then a
+# practical maintenance checklist four days later).
+NEWSLETTER_SEQUENCE = int(os.getenv("KIT_SEQUENCE_NEWSLETTER", "2979613") or 2979613)
+NEWSLETTER_TAG = (os.getenv("KIT_NEWSLETTER_TAG") or "newsletter").strip()
 TAG = (os.getenv("KIT_LEAD_TAG") or "estimate-request").strip()
 
 
@@ -89,5 +93,28 @@ def sync_lead(name: str = "", email: str = "", phone: str = "") -> dict:
         add_tag(sid)
         started = add_to_sequence(sid)
         return {"ok": True, "subscriber_id": sid, "sequence_started": started}
+    except Exception as exc:
+        return {"ok": False, "reason": str(exc)[:200]}
+
+
+def subscribe_newsletter(email: str = "", first_name: str = "") -> dict:
+    """Public newsletter signup: subscribe, tag, start the welcome sequence.
+
+    Deliberately separate from sync_lead: a newsletter reader is not an
+    estimate request and must not enter the sales sequence.
+    """
+    if not configured():
+        return {"ok": False, "reason": "Newsletter signup is not configured yet."}
+    email = (email or "").strip().lower()
+    local, _, domain = email.partition("@")
+    if not local or "." not in domain or len(email) > 254 or " " in email:
+        return {"ok": False, "reason": "That email address does not look right."}
+    try:
+        sid = subscribe(email, (first_name or "").strip())
+        if not sid:
+            return {"ok": False, "reason": "Kit did not accept that address."}
+        add_tag(sid, NEWSLETTER_TAG)
+        started = add_to_sequence(sid, NEWSLETTER_SEQUENCE)
+        return {"ok": True, "sequence_started": started}
     except Exception as exc:
         return {"ok": False, "reason": str(exc)[:200]}

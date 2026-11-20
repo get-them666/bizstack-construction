@@ -1,0 +1,34 @@
+{# Bulk actions on the work queue. Rendered above the outbound call list so
+   the owner does not have to scroll past every dial row to reach them; this
+   block lived inside _leads_lane.html until the outbound panel was added on
+   top of the page and buried it. #}
+<div class="flex flex-wrap items-start gap-3 mb-4">
+    <form method="POST" action="/api/leads/fire-all-drafts" onsubmit="this.querySelector('button').disabled = true; this.querySelector('button').textContent = 'Firing…';" class="flex items-center gap-2">
+        {% if draft_count %}
+        <span class="text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-2.5 py-1.5 rounded-full">{{ draft_count }} draft{{ 's' if draft_count != 1 }} ready</span>
+        {% endif %}
+        <button type="submit" class="px-4 py-2.5 text-sm font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl transition-colors">Fire all drafts</button>
+    </form>
+
+    {# CSV of every lead with a street address, for mailing and for working the
+       list offline. #}
+    <a href="/api/leads/addresses.csv?company=construction"
+       class="px-4 py-2.5 text-sm font-semibold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 rounded-xl transition-colors">
+        Export addresses CSV
+    </a>
+
+    <div class="flex-1 min-w-[280px]">
+        <div class="flex flex-wrap items-center gap-2">
+            <button type="button" id="owners-all-btn"
+                    class="px-4 py-2.5 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition-colors">
+                Find owners for all leads
+            </button>
+            <button type="button" id="enrich-btn"
+                    class="px-4 py-2.5 text-sm font-bold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 rounded-xl transition-colors">
+                Find phone/email for address-only leads
+            </button>
+        </div>
+        <div id="owners-all-out" class="hidden mt-2 bg-white rounded-xl border border-slate-200 p-3 text-xs"></div>
+        <div id="enrich-out" class="hidden mt-2 bg-white rounded-xl border border-slate-200 p-3"></div>
+    </div>
+</div>

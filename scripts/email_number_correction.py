@@ -32,7 +32,7 @@ SELECT DISTINCT ON (lower(l.email))
        l.id, l.name, l.email
   FROM leads l
  WHERE l.company = 'construction'
-   AND coalesce(l.email, '') LIKE '%@%'
+   AND position('@' in coalesce(l.email, '')) > 1
    AND coalesce(l.opted_out_at::text, '') = ''
    AND coalesce(l.do_not_contact, false) = false
    AND lower(coalesce(l.status, 'new')) NOT IN
@@ -80,6 +80,7 @@ def main(argv=None) -> int:
         return 2
 
     import documents_service
+    from auto_reply import run_coro
     cfg = documents_service.smtp_config_from_env()
     if not documents_service.smtp_configured(cfg):
         print("email transport is not configured", file=sys.stderr)
@@ -100,7 +101,7 @@ def main(argv=None) -> int:
                 continue
             body = body_for(row.get("name") or "")
             try:
-                ok = asyncio.run(documents_service.send_email(cfg, to, SUBJECT, body))
+                ok = run_coro(documents_service.send_email(cfg, to, SUBJECT, body))
             except Exception as exc:
                 print(" send failed:", to, str(exc)[:120])
                 failed += 1

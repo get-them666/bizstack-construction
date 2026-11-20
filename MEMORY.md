@@ -63,9 +63,9 @@ routes, and a Broom branch in the Google OAuth callback at `:2194`. Both apps
 still create all 52 tables at startup. Anyone assuming "construction repo =
 construction business" will be wrong about the code, though right about the data.
 
-**Two phone numbers, and which is which.** `757-908-7121` is the business line
-and appears on every homeowner- and customer-facing surface: lead auto-replies,
-bid inquiries, the website, printed letters, invoices, receipts, the photo log.
+**Two phone numbers, and which is which.** `757-908-7121` is the Broom Service
+business line (Vapi-owned, at bizstackperks.com). `757-846-9275` is the BuildStack
+Construction business line (SignalWire-owned, at construction.bizstackperks.com).
 `252-665-5891` is Shaun's personal mobile and appears **only** in lending
 material — `loan_outreach.py`, `LOAN_OUTREACH_SEQUENCE.md`,
 `SBA_7a_LOAN_PITCH.md`, and the lender sections of `docs/OUTREACH_EMAILS.md`.
@@ -1171,6 +1171,33 @@ FTC DNC telemarketer account: Organization ID `10342776-65889` (BuildStack Const
 authorized representative Shaun, downloader email hello@bizstackperks.com. The portal's B2C MFA
 loops in an automated browser; complete the final login/download in Safari. Cold permit calling
 stays held until `outbound_campaign.py --import-dnc <file>` records a fresh scrub (31-day window).
+
+## 2026-11-19: the bid-follow-up calls reached voicemail, not people
+
+`scripts/call_bids.py --apply` dialled five live bid contacts on 2026-11-18 at 20:20. Every
+call that answered hit voicemail. The transcripts show the agent talking to a recording for
+3+ minutes ("I think we spoke over each other again…", "Are you still there?" ×6) because
+nothing in the SWML flow detected a machine and `attention_timeout` was set to **4000 ms**, so
+the agent re-prompted itself every four seconds of silence.
+
+Two fixes, both in `construction_main.py`:
+
+- `_build_voice_swml(..., machine_detection=True)` prepends `detect_machine` (AMD) and a
+  `switch` on `detect_result`: `human`/`default` run the AI, **`machine` and `fax` hang up**.
+  Only the outbound route (`/comms/outbound-voice.swml`) turns it on — inbound callers already
+  chose to talk. `unknown` falls through to the AI, so a detector that cannot decide degrades to
+  the old behaviour rather than dropping a real person.
+- `attention_timeout` is now 12000 ms with an `attention_timeout_prompt` that allows **one**
+  check-in, and outbound calls carry `hard_stop_time: "6:00"` as a backstop.
+
+The post-prompt report (`/api/voice/debug`) was also lying about these calls: it wrote every
+one as `direction='inbound'`, `sender='unknown'`, `recipient=<our line>`, and used the agent's
+own **system prompt** as the transcript preview, so `/monitor` showed
+"System: LEGAL REQUIRED BEHAVIOUR FOR THIS OUTBOUND CALL…" for every row and hid what was
+actually said. It now resolves direction from the `bot_calls` row written at dial time, logs
+our line → the lead's number, drops `system` / `assistant-manual` / `system-log` turns (the
+latter two are SignalWire's `speech_fillers`, not speech), and marks the call `completed`.
+Spoken opt-outs still run afterwards and override that status to `opted_out`.
 
 ## 2026-11-13: client portal — signing, card payments, credentials
 

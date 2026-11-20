@@ -371,7 +371,8 @@ def send_followup(conn, lead: dict, step: int, *, send_email, send_sms, channel_
     return out
 
 
-def run_once(conn, *, send_email, send_sms, channel_allowed, review_mode: bool) -> dict:
+def run_once(conn, *, send_email, send_sms, channel_allowed, review_mode: bool,
+             schedule_call=None) -> dict:
     summary = {"due": 0, "sent": 0, "skipped": []}
     if disabled():
         summary["skipped"].append("DISABLE_FOLLOWUPS")
@@ -387,6 +388,16 @@ def run_once(conn, *, send_email, send_sms, channel_allowed, review_mode: bool) 
             summary["sent"] += 1
         elif res["why"]:
             summary["skipped"].append(f"#{lead['id']}: {'; '.join(res['why'])}")
+        # Email and text are not the whole cadence: an enquiry that has never
+        # been spoken to should get one AI call, not a third email. The caller
+        # owns the scheduling rules (hours, dedupe, DNC).
+        if schedule_call is not None:
+            try:
+                if schedule_call(conn, lead):
+                    summary.setdefault("calls_queued", 0)
+                    summary["calls_queued"] += 1
+            except Exception as exc:  # noqa: BLE001 - a call must not break the sweep
+                summary["skipped"].append(f"#{lead['id']}: call queue {exc}"[:160])
     return summary
 
 

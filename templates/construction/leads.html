@@ -30,6 +30,8 @@
         </div>
 
         {% if lane != 'permits' %}
+        {% include "_leads_actions.html" %}
+
         {# ── Outbound calls ───────────────────────────────────────────────
            One row per lead in the work queue, with its number and the call
            status the outbound log reports. The buttons and chips are inert
@@ -56,7 +58,7 @@
             </div>
 
             {% if buckets %}
-            <ul class="divide-y divide-slate-100">
+            <ul class="divide-y divide-slate-100 max-h-96 overflow-y-auto">
                 {% for bucket in buckets %}
                 {% for lead in bucket.leads %}
                 <li class="px-5 py-3 flex flex-wrap items-center gap-x-3 gap-y-2">

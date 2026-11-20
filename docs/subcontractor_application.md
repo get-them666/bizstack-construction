@@ -73,7 +73,7 @@ coverage, surety letter, W-9, and safety program are current and attached / avai
 `[ATTACH: ___, ___, ___]`
 
 I would welcome the opportunity to bid `[SPECIFIC SCOPE]` or to price a test package so you can
-evaluate us on live work. I am reachable directly at **[757-908-7121]** and at
+evaluate us on live work. I am reachable directly at **[757-846-9275]** and at
 `[EMAIL]`, and I will return a complete, itemized bid within `[X]` business days of receiving
 the drawings and scope.
 
@@ -113,8 +113,8 @@ VA/NC `[LICENSE #]`
 | **License expiry** | `[MM/DD/YYYY]` |
 | **NC license** | Not held. Not required for NC work under $40,000 (§ 87-1(a)). Electrical reciprocity available if needed — see Part 6. |
 | **Principal** | `[NAME, TITLE]` |
-| **Phone (office)** | (757) 908-7121 |
-| **Phone (24/7 dispatch)** | (757) 908-7121 |
+| **Phone (office)** | (757) 846-9275 |
+| **Phone (24/7 dispatch)** | (757) 846-9275 |
 | **Email** | `[EMAIL]` |
 | **Website** | construction.bizstackperks.com |
 | **Address** | `[STREET, CITY, STATE ZIP]` |

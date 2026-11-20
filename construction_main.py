@@ -92,7 +92,7 @@ import ledger_bridge
 import funding_referrals
 import bid_opportunities
 import bid_sources
-from signalwire_service import SignalWireService
+from signalwire_service import SignalWireService, e164 as _e164_number
 import vapi_service
 import zoho_sync
 import zoho_books_sync
@@ -1155,6 +1155,55 @@ async def lifecycle(app: FastAPI):
         followups.start(_run_followups)
     except Exception as exc:
         print(f"[followups] could not start: {exc}", flush=True)
+
+    # Scheduled AI calls. A time written to Postgres so a redeploy delays a
+    # call by one tick instead of cancelling it.
+    try:
+        import scheduled_calls
+
+        def _run_scheduled_calls():
+            with psycopg.connect(db_url, row_factory=dict_row) as c:
+                return scheduled_calls.run_due(c)
+
+        with psycopg.connect(db_url, row_factory=dict_row) as conn:
+            scheduled_calls.ensure_schema(conn)
+
+        def _scheduled_loop():
+            time.sleep(90)
+            while True:
+                try:
+                    res = _run_scheduled_calls()
+                    if res.get("due"):
+                        print(f"[scheduled-call] {res}", flush=True)
+                except Exception as exc:  # noqa: BLE001
+                    print(f"[scheduled-call] pass failed: {exc}", flush=True)
+                time.sleep(300)
+
+        threading.Thread(target=_scheduled_loop, daemon=True, name="scheduled-calls").start()
+        print("📞 Scheduled calls ready.", flush=True)
+    except Exception as exc:
+        print(f"[scheduled-call] could not start: {exc}", flush=True)
+
+    # Review requests: completed customers get asked once, and never twice.
+    # Started after the DDL block so review_requests has its table.
+    try:
+        import review_requests
+
+        def _review_loop():
+            time.sleep(300)
+            while True:
+                try:
+                    res = _run_review_requests()
+                    if res.get("due"):
+                        print(f"[reviews] {res}", flush=True)
+                except Exception as exc:  # noqa: BLE001
+                    print(f"[reviews] pass failed: {exc}", flush=True)
+                time.sleep(6 * 3600)
+
+        threading.Thread(target=_review_loop, daemon=True, name="review-requests").start()
+        print("⭐ Review requests ready.", flush=True)
+    except Exception as exc:
+        print(f"[reviews] could not start: {exc}", flush=True)
 
     # BuildingConnected -> bid board, every few hours, once the owner has
     # signed in to Autodesk. Invitations should land on the board by
@@ -3565,6 +3614,122 @@ async def sitemap_xml(request: Request):
     return Response(content=body, media_type="application/xml")
 
 
+@app.get("/marketing", response_class=HTMLResponse)
+async def marketing_page(request: Request, db=Depends(get_db)):
+    """Free advertising: post real work to Facebook, claim the free listings.
+
+    Facebook is the only one of these with a posting API. Yelp and Nextdoor are
+    UI-only, so the page carries their copy and claim steps instead of a button
+    that would pretend to work.
+    """
+    require_admin(request)
+    import facebook_page
+    import social_media
+
+    social_media.ensure_schema(db)
+    posted = social_media.posted_slugs(db)
+    base = _site_base(request).rstrip("/")
+
+    projects = []
+    for slug, title, scope, caption in social_media.PROJECTS:
+        suffix = "gallery" if slug == "garage-to-airbnb" else "before-after"
+        projects.append({
+            "slug": slug,
+            "title": title,
+            "scope": scope,
+            "caption": caption,
+            "image": f"{base}/static/listing/projects2/{slug}-{suffix}.jpg",
+            "posted": slug in posted,
+        })
+
+    copy_blocks = [
+        {"title": "Google Business Profile description", "rows": 7,
+         "text": social_media.GOOGLE_PROFILE_DESCRIPTION},
+        {"title": "Nextdoor post (once a month)", "rows": 10,
+         "text": social_media.NEXTDOOR_POST},
+        {"title": "Craigslist ad (every 48 hours)", "rows": 9,
+         "text": social_media.CRAIGSLIST_AD},
+        {"title": "Yelp — claim and recovery", "rows": 9,
+         "text": social_media.YELP_BIZ_NOTE},
+    ]
+
+    return templates.TemplateResponse(request=request, name="marketing.html", context={
+        "user": {"email": require_auth(request)[1]},
+        "fb": facebook_page.page_info(),
+        "projects": projects,
+        "channels": social_media.CHANNELS,
+        "copy_blocks": copy_blocks,
+    })
+
+
+@app.post("/marketing/facebook")
+async def marketing_facebook_post(request: Request, db=Depends(get_db)):
+    require_admin(request)
+    import facebook_page
+    import social_media
+
+    form = await request.form()
+    slug = str(form.get("slug") or "").strip()
+    caption = str(form.get("caption") or "").strip()[:5000]
+
+    project = next((p for p in social_media.PROJECTS if p[0] == slug), None)
+    if not project:
+        return RedirectResponse(url="/marketing?error=unknown+project",
+                                status_code=status.HTTP_303_SEE_OTHER)
+
+    suffix = "gallery" if slug == "garage-to-airbnb" else "before-after"
+    image_url = f"{_site_base(request).rstrip('/')}/static/listing/projects2/{slug}-{suffix}.jpg"
+    result = facebook_page.post_photo(image_url, caption or project[3])
+    if not result.get("ok"):
+        import urllib.parse as _up
+        return RedirectResponse(
+            url="/marketing?error=" + _up.quote(str(result.get("reason") or "failed")[:200]),
+            status_code=status.HTTP_303_SEE_OTHER)
+
+    social_media.ensure_schema(db)
+    social_media.record_post(db, slug, str(result.get("post_id") or ""), caption or project[3])
+    return RedirectResponse(url=f"/marketing?posted={slug}",
+                            status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/api/newsletter")
+async def newsletter_signup(request: Request):
+    """Public newsletter signup behind the site footer form.
+
+    Someone who wants the monthly email is a reader, not an estimate request:
+    this tags them `newsletter` and starts the welcome sequence, and never
+    touches the sales sequence.
+    """
+    wants_json = "application/json" in (request.headers.get("content-type") or "")
+    data: dict = {}
+    try:
+        data = (await request.json()) if wants_json else dict(await request.form())
+    except Exception:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+
+    email = str(data.get("email") or "").strip()[:254]
+    name = str(data.get("name") or "").strip()[:80]
+
+    # Honeypot: real people never fill a hidden "company" field.
+    if str(data.get("company") or "").strip():
+        return JSONResponse({"ok": True}) if wants_json else RedirectResponse(
+            url="/?newsletter=ok#newsletter", status_code=status.HTTP_303_SEE_OTHER)
+
+    ip = (request.client.host if request.client else "") or ""
+    if ip and _lead_submit_throttled(f"newsletter:{ip}", window=600, max_calls=5):
+        result = {"ok": False, "reason": "Too many attempts. Try again in a few minutes."}
+    else:
+        import kit_service
+        result = kit_service.subscribe_newsletter(email, name)
+
+    if wants_json:
+        return JSONResponse(result, status_code=200 if result.get("ok") else 400)
+    target = "/?newsletter=ok#newsletter" if result.get("ok") else "/?newsletter=bad#newsletter"
+    return RedirectResponse(url=target, status_code=status.HTTP_303_SEE_OTHER)
+
+
 # --- Lead capture -----------------------------------------------------------
 # In-memory rate limit for public lead forms: {ip: [timestamp, ...]}
 _lead_submit_times: dict[str, list[float]] = {}
@@ -3913,10 +4078,73 @@ def _run_followups() -> dict:
             return signalwire.send_sms(to, body)
 
         _send_sms_cb = _send_sms if signalwire.is_configured() else None
+
+        def _schedule_call(conn, lead) -> bool:
+            """One AI call for a lead the emails have not reached.
+
+            Fires on the day-3 touch (step 1), never if the lead has already been
+            dialled, and lands at 8:05 the next morning so the call happens in
+            the day rather than the middle of the night.
+            """
+            if int(lead.get("step") or 0) != 1:
+                return False
+            if (lead.get("status") or "new") not in ("new", "contacted"):
+                return False
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1 FROM bot_calls WHERE lead_id = %s LIMIT 1;",
+                            (lead["id"],))
+                if cur.fetchone():
+                    return False
+            import scheduled_calls
+            when = datetime.now(ZoneInfo("America/New_York")).replace(
+                hour=8, minute=5, second=0, microsecond=0) + timedelta(days=1)
+            scheduled_calls.schedule(conn, lead["id"], when, "day-3 follow-up call")
+            return True
+
         return followups.run_once(
             conn, send_email=_send_email, send_sms=_send_sms_cb,
             channel_allowed=lambda ch: auto_reply._channel_allowed(conn, ch),
             review_mode=auto_reply._review_mode(),
+            schedule_call=_schedule_call,
+        )
+    finally:
+        conn.close()
+
+
+def _run_review_requests() -> dict:
+    """One pass of the review ask, using the same transports and DNC gates."""
+    conn = psycopg.connect(db_url, row_factory=dict_row)
+    try:
+        cfg = documents_service.smtp_config_from_env()
+        suppression.ensure_schema(conn)
+
+        def _blocked(channel, recipient) -> bool:
+            try:
+                allowed, why = suppression.check_outbound(conn, channel, recipient)
+            except Exception as exc:  # noqa: BLE001 - fail closed
+                print(f"[reviews] suppression check failed: {exc}", flush=True)
+                return True
+            if not allowed:
+                print(f"[reviews] blocked {channel} ({why})", flush=True)
+            return not allowed
+
+        def _send_email(to, subject, body):
+            if _blocked(suppression.CHANNEL_EMAIL, to):
+                return False
+            if not documents_service.smtp_configured(cfg):
+                return False
+            return bool(auto_reply.run_coro(
+                documents_service.send_email(cfg, to, subject, body.replace("\n", "<br>"))))
+
+        def _send_sms(to, body):
+            if _blocked(suppression.CHANNEL_SMS, to):
+                return False
+            return signalwire.send_sms(to, body)
+
+        return review_requests.run_once(
+            conn, send_email=_send_email,
+            send_sms=(_send_sms if signalwire.is_configured() else None),
+            channel_allowed=lambda ch: auto_reply._channel_allowed(conn, ch),
         )
     finally:
         conn.close()
@@ -6628,6 +6856,157 @@ async def inventory_update(
             cur.execute("UPDATE supplies_inventory SET qty_on_hand = %s, updated_at = NOW() WHERE id = %s;", (new_qty, row["id"]))
         db.commit()
     return RedirectResponse(url=f"/inventory?company={co}", status_code=303)
+
+
+# --- Inventory JSON API (for inventory-tracker React SPA) --------------------
+@app.get("/api/inventory")
+async def inventory_api(request: Request, company: str = "construction", db=Depends(get_db)):
+    """JSON endpoint for the inventory-tracker React SPA."""
+    is_authed, _ = require_auth(request)
+    if not is_authed:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    co = company or "construction"
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT id, item_name, category, qty_on_hand, unit, reorder_level, updated_at "
+            "FROM supplies_inventory WHERE company = %s ORDER BY category, item_name;",
+            (co,),
+        )
+        rows = cur.fetchall()
+    items = []
+    for r in rows:
+        qty = float(r.get("qty_on_hand") or 0)
+        reorder = float(r.get("reorder_level") or 0)
+        items.append({
+            "id": r["id"],
+            "item_name": r["item_name"],
+            "category": r.get("category") or "general",
+            "qty_on_hand": qty,
+            "unit": r.get("unit") or "each",
+            "reorder_level": reorder,
+            "status": "low" if qty <= reorder else ("out_of_stock" if qty == 0 else "optimal"),
+            "lastUpdated": r["updated_at"].isoformat() if r.get("updated_at") else None,
+        })
+    return JSONResponse(content={"items": items, "company": co})
+
+
+@app.post("/api/inventory/update")
+async def inventory_update_api(
+    request: Request,
+    item_id: int = 0,
+    item_name: str = "",
+    company: str = "construction",
+    delta: float = 0,
+    quantity: float = 0,
+    reorder_level: float = None,
+    category: str = "",
+    db=Depends(get_db),
+):
+    """JSON endpoint for inventory updates from the React SPA."""
+    is_authed, _ = require_auth(request)
+    if not is_authed:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    co = company or "construction"
+    change = delta or quantity or 0
+    with db.cursor() as cur:
+        if item_id:
+            cur.execute("SELECT * FROM supplies_inventory WHERE id = %s;", (item_id,))
+            row = cur.fetchone()
+        elif item_name.strip():
+            cur.execute(
+                "SELECT * FROM supplies_inventory WHERE company = %s AND item_name ILIKE %s;",
+                (co, item_name.strip()),
+            )
+            row = cur.fetchone()
+            if not row:
+                cur.execute(
+                    "INSERT INTO supplies_inventory (company, item_name, category, reorder_level) "
+                    "VALUES (%s, %s, %s, %s) RETURNING *;",
+                    (co, item_name.strip(), category or "general", reorder_level or 0),
+                )
+                row = cur.fetchone()
+        else:
+            row = None
+        if not row:
+            raise HTTPException(status_code=404, detail="Item not found")
+        new_qty = float(row.get("qty_on_hand") or 0) + change
+        if reorder_level is not None:
+            cur.execute(
+                "UPDATE supplies_inventory SET qty_on_hand = %s, reorder_level = %s, "
+                "category = COALESCE(NULLIF(%s,''), category), updated_at = NOW() WHERE id = %s;",
+                (new_qty, reorder_level, category or "", row["id"]),
+            )
+        else:
+            cur.execute(
+                "UPDATE supplies_inventory SET qty_on_hand = %s, updated_at = NOW() WHERE id = %s;",
+                (new_qty, row["id"]),
+            )
+        db.commit()
+        cur.execute("SELECT * FROM supplies_inventory WHERE id = %s;", (row["id"],))
+        updated = cur.fetchone()
+    return JSONResponse(content={
+        "ok": True,
+        "item": {
+            "id": updated["id"],
+            "item_name": updated["item_name"],
+            "qty_on_hand": float(updated.get("qty_on_hand") or 0),
+            "reorder_level": float(updated.get("reorder_level") or 0),
+        },
+    })
+
+
+@app.post("/api/inventory/create")
+async def inventory_create_api(
+    request: Request,
+    item_name: str = Form(...),
+    category: str = Form("general"),
+    qty_on_hand: float = Form(0),
+    unit: str = Form("each"),
+    reorder_level: float = Form(0),
+    company: str = Form("construction"),
+    db=Depends(get_db),
+):
+    """JSON endpoint to create a new inventory item."""
+    is_authed, _ = require_auth(request)
+    if not is_authed:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    co = company or "construction"
+    if not item_name.strip():
+        raise HTTPException(status_code=400, detail="item_name is required")
+    with db.cursor() as cur:
+        cur.execute(
+            "INSERT INTO supplies_inventory (company, item_name, category, qty_on_hand, unit, reorder_level) "
+            "VALUES (%s, %s, %s, %s, %s, %s) RETURNING *;",
+            (co, item_name.strip(), category, qty_on_hand, unit, reorder_level),
+        )
+        row = cur.fetchone()
+        db.commit()
+    return JSONResponse(content={
+        "ok": True,
+        "item": {
+            "id": row["id"],
+            "item_name": row["item_name"],
+            "category": row.get("category"),
+            "qty_on_hand": float(row.get("qty_on_hand") or 0),
+            "unit": row.get("unit"),
+            "reorder_level": float(row.get("reorder_level") or 0),
+        },
+    })
+
+
+@app.delete("/api/inventory/{item_id}")
+async def inventory_delete_api(item_id: int, request: Request, db=Depends(get_db)):
+    """JSON endpoint to delete (or disable) an inventory item."""
+    is_authed, _ = require_auth(request)
+    if not is_authed:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    with db.cursor() as cur:
+        cur.execute("SELECT id FROM supplies_inventory WHERE id = %s;", (item_id,))
+        if not cur.fetchone():
+            raise HTTPException(status_code=404, detail="Item not found")
+        cur.execute("DELETE FROM supplies_inventory WHERE id = %s;", (item_id,))
+        db.commit()
+    return JSONResponse(content={"ok": True, "id": item_id})
 
 
 @app.post("/api/leads/{lead_id}/status")
@@ -9345,24 +9724,44 @@ def _follow_up_new_lead(lead_id: int) -> None:
         try:
             with db.cursor() as cur:
                 cur.execute(
-                    "SELECT id, name, phone, email, project_type FROM leads WHERE id = %s;",
+                    "SELECT id, name, phone, email, project_type, source FROM leads WHERE id = %s;",
                     (lead_id,),
                 )
                 row = cur.fetchone()
             if not row:
                 return
-            # Marketing list: every new lead joins Kit and starts the estimate
+            # Marketing list: a new ENQUIRY joins Kit and starts the estimate
             # sequence. Best-effort; a Kit outage must not affect the lead.
-            try:
-                import kit_service
-                kit_service.sync_lead(row.get("name") or "", row.get("email") or "",
-                                      row.get("phone") or "")
-            except Exception as exc:
-                print(f"📧[kit] lead sync failed: {exc}", flush=True)
+            #
+            # Permit records are not enquiries. They are public property data
+            # whose contact address belongs to a residential owner who never
+            # asked to hear from us, so they must not enter a marketing list.
+            # Placeholder intake addresses (@lead.local) are not deliverable.
+            email = (row.get("email") or "").strip()
+            source = (row.get("source") or "").strip().lower()
+            if email and not email.endswith("@lead.local") and source != "permit_finder":
+                try:
+                    import kit_service
+                    kit_service.sync_lead(row.get("name") or "", email,
+                                          row.get("phone") or "")
+                except Exception as exc:
+                    print(f"📧[kit] lead sync failed: {exc}", flush=True)
             from zoneinfo import ZoneInfo
 
             now = datetime.now(ZoneInfo(_CALL_TZ))
             if not (_CALL_START_HOUR <= now.hour < _CALL_END_HOUR):
+                # A lead that lands at 8pm used to be silently never called:
+                # this branch just returned. Queue it for the next morning so
+                # the promise "we'll call you" survives the queue.
+                try:
+                    import scheduled_calls
+                    when = now.replace(hour=8, minute=5, second=0, microsecond=0)
+                    if when <= now:
+                        when += timedelta(days=1)
+                    scheduled_calls.schedule(db, lead_id, when, "new enquiry outside calling hours")
+                    print(f"📞[followup] lead {lead_id} queued for {when.isoformat()}", flush=True)
+                except Exception as exc:
+                    print(f"📞[followup] could not queue lead {lead_id}: {exc}", flush=True)
                 return
             digits = _bot_phone_digits(row.get("phone"))
             if len(digits) < 10:
@@ -9893,17 +10292,22 @@ def _voice_prompt() -> str:
 
 
 def _swaig_parameters(props: dict, required: list, notes: str = ""):
+    # SignalWire validates every SWML document against its published schema, and
+    # FunctionParameters allows only type/properties/required. `$comment` and
+    # `additionalProperties` are not in that schema, so including them made the
+    # WHOLE document invalid and the number failed the call before the AI ever
+    # spoke. Keep the notes in the function description instead.
     return {
         "type": "object",
         "required": required,
         "properties": props,
-        "$comment": notes,
-        "additionalProperties": False,
     }
 
 
 def _build_voice_swml(prompt: str, ai_params_extra: dict | None = None,
-                      static_greeting: str = "") -> dict:
+                      static_greeting: str = "",
+                      machine_detection: bool = False,
+                      global_data: dict | None = None) -> dict:
     # Latency and turn-taking, tuned from SignalWire's AI params reference:
     #   ai_model            gpt-4.1 was a slow first token on every turn;
     #                       4.1-mini answers in roughly half the time and still
@@ -9931,9 +10335,18 @@ def _build_voice_swml(prompt: str, ai_params_extra: dict | None = None,
         "interrupt_on_noise": False,
         "enable_barge": "complete",
         "barge_min_words": 2,
-        "acknowledge_interruptions": 1,
+        "acknowledge_interruptions": True,
         "transparent_barge": True,
-        "attention_timeout": 4000,
+        # 4s was a nudge every time the caller took a breath, and on a call
+        # that reached voicemail it became a "are you still there?" loop for
+        # minutes. Give a real person time to think, and make the nudge itself
+        # check in once rather than restart the wait every 4 seconds.
+        "attention_timeout": 12000,
+        "attention_timeout_prompt": (
+            "The person has gone quiet. Ask once, briefly, whether they are "
+            "still there. If you have already checked in during this call, say "
+            "a short goodbye and end the call instead of asking again."
+        ),
         "wait_for_user": False,
         "double_turns": False,
         "enable_thinking": False,
@@ -10206,15 +10619,86 @@ def _build_voice_swml(prompt: str, ai_params_extra: dict | None = None,
     if static_greeting:
         ai_block["params"]["static_greeting"] = static_greeting
         ai_block["params"]["static_greeting_no_barge"] = False
-    return {
-        "version": "1.0.0",
-        "sections": {"main": [{"answer": {}}, {"ai": ai_block}]},
-    }
+    if global_data:
+        ai_block["global_data"] = global_data
+    main = [{"answer": {}}]
+    if machine_detection:
+        # Answering-machine detection runs before the agent says anything. On
+        # the 2026-11-18 bid pass every dial that answered hit voicemail and
+        # the agent spent minutes asking a recording whether it was still
+        # there. `machine` and `fax` hang up; `unknown` (detector could not
+        # decide) falls through to the agent, so this can only remove machine
+        # calls, never a real conversation.
+        main.append({
+            "detect_machine": {
+                "detectors": "amd",
+                "detect_message_end": False,
+                # 15s covers a normal voicemail greeting; a silently-answering
+                # human gets the greeting after this instead of waiting the
+                # 30s default. Voicemail starts talking within a second or two.
+                "timeout": 15,
+            }
+        })
+        main.append({
+            "switch": {
+                "variable": "detect_result",
+                "case": {
+                    "human": [{"ai": ai_block}],
+                    "machine": [{"hangup": {}}],
+                    "fax": [{"hangup": {}}],
+                },
+                "default": [{"ai": ai_block}],
+            }
+        })
+    else:
+        main.append({"ai": ai_block})
+    return {"version": "1.0.0", "sections": {"main": main}}
+
+
+def _vapi_inbound_sip_uri() -> str:
+    """Where SignalWire should hand an inbound call so VAPI answers it.
+
+    The business line is imported into Vapi as a BYO SIP number
+    (+17578469275, credential f879b2ea-...), and its assistant
+    ("bizstack-voice") answers using this app as its custom LLM at /vapi/llm.
+    Vapi's documented inbound form for a BYO number is
+    ``sip:{number}@{credential_id}.sip.vapi.ai``.
+
+    Set VAPI_INBOUND_SIP_URI to override, or to the word "off" to serve the
+    in-app SWML agent instead.
+    """
+    explicit = (os.getenv("VAPI_INBOUND_SIP_URI") or "").strip()
+    if explicit.lower() in ("off", "none", "0", "false"):
+        return ""
+    if explicit:
+        return explicit
+
+    credential = (os.getenv("VAPI_SIP_CREDENTIAL_ID")
+                  or "f879b2ea-02d1-4c8f-9346-f6e8a69217c2").strip()
+    number = "".join(ch for ch in (os.getenv("SIGNALWIRE_PHONE_RAW")
+                                   or os.getenv("SIGNALWIRE_PHONE")
+                                   or "+17578469275") if ch.isdigit())
+    if not (credential and number):
+        return ""
+    if not number.startswith("1"):
+        number = "1" + number
+    return f"sip:+{number}@{credential}.sip.vapi.ai"
 
 
 @app.api_route("/voice.swml", methods=["GET", "POST"], operation_id="voice_swml")
 @app.api_route("/voice-app.swml", methods=["GET", "POST"], operation_id="voice_app_swml")
 async def voice_swml():
+    # Answer, then hand the call to Vapi over SIP. Vapi's assistant supplies the
+    # voice and transcription; /vapi/llm supplies the prompt and tools. Serving
+    # the in-app SWML agent here instead would answer every call in a different
+    # voice from the one configured in the Vapi dashboard, and Vapi would never
+    # see the call at all.
+    sip_uri = _vapi_inbound_sip_uri()
+    if sip_uri:
+        return JSONResponse(content={
+            "version": "1.0.0",
+            "sections": {"main": [{"answer": {}}, {"connect": {"to": sip_uri}}]},
+        })
     return JSONResponse(content=_build_voice_swml(_voice_prompt()))
 
 
@@ -10289,6 +10773,11 @@ async def outbound_voice_swml(request: Request, db=Depends(get_db)):
         "availability, permit outcome or commitment. If they say stop, do not call, "
         "remove me or take me off the list: apologise, confirm the number is removed, "
         "end the call, and do not try to save the sale.\n\n"
+        "IF NOBODY IS THERE: a voicemail greeting, a recorded message, an automated "
+        "menu, or someone saying 'please leave a message after the tone' is not the "
+        "person you called. Say one short sentence — who you are and the number to "
+        "call back — then end the call. Never ask a recording a question, never wait "
+        "on it, and never repeat 'are you still there' more than once.\n\n"
         "SOUND LIKE A PERSON: use contractions and short sentences; keep most replies "
         "under 25 words; answer the question they asked instead of restating it; ask one "
         "question at a time; never list options like a menu. If you hear background "
@@ -10298,10 +10787,25 @@ async def outbound_voice_swml(request: Request, db=Depends(get_db)):
     return JSONResponse(content=_build_voice_swml(
         prompt,
         static_greeting=static_greeting,
+        # Kill switch: if the carrier rejects the detector, one env var gets the
+        # old call flow back without a code change. Explicit parse -- an env
+        # value of "false" is truthy and must not enable it.
+        machine_detection=(
+            str(os.getenv("DISABLE_OUTBOUND_AMD", "")).strip().lower()
+            not in ("1", "true", "yes")
+        ),
+        # The post-prompt report does not carry the dialled number, and a bid
+        # follow-up has no lead row to look it up from, so seed it here. It
+        # comes back in `global_data` and the call log can name both ends.
+        global_data=({"destination_number": _e164_number(to)}
+                     if _e164_number(to) else None),
         ai_params_extra={
             "direction": "outbound",
             "wait_for_user": False,
             "outbound_attention_timeout": 10000,
+            # A bid follow-up is a short call. This is the backstop for a call
+            # that gets stuck talking to something that is not a person.
+            "hard_stop_time": "6:00",
         },
     ))
 
@@ -10798,15 +11302,80 @@ def _swaig_tool_response_text(name: str, result) -> str:
     return json.dumps(result, default=str, ensure_ascii=False)
 
 
+_SW_CALL_CACHE: dict = {}
+_SW_CALL_CACHE_TTL = 300
+
+
+def _signalwire_call_exists(call_id: str) -> bool:
+    """True when ``call_id`` is a real call on our own SignalWire account.
+
+    The SWAIG tool webhook arrives from SignalWire with no session cookie, so
+    the old require_admin() rejected every tool call on every call: the
+    assistant could answer a caller and then do nothing at all. A stranger
+    cannot mint a call SID, so asking SignalWire whether the call exists on our
+    account authorises the request without a shared secret (which the public
+    /voice.swml would leak anyway).
+    """
+    if not call_id:
+        return False
+    now = time.time()
+    hit = _SW_CALL_CACHE.get(call_id)
+    if hit and now - hit[0] < _SW_CALL_CACHE_TTL:
+        return hit[1]
+
+    pid = (os.getenv("SIGNALWIRE_PROJECT_ID") or "").strip()
+    tok = (os.getenv("SIGNALWIRE_API_TOKEN") or "").strip()
+    space = (os.getenv("SIGNALWIRE_SPACE_URL") or "").strip().rstrip("/")
+    if not (pid and tok):
+        return False
+    if not space.startswith("http"):
+        space = "https://" + space
+
+    ok = False
+    try:
+        auth = _b64.b64encode(f"{pid}:{tok}".encode()).decode()
+        req = urllib.request.Request(
+            f"{space}/api/laml/2010-04-01/Accounts/{pid}/Calls/{call_id}.json",
+            headers={"Authorization": "Basic " + auth,
+                     "Accept": "application/json",
+                     "User-Agent": "BuildStack/1.0"},
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            ok = bool(json.loads(resp.read().decode() or "{}").get("sid"))
+    except Exception as exc:  # noqa: BLE001 - a lookup failure must not crash the call
+        print(f"[voice-tool] call lookup failed for {call_id}: {exc}", flush=True)
+
+    if len(_SW_CALL_CACHE) > 500:
+        _SW_CALL_CACHE.clear()
+    _SW_CALL_CACHE[call_id] = (now, ok)
+    return ok
+
+
+def _voice_tool_authorized(request: Request, payload: dict) -> bool:
+    """Owner session OR a tool call from a live call on our account."""
+    actor = current_actor(request)
+    if actor and actor.get("role") == "admin":
+        return True
+    call_id = str(payload.get("call_id") or "").strip()
+    if not call_id:
+        call = payload.get("call")
+        if isinstance(call, dict):
+            call_id = str(call.get("call_id") or call.get("id") or "").strip()
+    return _signalwire_call_exists(call_id)
+
+
 @app.api_route("/api/voice/tool", methods=["POST"])
 async def voice_tool(request: Request, db=Depends(get_db)):
-    require_admin(request)
     try:
         payload = await request.json()
     except Exception:
         payload = {}
     if not isinstance(payload, dict):
         payload = {}
+
+    if not _voice_tool_authorized(request, payload):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                            detail="Voice tool call not tied to a live SignalWire call.")
 
     function_name = payload.get("function") or payload.get("function_name")
     argument = payload.get("argument")
@@ -10882,12 +11451,29 @@ def _is_our_number(number) -> bool:
     return digits in {num for num in ours if num}
 
 
-def _spoken_opt_out_number(db, data: dict, call_id):
-    """The number that opted out, best source first.
+def _our_line_number() -> str:
+    """Our own voice line in E.164, or ``"unknown"`` when none is usable.
 
-    The bot_calls row for this call knows lead_id and direction. Falling back
-    to the payload's "from" on an outbound call would suppress our own line
-    instead of the lead's number.
+    ``SIGNALWIRE_NUMBER`` falls back to the literal string ``"system"`` when the
+    env var is missing, which must never be written into a phone column.
+    """
+    for value in (getattr(signalwire, "from_number", ""), SIGNALWIRE_NUMBER,
+                  company().get("phone_e164")):
+        digits = re.sub(r"\D", "", str(value or ""))
+        if len(digits) == 11 and digits.startswith("1"):
+            return "+" + digits
+        if len(digits) == 10:
+            return "+1" + digits
+    return "unknown"
+
+
+def _voice_call_sides(db, data: dict, call_id):
+    """``(direction, other party's number)`` for a post-prompt report.
+
+    SignalWire's post-prompt payload carries ``call_id`` and
+    ``caller_id_number``, not from/to, and ``caller_id_number`` is *our* line on
+    a call we placed. The ``bot_calls`` row written at dial time is the only
+    reliable statement of which way the call went, so it is consulted first.
     """
     direction = str(data.get("direction") or "").strip().lower()
     lead_id = None
@@ -10927,7 +11513,10 @@ def _spoken_opt_out_number(db, data: dict, call_id):
     if direction == "outbound":
         number = to_number
         if not number or _is_our_number(number):
-            number = ""
+            # `global_data.destination_number` is seeded by the outbound SWML
+            # route; a bid follow-up has no lead row to fall back to.
+            seeded = str(global_data.get("destination_number") or "").strip()
+            number = seeded if seeded and not _is_our_number(seeded) else ""
         if not number and lead_id:
             try:
                 with db.cursor() as cur:
@@ -10935,10 +11524,15 @@ def _spoken_opt_out_number(db, data: dict, call_id):
                     number = str((cur.fetchone() or {}).get("phone") or "").strip()
             except Exception as exc:
                 print(f"⚠️ VOICE-DEBUG lead phone lookup failed: {exc}", flush=True)
-        return number
+        return direction, number
     # Inbound: the caller is who asked us to stop. caller_id_number is the
     # post-prompt payload's own field for that; from/caller are older shapes.
-    return from_number or caller_id
+    return direction, (from_number or caller_id)
+
+
+def _spoken_opt_out_number(db, data: dict, call_id):
+    """The number that opted out, best source first."""
+    return _voice_call_sides(db, data, call_id)[1]
 
 
 def _record_spoken_opt_out(db, data: dict, call_id) -> bool:
@@ -10996,19 +11590,43 @@ async def voice_debug(request: Request, db=Depends(get_db)):
             for entry in call_log:
                 if not isinstance(entry, dict) or not entry.get("content"):
                     continue
-                label = {"assistant": "AI", "user": "Caller", "tool": "Tool", "system": "System"}.get(entry.get("role"), str(entry.get("role")))
+                role = str(entry.get("role") or "").strip().lower()
+                # `system` is the agent's own prompt, and the
+                # assistant-manual/system-log turns are the speech fillers
+                # ("one sec,", "sure,") SignalWire logs around a real reply.
+                # None of it was said to the person on the call, and leading
+                # with the prompt is how /monitor ended up showing the legal
+                # text instead of the conversation.
+                if role in ("system", "system-log", "assistant-manual"):
+                    continue
+                label = {"assistant": "AI", "user": "Caller", "tool": "Tool"}.get(
+                    role, role or "Unknown")
                 lines.append(f"{label}: {entry['content']}")
             transcript = "\n".join(lines)
         message = agent_summary or transcript or "Voice call (no transcript)"
         if call_id:
             message = f"[session {call_id}]\n" + message
+        direction, other = _voice_call_sides(db, data, call_id)
+        ours = _our_line_number()
+        if direction == "outbound":
+            sender, recipient = ours, other or "unknown"
+        else:
+            sender, recipient = other or "unknown", ours
         try:
             with db.cursor() as cur:
                 cur.execute(
-                    "INSERT INTO comms_logs (direction, channel, sender, recipient, message_body) VALUES ('inbound', 'voice', %s, %s, %s);",
-                    (data.get("from") or data.get("From") or "unknown",
-                     data.get("to") or data.get("To") or company()["phone_e164"], message),
+                    "INSERT INTO comms_logs (direction, channel, sender, recipient, message_body) "
+                    "VALUES (%s, 'voice', %s, %s, %s);",
+                    (direction or "inbound", sender, recipient, message),
                 )
+                # This report is the only end-of-call signal the app receives,
+                # so a dialled call must not sit at "dialed" forever.
+                if call_id:
+                    cur.execute(
+                        "UPDATE bot_calls SET status = 'completed' WHERE call_sid = %s "
+                        "AND coalesce(status, '') IN ('dialed', 'in_progress');",
+                        (str(call_id),),
+                    )
             db.commit()
         except Exception as e:
             print(f"⚠️ VOICE-DEBUG log insert failed: {e}", flush=True)

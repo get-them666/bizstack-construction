@@ -337,11 +337,15 @@
                     <a href="tel:{{ co.phone_e164 }}" class="font-semibold text-white hover:text-indigo-300">{{ co.phone }}</a> ·
                     <a href="mailto:{{ co.email }}" class="hover:text-indigo-300">{{ co.email }}</a>
                 </p>
-                <p class="mt-5">
-                    <a href="https://buildstack-construction-llc.kit.com/e609144899"
-                       class="inline-block px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-bold">
-                        Get the monthly home-maintenance email →
-                    </a>
+                <p class="mt-5" id="newsletter">
+                    <span class="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">The monthly home-maintenance email</span>
+                    <form id="newsletter-form" method="post" action="/api/newsletter" class="flex flex-col sm:flex-row gap-2 max-w-md">
+                        <input type="email" name="email" required placeholder="you@email.com" aria-label="Email address"
+                               class="flex-1 px-3 py-2.5 rounded-xl bg-white/10 border border-white/10 text-sm text-white focus:outline-none focus:ring-2 focus:ring-indigo-400">
+                        <input type="text" name="company" tabindex="-1" autocomplete="off" aria-hidden="true" class="hidden">
+                        <button type="submit" class="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-bold whitespace-nowrap">Sign me up</button>
+                    </form>
+                    <span id="newsletter-msg" class="block mt-2 text-xs text-slate-400">One short email a month. No pitch.</span>
                 </p>
             </div>
             <div>
@@ -375,6 +379,40 @@
 
     <script>
         document.addEventListener('DOMContentLoaded', function() {
+            // Newsletter signup in the footer. Posts to the app (not Kit
+            // directly) so the subscriber is tagged and enrolled server-side.
+            const newsletterForm = document.getElementById('newsletter-form');
+            const newsletterMsg = document.getElementById('newsletter-msg');
+            if (newsletterForm) {
+                newsletterForm.addEventListener('submit', async function (e) {
+                    e.preventDefault();
+                    const button = newsletterForm.querySelector('button');
+                    const email = newsletterForm.querySelector('[name="email"]').value;
+                    button.disabled = true;
+                    button.textContent = 'Signing up…';
+                    try {
+                        const res = await fetch('/api/newsletter', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({email: email})
+                        });
+                        const json = await res.json();
+                        if (json.ok) {
+                            newsletterForm.reset();
+                            if (newsletterMsg) { newsletterMsg.textContent = "You're in. Check your inbox for the first one."; newsletterMsg.className = 'block mt-2 text-xs text-emerald-300'; }
+                        } else if (newsletterMsg) {
+                            newsletterMsg.textContent = json.reason || 'That did not work. Try again.';
+                            newsletterMsg.className = 'block mt-2 text-xs text-amber-300';
+                        }
+                    } catch (err) {
+                        if (newsletterMsg) { newsletterMsg.textContent = 'That did not work. Try again.'; newsletterMsg.className = 'block mt-2 text-xs text-amber-300'; }
+                    } finally {
+                        button.disabled = false;
+                        button.textContent = 'Sign me up';
+                    }
+                });
+            }
+
             const mobileMenuBtn = document.getElementById('mobile-menu-btn');
             const mobileMenu = document.getElementById('mobile-menu');
             const iconOpen = document.getElementById('menu-icon-open');

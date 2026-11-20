@@ -97,9 +97,12 @@ class FakeCursor:
             return
         if text.startswith("update bot_calls"):
             sid = params[-1]
+            status = "completed" if "'completed'" in text else "opted_out"
             for row in self.db.bot_calls:
                 if str(row["call_sid"]) == str(sid):
-                    row["status"] = "opted_out"
+                    if status == "completed" and row.get("status") not in ("dialed", "in_progress"):
+                        continue
+                    row["status"] = status
             return
 
     def fetchone(self):
@@ -495,6 +498,94 @@ def test_post_prompt_does_not_suppress_a_plan_to_visit(monkeypatch, db):
     assert response.status_code == 204
 
 
+def test_outbound_post_prompt_logs_as_outbound_with_the_lead_number(db, monkeypatch):
+    """A call we placed must not be filed as an inbound call from "unknown".
+
+    SignalWire's post-prompt report only carries our own caller_id_number, so
+    the old insert wrote every dialled call as inbound to our own line and put
+    the legal prompt where the conversation should be.
+    """
+    monkeypatch.setattr(main, "SIGNALWIRE_NUMBER", "+17578469275")
+    monkeypatch.setattr(main.signalwire, "from_number", "+17578469275")
+    db.bot_calls.append({
+        "call_sid": "CA_out", "lead_id": 42, "direction": "outbound",
+        "status": "in_progress", "turns": 1,
+        "created_at": datetime(2026, 11, 18, 20, 20, tzinfo=timezone.utc),
+    })
+    main.app.dependency_overrides[main.get_db] = lambda: db
+    try:
+        response = TestClient(main.app).post("/api/voice/debug", json={
+            "action": "post_conversation",
+            "call_id": "CA_out",
+            "caller_id_number": "+17578469275",
+            "call_log": [
+                {"role": "system", "content": "LEGAL REQUIRED BEHAVIOUR FOR THIS OUTBOUND CALL: ..."},
+                {"role": "assistant-manual", "content": "one sec,"},
+                {"role": "assistant", "content": "Hi, this is Rachel with BuildStack."},
+                {"role": "system-log", "content": "sure,"},
+                {"role": "user", "content": "Please leave a message after the tone."},
+            ],
+        })
+    finally:
+        main.app.dependency_overrides.pop(main.get_db, None)
+
+    assert response.status_code == 204
+    direction, sender, recipient, body = db.comms_logs[-1]
+    assert direction == "outbound"
+    assert sender == "+17578469275"
+    assert recipient == "757-555-0142"
+    assert body.startswith("[session CA_out]\nAI: Hi, this is Rachel")
+    assert "LEGAL REQUIRED" not in body
+    assert "one sec," not in body and "sure," not in body
+    assert db.bot_calls[0]["status"] == "completed"
+
+
+def test_bid_follow_up_log_names_the_dialled_number(db, monkeypatch):
+    """Bid follow-ups have no lead_id; the seeded destination is the only name."""
+    monkeypatch.setattr(main, "SIGNALWIRE_NUMBER", "+17578469275")
+    monkeypatch.setattr(main.signalwire, "from_number", "+17578469275")
+    db.bot_calls.append({
+        "call_sid": "CA_bid", "lead_id": None, "direction": "outbound",
+        "status": "dialed", "turns": 0,
+        "created_at": datetime(2026, 11, 18, 20, 20, tzinfo=timezone.utc),
+    })
+    main.app.dependency_overrides[main.get_db] = lambda: db
+    try:
+        TestClient(main.app).post("/api/voice/debug", json={
+            "call_id": "CA_bid",
+            "caller_id_number": "+17578469275",
+            "global_data": {"destination_number": "+19542280518"},
+            "call_log": [{"role": "user", "content": "Please leave a message after the tone."}],
+        })
+    finally:
+        main.app.dependency_overrides.pop(main.get_db, None)
+
+    direction, sender, recipient, _ = db.comms_logs[-1]
+    assert direction == "outbound"
+    assert sender == "+17578469275"
+    assert recipient == "+19542280518"
+
+
+def test_inbound_post_prompt_stays_inbound(db, monkeypatch):
+    monkeypatch.setattr(main, "SIGNALWIRE_NUMBER", "+17578469275")
+    monkeypatch.setattr(main.signalwire, "from_number", "+17578469275")
+    main.app.dependency_overrides[main.get_db] = lambda: db
+    try:
+        TestClient(main.app).post("/api/voice/debug", json={
+            "call_id": "CA_in",
+            "caller_id_number": "+17575550199",
+            "call_log": [{"role": "user", "content": "I need a quote for a roof."}],
+        })
+    finally:
+        main.app.dependency_overrides.pop(main.get_db, None)
+
+    direction, sender, recipient, body = db.comms_logs[-1]
+    assert direction == "inbound"
+    assert sender == "+17575550199"
+    assert recipient == "+17578469275"
+    assert "Caller: I need a quote for a roof." in body
+
+
 # --------------------------------------------------------------------------
 # SignalWire: validate before the carrier
 # --------------------------------------------------------------------------
@@ -669,6 +760,8 @@ def test_swml_keeps_the_tuned_turn_taking(monkeypatch):
     assert params["barge_min_words"] == 2
     assert params["wait_for_user"] is False
     assert params["transparent_barge"] is True
+    assert params["attention_timeout"] >= 10000
+    assert "still there" in params["attention_timeout_prompt"]
     assert ai["languages"][0]["voice"] == "elevenlabs.rachel"
 
 
@@ -681,7 +774,8 @@ def test_outbound_swml_keeps_the_greeting_and_legal_disclosure(db):
         main.app.dependency_overrides.pop(main.get_db, None)
 
     assert response.status_code == 200
-    ai = response.json()["sections"]["main"][1]["ai"]
+    branch = response.json()["sections"]["main"][2]["switch"]
+    ai = branch["case"]["human"][0]["ai"]
     greeting = ai["params"]["static_greeting"]
     assert "Dana" in greeting
     assert "automated assistant" in greeting
@@ -693,6 +787,67 @@ def test_outbound_swml_keeps_the_greeting_and_legal_disclosure(db):
     assert "say 'stop'" in prompt
     assert ai["params"]["direction"] == "outbound"
     assert ai["params"]["wait_for_user"] is False
+
+
+def test_outbound_swml_detects_machines_before_the_agent_speaks(db, monkeypatch):
+    """Voicemail must not get the greeting, and must not be talked to.
+
+    On the 2026-11-18 bid pass the agent asked a voicemail recording whether it
+    was still there for three minutes. A machine result now hangs up.
+    """
+    monkeypatch.delenv("DISABLE_OUTBOUND_AMD", raising=False)
+    main.app.dependency_overrides[main.get_db] = lambda: db
+    try:
+        response = TestClient(main.app).get(
+            "/comms/outbound-voice.swml", params={"to": "+17575550142"})
+    finally:
+        main.app.dependency_overrides.pop(main.get_db, None)
+
+    main_section = response.json()["sections"]["main"]
+    assert [list(step)[0] for step in main_section] == ["answer", "detect_machine", "switch"]
+    detect = main_section[1]["detect_machine"]
+    assert detect["detectors"] == "amd"
+    assert detect["detect_message_end"] is False
+
+    branch = main_section[2]["switch"]
+    assert branch["variable"] == "detect_result"
+    assert branch["case"]["machine"] == [{"hangup": {}}]
+    assert branch["case"]["fax"] == [{"hangup": {}}]
+    assert "ai" in branch["case"]["human"][0]
+    assert "ai" in branch["default"][0]
+    # Seeded so the post-prompt report can name the dialled number.
+    assert branch["case"]["human"][0]["ai"]["global_data"]["destination_number"] == "+17575550142"
+
+
+def test_inbound_swml_does_not_probe_for_a_machine():
+    """An inbound caller has already chosen to talk to us; AMD would add silence.
+
+    Inbound is either bridged to the Vapi assistant that owns the number
+    (answer -> connect) or, with VAPI_INBOUND_SIP_URI=off, served by the in-app
+    agent (answer -> ai). Neither may probe for an answering machine.
+    """
+    response = TestClient(main.app).get("/voice.swml")
+    assert response.status_code == 200
+    steps = [list(step)[0] for step in response.json()["sections"]["main"]]
+    assert steps in (["answer", "connect"], ["answer", "ai"])
+    assert "detect_machine" not in steps
+
+
+def test_outbound_amd_kill_switch_parses_the_env_strictly(db, monkeypatch):
+    def kinds():
+        main.app.dependency_overrides[main.get_db] = lambda: db
+        try:
+            doc = TestClient(main.app).get(
+                "/comms/outbound-voice.swml", params={"to": "+17575550142"}).json()
+        finally:
+            main.app.dependency_overrides.pop(main.get_db, None)
+        return [list(step)[0] for step in doc["sections"]["main"]]
+
+    # "false" is a truthy string and must not switch detection off.
+    monkeypatch.setenv("DISABLE_OUTBOUND_AMD", "false")
+    assert kinds() == ["answer", "detect_machine", "switch"]
+    monkeypatch.setenv("DISABLE_OUTBOUND_AMD", "true")
+    assert kinds() == ["answer", "ai"]
 
 
 def test_swml_callbacks_are_absolute_https_even_without_app_base(monkeypatch):
