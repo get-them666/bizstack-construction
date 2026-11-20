@@ -52,3 +52,4 @@ my_agent/
 # One-off tools and artifacts that don't belong in the repo
 zmail-cli.jar
 stale/
+.env
