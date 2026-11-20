@@ -2,6 +2,8 @@
 
 > **MANDATORY FIRST STEP:** Every AI session MUST read `SESSIONS.md` before starting any work, and MUST append a dated entry after finishing. This is the single source of truth for what has been done, what is broken, and what is next. Never skip this step.
 
+> **POST-DEPLOYMENT RULE:** After every deployment to DigitalOcean (159.203.175.39), commit all changes (excluding .env files) and push to GitHub. This keeps the repo in sync with production.
+
 ## 1. Brand & Domain Mapping
 - **Domain 1 (`bizstackperks.com`):** **Broom Service** (Short-Term Rental Cleaning & Co-Hosting). Phone: `+1 (757) 908-7121`. Features: Flat-Rate Turnover Calculator, Rental Analysis Report, Passwordless Client Portal, Worker/Cleaner Dispatch App, AI Voice Assistant.
 - **Domain 2 (`construction.bizstackperks.com`):** **BuildStack Construction LLC** (General Contractor & STR Make-Ready). Phone: `+1 (757) 846-9275`, Email: `hello@bizstackperks.com`. Features: Free Estimate Form, Standard Scopes/Pricing, Client Portal, Owner/Admin Login, 24/7 AI Call/Text Assistant, Live Chat Widget.
