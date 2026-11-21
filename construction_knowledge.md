@@ -691,6 +691,71 @@ If a project's gross margin is below 25%, it's probably not profitable after ove
 
 ---
 
+## 19. Hampton Roads Labor Rates & Market Pricing (Chesapeake / Virginia Beach / Norfolk)
+
+### Current 2026 Market Rates for Hampton Roads, VA
+
+**General Handyman / Punch-Out Labor:**
+- Rate: **$95–$125/hr**
+- Minimum service call: **$200** (2-hour minimum)
+- Use for: small repairs, fixture swaps, door adjustments, caulking, minor drywall patch, hardware installation
+
+**Skilled Carpentry / Framing / Drywall / Tile / Flooring:**
+- Rate: **$100–$135/hr**
+- Use for: custom trim, built-ins, framing walls, hanging drywall, tiling, hardwood/LVP installation, crown molding, wainscoting
+
+**Licensed MEP Trades (Electrical / Plumbing / HVAC):**
+- Rate: **$135–$175/hr** (+ permit fees where applicable)
+- Use for: panel upgrades, circuit runs, plumbing rough-in/finish, water heater replacement, HVAC install/repair, gas line work
+- Note: These are subcontracted rates; we mark up 20–30% O&P on top
+
+### Mandatory Add-Ons to Every Estimate
+
+**Material Waste Factor:**
+- Standard materials (lumber, drywall, paint): **+10%**
+- Tile, roofing, complex framing: **+15%**
+- Always add waste factor to material quantities before pricing
+
+**Contractor Overhead & Profit (O&P) Markup:**
+- **20%–30% minimum** on top of raw material + subcontractor costs
+- 20% for straightforward projects (single-trade, easy access)
+- 25% for standard residential renovations
+- 30% for complex projects (multi-trade, tight schedule, high-end finishes, commercial)
+
+### Construction Upsell & Cross-Referral Rules
+
+When scoping a bid or renovation, **proactively ask** about:
+
+1. **Permits:** "Will this work need permits pulled? We handle all permitting and inspections — want me to include that in the scope?"
+2. **Dumpster / Haul-Away:** "Do you need a dumpster or debris haul-away? That's typically $450–$650 depending on size and duration."
+3. **Material Upgrades:** "Are you looking at standard-grade materials, or would you like to see premium options? The difference is usually 15–25% on materials but adds significant value."
+4. **Post-Construction Deep Cleaning:** "After we finish, you'll probably want a deep clean before moving back in. We can cross-refer you to our Broom Service division for a post-construction clean — they specialize in dust/debris removal and can have the place move-in ready in a day."
+
+**Cross-referral script:** "Our Broom Service division handles post-construction cleaning — they're experts at getting the fine dust out and making the space move-in ready. Want me to have them give you a quote?"
+
+### Typical Project Timelines (Hampton Roads)
+
+- **Kitchen remodel:** 4–6 weeks (demo → rough-in → inspections → finishes → final)
+- **Bathroom remodel:** 2–3 weeks
+- **Whole-home renovation:** 8–16 weeks depending on scope
+- **Addition:** 10–20 weeks (including permit approval time)
+- **Roofing:** 2–5 days
+- **Deck:** 1–2 weeks
+- **Flooring:** 2–5 days depending on sqft
+
+### Local Material Suppliers (Hampton Roads)
+
+- **Lumber/Framing:** 84 Lumber (Chesapeake), Builders FirstSource (Virginia Beach)
+- **Roofing:** ABC Supply (Norfolk), Beacon (Virginia Beach)
+- **Drywall:** GMS (Greenfield) (Chesapeake)
+- **Tile/Flooring:** The Tile Shop (Virginia Beach), Floor & Decor (Chesapeake)
+- **Electrical/Plumbing:** Ferguson (Norfolk), HD Supply (Virginia Beach)
+- **Concrete/ Masonry:** Vulcan Materials, Old Castle
+
+Always check current material prices with suppliers — lumber and steel prices fluctuate weekly.
+
+---
+
 ## Both websites, one brain
 
 Whether the message comes from construction.bizstackperks.com or bizstackperks.com, you're the

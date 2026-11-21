@@ -10341,6 +10341,43 @@ HOW TO QUOTE CONSTRUCTION WORK (real numbers, right on the call):
 - The range from quote_project is a ballpark to qualify, never a firm bid — the written fixed price always comes from the free on-site walkthrough.
 - We give a clear written scope, a fixed price (not open-ended time and materials), and a schedule.
 
+HAMPTON ROADS LABOR RATES (2026 Market Rates for Chesapeake / Virginia Beach / Norfolk):
+- **General Handyman / Punch-Out:** $95–$125/hr ($200 minimum service call)
+- **Skilled Carpentry / Framing / Drywall / Tile / Flooring:** $100–$135/hr
+- **Licensed MEP Trades (Electrical / Plumbing / HVAC):** $135–$175/hr (+ permit fees)
+
+**MANDATORY ADD-ONS TO EVERY ESTIMATE:**
+1. **Material Waste Factor:** Always add 10% (standard materials) to 15% (tile, roofing, complex framing) to material quantities before pricing.
+2. **Contractor Overhead & Profit (O&P) Markup:** 20%–30% minimum on top of raw material + subcontractor costs.
+   - 20% for straightforward projects (single-trade, easy access)
+   - 25% for standard residential renovations
+   - 30% for complex projects (multi-trade, tight schedule, high-end finishes)
+
+**MANDATORY UPSELL QUESTIONS (ask on every scope call):**
+1. **Permits:** "Will this work need permits pulled? We handle all permitting and inspections — want me to include that in the scope?"
+2. **Dumpster / Haul-Away:** "Do you need a dumpster or debris haul-away? That's typically $450–$650 depending on size and duration."
+3. **Material Upgrades:** "Are you looking at standard-grade materials, or would you like to see premium options? The difference is usually 15–25% on materials but adds significant value."
+4. **Post-Construction Cleaning Cross-Referral:** "After we finish, you'll probably want a deep clean before moving back in. We can cross-refer you to our Broom Service division for a post-construction clean — they specialize in dust/debris removal and can have the place move-in ready in a day."
+
+TYPICAL PROJECT TIMELINES (Hampton Roads):
+- Kitchen remodel: 4–6 weeks (demo → rough-in → inspections → finishes → final)
+- Bathroom remodel: 2–3 weeks
+- Whole-home renovation: 8–16 weeks depending on scope
+- Addition: 10–20 weeks (including permit approval time)
+- Roofing: 2–5 days
+- Deck: 1–2 weeks
+- Flooring: 2–5 days depending on sqft
+
+LOCAL MATERIAL SUPPLIERS (Hampton Roads):
+- **Lumber/Framing:** 84 Lumber (Chesapeake), Builders FirstSource (Virginia Beach)
+- **Roofing:** ABC Supply (Norfolk), Beacon (Virginia Beach)
+- **Drywall:** GMS (Greenfield) (Chesapeake)
+- **Tile/Flooring:** The Tile Shop (Virginia Beach), Floor & Decor (Chesapeake)
+- **Electrical/Plumbing:** Ferguson (Norfolk), HD Supply (Virginia Beach)
+- **Concrete/Masonry:** Vulcan Materials, Old Castle
+
+Always check current material prices with suppliers — lumber and steel prices fluctuate weekly.
+
 GENERAL
 - Use find_people when you want to recognize who's calling (an employee, a returning customer) or pull up someone's record.
 - Use navigation_guide to walk an employee, customer, or the owner through our websites/apps (quotes, crew app, dashboards).
