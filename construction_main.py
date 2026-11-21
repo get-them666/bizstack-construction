@@ -147,6 +147,48 @@ logger = logging.getLogger("construction")
 
 db_url = os.getenv("DATABASE_URL", "postgresql://shaun:secret@localhost:5432/buildstack")
 templates = Jinja2Templates(directory="templates/construction")
+
+# Jinja2 filter to convert UTC timestamps to Eastern Time with clean formatting
+def format_eastern(dt, fmt="%b %-d, %Y • %-I:%M %p EST"):
+    """Convert a datetime (UTC or aware) to Eastern Time and format it."""
+    if dt is None:
+        return ""
+    try:
+        from datetime import datetime, timezone
+        from zoneinfo import ZoneInfo
+        
+        # If dt is a string, parse it
+        if isinstance(dt, str):
+            # Handle ISO format with timezone
+            if '+' in dt or 'Z' in dt:
+                dt = dt.replace('Z', '+00:00')
+                try:
+                    dt = datetime.fromisoformat(dt)
+                except:
+                    return dt
+            else:
+                try:
+                    dt = datetime.fromisoformat(str(dt))
+                except:
+                    return str(dt)
+        
+        # If dt is naive (no timezone), assume UTC
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        
+        # Convert to Eastern Time
+        eastern = ZoneInfo("America/New_York")
+        dt_eastern = dt.astimezone(eastern)
+        
+        # Format with clean human-readable format
+        return dt_eastern.strftime(fmt)
+    except Exception as e:
+        # Fallback: return as-is if conversion fails
+        return str(dt) if dt else ""
+
+# Register the filter with Jinja2
+templates.env.filters["format_eastern"] = format_eastern
+
 stripe_svc = StripeService()
 signalwire = SignalWireService()
 # The number inbound calls/texts arrive from, i.e. the "recipient" for an inbound

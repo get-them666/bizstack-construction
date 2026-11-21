@@ -95,7 +95,7 @@
                                 {% elif lead.deposit_status == 'pending' %}<span class="font-semibold text-amber-600">Pending</span>
                                 {% else %}<span class="text-slate-400">—</span>{% endif %}
                             </td>
-                            <td class="px-6 py-3.5 text-xs text-slate-500">{{ lead.created_at }}</td>
+                            <td class="px-6 py-3.5 text-xs text-slate-500">{{ lead.created_at|format_eastern("%b %-d • %-I:%M %p") }}</td>
                         </tr>
                         {% endfor %}
                     </tbody>
