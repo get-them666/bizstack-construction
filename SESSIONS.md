@@ -81,6 +81,26 @@ Owner couldn't receive OTP calls (Yelp, Google, etc.) on business lines because 
 3. **Emergency calls** when owner wants to handle personally
 4. **AI handles everything** after hours and on Sundays
 
+### Original Vapi Assistant IDs (save for restoration after Yelp verification)
+
+**Construction (+1 757-846-9275):**
+- Phone ID: `7d110723-77e0-49a9-b3a4-de7fced4c003`
+- Original Assistant ID: `80156d94-2c6a-40e3-a027-f4b48ea928f9` (bizstack-voice)
+- Credential ID: `f879b2ea-02d1-4c8f-9346-f6e8a69217c2`
+- Provider: `byo-phone-number` (SignalWire imported)
+
+**Broom Service (+1 757-908-7121):**
+- Phone ID: `fc973bf0-9793-4b55-a554-122b35d98726`
+- Original Assistant ID: `5932a780-bfd6-4c71-9e45-557ab9f1344b` (broom-temp-forward)
+- Provider: `vapi` (native Vapi number)
+
+**Owner Personal Cell:** +1 252-665-5891
+
+### Temporary Configuration (for Yelp verification)
+Both numbers now have:
+- `assistantId`: null
+- `fallbackDestination`: +12526655891 with message
+
 ---
 
 ## 2026-11-21 — Session 10: Facebook Page Integration Setup
