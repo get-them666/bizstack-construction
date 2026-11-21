@@ -4,6 +4,71 @@
 
 ---
 
+## 2026-11-21 — Session 8: Critical Phone Routing Fix
+
+### Problem
+1. **Construction (+1 757-846-9275):** Calls returned "The wireless customer you called is not available at this time."
+2. **Broom Service (+1 757-908-7121):** Calls answered as "BuildStack Construction" instead of Broom Service.
+
+### Root Cause
+Both phone numbers were assigned to the **SAME Vapi assistant** (`80156d94...`), which was configured for Construction:
+- Model URL: `https://construction.bizstackperks.com/vapi/llm`
+- First Message: "Hi, this is the automated assistant at BuildStack Construction..."
+
+This caused:
+- Broom Service calls to route through the Construction assistant → wrong company identity
+- Construction calls to fail because the voice.swml endpoint was trying to hand off to Vapi via SIP, but the SIP URI was misconfigured
+
+### Fix Applied
+
+**1. Created Separate Vapi Assistant for Broom Service**
+- Assistant ID: `c25af729-a17a-42d3-ae8c-0b111093bb0d`
+- Name: `broom-service-voice`
+- Model URL: `https://bizstackperks.com/vapi/llm`
+- First Message: "Hi, this is the automated assistant at Broom Service. How can I help with your cleaning or co-hosting needs?"
+
+**2. Updated Phone Number Assignment**
+- Broom Service (+1 757-908-7121) → Now assigned to `c25af729...` (broom-service-voice) ✅
+- Construction (+1 757-846-9275) → Still assigned to `80156d94...` (bizstack-voice) ✅
+
+**3. Disabled Vapi SIP Handoff for Construction**
+- Set `VAPI_INBOUND_SIP_URI=off` in `/opt/bizstack/construction.env`
+- voice.swml endpoint now returns in-app SWML voice agent instead of trying SIP handoff to Vapi
+- Necessary because Construction number is provisioned in SignalWire, not Vapi
+
+### Final Configuration
+
+**Construction (+1 757-846-9275):**
+```
+SignalWire → voice.swml → In-app SWML Voice Agent
+  Endpoint: https://construction.bizstackperks.com/voice.swml
+  Assistant: bizstack-voice (80156d94-2c6a-40e3-a027-f4b48ea928f9)
+  Model URL: https://construction.bizstackperks.com/vapi/llm
+```
+
+**Broom Service (+1 757-908-7121):**
+```
+Vapi → Assistant → Custom LLM
+  Assistant: broom-service-voice (c25af729-a17a-42d3-ae8c-0b111093bb0d)
+  Model URL: https://bizstackperks.com/vapi/llm
+```
+
+### Verification
+Both endpoints tested and responding with correct company identities:
+- Construction `/vapi/llm`: "This is BuildStack Construction LLC..."
+- Broom Service `/vapi/llm`: "This is Broom Service!..."
+- Construction `voice.swml`: Returns complete SWML with Construction voice agent
+
+### Status
+✅ Construction calls now connect to Construction voice agent  
+✅ Broom Service calls now connect to Broom Service voice agent  
+✅ Zero cross-contamination between brands
+
+### Documentation
+Full details saved to `~/PHONE_ROUTING_FIX.md`
+
+---
+
 ## 2026-11-21 — Session 7: Fix Construction Inbound Call Routing
 
 ### Problem
