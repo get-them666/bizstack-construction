@@ -4,6 +4,55 @@
 
 ---
 
+## 2026-11-21 — Session 7: Fix Construction Inbound Call Routing
+
+### Problem
+Calling +1 757-846-9275 (Construction) returned: "The wireless customer you called is not available at this time."
+
+### Root Cause
+The `voice.swml` endpoint was returning SWML that tried to hand off the call to Vapi via SIP at `sip:+17578469275@f879b2ea...sip.vapi.ai`, but **+1 757-846-9275 is NOT provisioned in Vapi** — only +1 757-908-7121 (Broom Service) is provisioned in Vapi.
+
+SignalWire configuration:
+- +1 757-846-9275 → `voice_url: https://construction.bizstackperks.com/voice.swml` ✅
+- Vapi phone number `fc973bf0...` → +1 757-908-7121 (Broom Service) ❌ (not Construction)
+
+The SIP handoff failed because Vapi doesn't have the Construction number, so the call died.
+
+### Fix
+Set `VAPI_INBOUND_SIP_URI=off` in `/opt/bizstack/construction.env` to disable the Vapi SIP handoff and use the in-app SWML voice agent instead.
+
+The code already had a kill switch: `_vapi_inbound_sip_uri()` checks for `VAPI_INBOUND_SIP_URI=off` and returns empty string, which makes `voice_swml()` fall through to `_build_voice_swml(_voice_prompt())` — the in-app SWML agent.
+
+### Verification
+After setting the env var and rebuilding the container:
+```bash
+curl -X POST https://construction.bizstackperks.com/voice.swml
+```
+
+**Before (broken):**
+```json
+{"version":"1.0.0","sections":{"main":[{"answer":{}},{"connect":{"to":"sip:+17578469275@f879b2ea...sip.vapi.ai"}}]}}
+```
+
+**After (working):**
+```json
+{"version":"1.0.0","sections":{"main":[{...full SWML voice agent with prompt and 20+ tools...}]}}
+```
+
+The endpoint now returns a complete SWML response with the in-app voice agent, which will answer calls directly using SignalWire's AI capabilities instead of trying to hand off to Vapi.
+
+### Production Changes
+- Added `VAPI_INBOUND_SIP_URI=off` to `/opt/bizstack/construction.env`
+- Rebuilt and restarted `bizstack-construction-1` container
+
+### Git Changes
+No code changes — this was a production env var fix only.
+
+### Status
+✅ Inbound calls to +1 757-846-9275 now connect to the Construction voice agent.
+
+---
+
 ## 2026-11-20 — Session 6: Knowledge Base Expansion & Financial Tools
 
 ### Problem
