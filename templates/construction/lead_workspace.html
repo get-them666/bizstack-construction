@@ -107,12 +107,18 @@
                     {% if project %}
                     <div class="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 p-4">
                         <div class="flex flex-wrap items-center justify-between gap-2">
+                        <div class="flex flex-wrap items-center gap-3">
                             <div>
                                 <p class="text-xs font-bold uppercase tracking-wide text-emerald-700">Job in progress</p>
                                 <p class="font-bold text-slate-900">{{ project.name }}</p>
                                 <p class="text-sm text-slate-600">{{ project.status | replace('_', ' ') | title }} · {{ project.crew_names or 'Crew not assigned' }}</p>
                             </div>
                             <a href="/projects?project_id={{ project.id }}#project-{{ project.id }}" class="px-3 py-2 text-sm font-semibold text-emerald-800 bg-white border border-emerald-200 rounded-xl">Manage project →</a>
+                            <form method="POST" action="/api/projects/{{ project.id }}/generate-contract"
+                                  onsubmit="return confirm('Generate SOW + Contract and email to the client with a signing link?\n\nThis will also create a client portal account if one does not exist.');">
+                                <button type="submit" class="px-3 py-2 text-sm font-bold text-white bg-violet-600 hover:bg-violet-700 rounded-xl">✉️ Generate & Send Contract</button>
+                            </form>
+                        </div>
                         </div>
                     </div>
                     {% else %}

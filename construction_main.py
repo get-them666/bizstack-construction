@@ -72,6 +72,7 @@ import email_fetcher
 import bid_costing
 import bid_scope_skeleton
 import bid_takeoff
+import job_documents
 import bid_contact
 import bid_notes
 import direct_deposit
@@ -15016,6 +15017,85 @@ async def project_delete(project_id: int, request: Request, db=Depends(get_db)):
         cur.execute("DELETE FROM projects WHERE id=%s;", (project_id,))
         db.commit()
     return RedirectResponse(url="/projects?ok=deleted", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/api/projects/{project_id}/generate-contract")
+async def project_generate_contract(project_id: int, request: Request, db=Depends(get_db)):
+    """Generate SOW + Contract, email to client with signing link, provision portal.
+
+    This is the universal onboarding trigger for projects. It works for:
+    - Converted leads (project linked to a lead)
+    - Active projects without a bid
+    - Re-sending to existing projects
+
+    The flow: generate docs → create signing link → email client → provision portal.
+    All guardrails (suppression, caps) are enforced by the underlying services.
+    """
+    require_admin(request)
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT p.*, l.name AS lead_name, l.email AS lead_email, l.phone AS lead_phone, "
+            "l.project_type, l.description AS lead_description "
+            "FROM projects p LEFT JOIN leads l ON l.id = p.lead_id "
+            "WHERE p.id = %s;",
+            (project_id,),
+        )
+        project = cur.fetchone()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Build the normalized job dict
+    lead = {
+        "name": project.get("lead_name") or "",
+        "email": project.get("lead_email") or "",
+        "phone": project.get("lead_phone") or "",
+        "project_type": project.get("project_type") or "",
+        "description": project.get("lead_description") or "",
+        "address": project.get("address") or "",
+    }
+    job = job_documents._build_job_dict_from_project(dict(project), lead)
+
+    # For projects, we don't have bid_costs. Use an empty cost list.
+    # The contract will use the project's contract_value or bid_amount as the total.
+    costs = []
+
+    # Photos from the project
+    photos = []
+    try:
+        photos = [p for p, _ in _project_photo_paths(db, project_id)]
+    except Exception:
+        pass
+
+    try:
+        result = job_documents.full_onboarding_flow(db, job, costs, photos)
+    except Exception as exc:
+        logger.warning("[projects] onboarding flow failed for project %s: %s", project_id, exc)
+        return RedirectResponse(
+            url=f"/projects?project_id={project_id}&error=" + urllib.parse.quote(
+                f"Onboarding failed: {exc}"[:200]),
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+
+    if result.get("errors"):
+        error_msg = "; ".join(result["errors"][:3])
+        return RedirectResponse(
+            url=f"/projects?project_id={project_id}&error=" + urllib.parse.quote(error_msg[:200]),
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+
+    notice_parts = []
+    if result.get("email_sent"):
+        notice_parts.append(f"Contract emailed to {job.get('contact_email')}")
+    if result.get("signing_link"):
+        notice_parts.append("signing link created")
+    if result.get("portal_created"):
+        notice_parts.append(f"portal account created for {result.get('portal_email')}")
+
+    notice = " · ".join(notice_parts) if notice_parts else "Onboarding completed"
+    return RedirectResponse(
+        url=f"/projects?project_id={project_id}&onboarding=" + urllib.parse.quote(notice),
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
 
 
 # --- Back-log ---------------------------------------------------------------

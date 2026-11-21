@@ -15,6 +15,17 @@
             <a href="/dashboard" class="px-4 py-2.5 text-sm font-semibold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 rounded-xl transition-colors">← Dashboard</a>
         </div>
 
+        {% if request.query_params.get('onboarding') %}
+        <div class="mb-6 rounded-xl bg-violet-50 border border-violet-200 px-4 py-3 text-sm text-violet-800">
+            ✉️ {{ request.query_params.get('onboarding') }}
+        </div>
+        {% endif %}
+        {% if request.query_params.get('error') %}
+        <div class="mb-6 rounded-xl bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">
+            {{ request.query_params.get('error') }}
+        </div>
+        {% endif %}
+
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
             <div class="lg:col-span-2">
                 <div class="flex flex-wrap items-center gap-2 mb-4">
@@ -85,8 +96,12 @@
                                     </div>
                                 </div>
 
-                                <div class="mt-4 flex items-center justify-between">
+                                <div class="mt-4 flex flex-wrap items-center gap-3">
                                     {% if p.address %}<a href="{{ map_directions(p.address) }}" target="_blank" rel="noopener" class="text-sm font-semibold text-indigo-600 hover:text-indigo-700">Map & directions →</a>{% endif %}
+                                    <form method="POST" action="/api/projects/{{ p.id }}/generate-contract"
+                                          onsubmit="return confirm('Generate SOW + Contract and email to the client with a signing link?\n\nThis will also create a client portal account if one does not exist.');">
+                                        <button type="submit" class="px-3 py-2 text-sm font-bold text-white bg-violet-600 hover:bg-violet-700 rounded-xl transition-colors">✉️ Generate & Send Contract</button>
+                                    </form>
                                     <form method="POST" action="/api/projects/{{ p.id }}/delete" onsubmit="return confirm('Delete project {{ p.name }}?')">
                                         <button type="submit" class="px-3 py-2 text-sm font-semibold text-red-600 bg-white border border-red-200 hover:bg-red-50 rounded-xl transition-colors">Delete</button>
                                     </form>

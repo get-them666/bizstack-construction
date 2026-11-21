@@ -4,6 +4,96 @@
 
 ---
 
+## 2026-11-20 — Session 5: Universal SOW/Contract/Portal Automation
+
+### Problem
+The /bids pipeline (SOW generation, contract signing, email, portal provisioning) was only wired for bid_opportunities. Converted leads and active projects had no path to generate standardized paperwork or onboard clients.
+
+### Solution: Shared Service Module
+
+**Created `job_documents.py`** — a universal service that works from any entry point:
+- Normalized job dict shape works for bids, projects, and leads
+- `generate_sow()` — generates Scope of Work PDF
+- `generate_contract()` — generates Renovation Agreement with owner signature embedded
+- `generate_itemized_pricing()` — generates itemized quote PDF
+- `get_owner_signature()` / `save_owner_signature()` — works for bids and projects (uses synthetic bid_id for projects)
+- `create_signing_request()` — creates click-and-sign link for any job source
+- `send_contract_email()` — emails SOW + contract + signing link to client
+- `provision_portal_account()` — creates client portal account if needed
+- `send_portal_credentials_email()` — emails portal login to client
+- `full_onboarding_flow()` — one-call entry point that runs the entire flow
+
+**Created `bid_takeoff.py`** — AI takeoff extraction:
+- Extracts text from uploaded PDFs using PyMuPDF
+- Sends to OpenAI for structured line item parsing
+- Inserts extracted items as bid_costs rows
+
+### Routes Added
+
+| Route | Method | Purpose |
+|-------|--------|---------|
+| `/api/bids/{bid_id}/takeoff/extract` | POST | AI extract line items from uploaded PDFs |
+| `/api/bids/{bid_id}/send-to-contractor` | POST | Email contractor bid package + signing link |
+| `/api/projects/{project_id}/generate-contract` | POST | Full onboarding flow for any project |
+
+### UI Changes
+
+**bid_detail.html:**
+- Added "✨ AI Takeoff Extraction" button
+- Added "✉️ Send Bid Package to Contractor" section
+- Removed redundant "Bid This Job" section (duplicated Send to Contractor)
+- Removed duplicate upload form (merged into File Cabinet)
+- Removed duplicate signing/portal buttons (consolidated)
+- Stripped bottom bar from 9 links to 4 essentials
+- 1,418 → 1,289 lines (129 lines removed)
+
+**projects.html:**
+- Added "✉️ Generate & Send Contract" button on each project card
+- Added onboarding success/error notices
+
+**lead_workspace.html:**
+- Added "✉️ Generate & Send Contract" button next to "Manage project" link
+
+### Trigger Points
+
+The onboarding flow can now be triggered from:
+1. **Bid Board** — "Send to Contractor" button on /bids/{id}
+2. **Projects Dashboard** — "Generate & Send Contract" button on /projects
+3. **Lead Workspace** — "Generate & Send Contract" button on /leads/{id}
+
+All three trigger the same shared flow:
+1. Generate SOW + Contract PDFs (with owner signature embedded)
+2. Create signing link
+3. Email client with attachments + signing link
+4. Provision portal account if needed
+5. Email portal credentials to client
+
+### Guardrails Preserved
+- Calling hours enforcement (8am-7pm Eastern)
+- DNC/suppression.py checks on all outbound
+- Claim-based deduplication
+- Daily call caps
+- sam-gov exclusions
+
+### Files Created
+- `job_documents.py` — Universal SOW/contract/email/portal service (320 lines)
+- `bid_takeoff.py` — AI takeoff extraction module (180 lines)
+
+### Files Modified
+- `construction_main.py` — Added 3 new routes, imported job_documents and bid_takeoff
+- `templates/construction/bid_detail.html` — Added buttons, removed redundancies
+- `templates/construction/projects.html` — Added onboarding button and notices
+- `templates/construction/lead_workspace.html` — Added onboarding button
+
+### Compile Status
+✅ All Python files compile with zero errors
+
+### Git Commits
+- Previous: UI cleanup commits
+- Pending: This session's changes
+
+---
+
 ## 2026-11-20 — Session 4: /bids UI Cleanup & Consolidation
 
 ### Problem
