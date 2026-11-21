@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin — Pricing Rules</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#1a1a2e',
+                        accent: '#f59e0b',
+                        surface: '#16213e',
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-primary text-white min-h-screen">
+    
+    <!-- Header -->
+    <header class="bg-surface border-b border-accent py-4 shadow-lg">
+        <div class="max-w-7xl mx-auto px-4 flex items-center justify-between">
+            <h1 class="text-2xl font-bold"><span class="text-accent">Admin</span> — Pricing Rules</h1>
+            <nav class="flex gap-4">
+                <a href="/admin/quotes" class="hover:text-accent transition">Quotes</a>
+                <a href="/admin/pricing-rules" class="text-accent hover:underline">Pricing Rules</a>
+            </nav>
+        </div>
+    </header>
+    
+    <!-- Main Content -->
+    <main class="max-w-7xl mx-auto px-4 py-8">
+        
+        <!-- Brand Filter Tabs -->
+        <div class="flex gap-2 mb-6">
+            <button onclick="filterBrand('')" 
+                    id="tab-all"
+                    class="px-4 py-2 rounded bg-accent text-white font-bold">
+                All Rules
+            </button>
+            <button onclick="filterBrand('construction')" 
+                    id="tab-construction"
+                    class="px-4 py-2 rounded bg-gray-700 hover:bg-gray-600 font-bold transition">
+                Construction
+            </button>
+            <button onclick="filterBrand('broom')" 
+                    id="tab-broom"
+                    class="px-4 py-2 rounded bg-gray-700 hover:bg-gray-600 font-bold transition">
+                Broom Service
+            </button>
+        </div>
+        
+        <!-- Add New Rule -->
+        <div class="bg-surface rounded-lg shadow p-4 mb-6">
+            <h3 class="font-bold mb-3">Add New Pricing Rule</h3>
+            <form id="add-rule-form" 
+                  hx-post="/admin/pricing-rules" 
+                  hx-target="#rules-table-body"
+                  hx-swap="beforeend"
+                  class="grid grid-cols-1 md:grid-cols-6 gap-3">
+                <select name="brand" required class="bg-gray-800 border border-gray-600 rounded px-3 py-2 text-sm">
+                    <option value="">Brand...</option>
+                    <option value="construction">Construction</option>
+                    <option value="broom">Broom Service</option>
+                </select>
+                <select name="category" required class="bg-gray-800 border border-gray-600 rounded px-3 py-2 text-sm">
+                    <option value="">Category...</option>
+                    <option value="base_rate">Base Rate</option>
+                    <option value="per_sqft">Per SqFt</option>
+                    <option value="per_bedroom">Per Bedroom</option>
+                    <option value="per_bathroom">Per Bathroom</option>
+                    <option value="add_on">Add-On</option>
+                    <option value="travel_fee">Travel Fee</option>
+                    <option value="demolition">Demolition</option>
+                    <option value="tier_multiplier">Tier Multiplier</option>
+                    <option value="cabinet">Cabinet</option>
+                    <option value="countertop">Countertop</option>
+                </select>
+                <input type="text" name="name" placeholder="Rule name" required 
+                       class="bg-gray-800 border border-gray-600 rounded px-3 py-2 text-sm">
+                <input type="number" name="base_amount" placeholder="Amount ($)" step="0.01" required 
+                       class="bg-gray-800 border border-gray-600 rounded px-3 py-2 text-sm">
+                <input type="text" name="project_type" placeholder="Project type (optional)" 
+                       class="bg-gray-800 border border-gray-600 rounded px-3 py-2 text-sm">
+                <button type="submit" 
+                        class="bg-accent hover:opacity-80 text-white font-bold py-2 px-4 rounded transition text-sm">
+                    + Add Rule
+                </button>
+            </form>
+        </div>
+        
+        <!-- Rules Table -->
+        <div class="bg-surface rounded-lg shadow overflow-hidden">
+            <table class="w-full text-sm">
+                <thead class="bg-gray-800 text-left">
+                    <tr>
+                        <th class="px-4 py-3">ID</th>
+                        <th class="px-4 py-3">Brand</th>
+                        <th class="px-4 py-3">Category</th>
+                        <th class="px-4 py-3">Name</th>
+                        <th class="px-4 py-3">Amount</th>
+                        <th class="px-4 py-3">Project Type</th>
+                        <th class="px-4 py-3">Tier</th>
+                        <th class="px-4 py-3">Zone</th>
+                        <th class="px-4 py-3">Active</th>
+                        <th class="px-4 py-3">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="rules-table-body">
+                    {% for rule in rules %}
+                    <tr class="border-b border-gray-700 hover:bg-gray-800/50 rule-row" data-brand="{{ rule.brand }}">
+                        <td class="px-4 py-3 font-mono">{{ rule.id }}</td>
+                        <td class="px-4 py-3">
+                            <span class="px-2 py-1 rounded text-xs font-bold {% if rule.brand == 'construction' %}bg-amber-900 text-amber-200{% else %}bg-emerald-900 text-emerald-200{% endif %}">
+                                {{ rule.brand|upper }}
+                            </span>
+                        </td>
+                        <td class="px-4 py-3">{{ rule.category|replace('_', ' ')|title }}</td>
+                        <td class="px-4 py-3">
+                            <input type="text" 
+                                   value="{{ rule.name }}" 
+                                   id="name-{{ rule.id }}"
+                                   class="bg-transparent border-b border-transparent hover:border-gray-500 focus:border-accent focus:outline-none text-sm w-full">
+                        </td>
+                        <td class="px-4 py-3">
+                            <div class="flex items-center gap-1">
+                                <span class="text-xs">$</span>
+                                <input type="number" 
+                                       value="{{ rule.base_amount }}" 
+                                       id="amount-{{ rule.id }}"
+                                       step="0.01"
+                                       class="bg-transparent border-b border-transparent hover:border-gray-500 focus:border-accent focus:outline-none text-sm w-24 font-mono">
+                            </div>
+                        </td>
+                        <td class="px-4 py-3 text-xs opacity-70">{{ rule.project_type or '—' }}</td>
+                        <td class="px-4 py-3 text-xs opacity-70">{{ rule.finish_tier or '—' }}</td>
+                        <td class="px-4 py-3 text-xs opacity-70">{{ rule.zone or '—' }}</td>
+                        <td class="px-4 py-3">
+                            <label class="relative inline-flex items-center cursor-pointer">
+                                <input type="checkbox" 
+                                       id="active-{{ rule.id }}"
+                                       {% if rule.is_active %}checked{% endif %}
+                                       class="sr-only peer">
+                                <div class="w-9 h-5 bg-gray-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-accent"></div>
+                            </label>
+                        </td>
+                        <td class="px-4 py-3">
+                            <button onclick="saveRule({{ rule.id }})" 
+                                    class="bg-accent hover:opacity-80 text-white text-xs px-3 py-1 rounded transition">
+                                Save
+                            </button>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            
+            {% if not rules %}
+            <div class="text-center py-12 opacity-60">
+                <p class="text-lg">No pricing rules yet</p>
+                <p class="text-sm mt-2">Add rules above to configure pricing.</p>
+            </div>
+            {% endif %}
+        </div>
+        
+        <div id="save-message" class="mt-4 hidden"></div>
+    </main>
+    
+    <script>
+        function filterBrand(brand) {
+            // Update tab styles
+            document.querySelectorAll('[id^="tab-"]').forEach(tab => {
+                tab.classList.remove('bg-accent');
+                tab.classList.add('bg-gray-700');
+            });
+            
+            const activeTab = brand ? `tab-${brand}` : 'tab-all';
+            document.getElementById(activeTab).classList.remove('bg-gray-700');
+            document.getElementById(activeTab).classList.add('bg-accent');
+            
+            // Filter rows
+            document.querySelectorAll('.rule-row').forEach(row => {
+                if (!brand || row.dataset.brand === brand) {
+                    row.style.display = '';
+                } else {
+                    row.style.display = 'none';
+                }
+            });
+        }
+        
+        async function saveRule(ruleId) {
+            const name = document.getElementById(`name-${ruleId}`).value;
+            const amount = parseFloat(document.getElementById(`amount-${ruleId}`).value);
+            const isActive = document.getElementById(`active-${ruleId}`).checked;
+            
+            const formData = new FormData();
+            formData.append('rule_id', ruleId);
+            formData.append('base_amount', amount);
+            formData.append('is_active', isActive);
+            
+            try {
+                const response = await fetch('/admin/pricing-rules', {
+                    method: 'POST',
+                    body: formData,
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    const msg = document.getElementById('save-message');
+                    msg.textContent = `✓ Rule #${ruleId} saved successfully`;
+                    msg.classList.remove('hidden', 'text-red-400');
+                    msg.classList.add('text-green-400');
+                    setTimeout(() => msg.classList.add('hidden'), 3000);
+                } else {
+                    alert('Failed to save: ' + (data.message || 'Unknown error'));
+                }
+            } catch (e) {
+                alert('Error: ' + e.message);
+            }
+        }
+    </script>
+</body>
+</html>

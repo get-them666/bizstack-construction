@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>
+        {% if brand == 'construction' %}
+            Instant Quote — BuildStack Construction
+        {% else %}
+            Instant Quote — Broom Service
+        {% endif %}
+    </title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- HTMX -->
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    
+    <!-- Uppy.js for Photo Uploads -->
+    <link href="https://releases.transloadit.com/uppy/v3.21.0/uppy.min.css" rel="stylesheet">
+    <script src="https://releases.transloadit.com/uppy/v3.21.0/uppy.min.js"></script>
+    
+    <!-- Brand-specific color schemes -->
+    {% if brand == 'construction' %}
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#1a1a2e',
+                        accent: '#f59e0b',
+                        surface: '#16213e',
+                    }
+                }
+            }
+        }
+    </script>
+    {% else %}
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#064e3b',
+                        accent: '#10b981',
+                        surface: '#f0fdf4',
+                    }
+                }
+            }
+        }
+    </script>
+    {% endif %}
+    
+    <style>
+        .step-hidden { display: none; }
+        .step-visible { display: block; }
+        .uppy-Dashboard-AddFiles-title { color: #1a1a2e !important; }
+        .loading-spinner {
+            border: 4px solid rgba(0, 0, 0, 0.1);
+            border-left-color: #f59e0b;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s ease infinite;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body class="{% if brand == 'construction' %}bg-primary text-white{% else %}bg-surface text-gray-900{% endif %} min-h-screen">
+    
+    <!-- Header -->
+    <header class="{% if brand == 'construction' %}bg-surface border-b border-accent{% else %}bg-primary text-white{% endif %} py-6 shadow-lg">
+        <div class="max-w-4xl mx-auto px-4">
+            <h1 class="text-3xl font-bold">
+                {% if brand == 'construction' %}
+                    <span class="text-accent">BuildStack</span> Construction
+                {% else %}
+                    <span class="text-accent">Broom</span> Service
+                {% endif %}
+            </h1>
+            <p class="mt-2 opacity-80">Get Your Instant Quote in 3 Simple Steps</p>
+        </div>
+    </header>
+    
+    <!-- Progress Indicator -->
+    <div class="max-w-4xl mx-auto px-4 py-6">
+        <div class="flex items-center justify-between mb-8">
+            <div class="flex-1 text-center">
+                <div id="step1-indicator" class="w-10 h-10 mx-auto rounded-full bg-accent text-white flex items-center justify-center font-bold">1</div>
+                <p class="mt-2 text-sm">Project Details</p>
+            </div>
+            <div class="flex-1 border-t-2 border-gray-400 mx-4"></div>
+            <div class="flex-1 text-center">
+                <div id="step2-indicator" class="w-10 h-10 mx-auto rounded-full bg-gray-400 text-white flex items-center justify-center font-bold">2</div>
+                <p class="mt-2 text-sm">Upload Photos</p>
+            </div>
+            <div class="flex-1 border-t-2 border-gray-400 mx-4"></div>
+            <div class="flex-1 text-center">
+                <div id="step3-indicator" class="w-10 h-10 mx-auto rounded-full bg-gray-400 text-white flex items-center justify-center font-bold">3</div>
+                <p class="mt-2 text-sm">Get Your Quote</p>
+            </div>
+        </div>
+        
+        <!-- Step 1: Project Details Form -->
+        <div id="step1" class="step-visible">
+            <form id="quote-form" 
+                  hx-post="/api/quote/submit" 
+                  hx-target="#step1-result"
+                  hx-swap="innerHTML">
+                
+                <div class="{% if brand == 'construction' %}bg-surface{% else %}bg-white{% endif %} rounded-lg shadow-xl p-8">
+                    <h2 class="text-2xl font-bold mb-6">Project Details</h2>
+                    
+                    <!-- Customer Info -->
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                        <div>
+                            <label class="block text-sm font-medium mb-2">Full Name *</label>
+                            <input type="text" name="customer_name" required
+                                   class="w-full px-4 py-2 rounded border {% if brand == 'construction' %}bg-gray-800 border-gray-600 text-white{% else %}bg-white border-gray-300{% endif %} focus:ring-2 focus:ring-accent focus:outline-none">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium mb-2">Email *</label>
+                            <input type="email" name="customer_email" required
+                                   class="w-full px-4 py-2 rounded border {% if brand == 'construction' %}bg-gray-800 border-gray-600 text-white{% else %}bg-white border-gray-300{% endif %} focus:ring-2 focus:ring-accent focus:outline-none">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium mb-2">Phone *</label>
+                            <input type="tel" name="customer_phone" required
+                                   class="w-full px-4 py-2 rounded border {% if brand == 'construction' %}bg-gray-800 border-gray-600 text-white{% else %}bg-white border-gray-300{% endif %} focus:ring-2 focus:ring-accent focus:outline-none">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium mb-2">ZIP Code *</label>
+                            <input type="text" name="zip_code" required pattern="[0-9]{5}" maxlength="5"
+                                   class="w-full px-4 py-2 rounded border {% if brand == 'construction' %}bg-gray-800 border-gray-600 text-white{% else %}bg-white border-gray-300{% endif %} focus:ring-2 focus:ring-accent focus:outline-none">
+                        </div>
+                    </div>
+                    
+                    <div class="mb-6">
+                        <label class="block text-sm font-medium mb-2">Property Address *</label>
+                        <textarea name="property_address" required rows="2"
+                                  class="w-full px-4 py-2 rounded border {% if brand == 'construction' %}bg-gray-800 border-gray-600 text-white{% else %}bg-white border-gray-300{% endif %} focus:ring-2 focus:ring-accent focus:outline-none"></textarea>
+                    </div>
+                    
+                    <div class="mb-6">
+                        <label class="block text-sm font-medium mb-2">Square Footage *</label>
+                        <input type="number" name="square_footage" required min="100" max="50000" step="1"
+                               class="w-full px-4 py-2 rounded border {% if brand == 'construction' %}bg-gray-800 border-gray-600 text-white{% else %}bg-white border-gray-300{% endif %} focus:ring-2 focus:ring-accent focus:outline-none">
+                    </div>
+                    
+                    {% if brand == 'construction' %}
+                    <!-- Construction-specific fields -->
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                        <div>
+                            <label class="block text-sm font-medium mb-2">Project Type *</label>
+                            <select name="project_type" required
+                                    class="w-full px-4 py-2 rounded border bg-gray-800 border-gray-600 text-white focus:ring-2 focus:ring-accent focus:outline-none">
+                                <option value="">Select project type...</option>
+                                <option value="kitchen">Kitchen Remodel</option>
+                                <option value="bathroom">Bathroom Remodel</option>
+                                <option value="whole_home_rehab">Whole-Home Rehab</option>
+                                <option value="drywall_paint">Drywall & Paint</option>
+                                <option value="roofing_siding">Roofing & Siding</option>
+                                <option value="plumbing">Plumbing</option>
+                                <option value="electrical">Electrical</option>
+                                <option value="carpentry">Carpentry</option>
+                                <option value="flooring">Flooring</option>
+                                <option value="deck_fence">Deck & Fence</option>
+                                <option value="str_make_ready">STR Make-Ready</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium mb-2">Finish Tier *</label>
+                            <select name="finish_tier" required
+                                    class="w-full px-4 py-2 rounded border bg-gray-800 border-gray-600 text-white focus:ring-2 focus:ring-accent focus:outline-none">
+                                <option value="standard">Standard</option>
+                                <option value="mid_range">Mid-Range</option>
+                                <option value="custom_luxury">Custom/Luxury</option>
+                            </select>
+                        </div>
+                    </div>
+                    {% else %}
+                    <!-- Broom Service-specific fields -->
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+                        <div>
+                            <label class="block text-sm font-medium mb-2">Bedrooms *</label>
+                            <select name="bedrooms" required
+                                    class="w-full px-4 py-2 rounded border bg-white border-gray-300 focus:ring-2 focus:ring-accent focus:outline-none">
+                                <option value="0">Studio</option>
+                                <option value="1" selected>1</option>
+                                <option value="2">2</option>
+                                <option value="3">3</option>
+                                <option value="4">4</option>
+                                <option value="5">5+</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium mb-2">Bathrooms *</label>
+                            <select name="bathrooms" required
+                                    class="w-full px-4 py-2 rounded border bg-white border-gray-300 focus:ring-2 focus:ring-accent focus:outline-none">
+                                <option value="1" selected>1</option>
+                                <option value="2">2</option>
+                                <option value="3">3</option>
+                                <option value="4">4</option>
+                                <option value="5">5+</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium mb-2">Service Type *</label>
+                            <select name="service_type" required
+                                    class="w-full px-4 py-2 rounded border bg-white border-gray-300 focus:ring-2 focus:ring-accent focus:outline-none">
+                                <option value="turnover">STR Turnover</option>
+                                <option value="deep_clean">Deep Clean</option>
+                                <option value="move_out">Move-Out Clean</option>
+                            </select>
+                        </div>
+                    </div>
+                    
+                    <div class="mb-6">
+                        <label class="block text-sm font-medium mb-2">Add-Ons</label>
+                        <div class="grid grid-cols-2 md:grid-cols-3 gap-3">
+                            <label class="flex items-center space-x-2">
+                                <input type="checkbox" name="add_on" value="inside_oven" class="rounded">
+                                <span>Inside Oven (+$35)</span>
+                            </label>
+                            <label class="flex items-center space-x-2">
+                                <input type="checkbox" name="add_on" value="inside_fridge" class="rounded">
+                                <span>Inside Fridge (+$30)</span>
+                            </label>
+                            <label class="flex items-center space-x-2">
+                                <input type="checkbox" name="add_on" value="inside_microwave" class="rounded">
+                                <span>Inside Microwave (+$20)</span>
+                            </label>
+                            <label class="flex items-center space-x-2">
+                                <input type="checkbox" name="add_on" value="interior_windows" class="rounded">
+                                <span>Interior Windows (+$50)</span>
+                            </label>
+                        </div>
+                    </div>
+                    {% endif %}
+                    
+                    <div class="mb-6">
+                        <label class="block text-sm font-medium mb-2">Additional Notes</label>
+                        <textarea name="customer_notes" rows="3"
+                                  class="w-full px-4 py-2 rounded border {% if brand == 'construction' %}bg-gray-800 border-gray-600 text-white{% else %}bg-white border-gray-300{% endif %} focus:ring-2 focus:ring-accent focus:outline-none"
+                                  placeholder="Any special requirements or details..."></textarea>
+                    </div>
+                    
+                    <input type="hidden" name="brand" value="{{ brand }}">
+                    
+                    <button type="submit" 
+                            class="w-full bg-accent hover:opacity-90 text-white font-bold py-3 px-6 rounded-lg transition">
+                        Continue to Photo Upload →
+                    </button>
+                    
+                    <div id="step1-result" class="mt-4"></div>
+                </div>
+            </form>
+        </div>
+        
+        <!-- Step 2: Photo Upload -->
+        <div id="step2" class="step-hidden">
+            <div class="{% if brand == 'construction' %}bg-surface{% else %}bg-white{% endif %} rounded-lg shadow-xl p-8">
+                <h2 class="text-2xl font-bold mb-6">Upload Photos</h2>
+                
+                <div class="mb-6">
+                    <p class="mb-4">
+                        {% if brand == 'construction' %}
+                            Please upload at least 3 photos: wide-angle room shot, close-up of surfaces/cabinets, and electrical panel or damage area.
+                        {% else %}
+                            Upload 2-4 photos of key areas: kitchen, primary bath, living area, and any heavy-soil areas.
+                        {% endif %}
+                    </p>
+                    
+                    <div id="uppy-dashboard"></div>
+                </div>
+                
+                <div class="flex gap-4">
+                    <button id="back-to-step1" class="flex-1 bg-gray-600 hover:bg-gray-700 text-white font-bold py-3 px-6 rounded-lg transition">
+                        ← Back
+                    </button>
+                    <button id="analyze-photos" class="flex-1 bg-accent hover:opacity-90 text-white font-bold py-3 px-6 rounded-lg transition" disabled>
+                        Analyze Photos & Get Quote →
+                    </button>
+                </div>
+                
+                <div id="step2-result" class="mt-4"></div>
+            </div>
+        </div>
+        
+        <!-- Step 3: Quote Result -->
+        <div id="step3" class="step-hidden">
+            <div class="{% if brand == 'construction' %}bg-surface{% else %}bg-white{% endif %} rounded-lg shadow-xl p-8">
+                <h2 class="text-2xl font-bold mb-6">Your Quote</h2>
+                <div id="quote-result"></div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Footer -->
+    <footer class="{% if brand == 'construction' %}bg-surface border-t border-accent{% else %}bg-primary text-white{% endif %} py-6 mt-12">
+        <div class="max-w-4xl mx-auto px-4 text-center opacity-80">
+            <p>701 Dana Dr, Chesapeake, VA 23321</p>
+            <p class="mt-2">
+                {% if brand == 'construction' %}
+                    Serving Williamsburg–Hampton Roads, VA & Currituck County, Elizabeth City, & Outer Banks, NC<br>
+                    Phone: +1 (757) 846-9275 | Email: hello@bizstackperks.com
+                {% else %}
+                    Serving Williamsburg–Hampton Roads, VA & Currituck County, Elizabeth City, & Outer Banks, NC<br>
+                    Phone: +1 (757) 908-7121
+                {% endif %}
+            </p>
+        </div>
+    </footer>
+    
+    <script>
+        // Global state
+        let currentQuoteId = null;
+        let uppy = null;
+        
+        // Step navigation
+        function goToStep(stepNum) {
+            document.getElementById('step1').classList.add('step-hidden');
+            document.getElementById('step2').classList.add('step-hidden');
+            document.getElementById('step3').classList.add('step-hidden');
+            document.getElementById(`step${stepNum}`).classList.remove('step-hidden');
+            
+            // Update progress indicators
+            for (let i = 1; i <= 3; i++) {
+                const indicator = document.getElementById(`step${i}-indicator`);
+                if (i <= stepNum) {
+                    indicator.classList.remove('bg-gray-400');
+                    indicator.classList.add('bg-accent');
+                } else {
+                    indicator.classList.remove('bg-accent');
+                    indicator.classList.add('bg-gray-400');
+                }
+            }
+        }
+        
+        // Handle Step 1 form submission
+        document.body.addEventListener('htmx:afterSwap', function(evt) {
+            if (evt.detail.target.id === 'step1-result') {
+                try {
+                    const response = JSON.parse(evt.detail.xhr.response);
+                    if (response.success) {
+                        currentQuoteId = response.quote_id;
+                        goToStep(2);
+                        initUppy();
+                    }
+                } catch (e) {
+                    console.error('Failed to parse response:', e);
+                }
+            }
+        });
+        
+        // Initialize Uppy.js photo uploader
+        function initUppy() {
+            if (uppy) return; // Already initialized
+            
+            uppy = new Uppy.Uppy({
+                autoProceed: false,
+                allowMultipleUploads: true,
+                restrictions: {
+                    maxNumberOfFiles: 10,
+                    minNumberOfFiles: {% if brand == 'construction' %}3{% else %}2{% endif %},
+                    allowedFileTypes: ['image/*'],
+                }
+            })
+            .use(Uppy.Dashboard, {
+                inline: true,
+                target: '#uppy-dashboard',
+                theme: '{% if brand == "construction" %}dark{% else %}light{% endif %}',
+                proudlyUseMini: false,
+                note: 'Upload {% if brand == "construction" %}at least 3{% else %}2-4{% endif %} photos',
+            })
+            .use(Uppy.XHRUpload, {
+                endpoint: `/api/quote/${currentQuoteId}/photos`,
+                formData: true,
+                fieldName: 'photos',
+                limit: 5,
+            });
+            
+            uppy.on('upload-success', (file, response) => {
+                console.log('Upload successful:', file.name);
+            });
+            
+            uppy.on('complete', (result) => {
+                if (result.successful.length > 0) {
+                    document.getElementById('analyze-photos').disabled = false;
+                }
+            });
+        }
+        
+        // Back button
+        document.getElementById('back-to-step1').addEventListener('click', () => {
+            goToStep(1);
+        });
+        
+        // Analyze photos button
+        document.getElementById('analyze-photos').addEventListener('click', async () => {
+            const btn = document.getElementById('analyze-photos');
+            btn.disabled = true;
+            btn.innerHTML = '<div class="loading-spinner inline-block mr-2"></div> Analyzing...';
+            
+            try {
+                const response = await fetch(`/api/quote/${currentQuoteId}/analyze`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    displayQuoteResult(data);
+                    goToStep(3);
+                } else {
+                    alert('Analysis failed: ' + (data.error || 'Unknown error'));
+                    btn.disabled = false;
+                    btn.innerHTML = 'Analyze Photos & Get Quote →';
+                }
+            } catch (e) {
+                alert('Error: ' + e.message);
+                btn.disabled = false;
+                btn.innerHTML = 'Analyze Photos & Get Quote →';
+            }
+        });
+        
+        // Display quote result
+        function displayQuoteResult(data) {
+            const pricing = data.pricing;
+            const analysis = data.analysis;
+            
+            let html = `
+                <div class="mb-6">
+                    <div class="text-center mb-6">
+                        <h3 class="text-3xl font-bold text-accent">$${pricing.final_price.toFixed(2)}</h3>
+                        <p class="text-sm mt-2 opacity-70">
+                            ${pricing.quote_type === 'instant_guaranteed' ? '✅ Guaranteed Flat Rate' : 
+                              pricing.quote_type === 'conditional_fixed' ? '⚡ Conditional Fixed Price' : 
+                              '📋 Estimate — Walkthrough Recommended'}
+                        </p>
+                    </div>
+                    
+                    <div class="border rounded p-4 mb-6">
+                        <h4 class="font-bold mb-3">Itemized Breakdown</h4>
+                        <table class="w-full text-sm">
+                            <tbody>
+            `;
+            
+            for (const item of pricing.adjustments) {
+                html += `
+                    <tr class="border-b border-gray-700">
+                        <td class="py-2">${item.description}</td>
+                        <td class="py-2 text-right font-mono">$${item.line_total.toFixed(2)}</td>
+                    </tr>
+                `;
+            }
+            
+            html += `
+                            </tbody>
+                        </table>
+                    </div>
+            `;
+            
+            // Show red flags if any
+            if (pricing.red_flags && pricing.red_flags.length > 0) {
+                html += `
+                    <div class="bg-red-900/20 border border-red-500 rounded p-4 mb-6">
+                        <h4 class="font-bold text-red-400 mb-2">⚠️ Items Requiring On-Site Inspection</h4>
+                        <ul class="list-disc list-inside text-sm">
+                `;
+                for (const flag of pricing.red_flags) {
+                    html += `<li>${flag.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}</li>`;
+                }
+                html += `</ul></div>`;
+            }
+            
+            // Show AI analysis details
+            if (analysis && analysis.analysis) {
+                const a = analysis.analysis;
+                html += `
+                    <div class="border rounded p-4 mb-6">
+                        <h4 class="font-bold mb-3">🤖 AI Vision Analysis (Confidence: ${((analysis.confidence_score || 0) * 100).toFixed(0)}%)</h4>
+                        <div class="grid grid-cols-2 gap-2 text-sm">
+                `;
+                
+                if (a.layout_type) {
+                    html += `<div><strong>Layout:</strong> ${a.layout_type}</div>`;
+                }
+                if (a.soil_and_clutter_level) {
+                    html += `<div><strong>Soil Level:</strong> ${a.soil_and_clutter_level}/5</div>`;
+                }
+                if (a.estimated_cabinet_linear_ft) {
+                    html += `<div><strong>Cabinets:</strong> ${a.estimated_cabinet_linear_ft} linear ft</div>`;
+                }
+                if (a.pet_hair_detected !== undefined) {
+                    html += `<div><strong>Pet Hair:</strong> ${a.pet_hair_detected ? 'Detected' : 'None'}</div>`;
+                }
+                if (a.demolition_complexity) {
+                    html += `<div><strong>Demolition:</strong> ${a.demolition_complexity}</div>`;
+                }
+                
+                html += `</div></div>`;
+            }
+            
+            // Action buttons based on quote type
+            html += `<div class="flex flex-col gap-4">`;
+            
+            if (pricing.quote_type === 'instant_guaranteed' || pricing.quote_type === 'conditional_fixed') {
+                html += `
+                    <a href="/schedule?quote_id=${pricing.quote_id}" 
+                       class="block text-center bg-accent hover:opacity-90 text-white font-bold py-3 px-6 rounded-lg transition">
+                        📅 Lock In Slot & View Deposit Instructions
+                    </a>
+                `;
+            }
+            
+            if (pricing.requires_walkthrough || pricing.quote_type === 'estimate_only') {
+                html += `
+                    <a href="/schedule?quote_id=${pricing.quote_id}&type=walkthrough" 
+                       class="block text-center bg-gray-600 hover:bg-gray-700 text-white font-bold py-3 px-6 rounded-lg transition">
+                        🏠 Schedule Free On-Site Walkthrough First
+                    </a>
+                `;
+            }
+            
+            html += `</div></div>`;
+            
+            document.getElementById('quote-result').innerHTML = html;
+        }
+    </script>
+</body>
+</html>

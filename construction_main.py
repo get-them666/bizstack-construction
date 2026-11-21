@@ -10908,8 +10908,9 @@ async def voice_swml(db=Depends(get_db)):
             from datetime import datetime
             from zoneinfo import ZoneInfo
             now_et = datetime.now(ZoneInfo("America/New_York"))
-            # Business hours: 8am-7pm, Mon-Sat (weekday() < 6)
-            is_business_hours = (8 <= now_et.hour < 19) and (now_et.weekday() < 6)
+            # TEMPORARY: Forwarding 24/7 until Yelp verification complete
+            # Original: is_business_hours = (8 <= now_et.hour < 19) and (now_et.weekday() < 6)
+            is_business_hours = True  # Always forward for now
             
             if is_business_hours:
                 cur.execute("SELECT value FROM app_settings WHERE key = 'owner_personal_cell';")

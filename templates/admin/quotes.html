@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin — Quote Management</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#1a1a2e',
+                        accent: '#f59e0b',
+                        surface: '#16213e',
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        .status-draft { background: #6b7280; }
+        .status-pending_review { background: #f59e0b; }
+        .status-ai_analyzed { background: #3b82f6; }
+        .status-approved { background: #10b981; }
+        .status-sent { background: #8b5cf6; }
+        .status-booked { background: #06b6d4; }
+        .status-completed { background: #22c55e; }
+        .status-cancelled { background: #ef4444; }
+    </style>
+</head>
+<body class="bg-primary text-white min-h-screen">
+    
+    <!-- Header -->
+    <header class="bg-surface border-b border-accent py-4 shadow-lg">
+        <div class="max-w-7xl mx-auto px-4 flex items-center justify-between">
+            <h1 class="text-2xl font-bold"><span class="text-accent">Admin</span> — Quote Management</h1>
+            <nav class="flex gap-4">
+                <a href="/admin/quotes" class="text-accent hover:underline">Quotes</a>
+                <a href="/admin/pricing-rules" class="hover:text-accent transition">Pricing Rules</a>
+            </nav>
+        </div>
+    </header>
+    
+    <!-- Main Content -->
+    <main class="max-w-7xl mx-auto px-4 py-8">
+        
+        <!-- Filters -->
+        <div class="bg-surface rounded-lg shadow p-4 mb-6">
+            <div class="flex flex-wrap gap-4 items-center">
+                <div>
+                    <label class="text-sm mr-2">Brand:</label>
+                    <select id="filter-brand" class="bg-gray-800 border border-gray-600 rounded px-3 py-1 text-sm">
+                        <option value="">All</option>
+                        <option value="construction">Construction</option>
+                        <option value="broom">Broom Service</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="text-sm mr-2">Status:</label>
+                    <select id="filter-status" class="bg-gray-800 border border-gray-600 rounded px-3 py-1 text-sm">
+                        <option value="">All</option>
+                        <option value="draft">Draft</option>
+                        <option value="pending_review">Pending Review</option>
+                        <option value="ai_analyzed">AI Analyzed</option>
+                        <option value="approved">Approved</option>
+                        <option value="sent">Sent</option>
+                        <option value="booked">Booked</option>
+                        <option value="completed">Completed</option>
+                        <option value="cancelled">Cancelled</option>
+                    </select>
+                </div>
+                <div class="flex-1"></div>
+                <span class="text-sm opacity-60">{{ quotes|length }} quote{{ 's' if quotes|length != 1 else '' }}</span>
+            </div>
+        </div>
+        
+        <!-- Quotes Table -->
+        <div class="bg-surface rounded-lg shadow overflow-hidden">
+            <table class="w-full text-sm">
+                <thead class="bg-gray-800 text-left">
+                    <tr>
+                        <th class="px-4 py-3">#</th>
+                        <th class="px-4 py-3">Brand</th>
+                        <th class="px-4 py-3">Customer</th>
+                        <th class="px-4 py-3">Project</th>
+                        <th class="px-4 py-3">ZIP</th>
+                        <th class="px-4 py-3">Sq Ft</th>
+                        <th class="px-4 py-3">Price</th>
+                        <th class="px-4 py-3">Status</th>
+                        <th class="px-4 py-3">Date</th>
+                        <th class="px-4 py-3">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for quote in quotes %}
+                    <tr class="border-b border-gray-700 hover:bg-gray-800/50 quote-row"
+                        data-brand="{{ quote.brand }}"
+                        data-status="{{ quote.status.value }}">
+                        <td class="px-4 py-3 font-mono">{{ quote.id }}</td>
+                        <td class="px-4 py-3">
+                            <span class="px-2 py-1 rounded text-xs font-bold {% if quote.brand == 'construction' %}bg-amber-900 text-amber-200{% else %}bg-emerald-900 text-emerald-200{% endif %}">
+                                {{ quote.brand|upper }}
+                            </span>
+                        </td>
+                        <td class="px-4 py-3">
+                            <div class="font-medium">{{ quote.customer_name }}</div>
+                            <div class="text-xs opacity-60">{{ quote.customer_email }}</div>
+                            <div class="text-xs opacity-60">{{ quote.customer_phone }}</div>
+                        </td>
+                        <td class="px-4 py-3">
+                            {% if quote.brand == 'construction' %}
+                                {{ quote.project_type|default('N/A')|replace('_', ' ')|title }}
+                                {% if quote.finish_tier %}
+                                    <br><span class="text-xs opacity-60">{{ quote.finish_tier|replace('_', ' ')|title }}</span>
+                                {% endif %}
+                            {% else %}
+                                {{ quote.service_type|default('N/A')|replace('_', ' ')|title }}
+                                {% if quote.bedrooms %}
+                                    <br><span class="text-xs opacity-60">{{ quote.bedrooms }}BR / {{ quote.bathrooms }}BA</span>
+                                {% endif %}
+                            {% endif %}
+                        </td>
+                        <td class="px-4 py-3 font-mono">{{ quote.zip_code }}</td>
+                        <td class="px-4 py-3">{{ "{:,.0f}".format(quote.square_footage) if quote.square_footage else 'N/A' }}</td>
+                        <td class="px-4 py-3 font-mono font-bold">
+                            {% if quote.final_price %}
+                                ${{ "{:,.2f}".format(quote.final_price) }}
+                            {% else %}
+                                <span class="opacity-40">—</span>
+                            {% endif %}
+                        </td>
+                        <td class="px-4 py-3">
+                            <span class="status-{{ quote.status.value }} px-2 py-1 rounded text-xs font-bold text-white">
+                                {{ quote.status.value|replace('_', ' ')|title }}
+                            </span>
+                        </td>
+                        <td class="px-4 py-3 text-xs">
+                            {{ quote.created_at.strftime('%m/%d/%y %I:%M%p') if quote.created_at else 'N/A' }}
+                        </td>
+                        <td class="px-4 py-3">
+                            <div class="flex gap-2">
+                                <button onclick="viewQuote({{ quote.id }})" 
+                                        class="bg-accent hover:opacity-80 text-white text-xs px-3 py-1 rounded transition">
+                                    View
+                                </button>
+                                {% if quote.status.value == 'ai_analyzed' %}
+                                <button hx-post="/admin/quotes/{{ quote.id }}/approve"
+                                        hx-swap="none"
+                                        class="bg-green-600 hover:bg-green-700 text-white text-xs px-3 py-1 rounded transition">
+                                    Approve
+                                </button>
+                                {% endif %}
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            
+            {% if not quotes %}
+            <div class="text-center py-12 opacity-60">
+                <p class="text-lg">No quotes yet</p>
+                <p class="text-sm mt-2">Quotes will appear here as customers submit them.</p>
+            </div>
+            {% endif %}
+        </div>
+    </main>
+    
+    <!-- Quote Detail Modal -->
+    <div id="quote-modal" class="hidden fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4">
+        <div class="bg-surface rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
+            <div class="p-6">
+                <div class="flex justify-between items-center mb-4">
+                    <h2 class="text-xl font-bold">Quote Details</h2>
+                    <button onclick="closeModal()" class="text-2xl hover:text-accent">&times;</button>
+                </div>
+                <div id="quote-modal-content">
+                    <div class="text-center py-8 opacity-60">Loading...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        // Filter logic
+        document.getElementById('filter-brand').addEventListener('change', filterQuotes);
+        document.getElementById('filter-status').addEventListener('change', filterQuotes);
+        
+        function filterQuotes() {
+            const brand = document.getElementById('filter-brand').value;
+            const status = document.getElementById('filter-status').value;
+            
+            document.querySelectorAll('.quote-row').forEach(row => {
+                const rowBrand = row.dataset.brand;
+                const rowStatus = row.dataset.status;
+                
+                const brandMatch = !brand || rowBrand === brand;
+                const statusMatch = !status || rowStatus === status;
+                
+                row.style.display = (brandMatch && statusMatch) ? '' : 'none';
+            });
+        }
+        
+        // View quote detail
+        function viewQuote(quoteId) {
+            document.getElementById('quote-modal').classList.remove('hidden');
+            
+            fetch(`/api/quote/${quoteId}/detail`)
+                .then(r => r.json())
+                .then(data => {
+                    const q = data.quote;
+                    let html = `
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div>
+                                <h3 class="font-bold text-accent mb-2">Customer</h3>
+                                <p>${q.customer_name}</p>
+                                <p class="text-sm opacity-70">${q.customer_email}</p>
+                                <p class="text-sm opacity-70">${q.customer_phone}</p>
+                                <p class="text-sm mt-2">${q.property_address}</p>
+                                <p class="text-sm opacity-70">ZIP: ${q.zip_code}</p>
+                                <p class="text-sm opacity-70">${q.square_footage ? q.square_footage.toLocaleString() + ' sq ft' : ''}</p>
+                            </div>
+                            <div>
+                                <h3 class="font-bold text-accent mb-2">Project</h3>
+                                <p>Quote #${q.id}</p>
+                                <p>Brand: ${q.brand}</p>
+                                ${q.project_type ? `<p>Type: ${q.project_type}</p>` : ''}
+                                ${q.finish_tier ? `<p>Tier: ${q.finish_tier}</p>` : ''}
+                                ${q.bedrooms ? `<p>${q.bedrooms} BR / ${q.bathrooms} BA</p>` : ''}
+                                ${q.final_price ? `<p class="text-lg font-bold mt-2">$${q.final_price.toFixed(2)}</p>` : ''}
+                            </div>
+                        </div>
+                    `;
+                    
+                    // Photos
+                    if (data.photos && data.photos.length > 0) {
+                        html += `<h3 class="font-bold text-accent mt-6 mb-2">Photos (${data.photos.length})</h3>`;
+                        html += `<div class="grid grid-cols-3 gap-2">`;
+                        for (const photo of data.photos) {
+                            html += `<img src="/api/photo/${photo.id}" class="rounded border border-gray-600 w-full h-32 object-cover" alt="${photo.filename}">`;
+                        }
+                        html += `</div>`;
+                    }
+                    
+                    // AI Analysis
+                    if (data.vision_analysis) {
+                        const va = data.vision_analysis;
+                        html += `
+                            <h3 class="font-bold text-accent mt-6 mb-2">AI Analysis (${((va.confidence_score || 0) * 100).toFixed(0)}% confidence)</h3>
+                            <pre class="bg-gray-800 p-4 rounded text-xs overflow-x-auto">${JSON.stringify(va.extracted_data, null, 2)}</pre>
+                        `;
+                        
+                        if (va.red_flags && va.red_flags.length > 0) {
+                            html += `<div class="mt-2 bg-red-900/20 border border-red-500 rounded p-3">`;
+                            html += `<strong class="text-red-400">Red Flags:</strong> `;
+                            html += va.red_flags.join(', ');
+                            html += `</div>`;
+                        }
+                    }
+                    
+                    document.getElementById('quote-modal-content').innerHTML = html;
+                })
+                .catch(err => {
+                    document.getElementById('quote-modal-content').innerHTML = `<p class="text-red-400">Error loading quote: ${err.message}</p>`;
+                });
+        }
+        
+        function closeModal() {
+            document.getElementById('quote-modal').classList.add('hidden');
+        }
+        
+        // Close modal on escape key
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') closeModal();
+        });
+    </script>
+</body>
+</html>

@@ -4,6 +4,92 @@
 
 ---
 
+## 2026-11-21 — Session 12: Real-Time Scheduling & AI Vision Quote Engine
+
+### Overview
+Built the complete backend and frontend for the modular Python + HTML Real-Time Scheduling & AI Vision Quote Engine that serves both BuildStack Construction and Broom Service domains. This is a standalone FastAPI application that integrates with the existing Docker-based infrastructure.
+
+### Architecture
+- **Backend:** Python 3.11+ / FastAPI / SQLAlchemy / SQLite (dev) / PostgreSQL (production)
+- **Frontend:** Jinja2 HTML templates / Tailwind CSS / HTMX / Uppy.js
+- **Vision AI:** Google Gemini + OpenAI (dual-provider with fallback)
+- **Payment:** Zelle & ACH only — NO Stripe dependencies
+- **Scheduling:** Cal.com webhook integration at `/webhooks/cal`
+
+### Files Created
+
+**Core Backend:**
+- `main.py` — FastAPI app with 16 routes: quote submission, photo upload, AI analysis, pricing, admin portal, Cal.com webhook
+- `models.py` — SQLAlchemy models: Quote, Photo, VisionAnalysis, ScheduledAppointment, PricingRule, QuotePricingRule
+- `schemas.py` — Pydantic schemas: ConstructionVisionSchema, CleaningVisionSchema, PricingRequest/Response
+- `services/__init__.py` — Package init
+- `services/vision_analyzer.py` — Gemini + OpenAI dual-provider vision analysis with strict Pydantic structured output
+- `services/pricing_engine.py` — Deterministic pricing engine with admin-editable PricingRule table
+- `requirements-quote-engine.txt` — Python dependencies (zero Stripe)
+
+**Frontend Templates:**
+- `templates/quote_form.html` — 3-step quote wizard (intake → photo upload → result) with brand-specific styling
+- `templates/admin/quotes.html` — Admin quote management dashboard with filters, detail modal, approve actions
+- `templates/admin/pricing_rules.html` — Admin pricing rules editor with inline editing, brand tabs, add-new form
+
+### Key Features Implemented
+
+**Quote Flow (3-step wizard):**
+1. **Step 1:** Customer fills in name, email, phone, address, ZIP, sq ft, plus brand-specific fields (project type + finish tier for construction, bedrooms/bathrooms/service type/add-ons for cleaning)
+2. **Step 2:** Uppy.js drag-and-drop photo upload (min 3 for construction, min 2 for cleaning)
+3. **Step 3:** AI analyzes photos → pricing engine calculates → customer sees itemized quote with conditional actions
+
+**AI Vision Analysis:**
+- Construction: Extracts layout_type, cabinet_linear_ft, countertop_sqft, flooring, demolition_complexity, red_flags, confidence_score
+- Cleaning: Extracts soil_and_clutter_level (1-5), glass_shower_doors, pet_hair_detected, deep_clean_recommendation, confidence_score
+- Dual-provider with automatic fallback (Gemini → OpenAI or vice versa)
+
+**Deterministic Pricing:**
+- Construction: `(SqFt × BaseTradeRate × TierMultiplier) + Demolition + Cabinets + Countertops + TravelFee`
+- Cleaning: `$150 base + ($35 × bedrooms) + ($45 × bathrooms) + sqft adjustment + add-ons + service multipliers`
+- Auto deep-clean upgrade (+30%) when AI detects soil_level ≥ 4
+- Auto pet hair surcharge (+20%) when AI detects pet hair
+- Quote types: instant_guaranteed (cleaning), conditional_fixed (construction with high confidence), estimate_only (needs walkthrough)
+
+**ZIP Code Zone Logic:**
+- 77 core ZIPs (Chesapeake, VB, Norfolk, Portsmouth, Suffolk, Newport News, Hampton, Williamsburg, Yorktown) — $0 travel fee
+- 23 extended ZIPs (Currituck County, Elizabeth City, Outer Banks) — +45min buffer + $75 zone fee
+- Unknown ZIPs default to extended zone
+
+**Cal.com Webhook (`POST /webhooks/cal`):**
+- Receives `BOOKING_CREATED` events
+- Creates ScheduledAppointment record linked to Quote
+- Updates quote status to BOOKED
+
+**Admin Portal (`/admin`):**
+- Quote dashboard: filter by brand/status, view details modal with photos + AI analysis, one-click approve
+- Pricing rules editor: inline editing, brand tabs, add new rules, toggle active status
+- Photo serving endpoint for admin modal
+
+### Verified & Tested
+```
+✓ models.py imports OK (77 core ZIPs, 23 extended ZIPs)
+✓ schemas.py imports OK
+✓ pricing_engine.py imports OK
+✓ vision_analyzer.py imports OK
+✓ Database initialization OK
+✓ Construction pricing: 200sqft kitchen mid-range = $37,500.00
+✓ Cleaning pricing: 3BR/2BA turnover 1200sqft = $345.00
+✓ Extended zone pricing: $75 travel fee included
+✓ FastAPI app imports OK — 16 routes registered
+✓ All dependencies installed from requirements-quote-engine.txt
+```
+
+### Next Steps
+1. Add Cal.com embed widget to scheduling page (`/schedule` route)
+2. Add email service for deposit instruction delivery (Zelle/ACH details)
+3. Integrate with existing Docker infrastructure (add to docker-compose.yml)
+4. Configure Gemini/OpenAI API keys in production env
+5. End-to-end testing with real photos
+6. Deploy to production (159.203.175.39)
+
+---
+
 ## 2026-11-21 — Session 11: Call Forwarding System
 
 ### Problem
