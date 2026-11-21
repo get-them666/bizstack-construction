@@ -1251,7 +1251,7 @@
         </details>
         {% endif %}
 
-        {# ── File Cabinet folders (from bid_files table) ────────────── #}
+        {# ── Working file folders (permits, photos, inspections, etc.) ────── #}
         {% if bid_files %}
         {% set files_by_folder = {} %}
         {% for f in bid_files %}
@@ -1259,7 +1259,7 @@
         {% endfor %}
         <details class="mb-4">
           <summary class="cursor-pointer text-xs font-bold text-slate-500 uppercase tracking-wide hover:text-slate-700 py-2 border-b border-slate-100">
-            File Cabinet Folders ({{ bid_files|length }} file{{ '' if bid_files|length == 1 else 's' }})
+            Working File Folders ({{ bid_files|length }} file{{ '' if bid_files|length == 1 else 's' }})
           </summary>
           <div class="pt-3 space-y-4">
             {% for folder in bid_folders %}
@@ -1394,13 +1394,4 @@
   </form>
 </section>
 
-{# ── Quick-action bar, pinned to the bottom ──────────────────────────────── #}
-<div class="fixed bottom-0 left-0 right-0 z-40 px-4 sm:px-6 lg:px-8 py-3 bg-white/95 backdrop-blur border-t border-slate-200 shadow-[0_-8px_24px_-16px_rgba(15,23,42,0.35)]">
-  <div class="max-w-7xl mx-auto flex flex-wrap items-center gap-2">
-    <a href="/bids/{{ b.id }}/package.pdf" target="_blank" rel="noopener" class="px-3 py-2 text-xs font-bold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 rounded-lg">📦 Package PDF</a>
-    <a href="#contractor" class="px-3 py-2 text-xs font-bold text-violet-700 bg-violet-50 border border-violet-200 hover:bg-violet-100 rounded-lg">✉️ Send to Contractor</a>
-    <a href="#pnc" class="px-3 py-2 text-xs font-bold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 rounded-lg">Send to PNC</a>
-    <a href="#bid-files" class="px-3 py-2 text-xs font-bold text-slate-700 bg-white border border-slate-200 hover:border-indigo-300 rounded-lg">📁 File Cabinet</a>
-  </div>
-</div>
 {% endblock %}
