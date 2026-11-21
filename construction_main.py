@@ -13631,6 +13631,18 @@ async def bid_detail_page(bid_id: int, request: Request, db=Depends(get_db)):
         [f.get("original_filename") or "" for f in (bid_files or [])]
         + [d.get("filename") or "" for d in (docs or [])]))
 
+    # Check if any CSI-numbered files are in single-slot override positions
+    # (sow/itemized/contract) — these need the one-time fix
+    csi_fix_needed = 0
+    try:
+        import bid_attachments as _ba
+        for d in (docs or []):
+            if not d.get("superseded_at") and d.get("document_type") in ("sow", "itemized", "contract"):
+                if _ba.is_csi_file(d.get("filename") or ""):
+                    csi_fix_needed += 1
+    except Exception:
+        pass
+
     response = templates.TemplateResponse(
         request=request, name="bid_detail.html",
         context={
@@ -13645,6 +13657,7 @@ async def bid_detail_page(bid_id: int, request: Request, db=Depends(get_db)):
             "revisions": revisions, "revision_dirty": revision_dirty,
             "revision_label": bid_costing.revision_label(dict(bid)),
             "docs": docs,
+            "csi_fix_needed": csi_fix_needed,
             "source_emails": source_emails,
             "source_body": source_body,
             "pulled": request.query_params.get("pulled", ""),
@@ -13937,6 +13950,13 @@ async def bid_document_upload(bid_id: int, request: Request,
         # leave it on "Other", read the filename so "03-Contract-Revised" does not
         # land in the wrong slot.
         current_doc_type = (doc_type or "").strip().lower() or "other"
+        # CSI MasterFormat section numbers must NEVER occupy the BuildStack
+        # override slots (Scope of Work, Itemized Pricing, Contract), even if
+        # the user selects one from the dropdown.  A 6-digit CSI prefix is
+        # unambiguous: it is a specification reference, not a BuildStack-
+        # generated package document.
+        if bid_attachments.is_csi_file(original) and current_doc_type in ("sow", "itemized", "contract"):
+            current_doc_type = "plans"  # Route to Plans & Specs as reference only
         if current_doc_type == "other":
             guessed = bid_attachments.classify(original)
             if guessed in package_types:
@@ -14018,7 +14038,19 @@ async def bid_document_type(doc_id: int, request: Request,
     """Re-file a document into the right slot (e.g. a contract uploaded as Quote)."""
     require_admin(request)
     bid_opportunities.ensure_schema(db)
-    if not bid_opportunities.set_document_type(db, doc_id, _BID_COMPANY, document_type):
+    # CSI MasterFormat files must never be moved into the BuildStack override
+    # slots (Scope of Work, Itemized Pricing, Contract).  If the user tries,
+    # route them to "plans" as a reference specification instead.
+    target_type = (document_type or "").strip().lower()
+    if target_type in ("sow", "itemized", "contract"):
+        import bid_attachments as _ba
+        cur = db.cursor()
+        cur.execute("SELECT filename FROM bid_documents WHERE id = %s AND company = %s",
+                    (doc_id, _BID_COMPANY))
+        row = cur.fetchone()
+        if row and _ba.is_csi_file(row[0] or ""):
+            target_type = "plans"
+    if not bid_opportunities.set_document_type(db, doc_id, _BID_COMPANY, target_type):
         raise HTTPException(status_code=404, detail="Document not found")
     back = request.headers.get("referer") or "/bids"
     return RedirectResponse(url=back, status_code=status.HTTP_303_SEE_OTHER)
@@ -14041,6 +14073,86 @@ async def bid_document_restore(doc_id: int, request: Request, db=Depends(get_db)
     bid_opportunities.restore_document(db, doc_id, _BID_COMPANY)
     back = request.headers.get("referer") or "/bids"
     return RedirectResponse(url=back, status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/api/bids/{bid_id}/fix-csi-slots")
+async def fix_csi_in_single_slots(bid_id: int, request: Request, db=Depends(get_db)):
+    """One-time cleanup: move any CSI-numbered files out of the SOW/Itemized/Contract
+    override slots and into 'plans' (reference specs).  Also clears superseded_at
+    on auto-generated BuildStack package documents (Scope of Work.pdf, Contract.pdf)
+    when they were incorrectly superseded by CSI spec files."""
+    require_admin(request)
+    bid_opportunities.ensure_schema(db)
+    import bid_attachments as _ba
+    import re as _re
+    _CSI = _re.compile(r"^(\d{6})(?:\s|-|\.|$)")
+    cur = db.cursor()
+
+    # 1. Find all active (non-superseded) documents for this bid in single-slot types
+    #    whose filenames start with a CSI number.  Move them to 'plans'.
+    cur.execute("""
+        SELECT id, filename, document_type
+        FROM bid_documents
+        WHERE bid_id = %s AND company = %s
+          AND superseded_at IS NULL
+          AND document_type IN ('sow', 'itemized', 'contract')
+    """, (bid_id, _BID_COMPANY))
+    misplaced = cur.fetchall()
+    moved = 0
+    for doc_id, filename, doc_type in misplaced:
+        name_lower = (filename or "").lower()
+        if _CSI.match(name_lower):
+            cur.execute("""
+                UPDATE bid_documents
+                SET document_type = 'plans', superseded_at = NOW()
+                WHERE id = %s
+            """, (doc_id,))
+            moved += 1
+
+    # 2. Find auto-generated BuildStack documents that were incorrectly superseded
+    #    by CSI files.  Restore them as active.
+    _GENERATED_NAMES = ("scope of work.pdf", "contract.pdf", "scope_of_work.pdf")
+    cur.execute("""
+        SELECT id, filename, document_type
+        FROM bid_documents
+        WHERE bid_id = %s AND company = %s
+          AND superseded_at IS NOT NULL
+          AND document_type IN ('sow', 'contract')
+    """, (bid_id, _BID_COMPANY))
+    superseded = cur.fetchall()
+    restored = 0
+    for doc_id, filename, doc_type in superseded:
+        name_lower = (filename or "").lower()
+        # Only restore BuildStack's auto-generated documents, not random superseded uploads
+        if any(g in name_lower for g in _GENERATED_NAMES) or name_lower.startswith("scope of work") or name_lower.startswith("contract"):
+            cur.execute("""
+                UPDATE bid_documents
+                SET superseded_at = NULL
+                WHERE id = %s
+            """, (doc_id,))
+            restored += 1
+
+    # 3. Re-classify any remaining CSI files that are still in wrong slots
+    cur.execute("""
+        SELECT id, filename, document_type
+        FROM bid_documents
+        WHERE bid_id = %s AND company = %s
+          AND superseded_at IS NULL
+          AND document_type IN ('sow', 'itemized', 'contract')
+    """, (bid_id, _BID_COMPANY))
+    still_bad = cur.fetchall()
+    for doc_id, filename, doc_type in still_bad:
+        if _ba.is_csi_file(filename):
+            cur.execute("""
+                UPDATE bid_documents SET document_type = 'plans' WHERE id = %s
+            """, (doc_id,))
+            moved += 1
+
+    db.commit()
+    return RedirectResponse(
+        url=f"/bids/{bid_id}?csi_fix=moved_{moved}_restored_{restored}",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
 
 
 # --- Bid file cabinet -------------------------------------------------------

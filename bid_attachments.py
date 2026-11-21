@@ -79,6 +79,13 @@ def classify(filename: str, content_type: str = "") -> str:
     Order matters: "Bid Form - Scope of Work.pdf" is a bid form, but a plan sheet
     that happens to mention scope is still a drawing. Drawings are checked
     first for exactly that reason.
+
+    CSI MasterFormat numbers are the strongest signal after drawing extensions
+    and "bid set". A file that starts with six digits (00xxxx–49xxxx) is a
+    specification book, NEVER a Scope of Work, Contract, or Itemized Pricing
+    -- even when the section title contains words like "conditions" or
+    "request for information".  Those keywords are GC front-end boilerplate,
+    not BuildStack's generated SOW or signed renovation agreement.
     """
     name = (filename or "").lower()
     ext = os.path.splitext(name)[1].lower()
@@ -87,21 +94,12 @@ def classify(filename: str, content_type: str = "") -> str:
     # with six digits that look like a CSI section but are a project number.
     if ext in _DRAWING_EXT or "bid set" in name:
         return "plans"
-    # An explicit word in the title beats the number in front of it: "007200 -
-    # GENERAL CONDITIONS" is a contract, and "006313 - REQUEST FOR INFORMATION
-    # FORM" is an RFI, even though both carry a division-00 prefix.
-    if any(_hits(name, h) for h in _CONTRACT_HINTS):
-        return "contract"
-    if any(_hits(name, h) for h in _RFI_HINTS):
-        return "rfi"
-    if any(_hits(name, h) for h in _ADDENDA_HINTS):
-        return "addenda"
-    # A spec book arrives as "270000 - STRUCTURED CABLING.pdf": CSI MasterFormat
-    # section numbers. This is a stronger signal than a word in the section title
-    # -- "221316 - STORM DRAINAGE" is plumbing, not a site plan -- so it is
-    # checked before the rest of the drawing hints. Division 00 is the front end
-    # (invitation, bid form, instructions), 01 is general requirements, 02+ is
-    # the specification itself.
+    # CSI MasterFormat section numbers are checked BEFORE any word hints.
+    # "007200 - GENERAL CONDITIONS" is a CSI front-end spec book (bid_docs),
+    # NOT the project's signed contract.  "084113 - ALUMINUM-FRAMED ENTRANCES"
+    # is a CSI Division 08 spec, NOT a Scope of Work.  "006313 - REQUEST FOR
+    # INFORMATION FORM" is a CSI Division 00 bid document, NOT a free-standing
+    # RFI.  The six-digit prefix is unambiguous; the title words are noise.
     csi = _CSI_SECTION.match(name)
     if csi:
         division = int(csi.group(1)[:2])
@@ -112,6 +110,15 @@ def classify(filename: str, content_type: str = "") -> str:
             return "bid_docs"
         if division >= 1:
             return "specs"
+    # An explicit word in the title beats the number in front of it for
+    # non-CSI files: "AIA Document A101 - Contract" is a contract, and
+    # "RFI Form - Project X" is an RFI.
+    if any(_hits(name, h) for h in _CONTRACT_HINTS):
+        return "contract"
+    if any(_hits(name, h) for h in _RFI_HINTS):
+        return "rfi"
+    if any(_hits(name, h) for h in _ADDENDA_HINTS):
+        return "addenda"
     if any(_hits(name, h) for h in _DRAWING_HINTS):
         return "plans"
     if any(_hits(name, h) for h in _SOW_HINTS):
@@ -131,6 +138,29 @@ def classify(filename: str, content_type: str = "") -> str:
     if any(_hits(name, h) for h in _SCHEDULE_HINTS):
         return "schedule"
     return "other"
+
+
+# ─── Guard: CSI files must NEVER occupy single-slot types ────────────────────
+# Even if a user selects "Scope of Work" from the dropdown, a CSI-numbered file
+# is re-routed to "specs" so it cannot supersede BuildStack's generated SOW.
+_SINGLE_SLOT_TYPES = ("sow", "itemized", "contract")
+
+def is_csi_file(filename: str) -> bool:
+    """True if the filename starts with a CSI MasterFormat section number."""
+    return _CSI_SECTION.match((filename or "").lower()) is not None
+
+def safe_classify(filename: str, content_type: str = "", requested_type: str = "") -> str:
+    """Classify a file, with a hard guard against CSI files in single slots.
+
+    If the user explicitly picks a single-slot type (sow/itemized/contract) for
+    a CSI-numbered file, re-route it to 'specs' instead.  Only non-CSI files
+    may occupy the BuildStack override slots.
+    """
+    if requested_type and requested_type in _SINGLE_SLOT_TYPES:
+        if is_csi_file(filename):
+            return "specs"  # Never let a CSI file into SOW/itemized/contract
+        return requested_type
+    return classify(filename, content_type)
 
 
 def _folder_for(zoho_mail, account_id: str, folder_id: str, message_id: str) -> str:

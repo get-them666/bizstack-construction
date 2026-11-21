@@ -4,6 +4,84 @@
 
 ---
 
+## 2026-11-21 — Session 14: Bid #18393 CSI Spec Slot Bug Fix & UI Consolidation
+
+### Fix 1: CSI Spec Files Overriding BuildStack's Package Documents
+
+**Root Cause:** In `bid_attachments.classify()`, contract/RFI hints were checked BEFORE CSI MasterFormat section numbers. Files like `007200 - GENERAL CONDITIONS v20.3.pdf` matched "conditions" (a contract hint) and were classified as `contract`, superseding BuildStack's auto-generated Contract.pdf. Similarly, `084113 - ALUMINUM-FRAMED ENTRANCES` could match "spec" (a SOW hint) and go into the SOW slot.
+
+**Classifier Fix (`bid_attachments.py`):**
+- Moved the CSI MasterFormat check (`^\d{6}`) to BEFORE contract/RFI/addenda hints
+- Now `007200 - GENERAL CONDITIONS` → `bid_docs` (not `contract`)
+- Now `006313 - REQUEST FOR INFORMATION FORM` → `bid_docs` (not `rfi`)
+- Now `084113 - ALUMINUM-FRAMED ENTRANCES` → `specs` (not `sow`)
+- `_BID SET` files always → `plans` (unchanged)
+
+**Guard Functions Added:**
+- `is_csi_file(filename)` — Returns True if filename starts with 6-digit CSI pattern
+- `safe_classify(filename, requested_type)` — Prevents CSI files from occupying single-slot types even if explicitly requested
+
+**Upload Handler Guard (`construction_main.py`):**
+- Document upload route now checks `is_csi_file()` before allowing `sow`/`itemized`/`contract` types
+- CSI files uploaded with a single-slot dropdown selection are re-routed to `plans`
+
+**Re-filing Guard:**
+- `/api/bids/documents/{doc_id}/type` route now refuses to move CSI files into `sow`/`itemized`/`contract`
+- Routes them to `plans` instead
+
+**Migration Route (`POST /api/bids/{bid_id}/fix-csi-slots`):**
+- Finds all CSI-numbered files in single-slot positions → moves to `plans`
+- Restores auto-generated BuildStack docs (Scope of Work.pdf, Contract.pdf) that were incorrectly superseded
+- Re-classifies any remaining misplaced CSI files
+
+**Verification:** All 17 test cases pass:
+```
+✅ 084113 - ALUMINUM-FRAMED ENTRANCES → specs (was: contract)
+✅ 007200 - GENERAL CONDITIONS → bid_docs (was: contract)
+✅ Scope of Work.pdf → sow ✅
+✅ Contract.pdf → contract ✅
+✅ Itemized Pricing - Chase Bank → itemized ✅
+```
+
+### Fix 2: UI Consolidation on Bid Detail Page
+
+**Merged Sections:** Combined "Job Documents" and "File Cabinet" into one unified "Documents" section:
+
+1. **Single uploader** — replaces the two duplicate upload forms (one with document type dropdown, one with folder dropdown)
+2. **BuildStack Package Documents** — 3-card grid showing active SOW, Itemized Pricing, Contract
+   - Green "Active" badge when uploaded document is in use
+   - Falls back to auto-generated PDFs when no upload
+   - Superseded revisions hidden behind "Show superseded (N)" toggle
+3. **Plans & CSI Specifications** — Collapsible accordion for all spec files
+   - Groups CSI specs, plans, and bid documents separately
+   - Auto-collapsed when >5 files to prevent page flooding
+4. **File Cabinet Folders** — Collapsible accordion for working files
+   - All folder-based files in nested `<details>` elements
+
+**Signature Section Compact:**
+- When signature already on file: shows name + date + "Signed ✓" badge
+- Full signing pad hidden behind "Replace signature" `<details>` toggle
+- When no signature: shows full pad as before
+
+**CSI Fix Banner:**
+- Amber warning appears when CSI files detected in single slots
+- "🔧 Fix Contract Package" button triggers the migration route
+- Green success banner after fix shows moved/restored counts
+
+### Files Modified
+- `bid_attachments.py` — Classifier fix, `is_csi_file()`, `safe_classify()` functions
+- `construction_main.py` — Upload guard, re-file guard, migration route, `csi_fix_needed` context
+- `templates/construction/bid_detail.html` — Unified document manager, compact signature, CSI fix UI
+
+### Deployment
+Run the migration for Bid #18393:
+```bash
+curl -X POST https://construction.bizstackperks.com/api/bids/18393/fix-csi-slots \
+  -H "Cookie: session=..."
+```
+
+---
+
 ## 2026-11-21 — Session 13: Phase 2 — Cal.com, Deposits, Local SEO, Social Posting, Docker
 
 ### Overview

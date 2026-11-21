@@ -92,6 +92,18 @@
   {% if error %}
   <div class="mb-6 rounded-xl bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">{{ error }}</div>
   {% endif %}
+  {% if request.query_params.get('csi_fix') %}
+  <div class="mb-6 rounded-xl bg-emerald-50 border border-emerald-200 px-4 py-3 text-sm text-emerald-800">
+    ✅ <b>Contract package repaired.</b>
+    {% set parts = (request.query_params.get('csi_fix') or '').split('_') %}
+    {% set moved_count = 0 %}
+    {% set restored_count = 0 %}
+    {% for p in parts %}{% if p.startswith('moved_') %}{% set moved_count = p.replace('moved_','')|int %}{% endif %}{% endfor %}
+    {% for p in parts %}{% if p.startswith('restored_') %}{% set restored_count = p.replace('restored_','')|int %}{% endif %}{% endfor %}
+    Moved <b>{{ moved_count }}</b> CSI spec file(s) out of the SOW/Contract override slots into Plans & Specs,
+    and restored <b>{{ restored_count }}</b> BuildStack-generated document(s) as the active package files.
+  </div>
+  {% endif %}
 
   {# ── Source of truth banner ──────────────────────────────────────────────── #}
   <div class="mb-6 px-4 py-3 rounded-xl bg-slate-900 border border-slate-700 text-slate-200 text-sm font-semibold">
@@ -883,28 +895,41 @@
       <section class="bg-white rounded-2xl border border-slate-200 p-5">
         <h2 class="text-sm font-bold uppercase tracking-wide text-slate-500 mb-2">Signature</h2>
         {% if signature.signed %}
-        <div class="text-sm mb-3">
-          <div class="font-semibold text-slate-800">{{ signature.name }}</div>
-          <div class="text-xs text-slate-500">{{ signature.signed_at }}{% if signature.email %} · {{ signature.email }}{% endif %}</div>
-          <div class="text-[11px] text-slate-400 mt-1 font-mono">doc {{ signature.document_sha256 }}…</div>
+        <div class="flex items-center justify-between gap-3 mb-3">
+          <div>
+            <div class="text-sm font-semibold text-slate-800">{{ signature.name }}</div>
+            <div class="text-xs text-slate-500">{{ signature.signed_at }}{% if signature.email %} · {{ signature.email }}{% endif %}</div>
+          </div>
+          <span class="text-[10px] font-black uppercase tracking-wide text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-2 py-1">Signed ✓</span>
         </div>
-        {% endif %}
+        <details>
+          <summary class="cursor-pointer text-xs text-slate-500 hover:text-indigo-600">Replace signature</summary>
+          <div class="mt-3">
+            <form method="post" action="/api/bids/{{ b.id }}/signature" id="sign-form">
+              <canvas id="sig-pad" height="140" class="w-full border border-slate-200 rounded-lg bg-white touch-none cursor-crosshair"></canvas>
+              <input name="signer_name" value="{{ signature.name or 'Shaun David OLeary' }}" placeholder="Printed name" class="mt-2 w-full text-sm border border-slate-200 rounded-lg px-3 py-2">
+              <input type="hidden" name="signature" id="sig-data">
+              <input type="hidden" name="back" value="/bids/{{ b.id }}">
+              <div class="flex gap-2 mt-2">
+                <button type="button" id="sig-clear" class="text-sm font-semibold px-4 py-2 bg-white border border-slate-200 rounded-lg hover:border-indigo-300">Clear</button>
+                <button class="flex-1 text-sm font-semibold px-4 py-2 bg-slate-900 text-white rounded-lg hover:bg-slate-700">Replace signature</button>
+              </div>
+            </form>
+          </div>
+        </details>
+        {% else %}
         <p class="text-xs text-slate-500 mb-2">Draw it once. It is stamped on the proposal, the package and the contract.</p>
         <form method="post" action="/api/bids/{{ b.id }}/signature" id="sign-form">
-          <canvas id="sig-pad" height="140"
-                  class="w-full border border-slate-200 rounded-lg bg-white touch-none cursor-crosshair"></canvas>
-          <input name="signer_name" value="{{ signature.name or 'Shaun David OLeary' }}" placeholder="Printed name"
-                 class="mt-2 w-full text-sm border border-slate-200 rounded-lg px-3 py-2">
+          <canvas id="sig-pad" height="140" class="w-full border border-slate-200 rounded-lg bg-white touch-none cursor-crosshair"></canvas>
+          <input name="signer_name" value="{{ signature.name or 'Shaun David OLeary' }}" placeholder="Printed name" class="mt-2 w-full text-sm border border-slate-200 rounded-lg px-3 py-2">
           <input type="hidden" name="signature" id="sig-data">
           <input type="hidden" name="back" value="/bids/{{ b.id }}">
           <div class="flex gap-2 mt-2">
-            <button type="button" id="sig-clear"
-                    class="text-sm font-semibold px-4 py-2 bg-white border border-slate-200 rounded-lg hover:border-indigo-300">Clear</button>
-            <button class="flex-1 text-sm font-semibold px-4 py-2 bg-slate-900 text-white rounded-lg hover:bg-slate-700">
-              {{ 'Replace signature' if signature.signed else 'Save signature' }}
-            </button>
+            <button type="button" id="sig-clear" class="text-sm font-semibold px-4 py-2 bg-white border border-slate-200 rounded-lg hover:border-indigo-300">Clear</button>
+            <button class="flex-1 text-sm font-semibold px-4 py-2 bg-slate-900 text-white rounded-lg hover:bg-slate-700">Save signature</button>
           </div>
         </form>
+        {% endif %}
         <p class="text-[11px] text-slate-400 mt-2">Stored with the time, the address it was signed from and a hash of the document as signed.</p>
       </section>
 
@@ -978,9 +1003,10 @@
       </script>
 
       <section class="bg-white rounded-2xl border border-slate-200 p-5">
-        <h2 class="text-sm font-bold uppercase tracking-wide text-slate-500 mb-3" id="job-docs">Job documents</h2>
-        <p class="text-xs text-slate-500 mb-3">Upload the SOW, quote, itemized pricing, plans, and contract for this job. Uploaded documents are linked here and used in place of the auto-generated templates. A revision becomes the one in use; superseding the old one keeps it listed as history without changing the package.</p>
+        <h2 class="text-sm font-bold uppercase tracking-wide text-slate-500 mb-3" id="job-docs">Documents</h2>
+        <p class="text-xs text-slate-500 mb-3">One place for all bid paperwork. Uploaded SOW, pricing and contract files override the auto-generated BuildStack PDFs. CSI spec books and plan sets are kept as reference — they never replace the BuildStack package.</p>
 
+        {# ── Pull from solicitation email ───────────────────────────── #}
         {% if pulled != '' %}
         <div class="mb-4 rounded-xl border {{ 'border-emerald-200 bg-emerald-50 text-emerald-900' if pulled|int > 0 else 'border-amber-200 bg-amber-50 text-amber-900' }} px-4 py-3 text-xs">
           <span class="font-bold">Pulled {{ pulled }} file{{ '' if pulled|int == 1 else 's' }} from the solicitation email.</span>
@@ -997,9 +1023,8 @@
               {% if source_emails %}
               <p class="mt-1 text-xs font-semibold text-indigo-900 truncate">{{ source_emails[0].subject or 'Solicitation email' }}</p>
               <p class="text-[11px] text-indigo-600 truncate">{{ source_emails[0].sender or '' }}</p>
-              <p class="mt-1 text-[11px] text-indigo-700">Pull the plans, scope, bid forms and addenda that came with the email, plus any direct document link inside it. Files behind the board's sign-in stay on the board — use the bid package link at the top. Safe to press more than once.</p>
               {% else %}
-              <p class="mt-1 text-[11px] text-indigo-700">No solicitation email is linked to this bid yet. Press below to search the mailbox by the sender and reference; if it is found, its plans, scope and bid forms come across. Hand-entered bids have no email source.</p>
+              <p class="mt-1 text-[11px] text-indigo-700">No solicitation email linked yet. Press below to search the mailbox.</p>
               {% endif %}
             </div>
             <form method="post" action="/api/bids/{{ b.id }}/documents/from-email">
@@ -1010,180 +1035,271 @@
 
         {% if source_body %}
         <details class="mb-5 rounded-xl border border-slate-200 bg-slate-50">
-          <summary class="cursor-pointer px-4 py-3 text-xs font-bold text-slate-700">
-            Read the solicitation email — scope, RFIs and instructions
-          </summary>
+          <summary class="cursor-pointer px-4 py-3 text-xs font-bold text-slate-700">Read the solicitation email — scope, RFIs and instructions</summary>
           <div class="px-4 pb-4">
             <pre class="whitespace-pre-wrap break-words text-xs leading-relaxed text-slate-700 font-sans max-h-96 overflow-y-auto">{{ source_body }}</pre>
           </div>
         </details>
         {% endif %}
-        {% set docs_by_type = {} %}
-        {% for d in docs %}
-        {% set _ = docs_by_type.setdefault(d.document_type or 'other', []).append(d) %}
-        {% endfor %}
-        {% set doc_types = [('sow', 'Scope of Work'), ('quote', 'Quote'), ('itemized', 'Itemized Pricing'), ('contract', 'Contract'), ('plans', 'Plans & Specs'), ('other', 'Other')] %}
-        <p class="text-xs text-slate-500 pt-4 border-t border-slate-100 mb-4">Upload SOW, quote, pricing, and contract files in the <a href="#bid-files" class="font-semibold text-indigo-600 hover:underline">File Cabinet</a> below. Files typed as SOW, Quote, Itemized Pricing or Contract here are used in the generated package.</p>
-        {% for dt, label in doc_types %}
-        {% set tdocs = docs_by_type.get(dt, []) %}
-        {% if tdocs %}
-        <div class="mb-4">
-          <p class="text-xs font-bold text-slate-500 uppercase tracking-wide mb-2">{{ label }}</p>
-          <ul class="space-y-1 text-sm">
-            {% for d in tdocs %}
-            <li class="flex items-center justify-between gap-2 py-1.5 border-b border-slate-50">
-              <a href="{{ d.url or ('/media/' ~ d.key) }}" target="_blank" rel="noopener" class="min-w-0 truncate font-semibold {% if d.superseded_at %}text-slate-400 line-through{% else %}text-indigo-700 hover:underline{% endif %}">{{ d.filename }}</a>
-              <div class="flex items-center gap-2">
-                {% if d.superseded_at %}
-                <span class="text-[11px] font-semibold text-red-500 whitespace-nowrap">superseded</span>
-                <form method="post" action="/api/bids/documents/{{ d.id }}/restore">
-                  <button class="text-xs text-indigo-600 hover:underline">Use again</button>
-                </form>
-                {% else %}
-                {% if dt in ('sow', 'quote', 'itemized', 'contract') and loop.index == 1 %}
-                <span class="text-[10px] font-black uppercase tracking-wide text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-1.5 py-0.5 whitespace-nowrap">In use</span>
-                {% endif %}
-                {% if d.suggested_type and d.suggested_type != d.document_type %}
-                <form method="post" action="/api/bids/documents/{{ d.id }}/type" class="inline"
-                      title="The filename looks like {{ d.suggested_type }}, but it is filed as {{ d.document_type }}">
-                  <input type="hidden" name="document_type" value="{{ d.suggested_type }}">
-                  <button class="text-xs font-bold text-amber-700 bg-amber-50 border border-amber-200 hover:bg-amber-100 rounded px-1.5 py-0.5 whitespace-nowrap">Move to {{ d.suggested_type }}</button>
-                </form>
-                {% endif %}
-                <form method="post" action="/api/bids/documents/{{ d.id }}/delete" onsubmit="return confirm('Retire this document from the package? It stays listed as history.')">
-                  <button class="text-xs text-red-600 hover:underline">Retire</button>
-                </form>
-                {% endif %}
-              </div>
-            </li>
-            {% endfor %}
-          </ul>
-        </div>
-        {% endif %}
-        {% endfor %}
-        {% if not docs %}
-        <p class="text-sm text-slate-500">No documents uploaded yet. Add the SOW, quote, and itemized pricing for this job.</p>
-        {% endif %}
-      </section>
 
-      {# ── File cabinet (permits, photos, inspections, etc.) ─────────── #}
-      <section id="bid-files" class="bg-white rounded-2xl border border-slate-200 p-5">
-        <h2 class="text-sm font-bold uppercase tracking-wide text-slate-500 mb-3">File Cabinet</h2>
-        <p class="text-xs text-slate-500 mb-4">Upload permits, photos, inspection reports, change orders, correspondence, and other files for this bid. Files are organized by folder.</p>
-
-        {% if files_purged %}
-        <div class="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs text-emerald-900">
-          Purged <b>{{ files_purged }}</b> file{{ '' if files_purged == '1' else 's' }} and freed <b>{{ files_freed_mb }} MB</b>.
-        </div>
-        {% endif %}
-        {% if files_saved %}
-        <div class="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs text-emerald-900">
-          <b>{{ files_saved }}</b> file{{ '' if files_saved == '1' else 's' }} uploaded.
-          {% if files_errors and files_errors != '0' %}
-          <span class="text-amber-800">{{ files_errors }} could not be uploaded{% if files_error_msg %}: {{ files_error_msg }}{% endif %}.</span>
-          {% endif %}
-        </div>
-        {% elif files_errors and files_errors != '0' %}
-        <div class="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900">
-          <b>{{ files_errors }}</b> file{{ '' if files_errors == '1' else 's' }} could not be uploaded{% if files_error_msg %}: {{ files_error_msg }}{% endif %}.
-        </div>
-        {% endif %}
-
-        <form method="post" action="/api/bids/{{ b.id }}/files/upload" enctype="multipart/form-data" class="mb-6">
-          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
+        {# ── Unified uploader (replaces both old uploaders) ─────────── #}
+        <form method="post" action="/api/bids/{{ b.id }}/files/upload" enctype="multipart/form-data" class="rounded-xl border border-slate-200 bg-slate-50 p-4 mb-6" id="bid-files">
+          <p class="text-[11px] font-black uppercase tracking-wide text-slate-600 mb-3">Upload files</p>
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3">
             <div>
-              <label class="block text-xs font-bold text-slate-600 mb-1">Folder</label>
+              <label class="block text-xs font-bold text-slate-600 mb-1">Type (auto-sorts if left blank)</label>
               <select name="folder" class="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 bg-white">
                 <option value="">Auto-sort by filename</option>
                 {% for f in bid_folders %}
                 <option value="{{ f }}">{{ f }}</option>
                 {% endfor %}
               </select>
-              <p class="text-[11px] text-slate-400 mt-1">Auto-sort files plans, scopes, RFIs, permits and inspection reports from the filename.</p>
             </div>
             <div>
               <label class="block text-xs font-bold text-slate-600 mb-1">Files (max 50 MB each)</label>
               <input type="file" name="files" multiple class="w-full text-sm text-slate-600 file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100">
-              <p class="text-[11px] text-slate-400 mt-1">Pick as many files as you like.</p>
             </div>
-            <div class="sm:col-span-2">
-              <label class="block text-xs font-bold text-slate-600 mb-1">…or upload a whole folder</label>
+            <div>
+              <label class="block text-xs font-bold text-slate-600 mb-1">…or a whole folder</label>
               <input type="file" name="files" webkitdirectory multiple class="w-full text-sm text-slate-600 file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-slate-100 file:text-slate-700 hover:file:bg-slate-200">
-              <p class="text-[11px] text-slate-400 mt-1">Every file in the folder is uploaded and sorted. Use the folder picker on its own — do not also add files above in the same submit.</p>
             </div>
           </div>
-          <button class="text-sm font-semibold px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700">Upload files</button>
-          <p class="text-[11px] text-slate-400 mt-2">PDF, images, Word, Excel, CSV, DWG/DXF, RVT/IFC, ZIP and email files.</p>
+          <div class="flex items-center gap-3">
+            <button class="text-sm font-semibold px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700">Upload</button>
+            <span class="text-[11px] text-slate-400">PDF, images, Word, Excel, DWG/DXF, RVT/IFC, ZIP. CSI spec files auto-sort to Plans & Specs.</span>
+          </div>
         </form>
 
+        {# ── Fix CSI button (for legacy data mis-filed before the guard) ── #}
+        {% if csi_fix_needed %}
+        <div class="mb-5 rounded-xl border border-amber-200 bg-amber-50 p-4">
+          <div class="flex items-center justify-between gap-3">
+            <div>
+              <p class="text-xs font-bold text-amber-800">⚠️ {{ csi_fix_needed }} CSI spec file(s) found in the Contract package override slots</p>
+              <p class="text-[11px] text-amber-700 mt-1">These were auto-sorted incorrectly and are hiding BuildStack's real Scope of Work and Contract.</p>
+            </div>
+            <form method="post" action="/api/bids/{{ b.id }}/fix-csi-slots">
+              <button class="text-sm font-bold px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700">🔧 Fix Contract Package</button>
+            </form>
+          </div>
+        </div>
+        {% endif %}
+
+        {# ── BuildStack Package Documents (3 active slots) ──────────── #}
+        {% set docs_by_type = {} %}
+        {% for d in docs %}
+        {% set _ = docs_by_type.setdefault(d.document_type or 'other', []).append(d) %}
+        {% endfor %}
+        {% set sow_list = docs_by_type.get('sow', []) %}
+        {% set quote_list = docs_by_type.get('quote', []) %}
+        {% set item_list = docs_by_type.get('itemized', []) %}
+        {% set contract_list = docs_by_type.get('contract', []) %}
+        {% set sow_active = [] %}{% set sow_old = [] %}
+        {% for d in sow_list %}{% if d.superseded_at %}{% set _ = sow_old.append(d) %}{% else %}{% set _ = sow_active.append(d) %}{% endif %}{% endfor %}
+        {% set item_active = [] %}{% set item_old = [] %}
+        {% for d in item_list %}{% if d.superseded_at %}{% set _ = item_old.append(d) %}{% else %}{% set _ = item_active.append(d) %}{% endif %}{% endfor %}
+        {% set contract_active = [] %}{% set contract_old = [] %}
+        {% for d in contract_list %}{% if d.superseded_at %}{% set _ = contract_old.append(d) %}{% else %}{% set _ = contract_active.append(d) %}{% endif %}{% endfor %}
+
+        <div class="mb-6">
+          <p class="text-xs font-bold text-slate-500 uppercase tracking-wide mb-3">BuildStack Package Documents</p>
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            {# SOW slot #}
+            <div class="rounded-xl border {% if sow_active %}border-emerald-200 bg-emerald-50/50{% else %}border-slate-200{% endif %} p-3">
+              <p class="text-[10px] font-black uppercase tracking-wide {% if sow_active %}text-emerald-700{% else %}text-slate-400{% endif %} mb-1.5">Scope of Work</p>
+              {% if sow_active %}
+              <a href="{{ sow_active[0].url or ('/media/' ~ sow_active[0].key) }}" target="_blank" rel="noopener" title="{{ sow_active[0].filename }}"
+                 class="text-xs font-semibold text-emerald-800 hover:underline truncate block">{{ sow_active[0].filename }}</a>
+              <span class="text-[10px] text-emerald-600 font-bold">Active</span>
+              {% else %}
+              <a href="/bids/{{ b.id }}/sow.pdf?v={{ b.id }}-{{ saved_revision or 0 }}" target="_blank" rel="noopener"
+                 class="text-xs font-semibold text-slate-700 hover:underline block">📄 Auto-generated Scope of Work</a>
+              <span class="text-[10px] text-slate-400">No upload — using template</span>
+              {% endif %}
+              {% if sow_old %}
+              <details class="mt-2">
+                <summary class="cursor-pointer text-[10px] text-slate-400 hover:text-slate-600">Show superseded ({{ sow_old|length }})</summary>
+                <ul class="mt-1 space-y-0.5">
+                  {% for d in sow_old %}
+                  <li class="flex items-center justify-between gap-1 text-[11px]">
+                    <a href="{{ d.url or ('/media/' ~ d.key) }}" target="_blank" class="text-slate-400 line-through truncate hover:text-slate-600">{{ d.filename }}</a>
+                    <form method="post" action="/api/bids/documents/{{ d.id }}/restore" class="shrink-0">
+                      <button class="text-[10px] text-indigo-600 hover:underline">Use</button>
+                    </form>
+                  </li>
+                  {% endfor %}
+                </ul>
+              </details>
+              {% endif %}
+            </div>
+            {# Itemized Pricing slot #}
+            <div class="rounded-xl border {% if item_active or quote_list %}border-emerald-200 bg-emerald-50/50{% else %}border-slate-200{% endif %} p-3">
+              <p class="text-[10px] font-black uppercase tracking-wide {% if item_active or quote_list %}text-emerald-700{% else %}text-slate-400{% endif %} mb-1.5">Itemized Pricing</p>
+              {% if item_active %}
+              <a href="{{ item_active[0].url or ('/media/' ~ item_active[0].key) }}" target="_blank" rel="noopener" title="{{ item_active[0].filename }}"
+                 class="text-xs font-semibold text-emerald-800 hover:underline truncate block">{{ item_active[0].filename }}</a>
+              <span class="text-[10px] text-emerald-600 font-bold">Active</span>
+              {% elif quote_list %}
+              {% set q = quote_list|selectattr('superseded_at','undefined')|list %}
+              {% set q_active = [] %}{% for d in quote_list %}{% if not d.superseded_at %}{% set _ = q_active.append(d) %}{% endif %}{% endfor %}
+              {% if q_active %}
+              <a href="{{ q_active[0].url or ('/media/' ~ q_active[0].key) }}" target="_blank" rel="noopener" title="{{ q_active[0].filename }}"
+                 class="text-xs font-semibold text-emerald-800 hover:underline truncate block">{{ q_active[0].filename }}</a>
+              <span class="text-[10px] text-emerald-600 font-bold">Active (Quote)</span>
+              {% else %}
+              <a href="/bids/{{ b.id }}/itemized.pdf?v={{ b.id }}-{{ saved_revision or 0 }}" target="_blank" rel="noopener"
+                 class="text-xs font-semibold text-slate-700 hover:underline block">💰 Auto-generated Pricing</a>
+              {% endif %}
+              {% else %}
+              <a href="/bids/{{ b.id }}/itemized.pdf?v={{ b.id }}-{{ saved_revision or 0 }}" target="_blank" rel="noopener"
+                 class="text-xs font-semibold text-slate-700 hover:underline block">💰 Auto-generated Pricing</a>
+              <span class="text-[10px] text-slate-400">No upload — using template</span>
+              {% endif %}
+            </div>
+            {# Contract slot #}
+            <div class="rounded-xl border {% if contract_active %}border-emerald-200 bg-emerald-50/50{% else %}border-slate-200{% endif %} p-3">
+              <p class="text-[10px] font-black uppercase tracking-wide {% if contract_active %}text-emerald-700{% else %}text-slate-400{% endif %} mb-1.5">Contract</p>
+              {% if contract_active %}
+              <a href="{{ contract_active[0].url or ('/media/' ~ contract_active[0].key) }}" target="_blank" rel="noopener" title="{{ contract_active[0].filename }}"
+                 class="text-xs font-semibold text-emerald-800 hover:underline truncate block">{{ contract_active[0].filename }}</a>
+              <span class="text-[10px] text-emerald-600 font-bold">Active</span>
+              {% else %}
+              <a href="/bids/{{ b.id }}/contract.pdf?v={{ b.id }}-{{ saved_revision or 0 }}" target="_blank" rel="noopener"
+                 class="text-xs font-semibold text-slate-700 hover:underline block">✍️ Auto-generated Contract</a>
+              <span class="text-[10px] text-slate-400">No upload — using template</span>
+              {% endif %}
+              {% if contract_old %}
+              <details class="mt-2">
+                <summary class="cursor-pointer text-[10px] text-slate-400 hover:text-slate-600">Show superseded ({{ contract_old|length }})</summary>
+                <ul class="mt-1 space-y-0.5">
+                  {% for d in contract_old %}
+                  <li class="flex items-center justify-between gap-1 text-[11px]">
+                    <a href="{{ d.url or ('/media/' ~ d.key) }}" target="_blank" class="text-slate-400 line-through truncate hover:text-slate-600">{{ d.filename }}</a>
+                    <form method="post" action="/api/bids/documents/{{ d.id }}/restore" class="shrink-0">
+                      <button class="text-[10px] text-indigo-600 hover:underline">Use</button>
+                    </form>
+                  </li>
+                  {% endfor %}
+                </ul>
+              </details>
+              {% endif %}
+            </div>
+          </div>
+        </div>
+
+        {# ── Plans & CSI Specifications (collapsible) ───────────────── #}
+        {% set plans_list = docs_by_type.get('plans', []) %}
+        {% set specs_list = docs_by_type.get('specs', []) %}
+        {% set bid_docs_list = docs_by_type.get('bid_docs', []) %}
+        {% set other_list = docs_by_type.get('other', []) %}
+        {% set ref_count = plans_list|length + specs_list|length + bid_docs_list|length %}
+        {% if ref_count > 0 %}
+        <details class="mb-6" {% if ref_count <= 5 %}open{% endif %}>
+          <summary class="cursor-pointer text-xs font-bold text-slate-500 uppercase tracking-wide hover:text-slate-700 py-2 border-b border-slate-100">
+            Plans &amp; CSI Specifications ({{ ref_count }} file{{ '' if ref_count == 1 else 's' }})
+          </summary>
+          <div class="pt-3 space-y-3">
+            {% if specs_list %}
+            <div>
+              <p class="text-[11px] font-bold text-slate-400 mb-1">CSI Specification Sections</p>
+              <ul class="space-y-0.5">
+                {% for d in specs_list[:20] %}
+                <li class="flex items-center justify-between gap-2 text-[11px] py-0.5">
+                  <a href="{{ d.url or ('/media/' ~ d.key) }}" target="_blank" rel="noopener" class="text-indigo-600 hover:underline truncate">{{ d.filename }}</a>
+                  <form method="post" action="/api/bids/documents/{{ d.id }}/delete" class="shrink-0" onsubmit="return confirm('Remove this spec?')">
+                    <button class="text-[10px] text-red-500 hover:underline">Remove</button>
+                  </form>
+                </li>
+                {% endfor %}
+                {% if specs_list|length > 20 %}
+                <li class="text-[11px] text-slate-400">…and {{ specs_list|length - 20 }} more</li>
+                {% endif %}
+              </ul>
+            </div>
+            {% endif %}
+            {% if plans_list %}
+            <div>
+              <p class="text-[11px] font-bold text-slate-400 mb-1">Plans &amp; Drawings</p>
+              <ul class="space-y-0.5">
+                {% for d in plans_list %}
+                <li class="flex items-center justify-between gap-2 text-[11px] py-0.5">
+                  <a href="{{ d.url or ('/media/' ~ d.key) }}" target="_blank" rel="noopener" class="text-indigo-600 hover:underline truncate">{{ d.filename }}</a>
+                  <form method="post" action="/api/bids/documents/{{ d.id }}/delete" class="shrink-0" onsubmit="return confirm('Remove this plan?')">
+                    <button class="text-[10px] text-red-500 hover:underline">Remove</button>
+                  </form>
+                </li>
+                {% endfor %}
+              </ul>
+            </div>
+            {% endif %}
+            {% if bid_docs_list %}
+            <div>
+              <p class="text-[11px] font-bold text-slate-400 mb-1">Bid Documents (Division 00)</p>
+              <ul class="space-y-0.5">
+                {% for d in bid_docs_list %}
+                <li class="flex items-center justify-between gap-2 text-[11px] py-0.5">
+                  <a href="{{ d.url or ('/media/' ~ d.key) }}" target="_blank" rel="noopener" class="text-indigo-600 hover:underline truncate">{{ d.filename }}</a>
+                  <form method="post" action="/api/bids/documents/{{ d.id }}/delete" class="shrink-0" onsubmit="return confirm('Remove?')">
+                    <button class="text-[10px] text-red-500 hover:underline">Remove</button>
+                  </form>
+                </li>
+                {% endfor %}
+              </ul>
+            </div>
+            {% endif %}
+          </div>
+        </details>
+        {% endif %}
+
+        {# ── File Cabinet folders (from bid_files table) ────────────── #}
         {% if bid_files %}
         {% set files_by_folder = {} %}
         {% for f in bid_files %}
         {% set _ = files_by_folder.setdefault(f.folder, []).append(f) %}
         {% endfor %}
-
-        {% for folder in bid_folders %}
-        {% set folder_files = files_by_folder.get(folder, []) %}
-        {% if folder_files %}
-        <div class="mb-5">
-          <h3 class="text-xs font-bold text-slate-600 uppercase tracking-wide mb-2 border-b border-slate-100 pb-1">{{ folder }} <span class="text-slate-400 font-normal">({{ folder_files|length }})</span></h3>
-          <ul class="space-y-1.5">
-            {% for f in folder_files %}
-            <li class="flex items-center justify-between gap-2 py-1.5 px-2 rounded-lg hover:bg-slate-50">
-              <div class="flex items-center gap-2 min-w-0 flex-1">
-                <span class="text-slate-400 text-xs">
-                  {% if f.mime_type and 'image' in f.mime_type %}🖼️
-                  {% elif f.mime_type and 'pdf' in f.mime_type %}📄
-                  {% elif f.mime_type and ('excel' in f.mime_type or 'spreadsheet' in f.mime_type) %}📊
-                  {% elif f.mime_type and ('word' in f.mime_type or 'document' in f.mime_type) %}📝
-                  {% else %}📎{% endif %}
-                </span>
-                <a href="/api/bids/{{ b.id }}/files/{{ f.id }}/download" target="_blank" rel="noopener" class="text-sm font-semibold text-indigo-700 hover:underline truncate" title="{{ f.original_filename }}">
-                  {{ f.original_filename }}
-                </a>
-                <span class="text-[11px] text-slate-400 whitespace-nowrap">
-                  {{ '%.1f'|format(f.size_kb or 0) }} KB
-                  {% if f.uploaded_at %}· {{ f.uploaded_at.strftime('%b %d') }}{% endif %}
-                </span>
-              </div>
-              <form method="post" action="/api/bids/{{ b.id }}/files/{{ f.id }}/delete" class="flex-shrink-0" onsubmit="return confirm('Delete this file?')">
-                <button class="text-xs font-semibold text-red-600 hover:text-red-700 px-2 py-1 rounded hover:bg-red-50">Delete</button>
-              </form>
-            </li>
-            {% endfor %}
-          </ul>
-        </div>
-        {% endif %}
-        {% endfor %}
-        {% else %}
-        <p class="text-sm text-slate-500">No files uploaded yet.</p>
-        {% endif %}
-
-        {% if b.status == 'won' and file_folder_stats %}
-        <details class="mt-5 rounded-xl border border-red-200 bg-red-50/60">
-          <summary class="cursor-pointer px-4 py-3 text-xs font-bold text-red-800">
-            Purge files from this job — the bid is won, the paperwork is placed
+        <details class="mb-4">
+          <summary class="cursor-pointer text-xs font-bold text-slate-500 uppercase tracking-wide hover:text-slate-700 py-2 border-b border-slate-100">
+            File Cabinet Folders ({{ bid_files|length }} file{{ '' if bid_files|length == 1 else 's' }})
           </summary>
+          <div class="pt-3 space-y-4">
+            {% for folder in bid_folders %}
+            {% set folder_files = files_by_folder.get(folder, []) %}
+            {% if folder_files %}
+            <details>
+              <summary class="cursor-pointer text-xs font-bold text-slate-600 hover:text-slate-800">{{ folder }} <span class="text-slate-400 font-normal">({{ folder_files|length }})</span></summary>
+              <ul class="mt-1 space-y-1 pl-3">
+                {% for f in folder_files %}
+                <li class="flex items-center justify-between gap-2 py-1 text-[11px]">
+                  <a href="/api/bids/{{ b.id }}/files/{{ f.id }}/download" target="_blank" rel="noopener" class="text-indigo-600 hover:underline truncate" title="{{ f.original_filename }}">
+                    {{ f.original_filename }}
+                  </a>
+                  <span class="text-slate-400 whitespace-nowrap shrink-0">{{ '%.0f'|format(f.size_kb or 0) }} KB</span>
+                </li>
+                {% endfor %}
+              </ul>
+            </details>
+            {% endif %}
+            {% endfor %}
+          </div>
+        </details>
+        {% endif %}
+
+        {# Purge section for won bids #}
+        {% if b.status == 'won' and file_folder_stats %}
+        <details class="mt-3 rounded-xl border border-red-200 bg-red-50/60">
+          <summary class="cursor-pointer px-4 py-3 text-xs font-bold text-red-800">Purge files — bid is won, paperwork is placed</summary>
           <form method="post" action="/api/bids/{{ b.id }}/files/purge" class="px-4 pb-4"
-                onsubmit="return confirm('Delete the ticked folders and their files permanently? There is no undo.')">
-            <p class="text-[11px] text-red-800/80 mb-3">
-              Keep the records a finished job needs — contracts, permits, change orders, inspections.
-              Tick what is safe to lose: the vendor spec book, the plan set, the site photos.
-              Deleting is permanent.
-            </p>
+                onsubmit="return confirm('Delete the ticked folders permanently?')">
             <ul class="space-y-1 mb-3">
               {% for f in file_folder_stats %}
               <li class="flex items-center gap-2 text-xs text-slate-700">
                 <input type="checkbox" name="folders" value="{{ f.name }}" id="purge-{{ loop.index }}" class="rounded border-slate-300">
-                <label for="purge-{{ loop.index }}" class="cursor-pointer">
-                  <b>{{ f.name }}</b> — {{ f.count }} file{{ '' if f.count == 1 else 's' }}, {{ '%.1f'|format(f.mb) }} MB
-                </label>
+                <label for="purge-{{ loop.index }}" class="cursor-pointer"><b>{{ f.name }}</b> — {{ f.count }} file(s), {{ '%.1f'|format(f.mb) }} MB</label>
               </li>
               {% endfor %}
             </ul>
             <div class="flex flex-wrap items-center gap-2">
-              <input name="confirm" placeholder="Type PURGE to confirm" autocomplete="off"
-                     class="text-sm border border-red-200 rounded-lg px-3 py-2 bg-white">
+              <input name="confirm" placeholder="Type PURGE to confirm" autocomplete="off" class="text-sm border border-red-200 rounded-lg px-3 py-2 bg-white">
               <button class="text-sm font-semibold px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700">Delete ticked folders</button>
             </div>
           </form>
