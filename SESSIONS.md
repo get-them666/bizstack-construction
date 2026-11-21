@@ -4,6 +4,94 @@
 
 ---
 
+## 2026-11-21 — Session 9: Global Timestamp Fix & Call Log Cleanup
+
+### Problem
+All timestamps across the UI were displaying in raw UTC format (`2026-11-21 01:12:48+00:00`), making evening calls after 7:00 PM EST appear as tomorrow's date. Additionally, the Phone Bot call log "What was said" column was showing raw system prompts (`[session ...] System: LEGAL REQUIRED BEHAVIOUR...`) instead of actual caller/AI dialogue.
+
+### Solution
+
+**1. Created `format_eastern` Jinja2 Filter**
+- Added to both `construction_main.py` and `main.py` (Broom Service)
+- Converts UTC timestamps to Eastern Time (America/New_York)
+- Formats as clean human-readable strings: `Nov 21, 2026 • 8:12 PM EST`
+- Handles datetime objects, ISO strings, and timezone-aware/naive datetimes
+- Falls back gracefully if conversion fails
+
+**2. Updated Templates to Use Filter**
+
+**Construction:**
+- `monitor.html` — Voice call logs and SMS logs use `|format_eastern("%b %-d • %-I:%M %p")`
+- `dashboard.html` — Lead timestamps use `|format_eastern`
+- **System prompt filtering:** Call log "What was said" column strips `[session ...] System:` prefixes, showing only actual dialogue
+
+**Broom Service:**
+- `comms.html` — All communication logs use `|format_eastern` with system prompt filtering
+- `leads.html` — Lead creation timestamps use `|format_eastern`
+- `dashboard.html` — Booking timestamps use `|format_eastern`
+
+**3. Backend Scheduling Verification**
+- Both apps already use `APP_TZ = ZoneInfo("America/New_York")` for all scheduling
+- Outbound campaign calling hours (8am-7pm Eastern) ✅
+- Scheduled callbacks ✅
+- Lead follow-up timing ✅
+- All date/time comparisons ✅
+
+### Files Modified
+
+**Construction:**
+- `construction_main.py` — Added `format_eastern` Jinja2 filter function
+- `templates/construction/monitor.html` — Updated timestamps, filtered system prompts
+- `templates/construction/dashboard.html` — Updated timestamps
+
+**Broom Service:**
+- `main.py` — Added `format_eastern` Jinja2 filter function
+- `templates/comms.html` — Updated timestamps, filtered system prompts
+- `templates/leads.html` — Updated timestamps
+- `templates/dashboard.html` — Updated timestamps
+
+### Deployment
+- Synced updated files to production via rsync
+- Rebuilt and restarted both containers (`construction` and `hosts`)
+- Verified containers are healthy and running
+
+### Result
+
+**Before:**
+```
+2026-11-21 01:12:48+00:00  (UTC, shows as tomorrow)
+```
+
+**After:**
+```
+Nov 21 • 8:12 PM EST  (clean Eastern Time)
+```
+
+**Call log preview:**
+```
+Before: [session abc123] System: LEGAL REQUIRED BEHAVIOUR FOR THIS OUTBOUND CALL...
+After:  Hi, this is the automated assistant at BuildStack Construction...
+```
+
+### Git Commits
+
+**Construction:** `07951b5` — "Global timestamp fix: add format_eastern Jinja2 filter, convert UTC to Eastern Time, filter system prompts from call logs"
+- 3 files changed, 53 insertions, 4 deletions
+
+**Broom Service:** `c414d06` — "Global timestamp fix: add format_eastern Jinja2 filter, convert UTC to Eastern Time, filter system prompts from call logs"
+- 4 files changed, 53 insertions, 4 deletions
+
+Both pushed to `origin/main`.
+
+### Status
+✅ All timestamps display in Eastern Time with clean formatting  
+✅ System prompts filtered from call log previews  
+✅ Backend scheduling already uses America/New_York  
+✅ Both containers rebuilt and restarted  
+✅ All changes committed and pushed
+
+---
+
 ## 2026-11-21 — Session 8: Critical Phone Routing Fix
 
 ### Problem
