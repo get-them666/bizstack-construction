@@ -395,7 +395,7 @@ def company() -> dict:
         "entity_id": brand.entity_id(),
         "entity_line": brand.entity_line(),
         "address": brand.mailing_address(),
-        "phone": os.getenv("COMPANY_PHONE", "+1 (757) 846-9275"),
+        "phone": os.getenv("COMPANY_PHONE", "+1 (757) 908-7121"),
         "phone_e164": os.getenv("VAPI_PHONE", "+17578469275"),
         "email": os.getenv("COMPANY_EMAIL", "hello@bizstackperks.com"),
         "domain": os.getenv("COMPANY_DOMAIN", "construction.bizstackperks.com"),
