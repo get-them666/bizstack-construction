@@ -4,6 +4,43 @@
 
 ---
 
+## 2026-11-21 — Session 10: Facebook Page Integration Setup
+
+### Problem
+Set up Facebook Page posting for BuildStack Construction LLC. The initial short-lived token expired within an hour.
+
+### Solution
+
+**1. Generated Long-Lived Page Access Token**
+- Exchanged short-lived user token for long-lived user token (59-day expiry)
+- Exchanged long-lived user token for Page access token (non-expiring for Business apps)
+- App ID: 1180067314679086
+- Page ID: 1357882134064683 (BuildStack Construction LLC)
+
+**2. Updated Production Environment**
+- Added `FB_PAGE_ID=1357882134064683` to `/opt/bizstack/construction.env`
+- Added `FB_PAGE_TOKEN=EAAQxQ9UaPS4BTA6kk2aC2quvptwAs6onY3qofuCezOox4MTaVq83vR09lh592BTpqjg4MybjvHJ3jClTGB2R9SpCVoHQposJ4gJTKI1tRrzlzZBLMNoaGJyDbw2VnZBswgMPWEJERCFrbasli7hN3wip07z4kCUjGvrTBqTYSuowjojFCl8vjEVj6ZCFLAlYGL2` to `/opt/bizstack/construction.env`
+- Stopped and recreated container to force environment reload
+
+**3. Verified Integration**
+- `facebook_page.page_info()` returns successfully
+- Page name: "BuildStack Construction LLC"
+- Page link: https://www.facebook.com/1357882134064683
+
+### Files Modified (Production Only)
+- `/opt/bizstack/construction.env` — Added FB_PAGE_ID and FB_PAGE_TOKEN
+
+### Status
+✅ Facebook Page integration working  
+✅ Long-lived token configured (non-expiring for Business apps)  
+✅ Container restarted with new credentials  
+✅ Page info verified: BuildStack Construction LLC
+
+### Note
+The Facebook posting functionality is available via the `/marketing` page in the Construction dashboard. The `facebook_page.py` module handles posting photos with captions to the Page.
+
+---
+
 ## 2026-11-21 — Session 9: Global Timestamp Fix & Call Log Cleanup
 
 ### Problem
