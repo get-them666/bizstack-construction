@@ -4,6 +4,85 @@
 
 ---
 
+## 2026-11-21 — Session 11: Call Forwarding System
+
+### Problem
+Owner couldn't receive OTP calls (Yelp, Google, etc.) on business lines because the AI assistant was intercepting all inbound calls 24/7.
+
+### Solution: Business Hours Call Forwarding
+
+**Implemented for both business lines:**
+- **Construction:** +1 757-846-9275 (SignalWire → voice.swml endpoint)
+- **Broom Service:** +1 757-908-7121 (Vapi → /vapi/llm endpoint)
+
+**How it works:**
+1. During business hours (8am-7pm ET, Mon-Sat): Calls forward to owner's personal cell (+1 252-665-5891)
+2. After hours (7pm-8am ET, Sun): AI assistant answers 24/7
+3. Dashboard toggle: Owner can enable/disable forwarding from Settings page
+4. Manual override: Owner can set "AI only" mode when busy
+
+**Technical implementation:**
+
+**Construction (construction_main.py):**
+- Modified `/voice.swml` endpoint to check `call_forwarding_enabled` and `owner_personal_cell` from app_settings
+- Checks current time in America/New_York timezone
+- If business hours + forwarding enabled: Returns SWML that dials owner's cell with business line as caller ID
+- If after hours or disabled: Falls through to normal AI assistant
+
+**Broom Service (main.py):**
+- Modified `/vapi/llm` endpoint to check business hours on first message of call
+- If business hours + forwarding enabled: Injects transfer instruction into system prompt
+- AI model calls `transfer_call` tool to forward to owner's cell
+- If after hours or disabled: Normal AI flow
+
+**Dashboard Settings:**
+- Added "Call forwarding" section to both settings pages
+- Toggle switch: Enable/disable forwarding
+- Input field: Owner's personal cell number
+- Status indicator: Shows current state (ON/OFF)
+- Business hours info: 8am-7pm ET, Mon-Sat
+
+**Database:**
+- `app_settings` table stores:
+  - `call_forwarding_enabled`: "true" or "false"
+  - `owner_personal_cell`: E.164 format (+12526655891)
+
+### Files Modified
+
+**Construction:**
+- `construction_main.py` — Modified voice.swml endpoint, added /api/settings/call-forwarding route, updated settings_page context
+- `templates/construction/settings.html` — Added call forwarding section
+
+**Broom Service:**
+- `main.py` — Modified /vapi/llm endpoint, added /api/settings/call-forwarding route, updated settings_page context
+- `templates/settings.html` — Added call forwarding section
+
+### Deployment
+- ✅ Database initialized: `call_forwarding_enabled=true`, `owner_personal_cell=+12526655891`
+- ✅ Both containers rebuilt and restarted
+- ✅ Both repos committed and pushed
+
+**Construction:** `490b113` — "Add call forwarding: business hours routing to owner's personal cell, dashboard toggle"  
+**Broom Service:** `a5ee3e7` — "Add call forwarding: business hours routing to owner's personal cell, dashboard toggle"
+
+### Testing
+**Yelp verification test:**
+- Owner clicks "Call me again" on Yelp verification page
+- Yelp calls +1 757-908-7121 (Broom Service line)
+- AI answers: "Thank you for calling Broom Service. Connecting you now."
+- Call forwards to +1 252-665-5891 (owner's personal cell)
+- Owner answers, hears Yelp's automated voice
+- Owner enters code **5432** on keypad
+- Verification complete ✅
+
+### Use Cases
+1. **Business verification calls** (Yelp, Google, Facebook, etc.)
+2. **Important client calls** during business hours
+3. **Emergency calls** when owner wants to handle personally
+4. **AI handles everything** after hours and on Sundays
+
+---
+
 ## 2026-11-21 — Session 10: Facebook Page Integration Setup
 
 ### Problem
