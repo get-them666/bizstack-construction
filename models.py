@@ -296,6 +296,64 @@ class QuotePricingRule(Base):
         return f"<QuotePricingRule #{self.id} Quote #{self.quote_id} Rule #{self.pricing_rule_id}>"
 
 
+class CustomerReview(Base):
+    """Customer review submissions (gated funnel — positive goes to public, negative to owner)."""
+    __tablename__ = "customer_reviews"
+
+    id = Column(Integer, primary_key=True, index=True)
+    
+    # Customer info
+    customer_name = Column(String(255), nullable=False)
+    customer_email = Column(String(255), nullable=False)
+    customer_phone = Column(String(50), nullable=True)
+    
+    # Review data
+    rating = Column(Integer, nullable=False)  # 1-5
+    feedback_text = Column(Text, nullable=True)
+    quote_id = Column(Integer, ForeignKey("quotes.id"), nullable=True)
+    brand = Column(String(20), nullable=False)
+    
+    # Routing decision
+    routed_to_public = Column(Boolean, default=False, nullable=False)  # True if 4-5 stars and sent to review sites
+    routed_to_owner = Column(Boolean, default=False, nullable=False)  # True if 1-3 stars and sent to owner
+    
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    def __repr__(self):
+        return f"<CustomerReview #{self.id} {self.rating}★ {self.brand}>"
+
+
+class MarketingPost(Base):
+    """Social media marketing posts generated from completed job photos."""
+    __tablename__ = "marketing_posts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    brand = Column(String(20), nullable=False)
+    
+    # Post content
+    caption = Column(Text, nullable=False)
+    hashtags = Column(Text, nullable=True)  # Space-separated hashtags
+    city_slug = Column(String(100), nullable=True)
+    
+    # Photo reference
+    photo_ids = Column(JSON, nullable=True)  # List of Photo IDs
+    
+    # Platform tracking
+    google_posted = Column(Boolean, default=False)
+    facebook_posted = Column(Boolean, default=False)
+    google_post_id = Column(String(255), nullable=True)
+    facebook_post_id = Column(String(255), nullable=True)
+    
+    # Status
+    status = Column(String(50), default="draft")  # draft, published, failed
+    
+    created_by = Column(String(255), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    def __repr__(self):
+        return f"<MarketingPost #{self.id} {self.brand} {self.status}>"
+
+
 # ─── Database Setup ──────────────────────────────────────────────────────────
 
 def get_engine(database_url: str = "sqlite:///./quote_engine.db"):

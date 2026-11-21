@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>
+        {% if brand == 'construction' %}
+            Schedule Free Walkthrough — BuildStack Construction
+        {% else %}
+            Book Your Cleaning — Broom Service
+        {% endif %}
+    </title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    {% if brand == 'construction' %}
+    <script>
+        tailwind.config = { theme: { extend: { colors: { primary: '#1a1a2e', accent: '#f59e0b', surface: '#16213e' }}}}
+    </script>
+    {% else %}
+    <script>
+        tailwind.config = { theme: { extend: { colors: { primary: '#064e3b', accent: '#10b981', surface: '#f0fdf4' }}}}
+    </script>
+    {% endif %}
+    
+    <!-- Cal.com Embed SDK -->
+    <script type="text/javascript">
+        (function (C, A, L) {
+            let p = function (a, ar) { a.q.push(ar); };
+            let d = C.document;
+            C.Cal = C.Cal || function () {
+                let cal = C.Cal;
+                let ar = arguments;
+                if (!cal.loaded) {
+                    cal.ns = {};
+                    cal.q = cal.q || [];
+                    d.head.appendChild(d.createElement("script")).src = A;
+                    cal.loaded = true;
+                }
+                if (ar[0] === L) {
+                    const api = function () { p(api, arguments); };
+                    const namespace = ar[1];
+                    api.q = api.q || [];
+                    if (typeof namespace === "string") {
+                        cal.ns[namespace] = cal.ns[namespace] || api;
+                        p(cal.ns[namespace], ar);
+                        p(cal, ["initNamespace", namespace]);
+                    } else p(cal, ar);
+                    return;
+                }
+                p(cal, ar);
+            };
+        })(window, "https://app.cal.com/embed/embed.js", "init");
+    </script>
+</head>
+<body class="{% if brand == 'construction' %}bg-primary text-white{% else %}bg-surface text-gray-900{% endif %} min-h-screen">
+    
+    <!-- Header -->
+    <header class="{% if brand == 'construction' %}bg-surface border-b border-accent{% else %}bg-primary text-white{% endif %} py-6 shadow-lg">
+        <div class="max-w-4xl mx-auto px-4">
+            <h1 class="text-3xl font-bold">
+                {% if brand == 'construction' %}
+                    <span class="text-accent">BuildStack</span> Construction
+                {% else %}
+                    <span class="text-accent">Broom</span> Service
+                {% endif %}
+            </h1>
+            <p class="mt-2 opacity-80">
+                {% if brand == 'construction' %}
+                    Schedule Your Free On-Site Walkthrough
+                {% else %}
+                    Book Your Cleaning Appointment
+                {% endif %}
+            </p>
+        </div>
+    </header>
+    
+    <!-- Quote Summary (if quote_id provided) -->
+    {% if quote_id %}
+    <div class="max-w-4xl mx-auto px-4 mt-6">
+        <div class="{% if brand == 'construction' %}bg-surface{% else %}bg-white{% endif %} rounded-lg shadow p-4 flex items-center justify-between">
+            <div>
+                <span class="text-sm opacity-60">Quote #{{ quote_id }}</span>
+                <p class="font-bold">{{ customer_name }}</p>
+                <p class="text-sm opacity-70">{{ property_address }}</p>
+            </div>
+            <div class="text-right">
+                <span class="text-2xl font-bold text-accent">${{ "{:,.2f}".format(final_price) }}</span>
+                <p class="text-sm opacity-60">{{ quote_type|replace('_', ' ')|title }}</p>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+    
+    <!-- Cal.com Embed Widget -->
+    <div class="max-w-4xl mx-auto px-4 py-8">
+        <div class="{% if brand == 'construction' %}bg-surface{% else %}bg-white{% endif %} rounded-lg shadow-xl overflow-hidden">
+            <div id="cal-embed" style="min-height: 600px;"></div>
+        </div>
+        
+        <div class="mt-6 text-center">
+            <p class="text-sm opacity-60">
+                {% if brand == 'construction' %}
+                    60-minute walkthrough with measurement verification. Mon–Sat 7AM–8PM.
+                {% else %}
+                    Cleaning duration varies by property size. Mon–Sat 7AM–8PM.
+                {% endif %}
+            </p>
+            <p class="mt-2 text-sm">
+                Need to reschedule? Call us at 
+                <strong>
+                    {% if brand == 'construction' %}
+                        +1 (757) 846-9275
+                    {% else %}
+                        +1 (757) 908-7121
+                    {% endif %}
+                </strong>
+            </p>
+        </div>
+    </div>
+    
+    <script>
+        // Cal.com Embed Configuration
+        const brand = "{{ brand }}";
+        const calcomSlug = brand === "construction" 
+            ? "{{ calcom_construction_slug }}" 
+            : "{{ calcom_broom_slug }}";
+        
+        // Initialize Cal.com embed
+        Cal("init", {
+            embedOrigin: "https://app.cal.com"
+        });
+        
+        // Configure inline embed
+        Cal.ns.inline("init", {
+            calLink: calcomSlug,
+            embedOrigin: "https://app.cal.com"
+        });
+        
+        // Pre-fill customer data from quote
+        const prefillData = {
+            name: "{{ customer_name or '' }}",
+            email: "{{ customer_email or '' }}",
+            {% if quote_id %}
+            notes: "Quote #{{ quote_id }} | {{ property_address }} | ZIP: {{ zip_code }} | {{ square_footage }} sqft" + 
+                   {% if brand == 'construction' %}
+                   " | Project: {{ project_type or 'N/A' }} | Tier: {{ finish_tier or 'standard' }}"
+                   {% else %}
+                   " | {{ bedrooms or 0 }}BR/{{ bathrooms or 0 }}BA | Service: {{ service_type or 'turnover' }}"
+                   {% endif %}
+            {% endif %}
+        };
+        
+        // Mount the embed
+        Cal.ns.inline("ui", {
+            cssVarsPerTheme: {
+                light: { "cal-brand": brand === "construction" ? "#f59e0b" : "#10b981" },
+                dark: { "cal-brand": "#f59e0b" }
+            },
+            hideEventTypeDetails: false,
+            layout: "month_view"
+        });
+        
+        // Pre-fill form fields once loaded
+        window.addEventListener('message', function(event) {
+            if (event.data && event.data.type === 'cal:embed:ready') {
+                const iframe = document.querySelector('#cal-embed iframe');
+                if (iframe && iframe.contentWindow) {
+                    iframe.contentWindow.postMessage({
+                        type: 'cal:prefill',
+                        data: prefillData
+                    }, '*');
+                }
+            }
+        });
+        
+        // Mount into container
+        Cal.ns.inline("inline", {
+            elementOrSelector: "#cal-embed",
+            embedOrigin: "https://app.cal.com"
+        });
+    </script>
+</body>
+</html>

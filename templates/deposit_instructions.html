@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Deposit Instructions — Quote #{{ quote.id }}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    {% if quote.brand == 'construction' %}
+    <script>
+        tailwind.config = { theme: { extend: { colors: { primary: '#1a1a2e', accent: '#f59e0b', surface: '#16213e' }}}}
+    </script>
+    {% else %}
+    <script>
+        tailwind.config = { theme: { extend: { colors: { primary: '#064e3b', accent: '#10b981', surface: '#f0fdf4' }}}}
+    </script>
+    {% endif %}
+</head>
+<body class="{% if quote.brand == 'construction' %}bg-primary text-white{% else %}bg-surface text-gray-900{% endif %} min-h-screen">
+    
+    <div class="max-w-3xl mx-auto px-4 py-8">
+        
+        <!-- Brand Header -->
+        <div class="text-center mb-8">
+            <h1 class="text-3xl font-bold">
+                {% if quote.brand == 'construction' %}
+                    <span class="text-accent">BuildStack</span> Construction
+                {% else %}
+                    <span class="text-accent">Broom</span> Service
+                {% endif %}
+            </h1>
+            <p class="mt-2 opacity-70">Quote #{{ quote.id }} — Deposit Instructions</p>
+        </div>
+        
+        <!-- Success Confirmation -->
+        <div class="bg-green-900/20 border border-green-500 rounded-lg p-4 mb-6 text-center">
+            <p class="text-green-400 font-bold text-lg">✅ Quote Accepted!</p>
+            <p class="text-sm opacity-80 mt-1">Your deposit instructions are below. Complete payment to lock in your slot.</p>
+        </div>
+        
+        <!-- Written Scope -->
+        <div class="{% if quote.brand == 'construction' %}bg-surface{% else %}bg-white shadow{% endif %} rounded-lg p-6 mb-6">
+            <h2 class="text-xl font-bold mb-4 text-accent">Written Scope</h2>
+            <div class="space-y-2 text-sm">
+                {% if quote.brand == 'construction' %}
+                    <p><strong>Project:</strong> {{ quote.project_type|replace('_', ' ')|title }}</p>
+                    <p><strong>Finish Tier:</strong> {{ quote.finish_tier|replace('_', ' ')|title }}</p>
+                    <p><strong>Area:</strong> {{ "{:,.0f}".format(quote.square_footage) }} sq ft</p>
+                    <p><strong>Location:</strong> {{ quote.property_address }} (ZIP {{ quote.zip_code }})</p>
+                {% else %}
+                    <p><strong>Service:</strong> {{ quote.service_type|replace('_', ' ')|title }}</p>
+                    <p><strong>Property:</strong> {{ quote.bedrooms }}BR / {{ quote.bathrooms }}BA</p>
+                    <p><strong>Area:</strong> {{ "{:,.0f}".format(quote.square_footage) }} sq ft</p>
+                    <p><strong>Location:</strong> {{ quote.property_address }} (ZIP {{ quote.zip_code }})</p>
+                    {% if quote.add_ons and quote.add_ons|length > 0 %}
+                    <p><strong>Add-Ons:</strong> {{ quote.add_ons|join(', ')|replace('_', ' ')|title }}</p>
+                    {% endif %}
+                {% endif %}
+            </div>
+            
+            {% if adjustments %}
+            <div class="mt-4 border-t border-gray-600 pt-4">
+                <h3 class="font-bold text-sm mb-2">Itemized Breakdown</h3>
+                <table class="w-full text-xs">
+                    {% for item in adjustments %}
+                    <tr class="border-b border-gray-700">
+                        <td class="py-1">{{ item.description }}</td>
+                        <td class="py-1 text-right font-mono">${{ "{:,.2f}".format(item.line_total) }}</td>
+                    </tr>
+                    {% endfor %}
+                </table>
+            </div>
+            {% endif %}
+        </div>
+        
+        <!-- Price Summary -->
+        <div class="{% if quote.brand == 'construction' %}bg-surface{% else %}bg-white shadow{% endif %} rounded-lg p-6 mb-6">
+            <div class="flex justify-between items-center mb-4">
+                <div>
+                    <p class="text-sm opacity-60">Total Project Cost</p>
+                    <p class="text-3xl font-bold">${{ "{:,.2f}".format(quote.final_price) }}</p>
+                </div>
+                <div class="text-right">
+                    <p class="text-sm opacity-60">Deposit Due Now</p>
+                    <p class="text-4xl font-bold text-accent">${{ "{:,.2f}".format(deposit_amount) }}</p>
+                </div>
+            </div>
+            <p class="text-xs opacity-50">
+                {% if quote.brand == 'construction' %}
+                    30% deposit required to book. Remaining balance due upon project completion.
+                {% else %}
+                    Full payment due before cleaning begins.
+                {% endif %}
+                Use <strong>Quote #{{ quote.id }}</strong> as memo/reference.
+            </p>
+        </div>
+        
+        <!-- Payment Options -->
+        <div class="{% if quote.brand == 'construction' %}bg-surface{% else %}bg-white shadow{% endif %} rounded-lg p-6 mb-6">
+            <h2 class="text-xl font-bold mb-4 text-accent">Payment Options</h2>
+            
+            <!-- Zelle -->
+            <div class="border border-gray-600 rounded-lg p-4 mb-4">
+                <div class="flex items-center gap-3 mb-2">
+                    <span class="text-2xl">📱</span>
+                    <h3 class="font-bold text-lg">Zelle</h3>
+                </div>
+                <div class="bg-gray-800/50 rounded p-3">
+                    <p class="text-sm opacity-60">Send to:</p>
+                    <p class="font-mono font-bold text-lg">{{ zelle_handle }}</p>
+                    <div class="mt-3 flex items-center gap-2">
+                        <span class="text-sm opacity-60">Amount:</span>
+                        <span class="font-bold text-accent">${{ "{:,.2f}".format(deposit_amount) }}</span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <span class="text-sm opacity-60">Memo:</span>
+                        <span class="font-mono font-bold">Quote #{{ quote.id }}</span>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- ACH / Bank Transfer -->
+            <div class="border border-gray-600 rounded-lg p-4">
+                <div class="flex items-center gap-3 mb-2">
+                    <span class="text-2xl">🏦</span>
+                    <h3 class="font-bold text-lg">ACH / Bank Transfer</h3>
+                </div>
+                <table class="w-full text-sm">
+                    <tr class="border-b border-gray-700">
+                        <td class="py-2 opacity-60">Bank:</td>
+                        <td class="py-2 font-bold">{{ bank_name }}</td>
+                    </tr>
+                    <tr class="border-b border-gray-700">
+                        <td class="py-2 opacity-60">Routing #:</td>
+                        <td class="py-2 font-mono font-bold">{{ ach_routing }}</td>
+                    </tr>
+                    <tr class="border-b border-gray-700">
+                        <td class="py-2 opacity-60">Account #:</td>
+                        <td class="py-2 font-mono font-bold">{{ ach_account }}</td>
+                    </tr>
+                    <tr class="border-b border-gray-700">
+                        <td class="py-2 opacity-60">Amount:</td>
+                        <td class="py-2 font-bold text-accent">${{ "{:,.2f}".format(deposit_amount) }}</td>
+                    </tr>
+                    <tr>
+                        <td class="py-2 opacity-60">Memo:</td>
+                        <td class="py-2 font-mono font-bold">Quote #{{ quote.id }}</td>
+                    </tr>
+                </table>
+            </div>
+        </div>
+        
+        <!-- Book Now CTA -->
+        <div class="text-center mb-8">
+            <a href="/schedule?brand={{ quote.brand }}&quote_id={{ quote.id }}" 
+               class="inline-block bg-accent hover:opacity-90 text-white font-bold py-4 px-8 rounded-lg text-lg transition shadow-lg">
+                📅 Book Your 
+                {% if quote.brand == 'construction' %}
+                    Free Walkthrough Date
+                {% else %}
+                    Cleaning Appointment
+                {% endif %}
+            </a>
+            <p class="text-sm opacity-60 mt-3">
+                Once deposit is received, we'll confirm within 2 business hours.
+            </p>
+        </div>
+        
+        <!-- Confirmation Email Notice -->
+        <div class="bg-blue-900/20 border border-blue-500 rounded-lg p-4 text-center">
+            <p class="text-blue-400 text-sm">
+                📧 A copy of these instructions has been emailed to <strong>{{ quote.customer_email }}</strong>
+            </p>
+        </div>
+        
+        <!-- Footer -->
+        <div class="text-center mt-8 opacity-50 text-xs">
+            <p>
+                {% if quote.brand == 'construction' %}
+                    BuildStack Construction LLC | 701 Dana Dr, Chesapeake, VA 23321 | +1 (757) 846-9275
+                {% else %}
+                    Broom Service | 701 Dana Dr, Chesapeake, VA 23321 | +1 (757) 908-7121
+                {% endif %}
+            </p>
+        </div>
+    </div>
+</body>
+</html>

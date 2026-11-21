@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin — Local Marketing</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <script>
+        tailwind.config = { theme: { extend: { colors: { primary: '#1a1a2e', accent: '#f59e0b', surface: '#16213e' }}}}
+    </script>
+</head>
+<body class="bg-primary text-white min-h-screen">
+    
+    <!-- Header -->
+    <header class="bg-surface border-b border-accent py-4 shadow-lg">
+        <div class="max-w-7xl mx-auto px-4 flex items-center justify-between">
+            <h1 class="text-2xl font-bold"><span class="text-accent">Admin</span> — Local Marketing</h1>
+            <nav class="flex gap-4">
+                <a href="/admin/quotes" class="hover:text-accent transition">Quotes</a>
+                <a href="/admin/pricing-rules" class="hover:text-accent transition">Pricing Rules</a>
+                <a href="/admin/marketing" class="text-accent hover:underline">Local Marketing</a>
+            </nav>
+        </div>
+    </header>
+    
+    <main class="max-w-7xl mx-auto px-4 py-8">
+        
+        <!-- Social Post Generator -->
+        <div class="bg-surface rounded-lg shadow-xl p-6 mb-8">
+            <h2 class="text-xl font-bold mb-4 text-accent">Generate Social Media Post</h2>
+            
+            <form id="generate-post-form" class="space-y-4">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm font-medium mb-1">Brand</label>
+                        <select name="brand" id="post-brand" class="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2">
+                            <option value="construction">BuildStack Construction</option>
+                            <option value="broom">Broom Service</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium mb-1">City / Area</label>
+                        <select name="city_slug" id="post-city" class="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2">
+                            <option value="chesapeake-va">Chesapeake, VA</option>
+                            <option value="virginia-beach-va">Virginia Beach, VA</option>
+                            <option value="norfolk-va">Norfolk, VA</option>
+                            <option value="williamsburg-va">Williamsburg, VA</option>
+                            <option value="hampton-newport-news-va">Hampton & Newport News, VA</option>
+                            <option value="outer-banks-currituck-nc">Outer Banks & Currituck, NC</option>
+                        </select>
+                    </div>
+                </div>
+                
+                <div>
+                    <label class="block text-sm font-medium mb-1">Job Description / Notes</label>
+                    <textarea id="post-notes" rows="3" placeholder="e.g., 'Kitchen remodel in Greenbrier - before/after photos of custom cabinets and quartz countertops'"
+                              class="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-sm"></textarea>
+                </div>
+                
+                <div>
+                    <label class="block text-sm font-medium mb-1">Select Photos (from completed jobs)</label>
+                    <div id="photo-selector" class="grid grid-cols-4 gap-2 max-h-48 overflow-y-auto p-2 bg-gray-900 rounded border border-gray-700">
+                        <p class="col-span-4 text-sm text-gray-500 text-center py-4">Loading completed job photos...</p>
+                    </div>
+                </div>
+                
+                <button type="button" onclick="generateCaption()" 
+                        class="bg-accent hover:opacity-90 text-white font-bold py-2 px-6 rounded transition">
+                    🤖 Generate Caption & Hashtags
+                </button>
+            </form>
+            
+            <!-- Generated Caption -->
+            <div id="generated-caption" class="mt-6 hidden">
+                <h3 class="font-bold text-accent mb-2">Generated Post</h3>
+                <div class="bg-gray-800 rounded-lg p-4">
+                    <div class="mb-3">
+                        <label class="text-xs text-gray-400 block mb-1">Caption</label>
+                        <textarea id="caption-text" rows="4" class="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm"></textarea>
+                    </div>
+                    <div class="mb-4">
+                        <label class="text-xs text-gray-400 block mb-1">Hashtags</label>
+                        <input type="text" id="hashtags-text" class="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm font-mono">
+                    </div>
+                    
+                    <!-- Platform Copy Cards -->
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <div class="bg-gray-900 rounded p-3 border border-gray-700">
+                            <div class="flex items-center justify-between mb-2">
+                                <span class="text-sm font-bold text-blue-400">📘 Facebook</span>
+                                <button onclick="copyToClipboard('caption-text')" class="text-xs bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded">Copy</button>
+                            </div>
+                            <p class="text-xs text-gray-400">Post to Facebook Page with photos</p>
+                        </div>
+                        <div class="bg-gray-900 rounded p-3 border border-gray-700">
+                            <div class="flex items-center justify-between mb-2">
+                                <span class="text-sm font-bold text-green-400">🔵 Google Business</span>
+                                <button onclick="publishToGoogle()" class="text-xs bg-green-700 hover:bg-green-600 px-2 py-1 rounded">Publish</button>
+                            </div>
+                            <p class="text-xs text-gray-400">Post via Google Business Profile API</p>
+                        </div>
+                        <div class="bg-gray-900 rounded p-3 border border-gray-700">
+                            <div class="flex items-center justify-between mb-2">
+                                <span class="text-sm font-bold text-blue-400">⭐ Yelp Portfolio</span>
+                                <button onclick="copyToClipboard('caption-text')" class="text-xs bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded">Copy</button>
+                            </div>
+                            <p class="text-xs text-gray-400">Add to Yelp portfolio with photos</p>
+                        </div>
+                        <div class="bg-gray-900 rounded p-3 border border-gray-700">
+                            <div class="flex items-center justify-between mb-2">
+                                <span class="text-sm font-bold text-orange-400">🏪 Marketplace/Craigslist</span>
+                                <button onclick="copyToClipboard('caption-text')" class="text-xs bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded">Copy</button>
+                            </div>
+                            <p class="text-xs text-gray-400">Copy for Facebook Marketplace / Craigslist post</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Recent Posts -->
+        <div class="bg-surface rounded-lg shadow-xl p-6">
+            <h2 class="text-xl font-bold mb-4">Recent Marketing Posts</h2>
+            <table class="w-full text-sm">
+                <thead class="bg-gray-800 text-left">
+                    <tr>
+                        <th class="px-4 py-2">Date</th>
+                        <th class="px-4 py-2">Brand</th>
+                        <th class="px-4 py-2">City</th>
+                        <th class="px-4 py-2">Caption Preview</th>
+                        <th class="px-4 py-2">Google</th>
+                        <th class="px-4 py-2">Facebook</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for post in posts %}
+                    <tr class="border-b border-gray-700">
+                        <td class="px-4 py-2 text-xs">{{ post.created_at.strftime('%m/%d/%y') if post.created_at else '—' }}</td>
+                        <td class="px-4 py-2">
+                            <span class="px-2 py-0.5 rounded text-xs {% if post.brand == 'construction' %}bg-amber-900 text-amber-200{% else %}bg-emerald-900 text-emerald-200{% endif %}">
+                                {{ post.brand|upper }}
+                            </span>
+                        </td>
+                        <td class="px-4 py-2 text-xs">{{ post.city_slug or '—' }}</td>
+                        <td class="px-4 py-2 text-xs opacity-70">{{ post.caption[:80] }}{% if post.caption|length > 80 %}...{% endif %}</td>
+                        <td class="px-4 py-2">
+                            {% if post.google_posted %}
+                                <span class="text-green-400">✓</span>
+                            {% else %}
+                                <span class="text-gray-500">—</span>
+                            {% endif %}
+                        </td>
+                        <td class="px-4 py-2">
+                            {% if post.facebook_posted %}
+                                <span class="text-green-400">✓</span>
+                            {% else %}
+                                <span class="text-gray-500">—</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            
+            {% if not posts %}
+            <p class="text-center py-8 opacity-50">No marketing posts yet. Generate one above!</p>
+            {% endif %}
+        </div>
+    </main>
+    
+    <script>
+        // City hashtags map
+        const cityHashtags = {
+            'chesapeake-va': '#ChesapeakeVA #Chesapeake #HamptonRoads #757 #STRCleaning',
+            'virginia-beach-va': '#VirginiaBeach #VBOceanfront #Sandbridge #HamptonRoads #VB #AirbnbCleaning',
+            'norfolk-va': '#NorfolkVA #Ghent #DowntownNorfolk #HamptonRoads #757',
+            'williamsburg-va': '#WilliamsburgVA #HistoricArea #Yorktown #ColonialWilliamsburg #HamptonRoads',
+            'hampton-newport-news-va': '#HamptonVA #NewportNews #Peninsula #HamptonRoads',
+            'outer-banks-currituck-nc': '#OuterBanks #OBX #Corolla #DuckNC #Currituck #VacationRental',
+        };
+        
+        const brandHashtags = {
+            'construction': '#GeneralContractor #HomeRenovation #KitchenRemodel #BathroomRemodel #BuildStack #ConstructionLife #STRMakeReady',
+            'broom': '#CleaningService #STRCleaning #TurnoverCleaning #DeepClean #MoveOutClean #BroomService #AirbnbHost #VRBO',
+        };
+        
+        // Load completed job photos
+        async function loadCompletedPhotos() {
+            try {
+                const response = await fetch('/admin/marketing/completed-photos');
+                const data = await response.json();
+                const container = document.getElementById('photo-selector');
+                
+                if (data.photos.length === 0) {
+                    container.innerHTML = '<p class="col-span-4 text-sm text-gray-500 text-center py-4">No completed job photos found. Complete some quotes first!</p>';
+                    return;
+                }
+                
+                container.innerHTML = data.photos.map(photo => `
+                    <label class="relative cursor-pointer">
+                        <input type="checkbox" name="photo_ids" value="${photo.id}" class="absolute top-1 left-1 z-10">
+                        <img src="/api/photo/${photo.id}" class="w-full h-20 object-cover rounded border border-gray-600" alt="Job photo">
+                        <span class="text-xs opacity-60">Quote #${photo.quote_id}</span>
+                    </label>
+                `).join('');
+            } catch (e) {
+                console.error('Failed to load photos:', e);
+            }
+        }
+        
+        // Generate caption with AI
+        function generateCaption() {
+            const brand = document.getElementById('post-brand').value;
+            const city = document.getElementById('post-city').value;
+            const notes = document.getElementById('post-notes').value;
+            
+            const cityData = {
+                'chesapeake-va': { city: 'Chesapeake, VA', neighborhoods: 'Greenbrier, Deep Creek, Indian River' },
+                'virginia-beach-va': { city: 'Virginia Beach, VA', neighborhoods: 'Oceanfront, Sandbridge, Town Center' },
+                'norfolk-va': { city: 'Norfolk, VA', neighborhoods: 'Ghent, Downtown, Hague District' },
+                'williamsburg-va': { city: 'Williamsburg, VA', neighborhoods: 'Colonial area, Jamestown, Yorktown' },
+                'hampton-newport-news-va': { city: 'Hampton & Newport News, VA', neighborhoods: 'the Peninsula area' },
+                'outer-banks-currituck-nc': { city: 'Outer Banks & Currituck, NC', neighborhoods: 'Corolla, Duck, Southern Shores' },
+            };
+            
+            const cd = cityData[city];
+            const brandName = brand === 'construction' ? 'BuildStack Construction' : 'Broom Service';
+            const serviceType = brand === 'construction' 
+                ? 'renovation and remodeling' 
+                : 'professional STR turnover cleaning';
+            
+            let caption = `✅ Another job done in ${cd.city}!\n\n`;
+            
+            if (notes) {
+                caption += `${notes}\n\n`;
+            }
+            
+            caption += `Serving ${cd.neighborhoods} and the surrounding area.\n\n`;
+            caption += `Why choose ${brandName}?\n`;
+            
+            if (brand === 'construction') {
+                caption += `• Licensed, bonded & insured\n• Free on-site estimates\n• Flat-rate written scopes\n• Serving Hampton Roads & Outer Banks\n`;
+            } else {
+                caption += `• Guaranteed flat-rate pricing\n• Photo-powered instant quotes\n• Same-day turnover available\n• Trusted by Airbnb & VRBO hosts\n`;
+            }
+            
+            caption += `\n📞 Call or text: ${brand === 'construction' ? '(757) 846-9275' : '(757) 908-7121'}\n`;
+            caption += `🌐 ${brand === 'construction' ? 'construction.bizstackperks.com' : 'bizstackperks.com'}\n`;
+            
+            const hashtags = `${brandHashtags[brand]} ${cityHashtags[city]}`;
+            
+            document.getElementById('caption-text').value = caption;
+            document.getElementById('hashtags-text').value = hashtags;
+            document.getElementById('generated-caption').classList.remove('hidden');
+        }
+        
+        function copyToClipboard(textareaId) {
+            const textarea = document.getElementById(textareaId);
+            const text = textarea.value;
+            navigator.clipboard.writeText(text).then(() => {
+                const btn = event.target;
+                const original = btn.textContent;
+                btn.textContent = '✓ Copied!';
+                setTimeout(() => btn.textContent = original, 2000);
+            });
+        }
+        
+        async function publishToGoogle() {
+            const caption = document.getElementById('caption-text').value;
+            const hashtags = document.getElementById('hashtags-text').value;
+            const brand = document.getElementById('post-brand').value;
+            const city = document.getElementById('post-city').value;
+            const photoIds = Array.from(document.querySelectorAll('input[name="photo_ids"]:checked')).map(cb => parseInt(cb.value));
+            
+            try {
+                const response = await fetch('/admin/marketing/post', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        brand: brand,
+                        city_slug: city,
+                        caption: caption + '\n\n' + hashtags,
+                        hashtags: hashtags,
+                        photo_ids: photoIds,
+                        platform: 'google',
+                    }),
+                });
+                
+                const data = await response.json();
+                if (data.success) {
+                    alert('✅ Post published to Google Business Profile!');
+                    location.reload();
+                } else {
+                    alert('Failed: ' + (data.error || 'Unknown error'));
+                }
+            } catch (e) {
+                alert('Error: ' + e.message);
+            }
+        }
+        
+        // Load photos on page load
+        loadCompletedPhotos();
+    </script>
+</body>
+</html>

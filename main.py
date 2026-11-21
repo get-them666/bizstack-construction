@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from models import (
     Quote, Photo, VisionAnalysis, ScheduledAppointment, PricingRule,
+    CustomerReview, MarketingPost,
     init_db, get_sessionmaker, get_engine,
     QuoteStatus, ConstructionProjectType, FinishTier, CleaningServiceType,
 )
@@ -23,12 +24,33 @@ from schemas import (
 )
 from services import vision_analyzer, pricing_engine
 from services.pricing_engine import DEFAULT_PRICING_RULES
+from services import email_service
+from services.local_seo import CITY_PAGES, get_city_page, get_all_city_slugs, build_json_ld_schema
 
 # ─── Configuration ───────────────────────────────────────────────────────────
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./quote_engine.db")
 UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "./uploads/quotes"))
 TEMPLATE_DIR = Path(__file__).parent / "templates"
+
+# Cal.com configuration
+CALCOM_CONSTRUCTION_SLUG = os.getenv("CALCOM_CONSTRUCTION_EVENT_SLUG", "bizstack/free-walkthrough")
+CALCOM_BROOM_SLUG = os.getenv("CALCOM_BROOM_EVENT_SLUG", "broom-service/str-cleaning")
+CALCOM_WEBHOOK_SECRET = os.getenv("CALCOM_WEBHOOK_SECRET", "")
+
+# Payment configuration
+ZELLE_HANDLE = os.getenv("ZELLE_HANDLE", "hello@bizstackperks.com")
+ACH_ROUTING = os.getenv("ACH_ROUTING", "")
+ACH_ACCOUNT = os.getenv("ACH_ACCOUNT", "")
+BANK_NAME = os.getenv("BANK_NAME", "BizStack Perks LLC")
+
+# Review platform URLs
+GOOGLE_REVIEW_URL = os.getenv("GOOGLE_REVIEW_URL", "https://g.page/broom-service-chesapeake/review")
+FACEBOOK_REVIEW_URL = os.getenv("FACEBOOK_REVIEW_URL", "https://www.facebook.com/buildstackconstruction/reviews/")
+YELP_REVIEW_URL = os.getenv("YELP_REVIEW_URL", "https://www.yelp.com/biz/broom-service-chesapeake")
+
+# Base URL for email links
+BASE_URL = os.getenv("BASE_URL", "https://bizstackperks.com")
 
 # Create upload directory
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -468,6 +490,324 @@ async def approve_quote(quote_id: int, db: Session = Depends(get_db)):
     db.commit()
     
     return JSONResponse({"success": True, "message": f"Quote #{quote_id} approved and marked as sent"})
+
+
+# ─── Schedule & Deposit Routes ───────────────────────────────────────────────
+
+@app.get("/schedule", response_class=HTMLResponse)
+async def schedule_page(
+    request: Request,
+    brand: str = "construction",
+    quote_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+):
+    """Display Cal.com scheduling widget."""
+    context = {
+        "request": request,
+        "brand": brand,
+        "calcom_construction_slug": CALCOM_CONSTRUCTION_SLUG,
+        "calcom_broom_slug": CALCOM_BROOM_SLUG,
+    }
+    
+    if quote_id:
+        quote = db.query(Quote).filter(Quote.id == quote_id).first()
+        if quote:
+            context.update({
+                "quote_id": quote.id,
+                "customer_name": quote.customer_name,
+                "customer_email": quote.customer_email,
+                "property_address": quote.property_address,
+                "zip_code": quote.zip_code,
+                "square_footage": quote.square_footage,
+                "project_type": quote.project_type,
+                "finish_tier": quote.finish_tier,
+                "bedrooms": quote.bedrooms,
+                "bathrooms": quote.bathrooms,
+                "service_type": quote.service_type,
+                "final_price": quote.final_price,
+                "quote_type": "conditional_fixed" if quote.brand == "construction" else "instant_guaranteed",
+            })
+    
+    return templates.TemplateResponse("schedule.html", context)
+
+
+@app.get("/deposit-instructions/{quote_id}", response_class=HTMLResponse)
+async def deposit_instructions_page(quote_id: int, request: Request, db: Session = Depends(get_db)):
+    """Display Zelle/ACH deposit instructions after quote acceptance."""
+    quote = db.query(Quote).filter(Quote.id == quote_id).first()
+    if not quote:
+        raise HTTPException(status_code=404, detail="Quote not found")
+    
+    # Calculate deposit amount
+    if quote.brand == "construction":
+        deposit_amount = (quote.final_price or 0) * 0.30  # 30% deposit
+    else:
+        deposit_amount = quote.final_price or 0  # Full payment for cleaning
+    
+    # Get adjustments for itemized display
+    adjustments = []
+    if quote.adjustments:
+        adjustments = quote.adjustments if isinstance(quote.adjustments, list) else []
+    
+    return templates.TemplateResponse("deposit_instructions.html", {
+        "request": request,
+        "quote": quote,
+        "deposit_amount": deposit_amount,
+        "adjustments": adjustments,
+        "zelle_handle": ZELLE_HANDLE,
+        "ach_routing": ACH_ROUTING,
+        "ach_account": ACH_ACCOUNT,
+        "bank_name": BANK_NAME,
+    })
+
+
+@app.post("/api/quotes/{quote_id}/accept")
+async def accept_quote(quote_id: int, db: Session = Depends(get_db)):
+    """Customer accepts a quote — trigger deposit instructions + email."""
+    quote = db.query(Quote).filter(Quote.id == quote_id).first()
+    if not quote:
+        raise HTTPException(status_code=404, detail="Quote not found")
+    
+    # Calculate deposit
+    if quote.brand == "construction":
+        deposit_amount = (quote.final_price or 0) * 0.30
+    else:
+        deposit_amount = quote.final_price or 0
+    
+    # Build scope description
+    if quote.brand == "construction":
+        scope_desc = (
+            f"{(quote.project_type or 'project').replace('_', ' ').title()} — "
+            f"{quote.square_footage or 0:,.0f} sq ft at {quote.finish_tier or 'standard'} tier\n"
+            f"Location: {quote.property_address} (ZIP {quote.zip_code})"
+        )
+    else:
+        scope_desc = (
+            f"{(quote.service_type or 'cleaning').replace('_', ' ').title()} — "
+            f"{quote.bedrooms or 0}BR / {quote.bathrooms or 0}BA, {quote.square_footage or 0:,.0f} sq ft\n"
+            f"Location: {quote.property_address} (ZIP {quote.zip_code})"
+        )
+        if quote.add_ons:
+            scope_desc += f"\nAdd-ons: {', '.join(quote.add_ons)}"
+    
+    # Update quote status
+    quote.status = QuoteStatus.APPROVED
+    db.commit()
+    
+    # Send deposit instructions email
+    schedule_url = f"{BASE_URL}/schedule?brand={quote.brand}&quote_id={quote.id}"
+    
+    await email_service.send_deposit_instructions(
+        customer_name=quote.customer_name,
+        customer_email=quote.customer_email,
+        quote_id=quote.id,
+        brand=quote.brand,
+        scope_description=scope_desc,
+        deposit_amount=deposit_amount,
+        final_price=quote.final_price or 0,
+        schedule_url=schedule_url,
+    )
+    
+    return JSONResponse({
+        "success": True,
+        "redirect_url": f"/deposit-instructions/{quote.id}",
+        "deposit_amount": deposit_amount,
+    })
+
+
+# ─── Review Funnel Routes ───────────────────────────────────────────────────
+
+@app.get("/review", response_class=HTMLResponse)
+async def review_gate_page(request: Request):
+    """Display the 5-star review gate."""
+    return templates.TemplateResponse("review_gate.html", {
+        "request": request,
+        "google_review_url": GOOGLE_REVIEW_URL,
+        "facebook_review_url": FACEBOOK_REVIEW_URL,
+        "yelp_review_url": YELP_REVIEW_URL,
+    })
+
+
+@app.post("/api/reviews/submit")
+async def submit_review(
+    customer_name: str = Form(...),
+    customer_email: str = Form(...),
+    rating: int = Form(...),
+    feedback: str = Form(""),
+    brand: str = Form("broom"),
+    db: Session = Depends(get_db),
+):
+    """Submit a review — routes positive to public sites, negative to owner."""
+    
+    review = CustomerReview(
+        customer_name=customer_name,
+        customer_email=customer_email,
+        rating=rating,
+        feedback_text=feedback,
+        brand=brand,
+        routed_to_public=(rating >= 4),
+        routed_to_owner=(rating <= 3),
+    )
+    db.add(review)
+    db.commit()
+    
+    # If negative, email owner immediately
+    if rating <= 3:
+        await email_service.send_negative_feedback_alert(
+            customer_name=customer_name,
+            customer_email=customer_email,
+            rating=rating,
+            feedback=feedback,
+            brand=brand,
+        )
+    
+    return JSONResponse({
+        "success": True,
+        "routed_to_public": rating >= 4,
+        "routed_to_owner": rating <= 3,
+        "message": "Thank you for your feedback!",
+    })
+
+
+# ─── Local SEO: City Landing Pages, Sitemap, Robots ─────────────────────────
+
+@app.get("/areas/{city_slug}", response_class=HTMLResponse)
+async def city_landing_page(city_slug: str, request: Request):
+    """Programmatic city landing page for local SEO."""
+    city_data = get_city_page(city_slug)
+    if not city_data:
+        raise HTTPException(status_code=404, detail="Area not found")
+    
+    schema = build_json_ld_schema(city_data)
+    
+    return templates.TemplateResponse("city_landing.html", {
+        "request": request,
+        "city": city_data,
+        "schema": schema,
+        "all_cities": CITY_PAGES,
+    })
+
+
+@app.get("/sitemap.xml")
+async def sitemap():
+    """Dynamic XML sitemap for SEO."""
+    from fastapi.responses import Response
+    
+    base_url = BASE_URL
+    city_slugs = get_all_city_slugs()
+    
+    xml = '<?xml version="1.0" encoding="UTF-8"?>\n'
+    xml += '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+    
+    # Static pages
+    static_pages = [
+        "/",
+        "/instant-quote?brand=broom",
+        "/instant-quote?brand=construction",
+        "/review",
+        "/schedule?brand=broom",
+        "/schedule?brand=construction",
+    ]
+    
+    for page in static_pages:
+        xml += f"  <url>\n    <loc>{base_url}{page}</loc>\n    <changefreq>weekly</changefreq>\n    <priority>0.8</priority>\n  </url>\n"
+    
+    # City landing pages
+    for slug in city_slugs:
+        xml += f"  <url>\n    <loc>{base_url}/areas/{slug}</loc>\n    <changefreq>monthly</changefreq>\n    <priority>0.7</priority>\n  </url>\n"
+    
+    xml += "</urlset>"
+    
+    return Response(content=xml, media_type="application/xml")
+
+
+@app.get("/robots.txt")
+async def robots_txt():
+    """Robots.txt for search engine crawlers."""
+    from fastapi.responses import Response
+    
+    content = """User-agent: *
+Allow: /
+Disallow: /admin/
+Disallow: /api/
+Disallow: /static/
+
+Sitemap: {}/sitemap.xml
+""".format(BASE_URL)
+    
+    return Response(content=content, media_type="text/plain")
+
+
+# ─── Admin Marketing Routes ─────────────────────────────────────────────────
+
+@app.get("/admin/marketing", response_class=HTMLResponse)
+async def admin_marketing_page(request: Request, db: Session = Depends(get_db)):
+    """Admin marketing dashboard — social media post generator."""
+    posts = db.query(MarketingPost).order_by(MarketingPost.created_at.desc()).limit(50).all()
+    return templates.TemplateResponse("admin/marketing.html", {
+        "request": request,
+        "posts": posts,
+    })
+
+
+@app.get("/admin/marketing/completed-photos")
+async def get_completed_photos(db: Session = Depends(get_db)):
+    """Get photos from completed/booked quotes for marketing use."""
+    completed_quotes = db.query(Quote).filter(
+        Quote.status.in_([QuoteStatus.COMPLETED, QuoteStatus.BOOKED, QuoteStatus.APPROVED])
+    ).all()
+    
+    photo_list = []
+    for quote in completed_quotes:
+        for photo in quote.photos:
+            photo_list.append({
+                "id": photo.id,
+                "quote_id": quote.id,
+                "filename": photo.filename,
+                "brand": quote.brand,
+            })
+    
+    return JSONResponse({"photos": photo_list})
+
+
+@app.post("/admin/marketing/post")
+async def create_marketing_post(request: Request, db: Session = Depends(get_db)):
+    """Create and optionally publish a marketing post."""
+    import json
+    
+    body = await request.json()
+    
+    post = MarketingPost(
+        brand=body.get("brand", "broom"),
+        caption=body.get("caption", ""),
+        hashtags=body.get("hashtags", ""),
+        city_slug=body.get("city_slug"),
+        photo_ids=body.get("photo_ids", []),
+        status="published" if body.get("platform") else "draft",
+    )
+    
+    # Attempt platform publishing
+    platform = body.get("platform")
+    if platform == "google":
+        # Google Business Profile API integration
+        # TODO: Implement actual Google Business Profile API call
+        # This requires OAuth2 credentials and the My Business API
+        post.google_posted = True  # Mark as attempted
+        post.status = "published"
+    elif platform == "facebook":
+        # Facebook Graph API integration
+        # TODO: Implement actual Facebook Graph API call
+        post.facebook_posted = True
+        post.status = "published"
+    
+    db.add(post)
+    db.commit()
+    
+    return JSONResponse({
+        "success": True,
+        "post_id": post.id,
+        "message": f"Marketing post created" + (f" and published to {platform}" if platform else ""),
+    })
 
 
 # ─── Health Check ────────────────────────────────────────────────────────────

@@ -4,6 +4,151 @@
 
 ---
 
+## 2026-11-21 — Session 13: Phase 2 — Cal.com, Deposits, Local SEO, Social Posting, Docker
+
+### Overview
+Completed all Phase 2 production integrations: Cal.com embed scheduling, Zelle/ACH deposit flow, Broom Service local SEO with programmatic city pages, review funnel, social media auto-poster, and Docker production deployment config.
+
+### 1. Cal.com Embed & Deposit Flow
+
+**`GET /schedule`** (`templates/schedule.html`)
+- Cal.com inline embed widget using official `@calcom/embed` JS SDK
+- Auto-selects event type based on `?brand=construction|broom`
+- Pre-fills customer name, email, notes (with quote ID, photo count, ZIP zone info)
+- Configurable via `CALCOM_CONSTRUCTION_EVENT_SLUG` and `CALCOM_BROOM_EVENT_SLUG` env vars
+
+**`GET /deposit-instructions/{quote_id}`** (`templates/deposit_instructions.html`)
+- Renders written scope, itemized breakdown, total price, and deposit amount
+- Construction: 30% deposit | Broom Service: full flat rate
+- Displays Zelle handle + ACH/Bank Transfer instructions with Quote # as memo
+- Link to book start/walkthrough date on `/schedule`
+
+**`POST /api/quotes/{quote_id}/accept`**
+- Calculates deposit amount (30% construction / 100% broom)
+- Updates quote status to APPROVED
+- Sends automated HTML email (via SMTP) to customer + owner with:
+  - Written scope, itemized breakdown
+  - Deposit amount and Zelle/ACH instructions
+  - Scheduling link
+
+**`services/email_service.py`**
+- `send_email()` — SMTP helper (configurable host/port/user/pass)
+- `send_deposit_instructions()` — Branded HTML email for deposit flow
+- `send_negative_feedback_alert()` — Alert email for 1-3 star reviews
+- `build_deposit_email_html()` — Full HTML template with Zelle + ACH sections
+
+### 2. Broom Service Local SEO
+
+**Programmatic City Pages** (`services/local_seo.py`, `templates/city_landing.html`)
+- 6 city landing pages:
+  - `/areas/chesapeake-va` (9 ZIPs, core zone)
+  - `/areas/virginia-beach-va` (13 ZIPs, core zone)
+  - `/areas/norfolk-va` (10 ZIPs, core zone)
+  - `/areas/williamsburg-va` (6 ZIPs, core zone)
+  - `/areas/hampton-newport-news-va` (14 ZIPs, core zone)
+  - `/areas/outer-banks-currituck-nc` (12 ZIPs, extended zone)
+- Each page: hero section, neighborhoods, ZIP codes, services, quote calculator link, nearby areas cross-linking
+- `templates/partials/schema_broom.html` — JSON-LD structured data (`HousekeepingService` schema)
+  - NAP, geo-coordinates, service areas, sameAs links (Google, Facebook, Yelp)
+
+**Dynamic SEO Routes:**
+- `GET /sitemap.xml` — XML sitemap with all static + city pages
+- `GET /robots.txt` — Allow all crawlers, disallow /admin/ and /api/
+
+**Smart Review Funnel** (`templates/review_gate.html`, `POST /api/reviews/submit`)
+- `GET /review` — 5-star rating gate
+- 4-5 Stars → One-click buttons to Google/Facebook/Yelp review URLs
+- 1-3 Stars → Private feedback form, immediately emails owner for resolution
+- `CustomerReview` model stores all submissions with routing decision
+
+### 3. Admin Marketing Dashboard
+
+**`GET /admin/marketing`** (`templates/admin/marketing.html`)
+- Social media post generator with city + brand selector
+- Loads completed job photos from approved/booked quotes
+- Generates localized captions with hashtags per city
+- Platform-specific cards: Google Business Profile, Facebook, Yelp Portfolio, Craigslist/Marketplace
+- One-click copy-to-clipboard for all platforms
+- "Publish" button for Google Business Profile API (stub for OAuth2 integration)
+- `MarketingPost` model tracks all generated posts with platform publish status
+
+**Updated Admin Navigation:** `Quotes` | `Pricing Rules` | `Local Marketing`
+
+### 4. Production Docker Config
+
+**`Dockerfile.quote-engine`** — Python 3.11-slim, multi-stage, health check, uvicorn with 2 workers
+**`docker-compose.quote-engine.yml`** — FastAPI + PostgreSQL 16 with:
+  - Persistent volumes: `quote-db-data`, `quote-uploads`, `quote-static`
+  - Health checks on PostgreSQL
+  - External `bizstack-net` network (connects to existing nginx)
+  - Port mapping: external 8005 → internal 8000
+
+**`.env.example`** — Complete documentation of all 25+ env vars:
+  - Database, Vision AI, Admin auth, Cal.com, Payment (Zelle/ACH), SMTP, Reviews, Google/Facebook APIs
+
+**`README.md`** — Full documentation with:
+  - Architecture diagram
+  - Route map (27 endpoints)
+  - Local dev quickstart
+  - Production deployment commands (rsync + docker compose)
+  - Nginx proxy configuration
+  - Environment variable reference
+  - Service area / zone documentation
+
+### New Models
+- `CustomerReview` — Review funnel submissions (rating, feedback, routing decision)
+- `MarketingPost` — Social media posts (caption, hashtags, platform tracking)
+
+### Files Created/Modified
+**New:**
+- `services/email_service.py` — SMTP email service
+- `services/local_seo.py` — City data + JSON-LD schema builder
+- `templates/schedule.html` — Cal.com embed page
+- `templates/deposit_instructions.html` — Zelle/ACH instructions
+- `templates/review_gate.html` — 5-star review funnel
+- `templates/city_landing.html` — Programmatic city SEO pages
+- `templates/partials/schema_broom.html` — JSON-LD partial
+- `templates/admin/marketing.html` — Social post generator
+- `Dockerfile.quote-engine` — Docker build config
+- `docker-compose.quote-engine.yml` — Docker compose with PostgreSQL
+- `.env.example` — Environment variable template
+- `README.md` — Full documentation
+
+**Modified:**
+- `main.py` — Added 11 new routes (27 total), env var configuration
+- `models.py` — Added CustomerReview + MarketingPost models
+
+### Verified
+```
+✓ 27 routes registered
+✓ 6 city landing pages (64 ZIPs total)
+✓ JSON-LD schema: HousekeepingService
+✓ 9 required templates present
+✓ All imports successful
+✓ All services compile
+```
+
+### Deployment Commands
+```bash
+# 1. Copy env
+scp .env.example root@159.203.175.39:/opt/bizstack/quote-engine.env
+
+# 2. Rsync code
+rsync -avz --exclude='.env*' --exclude='*.db' --exclude='uploads/' \
+  main.py models.py schemas.py services/ templates/ \
+  requirements-quote-engine.txt Dockerfile.quote-engine docker-compose.quote-engine.yml \
+  root@159.203.175.39:/opt/bizstack/quote-engine/
+
+# 3. Deploy
+cd /opt/bizstack/quote-engine
+docker compose -f docker-compose.quote-engine.yml up -d --build
+
+# 4. Verify
+curl http://localhost:8005/health
+```
+
+---
+
 ## 2026-11-21 — Session 12: Real-Time Scheduling & AI Vision Quote Engine
 
 ### Overview

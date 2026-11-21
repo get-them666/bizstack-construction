@@ -1,0 +1,142 @@
+{% include 'partials/schema_broom.html' %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ city.title }}</title>
+    <meta name="description" content="{{ city.description }}">
+    <meta name="keywords" content="{{ city.keywords|join(', ') }}">
+    <link rel="canonical" href="https://bizstackperks.com/areas/{{ city.slug }}">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = { theme: { extend: { colors: { primary: '#064e3b', accent: '#10b981', surface: '#f0fdf4' }}}}
+    </script>
+</head>
+<body class="bg-surface text-gray-900 min-h-screen">
+    
+    <!-- Header -->
+    <header class="bg-primary text-white py-12">
+        <div class="max-w-5xl mx-auto px-4">
+            <nav class="mb-6 text-sm">
+                <a href="/" class="text-accent hover:underline">Home</a>
+                <span class="mx-2 opacity-50">/</span>
+                <span>Areas We Serve</span>
+                <span class="mx-2 opacity-50">/</span>
+                <span>{{ city.city }}, {{ city.state }}</span>
+            </nav>
+            <h1 class="text-4xl font-bold">{{ city.hero_headline }}</h1>
+            <p class="mt-4 text-lg opacity-80 max-w-2xl">{{ city.hero_subheadline }}</p>
+            <div class="mt-6 flex flex-wrap gap-3">
+                <a href="/instant-quote?brand=broom" class="bg-accent hover:opacity-90 text-white font-bold py-3 px-6 rounded-lg transition">
+                    Get Instant Quote →
+                </a>
+                <a href="tel:+17579087121" class="bg-white/10 hover:bg-white/20 text-white font-bold py-3 px-6 rounded-lg transition">
+                    📞 (757) 908-7121
+                </a>
+            </div>
+        </div>
+    </header>
+    
+    <!-- Service Area Info -->
+    <section class="max-w-5xl mx-auto px-4 py-12">
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
+            <div class="bg-white rounded-xl shadow p-6">
+                <h3 class="font-bold text-lg mb-3 text-accent">🏘️ Neighborhoods We Serve</h3>
+                <ul class="space-y-1 text-sm">
+                    {% for neighborhood in city.neighborhoods %}
+                    <li class="flex items-center gap-2">
+                        <span class="w-1.5 h-1.5 bg-accent rounded-full"></span>
+                        {{ neighborhood }}
+                    </li>
+                    {% endfor %}
+                </ul>
+            </div>
+            <div class="bg-white rounded-xl shadow p-6">
+                <h3 class="font-bold text-lg mb-3 text-accent">📋 ZIP Codes</h3>
+                <div class="flex flex-wrap gap-2">
+                    {% for zip in city.zip_codes %}
+                    <span class="bg-gray-100 px-2 py-1 rounded text-xs font-mono">{{ zip }}</span>
+                    {% endfor %}
+                </div>
+                <p class="text-xs text-gray-500 mt-3">
+                    {% if city.zone == 'core' %}
+                        ✅ Core zone — no travel fee
+                    {% else %}
+                        🚗 Extended zone — travel fee applies
+                    {% endif %}
+                </p>
+            </div>
+            <div class="bg-white rounded-xl shadow p-6">
+                <h3 class="font-bold text-lg mb-3 text-accent">🧹 Services</h3>
+                <ul class="space-y-2 text-sm">
+                    <li>• STR Turnover Cleaning</li>
+                    <li>• Deep Cleaning</li>
+                    <li>• Move-Out Cleaning</li>
+                    <li>• Linen Restock</li>
+                    <li>• STR Staging</li>
+                    <li>• Co-Hosting</li>
+                </ul>
+            </div>
+        </div>
+    </section>
+    
+    <!-- Quote Calculator Embed -->
+    <section class="max-w-5xl mx-auto px-4 pb-12">
+        <div class="bg-white rounded-xl shadow-lg p-8">
+            <h2 class="text-2xl font-bold mb-4 text-center">Get Your {{ city.city }} Cleaning Quote</h2>
+            <p class="text-center text-gray-600 mb-6">Upload photos for a guaranteed flat-rate quote in under 60 seconds.</p>
+            <div class="text-center">
+                <a href="/instant-quote?brand=broom" 
+                   class="inline-block bg-accent hover:opacity-90 text-white font-bold py-4 px-8 rounded-lg text-lg transition">
+                    Start Photo Quote →
+                </a>
+            </div>
+        </div>
+    </section>
+    
+    <!-- Nearby Areas -->
+    <section class="max-w-5xl mx-auto px-4 pb-12">
+        <h2 class="text-2xl font-bold mb-6 text-center">Also Serving Nearby Areas</h2>
+        <div class="flex flex-wrap justify-center gap-3">
+            {% for area_slug in city.nearby_areas %}
+            {% if area_slug in all_cities %}
+            <a href="/areas/{{ area_slug }}" 
+               class="bg-white hover:bg-gray-50 shadow rounded-lg px-4 py-2 text-sm font-medium transition">
+                {{ all_cities[area_slug].city }}, {{ all_cities[area_slug].state }}
+            </a>
+            {% endif %}
+            {% endfor %}
+        </div>
+    </section>
+    
+    <!-- Trust Signals -->
+    <section class="bg-primary text-white py-12">
+        <div class="max-w-5xl mx-auto px-4 text-center">
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
+                <div>
+                    <p class="text-3xl font-bold text-accent">Licensed</p>
+                    <p class="text-sm opacity-70 mt-1">& Insured</p>
+                </div>
+                <div>
+                    <p class="text-3xl font-bold text-accent">Guaranteed</p>
+                    <p class="text-sm opacity-70 mt-1">Flat-Rate Pricing</p>
+                </div>
+                <div>
+                    <p class="text-3xl font-bold text-accent">5-Star</p>
+                    <p class="text-sm opacity-70 mt-1">Rated Service</p>
+                </div>
+            </div>
+        </div>
+    </section>
+    
+    <!-- Footer -->
+    <footer class="bg-gray-900 text-white py-8">
+        <div class="max-w-5xl mx-auto px-4 text-center text-sm opacity-70">
+            <p>Broom Service | 701 Dana Dr, Chesapeake, VA 23321</p>
+            <p class="mt-1">Phone: +1 (757) 908-7121 | Email: hello@bizstackperks.com</p>
+            <p class="mt-1">Serving Hampton Roads, VA & Outer Banks, NC</p>
+        </div>
+    </footer>
+</body>
+</html>

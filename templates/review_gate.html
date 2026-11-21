@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rate Your Experience — Broom Service</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = { theme: { extend: { colors: { primary: '#064e3b', accent: '#10b981', surface: '#f0fdf4' }}}}
+    </script>
+</head>
+<body class="bg-surface text-gray-900 min-h-screen flex items-center justify-center p-4">
+    
+    <div class="max-w-lg w-full">
+        
+        <!-- Header -->
+        <div class="text-center mb-8">
+            <h1 class="text-3xl font-bold"><span class="text-accent">Broom</span> Service</h1>
+            <p class="mt-2 text-gray-600">How did we do?</p>
+        </div>
+        
+        <!-- Step 1: Star Rating -->
+        <div id="step-rating" class="bg-white rounded-xl shadow-lg p-8 text-center">
+            <h2 class="text-xl font-bold mb-6">Rate your cleaning experience</h2>
+            
+            <div class="flex justify-center gap-2 mb-6" id="star-container">
+                <button onclick="selectRating(1)" class="star-btn text-5xl text-gray-300 hover:text-accent transition" data-rating="1">★</button>
+                <button onclick="selectRating(2)" class="star-btn text-5xl text-gray-300 hover:text-accent transition" data-rating="2">★</button>
+                <button onclick="selectRating(3)" class="star-btn text-5xl text-gray-300 hover:text-accent transition" data-rating="3">★</button>
+                <button onclick="selectRating(4)" class="star-btn text-5xl text-gray-300 hover:text-accent transition" data-rating="4">★</button>
+                <button onclick="selectRating(5)" class="star-btn text-5xl text-gray-300 hover:text-accent transition" data-rating="5">★</button>
+            </div>
+            
+            <p class="text-sm text-gray-500">Tap a star to rate</p>
+        </div>
+        
+        <!-- Step 2a: Positive Path (4-5 stars) -->
+        <div id="step-positive" class="bg-white rounded-xl shadow-lg p-8 text-center hidden">
+            <h2 class="text-xl font-bold mb-2 text-green-600">Thank you! 🎉</h2>
+            <p class="text-gray-600 mb-6">We're thrilled you had a great experience! Would you mind sharing it in a quick review?</p>
+            
+            <div class="space-y-3">
+                <a href="{{ google_review_url }}" target="_blank" rel="noopener"
+                   class="block w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-lg transition">
+                    <span class="flex items-center justify-center gap-2">
+                        <svg class="w-5 h-5" viewBox="0 0 24 24" fill="currentColor"><path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 01-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z"/><path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+                        Review on Google
+                    </span>
+                </a>
+                <a href="{{ facebook_review_url }}" target="_blank" rel="noopener"
+                   class="block w-full bg-blue-800 hover:bg-blue-900 text-white font-bold py-3 px-6 rounded-lg transition">
+                    <span class="flex items-center justify-center gap-2">
+                        <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/></svg>
+                        Review on Facebook
+                    </span>
+                </a>
+                <a href="{{ yelp_review_url }}" target="_blank" rel="noopener"
+                   class="block w-full bg-red-600 hover:bg-red-700 text-white font-bold py-3 px-6 rounded-lg transition">
+                    <span class="flex items-center justify-center gap-2">
+                        <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M20.16 12.594l-4.995 1.433c-.96.276-1.74-.404-1.74-1.433V6.103c0-.99.772-1.74 1.74-1.433l4.995 1.433c.96.276 1.74 1.162 1.74 2.153v2.185c0 .99-.78 1.876-1.74 2.153zM9.835 14.027l-4.995-1.433c-.96-.277-1.74-1.163-1.74-2.153V8.256c0-.99.78-1.877 1.74-2.153L9.835 4.67c.96-.277 1.74.443 1.74 1.433v6.491c0 1.029-.78 1.709-1.74 1.433z"/></svg>
+                        Review on Yelp
+                    </span>
+                </a>
+            </div>
+            
+            <p class="text-xs text-gray-400 mt-6">Your review helps other homeowners find quality cleaning services.</p>
+        </div>
+        
+        <!-- Step 2b: Negative Path (1-3 stars) -->
+        <div id="step-negative" class="bg-white rounded-xl shadow-lg p-8 hidden">
+            <h2 class="text-xl font-bold mb-2 text-orange-600">We're sorry to hear that</h2>
+            <p class="text-gray-600 mb-6">Please tell us what went wrong so we can make it right. Your feedback goes directly to our owner.</p>
+            
+            <form id="feedback-form" hx-post="/api/reviews/submit" hx-target="#feedback-result" hx-swap="innerHTML">
+                <input type="hidden" name="rating" id="hidden-rating">
+                <input type="hidden" name="brand" value="broom">
+                
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium mb-1">Your Name</label>
+                        <input type="text" name="customer_name" required 
+                               class="w-full px-4 py-2 rounded border border-gray-300 focus:ring-2 focus:ring-accent focus:outline-none">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium mb-1">Email or Phone</label>
+                        <input type="text" name="customer_email" required 
+                               class="w-full px-4 py-2 rounded border border-gray-300 focus:ring-2 focus:ring-accent focus:outline-none">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium mb-1">What happened?</label>
+                        <textarea name="feedback" rows="4" required 
+                                  placeholder="Please describe the issue..."
+                                  class="w-full px-4 py-2 rounded border border-gray-300 focus:ring-2 focus:ring-accent focus:outline-none"></textarea>
+                    </div>
+                </div>
+                
+                <button type="submit" 
+                        class="w-full mt-6 bg-accent hover:opacity-90 text-white font-bold py-3 px-6 rounded-lg transition">
+                    Send Private Feedback
+                </button>
+                
+                <div id="feedback-result" class="mt-4"></div>
+            </form>
+            
+            <p class="text-xs text-gray-400 mt-4 text-center">
+                We take every concern seriously and will respond within 24 hours.
+            </p>
+        </div>
+    </div>
+    
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <script>
+        let selectedRating = 0;
+        
+        function selectRating(rating) {
+            selectedRating = rating;
+            
+            // Update star colors
+            document.querySelectorAll('.star-btn').forEach((btn, idx) => {
+                btn.classList.toggle('text-accent', idx < rating);
+                btn.classList.toggle('text-gray-300', idx >= rating);
+            });
+            
+            // Route based on rating
+            setTimeout(() => {
+                document.getElementById('step-rating').classList.add('hidden');
+                
+                if (rating >= 4) {
+                    document.getElementById('step-positive').classList.remove('hidden');
+                } else {
+                    document.getElementById('hidden-rating').value = rating;
+                    document.getElementById('step-negative').classList.remove('hidden');
+                }
+            }, 500);
+        }
+        
+        // Handle HTMX response for feedback form
+        document.body.addEventListener('htmx:afterSwap', function(evt) {
+            if (evt.detail.target.id === 'feedback-result') {
+                try {
+                    const data = JSON.parse(evt.detail.xhr.response);
+                    if (data.success) {
+                        document.getElementById('step-negative').innerHTML = `
+                            <div class="text-center py-8">
+                                <p class="text-4xl mb-4">✅</p>
+                                <h2 class="text-xl font-bold text-green-600 mb-2">Thank you for your feedback</h2>
+                                <p class="text-gray-600">We've received your concerns and will contact you within 24 hours to make things right.</p>
+                            </div>
+                        `;
+                    }
+                } catch (e) {
+                    console.error('Parse error:', e);
+                }
+            }
+        });
+    </script>
+</body>
+</html>

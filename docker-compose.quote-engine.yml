@@ -1,0 +1,84 @@
+# ─── BizStack Quote Engine — Docker Compose ──────────────────────────────────
+# Runs the FastAPI Quote Engine alongside PostgreSQL
+# Includes persistent volumes for uploaded photos
+
+services:
+  
+  # ─── Quote Engine API ─────────────────────────────────────────────────────
+  quote-engine:
+    build:
+      context: .
+      dockerfile: Dockerfile.quote-engine
+    container_name: quote-engine
+    restart: unless-stopped
+    ports:
+      - "8005:8000"  # External port 8005 → internal 8000
+    env_file:
+      - quote-engine.env
+    environment:
+      - DATABASE_URL=postgresql://quote_engine:${QUOTE_ENGINE_DB_PASSWORD}@db-quote-engine:5432/quote_engine
+      - UPLOAD_DIR=/app/uploads/quotes
+      - BASE_URL=https://bizstackperks.com
+    volumes:
+      # Persist uploaded photos across container restarts
+      - quote-uploads:/app/uploads/quotes
+      - quote-static:/app/static/uploads
+    depends_on:
+      db-quote-engine:
+        condition: service_healthy
+    networks:
+      - bizstack-net
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+  
+  # ─── PostgreSQL Database ───────────────────────────────────────────────────
+  db-quote-engine:
+    image: postgres:16-alpine
+    container_name: db-quote-engine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: quote_engine
+      POSTGRES_PASSWORD: ${QUOTE_ENGINE_DB_PASSWORD}
+      POSTGRES_DB: quote_engine
+    volumes:
+      - quote-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U quote_engine -d quote_engine"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - bizstack-net
+  
+  # ─── Nginx Reverse Proxy (extends existing) ───────────────────────────────
+  # The quote engine routes are proxied through the main nginx configuration
+  # Add these location blocks to your existing nginx.conf:
+  #
+  # location /instant-quote { proxy_pass http://quote-engine:8000; }
+  # location /schedule      { proxy_pass http://quote-engine:8000; }
+  # location /deposit-instructions { proxy_pass http://quote-engine:8000; }
+  # location /review        { proxy_pass http://quote-engine:8000; }
+  # location /areas/        { proxy_pass http://quote-engine:8000; }
+  # location /api/quote     { proxy_pass http://quote-engine:8000; }
+  # location /api/quotes    { proxy_pass http://quote-engine:8000; }
+  # location /api/photo     { proxy_pass http://quote-engine:8000; }
+  # location /api/reviews   { proxy_pass http://quote-engine:8000; }
+  # location /webhooks/cal  { proxy_pass http://quote-engine:8000; }
+  # location /admin/quotes  { proxy_pass http://quote-engine:8000; }
+  # location /admin/pricing { proxy_pass http://quote-engine:8000; }
+  # location /admin/marketing { proxy_pass http://quote-engine:8000; }
+  # location /sitemap.xml   { proxy_pass http://quote-engine:8000; }
+  # location /robots.txt    { proxy_pass http://quote-engine:8000; }
+
+volumes:
+  quote-db-data:
+    driver: local
+  quote-uploads:
+    driver: local
+  quote-static:
+    driver: local
+
+networks:
+  bizstack-net:
+    external: true
+    name: bizstack-net
