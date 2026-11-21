@@ -109,6 +109,84 @@ def calculate(expression: str = "") -> dict:
     return {"ok": True, "expression": expression.strip(), "result": value}
 
 
+def build_financial_tools(db, company: str = "construction"):
+    """Return financial tool handlers for invoice lookup and expense logging.
+
+    These tools are admin-only (Copilot context). They query the bid_invoices
+    and ledger_entries tables without exposing bank details or API keys.
+    """
+    def lookup_invoices(bid_id: int = 0, project_id: int = 0) -> dict:
+        """Check invoice status, paid vs unpaid balances, and budget vs actual for a bid/project."""
+        if not bid_id and not project_id:
+            return {"ok": False, "error": "Provide bid_id or project_id."}
+        try:
+            import bid_costing
+            bid_costing.ensure_accounting_schema(db)
+            bid_id = bid_id or project_id  # projects and bids share the same id space
+            invoices = bid_costing.list_invoices(db, bid_id, company)
+            summary = bid_costing.invoice_summary(db, bid_id, company)
+            costs = bid_costing.cost_lines(db, bid_id, company)
+            cost_summary = bid_costing.cost_summary(db, bid_id, company)
+            return {
+                "ok": True,
+                "bid_id": bid_id,
+                "invoices": [{
+                    "id": inv["id"],
+                    "invoice_number": inv.get("invoice_number") or "",
+                    "kind": inv.get("kind") or "invoice",
+                    "amount": float(inv.get("amount") or 0),
+                    "status": inv.get("status") or "draft",
+                    "due_date": inv.get("due_date").isoformat() if inv.get("due_date") else None,
+                } for inv in invoices],
+                "summary": {
+                    "billed": float(summary.get("billed") or 0),
+                    "collected": float(summary.get("collected") or 0),
+                    "outstanding": float(summary.get("billed") or 0) - float(summary.get("collected") or 0),
+                },
+                "costs": {
+                    "estimated": float(cost_summary.get("estimated") or 0),
+                    "actual": float(cost_summary.get("actual") or 0),
+                    "variance": float(cost_summary.get("actual") or 0) - float(cost_summary.get("estimated") or 0),
+                    "line_count": len(costs),
+                },
+            }
+        except Exception as exc:
+            return {"ok": False, "error": f"Invoice lookup failed: {exc}"}
+
+    def log_expense(bid_id: int = 0, project_id: int = 0, category: str = "material",
+                    description: str = "", amount_cents: int = 0, vendor: str = "") -> dict:
+        """Log a material purchase, supply receipt, or job expense to a project/bid."""
+        if not bid_id and not project_id:
+            return {"ok": False, "error": "Provide bid_id or project_id."}
+        if amount_cents <= 0:
+            return {"ok": False, "error": "Amount must be positive (in cents)."}
+        try:
+            import bid_costing
+            bid_costing.ensure_accounting_schema(db)
+            bid_id = bid_id or project_id
+            line_id = bid_costing.add_cost_line(
+                db, bid_id, category=category, description=description,
+                vendor=vendor, actual=amount_cents / 100.0, company=company,
+            )
+            return {
+                "ok": True,
+                "line_id": line_id,
+                "bid_id": bid_id,
+                "category": category,
+                "description": description,
+                "amount": f"${amount_cents / 100:.2f}",
+                "vendor": vendor,
+                "message": f"Expense logged to bid #{bid_id}.",
+            }
+        except Exception as exc:
+            return {"ok": False, "error": f"Expense logging failed: {exc}"}
+
+    return {
+        "lookup_invoices": lookup_invoices,
+        "log_expense": log_expense,
+    }
+
+
 # Search models, cheapest first. `OPENAI_SEARCH_MODEL` overrides the whole list.
 #
 # `gpt-4o-mini-search-preview` and `web_search_preview` are what this used to

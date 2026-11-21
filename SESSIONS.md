@@ -4,6 +4,108 @@
 
 ---
 
+## 2026-11-20 — Session 6: Knowledge Base Expansion & Financial Tools
+
+### Problem
+The AI systems (Vapi Voice, Copilot, Email) lacked deep domain expertise in:
+- Construction math/takeoffs, blueprint reading, trades materials
+- Construction banking, job costing, progress billing, lien waivers
+- Broom Service cleaning chemistry, surface care protocols
+- Virginia STR law, local zoning, transient occupancy taxes
+- Broom Service banking, payment flows, profit margins
+
+And the Copilot lacked financial tools for invoice lookup and expense logging.
+
+### Solution: Expanded Knowledge Bases + Financial Tools
+
+**Construction (`construction_knowledge.md`) — Added 3 sections:**
+- **Section 16: Math, Takeoffs & Blueprint Reading**
+  - Area/volume calculations (sq ft, cubic yards, board feet, roof squares)
+  - Waste factors by trade (10-15% for lumber, drywall, tile, etc.)
+  - Labor-to-material ratios by trade
+  - Markup vs margin math
+  - Blueprint reading (floor plans, elevations, sections, schedules, MEP symbols)
+  - Takeoff workflow
+
+- **Section 17: All Trades — Materials & Tooling**
+  - Framing & structural (lumber, plywood, fasteners)
+  - Roofing & siding (shingles, underlayment, flashing, siding types)
+  - Drywall & paint (types, joint compound, paint categories)
+  - Flooring & tile (hardwood, LVP, ceramic/porcelain/stone)
+  - Cabinets & countertops (stock/semi-custom/custom, materials)
+  - Concrete & masonry (mix types, reinforcement, mortar)
+  - Electrical (wire types, panels, devices)
+  - Plumbing (pipe types, fixtures)
+  - HVAC (systems, ductwork, efficiency ratings)
+
+- **Section 18: Construction Banking & Job Costing**
+  - Progress billing & draw schedules (mobilization deposit, rough-in, completion, retention)
+  - Hard costs vs soft costs
+  - Job costing in the system (bid_costs table, budget vs actual)
+  - Change-order billing workflow
+  - Subcontractor 1099 payouts
+  - Lien waivers (conditional vs unconditional)
+  - Project profit margins (gross vs net, target margins)
+
+**Broom Service (`bot_knowledge.md`) — Added 3 sections:**
+- **Section 12: Cleaning Chemistry & Surface Care**
+  - Surface-safe protocols (quartz, granite, hardwood, LVP, stainless steel, tile)
+  - Stain & odor remediation (blood, wine, grease, mold, pet urine, ink)
+  - Bio-safe vs commercial disinfectants
+  - Post-construction deep cleans (3-phase process)
+
+- **Section 13: Virginia STR Law & Local Rules**
+  - VRLTA (security deposits, turnover documentation, notice requirements)
+  - Chesapeake / Virginia Beach / Norfolk STR zoning rules
+  - Transient occupancy taxes (5-6.5% by city)
+  - Licensing, bonding & insurance requirements
+  - Co-hosting agreements (digital 10-15%, full-service 20-30%)
+
+- **Section 14: Broom Service Banking & Transactions**
+  - Automated booking payment links (Stripe checkout flow)
+  - Recurring billing for regular hosts
+  - Security deposit / damage billing
+  - Co-hosting owner payout splits (monthly ACH)
+  - Cleaner per-job payouts (weekly ACH)
+  - Supply cost tracking (supplies_inventory table)
+  - Per-turnover profit margins (48.7% for turnover, 39.5% for deep clean, 61.6% for co-hosting)
+
+**Financial Tools Added:**
+
+Construction (`copilot_ops.py`):
+- `lookup_invoices(bid_id)` — Check invoice status, paid/unpaid balances, budget vs actual
+- `log_expense(bid_id, category, description, amount_cents, vendor)` — Log material purchases, supply receipts, job expenses
+
+Broom Service (`copilot_ops.py`):
+- `lookup_booking_invoice(event_id)` — Check payment status, amount, worker payout for a booking
+- `log_expense(event_id, category, description, amount_cents, vendor)` — Log supply receipts, job expenses
+
+**Security Guardrails:**
+- Financial tools only available in Copilot (admin-only context)
+- Never expose raw bank account/routing numbers or API keys
+- Internal P&L, margin, worker payout rates restricted to authenticated owner sessions
+
+### Files Modified
+
+**Construction:**
+- `construction_knowledge.md` — Added 3 sections (math/takeoffs, trades, banking)
+- `copilot_ops.py` — Added `build_financial_tools()` with `lookup_invoices` and `log_expense`
+- `construction_main.py` — Wired financial tools into `build_copilot_handlers()`
+
+**Broom Service:**
+- `bot_knowledge.md` — Added 3 sections (cleaning chemistry, VA STR law, banking)
+- `copilot_ops.py` — Added `build_financial_tools()` with `lookup_booking_invoice` and `log_expense`
+- `main.py` — Imported `copilot_ops`, wired financial tools into `build_tool_handlers()`
+
+### Compile Status
+✅ All Python files compile with zero errors
+
+### Git Commits
+- Construction: pending
+- Broom Service: pending
+
+---
+
 ## 2026-11-20 — Session 5: Universal SOW/Contract/Portal Automation
 
 ### Problem

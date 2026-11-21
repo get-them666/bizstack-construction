@@ -3207,6 +3207,7 @@ def build_copilot_handlers(db, owner_email: str):
     handlers.update(copilot_ops.build_task_tools(db, owner_email))
     handlers.update(copilot_ops.build_web_search_tools())
     handlers.update(copilot_ops.build_contact_tools(db, owner_email))
+    handlers.update(copilot_ops.build_financial_tools(db, _BID_COMPANY))
     handlers.update(_bid_document_tools(db, owner_email))
 
     def run_call_campaign(limit: int = 5, apply: bool = False,

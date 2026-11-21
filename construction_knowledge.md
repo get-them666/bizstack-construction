@@ -496,6 +496,201 @@ or text a residential number without consent and a DNC check.
 
 ---
 
+## 16. Math, Takeoffs & Blueprint Reading
+
+### Core construction math (memorize, use when estimating)
+
+**Area & volume:**
+- Square footage = length × width (for floors, walls, ceilings)
+- Cubic yards = (length × width × depth in feet) ÷ 27 (for concrete, fill, gravel)
+- Board feet = (thickness in inches × width in inches × length in feet) ÷ 12 (for lumber)
+- Roof squares = total roof area ÷ 100 (one square = 100 sq ft; shingles sold by the square)
+
+**Waste factors (always add these to material quantities):**
+- Lumber/framing: 10–15% waste (cuts, defects, errors)
+- Drywall: 10% waste (cuts, damaged sheets)
+- Flooring: 10% waste (cuts, pattern matching) + 5% for diagonal layouts
+- Tile: 10–15% waste (cuts, breakage, pattern)
+- Roofing: 10% waste (cuts, starter courses, ridge caps)
+- Concrete: 5–10% waste (spillage, over-pour, form variations)
+- Paint: 10% waste (touch-ups, second coats, roller absorption)
+
+**Labor-to-material ratios (rule of thumb for quick estimates):**
+- Framing: 60% labor / 40% material
+- Drywall: 55% labor / 45% material
+- Flooring: 50% labor / 50% material
+- Tile: 60% labor / 40% material (intricate patterns push labor higher)
+- Painting: 70% labor / 30% material
+- Roofing: 55% labor / 45% material
+- Electrical: 65% labor / 35% material
+- Plumbing: 60% labor / 40% material
+
+**Markup & margin:**
+- Markup = (selling price − cost) ÷ cost × 100
+- Margin = (selling price − cost) ÷ selling price × 100
+- Example: $100 cost, $130 selling price → 30% markup, 23% margin
+- Construction typically targets 20–35% markup (17–26% margin)
+- Always confirm whether the owner is quoting markup or margin — they are not interchangeable
+
+**Blueprint reading essentials:**
+- **Floor plans** — top-down view showing room layout, dimensions, door/window locations
+- **Elevations** — flat exterior views (front, rear, sides) showing heights, materials, roof pitch
+- **Sections** — cut-through views showing construction details (wall assemblies, floor framing, foundation)
+- **Schedules** — tables listing doors, windows, finishes, room names/numbers
+- **MEP symbols** — mechanical (HVAC ducts, equipment), electrical (outlets, switches, panels, lighting), plumbing (pipes, fixtures, vents)
+- **Scale** — drawings are scaled (¼" = 1'-0" is common); always verify dimensions on the drawing, never measure with a ruler
+- **Notes & legends** — the fine print explains materials, methods, code requirements, and special instructions
+
+**Takeoff workflow:**
+1. Read the scope of work and specifications
+2. Measure all areas from the plans (length × width for floors, perimeter × height for walls)
+3. Apply waste factors to material quantities
+4. Look up current material prices (use `estimate_materials` tool, never quote from memory)
+5. Apply labor rates (hours × crew rate, or per-unit labor costs)
+6. Add markup for overhead and profit
+7. Present the total as a range, not a fixed number — always offer the free on-site estimate for exact pricing
+
+---
+
+## 17. All Trades — Materials & Tooling
+
+### Framing & structural
+- **Lumber:** SPF (spruce-pine-fir) #2 is standard for framing; pressure-treated for ground contact; LVL/beam for long spans
+- **Plywood/OSB:** ½" and ¾" CDX for sheathing; ¾" T&G for subfloor
+- **Fasteners:** framing nails (3½" nails for 2× framing), joist hangers, Simpson Strong-Tie hardware
+- **Tools:** circular saw, miter saw, nail gun, level, tape measure, speed square
+
+### Roofing & siding
+- **Shingles:** architectural (30-yr) vs 3-tab (25-yr); GAF, Owens Corning, CertainTeed are top brands
+- **Underlayment:** synthetic (preferred) or felt paper; ice & water shield in valleys and eaves
+- **Flashing:** aluminum or galvanized steel at valleys, chimneys, vents, walls
+- **Siding:** vinyl (low maintenance), fiber cement (Hardie — durable, paintable), wood (cedar, redwood — high maintenance), engineered wood
+- **Tools:** roofing nailer, siding nailer, tin snips, chalk line, utility knife
+
+### Drywall & paint
+- **Drywall:** ½" standard for walls, ⅝" for ceilings/fire-rated assemblies; moisture-resistant (green board) for bathrooms
+- **Joint compound:** all-purpose (first coats) vs topping (final coats); setting-type (hot mud) for fast cure
+- **Paint:** latex (water-based) for walls/trim; oil-based for doors/trim (durability); primer seals stains and promotes adhesion
+- **Tools:** drywall T-square, utility knife, drywall saw, taping knives, mud pans, sanding pole, paint sprayer, rollers, brushes
+
+### Flooring & tile
+- **Hardwood:** solid (nail-down) vs engineered (glue/float); species: oak (hard, common), maple (harder), walnut (softer, darker), hickory (hardest)
+- **LVP/LVT:** luxury vinyl plank/tile — waterproof, durable, click-lock or glue-down
+- **Tile:** ceramic (affordable), porcelain (denser, frost-proof), natural stone (marble, granite, slate — seal regularly)
+- **Underlayment:** cork, foam, or rubber for sound/comfort; cement board for tile
+- **Tools:** tile saw (wet saw for cuts), notched trowel, spacers, level, grout float, sponge
+
+### Cabinets & countertops
+- **Cabinets:** stock (affordable, limited sizes), semi-custom (more options, moderate cost), custom (built to spec, highest cost)
+- **Countertops:** laminate (budget), quartz (durable, non-porous, mid-range), granite (natural stone, seal annually), marble (elegant, stains easily), solid surface (Corian — seamless, repairable)
+- **Hardware:** hinges (soft-close preferred), drawer slides (full extension), knobs/pulls
+- **Tools:** level, shims, screw guns, jigsaw for cutouts, clamp
+
+### Concrete & masonry
+- **Concrete mix:** 4000 PSI for slabs/driveways, 3000 PSI for footings, 5000+ PSI for structural
+- **Reinforcement:** rebar (#4 for slabs, #5 for footings), wire mesh, fiber mesh
+- **Masonry:** concrete block (CMU), brick (clay), stone veneer; mortar types: N (general), S (below grade/high strength), M (high strength)
+- **Tools:** concrete mixer, screed, float, trowel, edger, groover, masonry saw, level, string line
+
+### Electrical
+- **Wire:** NM-B (Romex) for residential; THHN/THWN in conduit; 14-gauge (15A), 12-gauge (20A), 10-gauge (30A), 6-gauge (50A+)
+- **Panels:** 100A minimum for homes, 200A standard for modern homes with electric heat/AC
+- **Devices:** GFCI (kitchen, bath, garage, exterior — code-required), AFCI (bedrooms — arc-fault protection)
+- **Tools:** wire strippers, crimpers, voltage tester, fish tape, drill, screwdrivers
+
+### Plumbing
+- **Pipe:** PEX (flexible, push-fit or crimp), copper (solder or press), PVC/CPVC (drain/waste/vent, cold/hot water)
+- **Fixtures:** toilets (1.28 GPF low-flow standard), faucets (single-handle preferred), water heaters (tankless vs tank — tankless saves space, higher upfront cost)
+- **Tools:** pipe cutters, crimp tool, solder torch, pipe wrenches, basin wrench, drain auger
+
+### HVAC
+- **Systems:** forced air (gas/electric furnace + AC heat pump), radiant (boiler + in-floor), mini-split (ductless heat pump)
+- **Ductwork:** sheet metal (rigid, durable), flex duct (easier to route), sealed with mastic (not duct tape)
+- **Efficiency:** SEER rating for AC (14+ standard, 16+ high-efficiency), AFUE for furnaces (80%+ standard, 90%+ high-efficiency)
+- **Tools:** sheet metal snips, crimpers, duct tape (for temp), mastic sealant, manifold gauges, vacuum pump
+
+---
+
+## 18. Construction Banking & Job Costing
+
+### Progress billing & draw schedules
+
+Construction projects are typically billed in stages, not all at once:
+
+1. **Mobilization deposit (10–30%)** — due at contract signing; covers material orders, permit fees, crew scheduling
+2. **Rough-in progress (30–40%)** — due when framing/drywall/electrical/plumbing rough-in is complete and before closing walls
+3. **Completion/final (30–40%)** — due at substantial completion (punch list items may remain but the space is usable)
+4. **Retention (5–10%)** — held for 30–60 days after completion to cover latent defects; released after warranty period
+
+**Draw requests:** for larger projects or commercial work, the owner may submit draw requests to a bank/lender with lien waivers from subs. Each draw is a percentage of completion verified by an inspector.
+
+### Hard costs vs soft costs
+
+- **Hard costs:** direct construction costs — labor, materials, equipment, permits, inspections, subcontractors
+- **Soft costs:** indirect costs — architectural/engineering fees, legal, insurance, financing costs, contingency, owner's time
+
+### Job costing in the system
+
+All costs are tracked in `bid_costs` (linked to a bid/project) with fields:
+- `category`: labor, material, sub, equipment, permit, other
+- `description`: what the cost is for
+- `qty`, `unit`, `unit_cost`, `estimated` (qty × unit_cost), `actual` (real cost after purchase)
+- `vendor`: who supplied it
+
+**Budget vs actual:** the bid card shows estimated total (sum of `estimated`) and actual total (sum of `actual`). Variance = actual − estimated. Positive variance = over budget. Negative variance = under budget (good).
+
+**Labor tracking:** crew clock in/out via the worker app; timesheets link to projects. Labor cost = hours × pay_rate. Compare estimated labor hours (from the bid) to actual hours (from timesheets) to see if the crew is ahead or behind.
+
+**Material tracking:** receipts are uploaded or entered manually; material cost = sum of actual material costs. Compare to the estimated material cost from the bid.
+
+**Subcontractor tracking:** subs submit invoices; mark them paid in the system. Track estimated sub cost (from bid) vs actual sub cost (invoices paid).
+
+### Change-order billing
+
+When the scope changes (owner requests additional work, or unforeseen conditions are discovered):
+1. Document the change in writing (email or change-order form)
+2. Price the change (materials + labor + markup)
+3. Get owner approval before proceeding
+4. Create a change order in the system (linked to the bid/project)
+5. Bill the change order separately or roll it into the next progress payment
+
+**Never do extra work without written approval.** "But the owner said it was fine" is not a contract. Get it in writing.
+
+### Subcontractor 1099 payouts
+
+Subcontractors who are not employees must receive a 1099-NEC form at year-end if paid $600+ in a calendar year. Track:
+- Sub name, EIN or SSN, address
+- Total paid in the year
+- Payment dates and methods (check, ACH, cash)
+
+At year-end, generate 1099-NEC forms and file with the IRS (due Jan 31) and provide a copy to the sub.
+
+### Lien waivers
+
+Before paying a subcontractor or supplier, get a lien waiver:
+- **Conditional waiver:** waives lien rights for the amount paid, but only if the payment clears
+- **Unconditional waiver:** waives lien rights immediately (use only after payment has cleared)
+
+Always get a waiver before releasing payment. A sub who hasn't been paid can file a lien on the property, even if the owner already paid the GC.
+
+### Project profit margins
+
+**Gross margin** = (revenue − direct costs) ÷ revenue × 100  
+Direct costs = labor + materials + subs + equipment + permits
+
+**Net margin** = (revenue − all costs) ÷ revenue × 100  
+All costs = direct costs + overhead (rent, insurance, admin, marketing, vehicles, tools, etc.)
+
+**Target margins:**
+- Gross margin: 30–40% (covers overhead and profit)
+- Net margin: 10–20% (what the owner actually keeps)
+
+If a project's gross margin is below 25%, it's probably not profitable after overhead. If it's below 15%, the owner is losing money.
+
+**Use the tools:** `get_business_summary` shows total revenue and deposits. `get_accounting_summary` shows revenue, expenses, and balance. `bid_costing.cost_summary` shows budget vs actual for a specific bid/project. Always use the tools for real numbers — never estimate margins from memory.
+
+---
+
 ## Both websites, one brain
 
 Whether the message comes from construction.bizstackperks.com or bizstackperks.com, you're the
