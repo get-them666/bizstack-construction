@@ -7918,6 +7918,10 @@ async def settings_page(request: Request, db=Depends(get_db)):
             "zoho_payments_status": zoho_payments_status,
             "zoho_lists": await asyncio.to_thread(zoho_campaigns.mailing_lists),
             "zoho_list_key": zoho_campaigns.list_key(),
+            "call_forwarding": {
+                "enabled": (_get_setting(db, "call_forwarding_enabled") or "").lower() in ("1", "true", "yes"),
+                "owner_cell": _get_setting(db, "owner_personal_cell") or "",
+            },
         },
     )
 
@@ -8220,6 +8224,41 @@ async def save_banking_settings(request: Request, pnc_account_last4: str = Form(
     if last4:
         _set_setting(db, "pnc_account_last4", last4)
     return RedirectResponse(url="/settings?saved=banking#banking", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/api/settings/call-forwarding")
+async def save_call_forwarding_settings(request: Request,
+                                        call_forwarding_enabled: str = Form(""),
+                                        owner_personal_cell: str = Form(""),
+                                        db=Depends(get_db)):
+    """Store call forwarding preferences.
+
+    When enabled, inbound calls during business hours (8am-7pm ET, Mon-Sat) are
+    forwarded to the owner's personal cell. After hours, the AI assistant handles
+    all calls 24/7. The owner can toggle this on/off from the dashboard.
+    """
+    require_admin(request)
+    
+    # Parse forwarding enabled (checkbox sends "on" when checked, nothing when unchecked)
+    forwarding_enabled = (call_forwarding_enabled or "").lower() in ("1", "true", "yes", "on")
+    _set_setting(db, "call_forwarding_enabled", "true" if forwarding_enabled else "false")
+    
+    # Store owner's personal cell number (strip non-digits, ensure E.164 format)
+    cell_digits = "".join(ch for ch in (owner_personal_cell or "") if ch.isdigit())
+    if cell_digits:
+        if len(cell_digits) == 10:
+            cell_e164 = f"+1{cell_digits}"
+        elif len(cell_digits) == 11 and cell_digits.startswith("1"):
+            cell_e164 = f"+{cell_digits}"
+        else:
+            cell_e164 = f"+{cell_digits}"
+        _set_setting(db, "owner_personal_cell", cell_e164)
+    
+    status_msg = "enabled" if forwarding_enabled else "disabled"
+    return RedirectResponse(
+        url=f"/settings?saved=call-forwarding ({status_msg})#call-forwarding",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
 
 
 # --- Admin: lead inbox (SQLite-backed) --------------------------------------
@@ -10851,12 +10890,46 @@ def _vapi_inbound_sip_uri() -> str:
 
 @app.api_route("/voice.swml", methods=["GET", "POST"], operation_id="voice_swml")
 @app.api_route("/voice-app.swml", methods=["GET", "POST"], operation_id="voice_app_swml")
-async def voice_swml():
-    # Answer, then hand the call to Vapi over SIP. Vapi's assistant supplies the
-    # voice and transcription; /vapi/llm supplies the prompt and tools. Serving
-    # the in-app SWML agent here instead would answer every call in a different
-    # voice from the one configured in the Vapi dashboard, and Vapi would never
-    # see the call at all.
+async def voice_swml(db=Depends(get_db)):
+    """Handle inbound calls to the Construction line.
+
+    During business hours (8am-7pm ET, Mon-Sat), forward to the owner's personal
+    cell if call_forwarding is enabled. After hours, the AI assistant answers.
+    The owner can toggle forwarding on/off from the dashboard.
+    """
+    # Check if call forwarding is enabled and if it's business hours
+    try:
+        with db.cursor() as cur:
+            cur.execute("SELECT value FROM app_settings WHERE key = 'call_forwarding_enabled';")
+            row = cur.fetchone()
+        forwarding_enabled = (row["value"] or "").lower() in ("1", "true", "yes") if row else False
+        
+        if forwarding_enabled:
+            from datetime import datetime
+            from zoneinfo import ZoneInfo
+            now_et = datetime.now(ZoneInfo("America/New_York"))
+            # Business hours: 8am-7pm, Mon-Sat (weekday() < 6)
+            is_business_hours = (8 <= now_et.hour < 19) and (now_et.weekday() < 6)
+            
+            if is_business_hours:
+                cur.execute("SELECT value FROM app_settings WHERE key = 'owner_personal_cell';")
+                row = cur.fetchone()
+                owner_cell = (row["value"] or "").strip() if row else ""
+                if owner_cell:
+                    print(f"[voice.swml] Forwarding call to owner at {owner_cell} (business hours)", flush=True)
+                    # Return SWML that forwards the call
+                    return JSONResponse(content={
+                        "version": "1.0.0",
+                        "sections": {"main": [
+                            {"answer": {}},
+                            {"say": "Thank you for calling BuildStack Construction. Connecting you now."},
+                            {"dial": {"number": owner_cell, "callerId": SIGNALWIRE_NUMBER}},
+                        ]},
+                    })
+    except Exception as exc:
+        print(f"[voice.swml] Forwarding check failed: {exc}", flush=True)
+    
+    # Default: use the AI assistant (after hours or forwarding disabled)
     sip_uri = _vapi_inbound_sip_uri()
     if sip_uri:
         return JSONResponse(content={
