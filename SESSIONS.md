@@ -4,6 +4,73 @@
 
 ---
 
+## 2026-11-22 — Session 15: Hampton Roads Property-Manager Vendor Applications Sent
+
+### What went out
+
+Five B2B vendor-application emails, all delivered through the Zoho Mail HTTPS API from
+`hello@bizstackperks.com` (display name `Shaun O'Leary, BuildStack Construction`):
+
+| # | Recipient | Subject |
+|---|---|---|
+| 1 | mfeehery@lawsoncompanies.com (Mike Feehery) | Vendor Book Application: Turnkey Construction & Final Cleaning |
+| 2 | info@keyrenterhamptonroads.com (Brian Soto) | Approved Vendor Inquiry: Turnkey Unit-Turn Contracting & Cleaning |
+| 3 | patti@pmivirginia.com | Local Contracting & Turnover Cleaning Vendor |
+| 4 | info@ospreypm.com | Rent-Ready Contracting & Cleaning Vendor for Osprey PM |
+| 5 | Adminservices@vbcdc.org | Vendor Registration: Construction, Rehab, Cleaning & Hauling |
+
+Receipts: `outbox/vendor-applications-2026-11-22/{01..05}-*.txt` + `sent.json`
+(also written inside the production container under `/app/outbox/...`).
+All five rows are in `comms_logs` (four were already picked up by the mailbox sync,
+VBCDC inserted manually).
+
+**Item 6 of the list was NOT sent** — FirstService Residential and City Wide Facility
+Solutions are portal applications with no email address. The portal copy is unchanged
+and still needs to be pasted into both portals.
+
+### Copy changes made before sending (do not revert without the paperwork)
+
+The drafts claimed documents that do not exist and a licence that is not held:
+
+- **No attachments exist.** No W-9, COI or DPOR licence file is anywhere in the repo or
+  on the owner's machine (`send_today/MANIFEST.md` still lists the W-9 as
+  "provided form — needs signing"). Every "I've attached…" line became an offer to send
+  the documents on request.
+- **No active Virginia DPOR contractor licence** (owner confirmed; `CONTRACTOR_LICENSE`
+  is empty in `.env`). "Licensed through Virginia DPOR" became "registered as
+  BuildStack Construction LLC" in all five emails. Do not put a licence claim back in
+  this copy without a licence number to back it.
+
+### Transport findings (important)
+
+- **Zoho SMTP is blocked from the owner's Mac**: `550 5.4.6 Unusual sending activity
+  detected` on 587 and 465. The unblock link is
+  <https://mail.zoho.com/UnblockMe> — owner action only.
+- **The Zoho HTTPS API from the production droplet works** (verified with a self-send
+  first). That is the path all five used.
+- The local OAuth token in `.env` is stale (`invalid_client`); production's token is
+  valid. Local `.env` needs a reconnect, not a code change.
+
+### Bug fixed en route
+
+`documents_service.send_email`'s IPv4 retry passed `server_hostname=` to
+`aiosmtplib.send()`, which has no such kwarg in 5.x, so every IP-literal attempt died
+with `TypeError` and buried the real SMTP refusal. Removed the kwarg (certs are not
+validated on that path anyway) and added `test_smtp_ip_fallback.py`, which stubs
+`aiosmtplib.send` with the library's real keyword-only signature and fails if the extra
+kwarg returns. Verified red on the old code, green on the fix; the existing
+`test_email_transport_fallback.py` / `test_email_send_accuracy.py` /
+`test_documents_service.py` suite still passes (19 tests).
+
+### Follow-ups for the owner
+
+1. Unblock the Zoho mailbox at the link above if sending from a local machine is needed.
+2. Produce the W-9 (sign it), the COI, and the business registration so the five
+   follow-ups can actually attach them.
+3. Paste the FirstService Residential + City Wide portal copy.
+
+---
+
 ## 2026-11-21 — Session 14: Bid #18393 CSI Spec Slot Bug Fix & UI Consolidation
 
 ### Fix 1: CSI Spec Files Overriding BuildStack's Package Documents

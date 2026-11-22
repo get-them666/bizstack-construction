@@ -1126,9 +1126,13 @@ async def send_email(cfg: dict, to: str, subject: str, body: str, attachment: by
             ladder = ladder[:1]
 
     async def _try(port: int, mode: str, ip: str | None = None):
+        # aiosmtplib's send() has no server_hostname kwarg (5.x signature), so
+        # the IPv4 retry used to raise TypeError before it ever reached the
+        # socket: "send() got an unexpected keyword argument 'server_hostname'".
+        # On an IP-literal attempt TLS SNI is the IP; validate_certs=False is
+        # already set, and the hostname attempts above are the ones that check
+        # the certificate, so there is nothing to pin here.
         kwargs = dict(hostname=ip or host, port=port, validate_certs=False, timeout=connect_timeout)
-        if ip:
-            kwargs["server_hostname"] = host
         if cfg.get("SMTP_USER"):
             kwargs.update(username=cfg["SMTP_USER"], password=cfg.get("SMTP_PASS", ""))
         if mode == "ssl":
@@ -1140,7 +1144,7 @@ async def send_email(cfg: dict, to: str, subject: str, body: str, attachment: by
 
     # Some cloud hosts only route IPv4 correctly; resolve IPv4 up front and,
     # if the hostname attempts fail, retry each candidate against a literal
-    # IPv4 address (SNI kept via server_hostname).
+    # IPv4 address (certificates are not validated on that path).
     ipv4_addresses: list[str] = []
     if not degraded_to_fallback:
         try:
