@@ -80,6 +80,18 @@ The drafts claimed documents that do not exist and a licence that is not held:
   members, none of them vendors). These are suppliers, not leads: never add them to
   `estimate-request`.
 
+- **Zepto deliverability verified from real headers** (fetched the test message back over
+  IMAP): `dkim=pass` (`d=bizstackperks.com`, selector `2233313`), `spf=pass`
+  (`bounce-zem.bizstackperks.com`, 8.39.54.241), `arc=pass`, `dmarc=pass` under `p=none`.
+  SPF already carries both `include:zohomail.com` and `include:zcsend.net`, so Zoho and
+  Zepto both authorise. Do not tighten DMARC to `p=quarantine` until Kit's sending domain
+  is confirmed aligned — Kit sequences also send as `hello@bizstackperks.com` and would be
+  the first casualty.
+- **Zoho Mail API scopes stay as they are** (`accounts.READ`, `messages.CREATE`,
+  `messages.READ`). Folders/labels/org/domains/users/policy APIs all need a re-consent and
+  a new refresh token in `construction.env` for no capability this app needs: reading is
+  IMAP on 993, sending is Zepto, threading is handled by `zoho_mail.reply()`.
+
 ### Bug fixed en route
 
 `documents_service.send_email`'s IPv4 retry passed `server_hostname=` to
