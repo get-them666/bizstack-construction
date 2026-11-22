@@ -8,7 +8,7 @@
 
 ### What went out
 
-Five B2B vendor-application emails, all delivered through the Zoho Mail HTTPS API from
+Five B2B vendor-application emails, all delivered through **ZeptoMail** from
 `hello@bizstackperks.com` (display name `Shaun O'Leary, BuildStack Construction`):
 
 | # | Recipient | Subject |
@@ -43,13 +43,25 @@ The drafts claimed documents that do not exist and a licence that is not held:
 
 ### Transport findings (important)
 
-- **Zoho SMTP is blocked from the owner's Mac**: `550 5.4.6 Unusual sending activity
-  detected` on 587 and 465. The unblock link is
-  <https://mail.zoho.com/UnblockMe> — owner action only.
-- **The Zoho HTTPS API from the production droplet works** (verified with a self-send
-  first). That is the path all five used.
+- **All five went out through ZeptoMail**, not Zoho. `ZEPTOMAIL_TOKEN` is set in the
+  production container, so `documents_service.send_email` takes the Zepto HTTPS branch
+  first and never reaches a mailbox. Container logs for the send window contain zero
+  `[EMAIL]` lines: Zepto accepted silently, which is the normal success path (it only
+  prints on rejection). The earlier note in this entry that said "Zoho HTTPS API... that
+  is the path all five used" was wrong and is corrected here.
+- This house runs **two outbound systems**, do not conflate them:
+  - **ZeptoMail** (`api.zeptomail.com/v1.1/email`) — transactional, first choice for
+    every `documents_service.send_email` call: vendor mail, quotes, deposits, bids.
+  - **Kit** (`api.kit.com/v4`, formerly ConvertKit) — marketing only. New estimate
+    leads and newsletter signups are tagged into sequences there (`kit_service.py`,
+    `KIT_SEQUENCE_NEW_ESTIMATE`, `KIT_SEQUENCE_NEWSLETTER`). It is not a transport and
+    was not used for these five vendor emails; do not push B2B vendor contacts into a
+    customer lead sequence.
+- **Zoho Mail** is now only a fallback: the HTTPS API works from production, but its
+  SMTP is refused from the owner's Mac with `550 5.4.6 Unusual sending activity`
+  (unblock: <https://mail.zoho.com/UnblockMe>). Fallback, not the primary path.
 - The local OAuth token in `.env` is stale (`invalid_client`); production's token is
-  valid. Local `.env` needs a reconnect, not a code change.
+  valid. Irrelevant to normal sending now that Zepto is primary.
 
 ### Bug fixed en route
 
@@ -64,10 +76,13 @@ kwarg returns. Verified red on the old code, green on the fix; the existing
 
 ### Follow-ups for the owner
 
-1. Unblock the Zoho mailbox at the link above if sending from a local machine is needed.
-2. Produce the W-9 (sign it), the COI, and the business registration so the five
+1. Produce the W-9 (sign it), the COI, and the business registration so the five
    follow-ups can actually attach them.
+2. Unblock the Zoho Mailbox only if Zoho needs to send from a local machine again.
 3. Paste the FirstService Residential + City Wide portal copy.
+4. Confirm how these five vendor contacts should be tracked in Kit, if at all — they are
+   vendors, not estimate leads, so the `estimate-request` sequence would be wrong for
+   them.
 
 ---
 
