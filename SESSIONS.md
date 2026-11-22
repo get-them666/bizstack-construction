@@ -63,6 +63,23 @@ The drafts claimed documents that do not exist and a licence that is not held:
 - The local OAuth token in `.env` is stale (`invalid_client`); production's token is
   valid. Irrelevant to normal sending now that Zepto is primary.
 
+### Local sending repaired, vendors tagged in Kit (same day, follow-up)
+
+- **`.env` would not parse past line 30.** `SENDER_PHYSICAL_ADDRESS` was double-quoted and
+  had a second pair of quotes around "unsubscribe", so `python-dotenv` aborted there and
+  every key below it (SMTP_*, Zoho, Kit, Payments...) was invisible to a local run.
+  Re-quoted with single quotes.
+- **`ZEPTOMAIL_TOKEN` / `ZEPTOMAIL_API_URL` copied from the production container** into the
+  local `.env` (`.env` is gitignored). `ZEPTOMAIL_API_URL` is the regional endpoint
+  `https://cpaas.zoho.com/v1.1/email`, not `api.zeptomail.com` — use the stored value.
+  Verified: a local send to hello@bizstackperks.com returned True through Zepto with no
+  SMTP attempt. Local mail no longer depends on the blocked Zoho mailbox.
+- **`scripts/kit_add_vendors.py`** — subscribes the five vendor desks and tags them
+  `vendor`, with **no sequence**. Applied: 5/5 active, ids 4401758719 … 4401758811,
+  verified against all four sequences (none enrolled; New Estimate Follow-Up has 27
+  members, none of them vendors). These are suppliers, not leads: never add them to
+  `estimate-request`.
+
 ### Bug fixed en route
 
 `documents_service.send_email`'s IPv4 retry passed `server_hostname=` to
@@ -80,9 +97,7 @@ kwarg returns. Verified red on the old code, green on the fix; the existing
    follow-ups can actually attach them.
 2. Unblock the Zoho Mailbox only if Zoho needs to send from a local machine again.
 3. Paste the FirstService Residential + City Wide portal copy.
-4. Confirm how these five vendor contacts should be tracked in Kit, if at all — they are
-   vendors, not estimate leads, so the `estimate-request` sequence would be wrong for
-   them.
+4. Send a Kit campaign to the `vendor` tag when the W-9/COI exist.
 
 ---
 
