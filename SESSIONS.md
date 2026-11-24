@@ -261,7 +261,45 @@ fetch_permits: VB=100 Norfolk=100 Chesapeake=30 Hampton=75
 `added=0` is the dedupe path doing its job — those permits were already stored.
 The following run added 24. 147 permit leads landed today.
 
-### AGENTS.md updated with the rules this session learned
+### Permit scan narrowed to the city that actually converts
+
+Owner chose option 3: pay Shovels only for cities with a track record. Decided from
+the data, not preference — permit leads by zip prefix:
+
+| prefix | city | leads | worked | rate |
+|---|---|---|---|---|
+| 234xx | Virginia Beach | 1,487 | 311 | 21% |
+| 235xx | Norfolk | 307 | 152 | 50% |
+| **233xx** | **Chesapeake** | **37** | **27** | **73%** |
+| 236xx | Hampton / Newport News | 2 | 0 | — |
+| 279xx | Currituck / Elizabeth City | 7 | 0 | — |
+
+Chesapeake converts ~3.5x better than Virginia Beach and is the only one of the
+three with no free feed. It is also the home market.
+
+**Production config changed** (env only, no code):
+
+```
+PERMIT_CITIES=Virginia Beach,Norfolk,Chesapeake
+PERMIT_MAX_PER_GEO=1        # was unset (defaulted to 4, capped by limit=200 -> 10)
+PERMIT_SCAN_HOURS=24        # unchanged
+```
+
+Result: VB and Norfolk keep using their free ArcGIS feeds, and Chesapeake is the
+only city drawing Shovels credits — 9 zip geo ids × 1 row × daily ≈ **270 credits
+a month**, inside the 500 cap with room for backfill and retries. Hampton, Newport
+News, Portsmouth, Suffolk, Williamsburg, York, Richmond, Currituck and Elizabeth
+City are no longer scanned; they had produced 0–2 leads each and nothing worked.
+
+`/opt/bizstack/construction.env` backed up to
+`/opt/bizstack/backups/construction.env.20261124-141022` before editing. Container
+restarted, smoke **94 passed, 0 failed**.
+
+**Mistake made and fixed in this step:** the first edit targeted
+`/opt/bizstack/construction/construction.env` instead of
+`/opt/bizstack/construction.env`, which created a stray 49-byte file inside the
+deploy directory. Removed immediately; deploy tree verified clean (`dirty: 0`)
+before the correct edit was applied to `/opt/bizstack/construction.env`.
 
 - **§7** — changing published copy, ad creative, ad budgets or Page profile
   fields now requires approval *for that specific change*; approval of one change
