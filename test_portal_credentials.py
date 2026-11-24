@@ -4,10 +4,6 @@ None of these touch a database or the network. They are the parts that decide
 whether a payment is considered paid, and what confirmation number a customer
 is given, so they must be right without a running Postgres.
 """
-import os
-
-os.environ.setdefault("DATABASE_URL", "postgresql://localhost/nonexistent")
-
 import portal_service
 import zoho_payments
 

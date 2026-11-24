@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% set co = company() %}
+{% block title %}Page not found | {{ co.name }}{% endblock %}
+{% block meta %}<meta name="robots" content="noindex, follow">{% endblock %}
+
+{% block content %}
+<section class="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-24 text-center">
+    <p class="text-7xl font-black text-indigo-200">404</p>
+    <h1 class="mt-4 text-3xl sm:text-4xl font-black tracking-tight text-slate-900">That page has moved or never existed.</h1>
+    <p class="mt-4 text-lg text-slate-600">Nothing is wrong with your project — the link is just old. Start with a free estimate or call us directly.</p>
+    <div class="mt-8 flex flex-col sm:flex-row gap-3 justify-center">
+        <a href="/get-started" class="px-6 py-3.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold">Get a free estimate</a>
+        <a href="/instant-quote" class="px-6 py-3.5 rounded-xl bg-white border border-slate-200 hover:border-indigo-300 text-slate-700 font-bold">Instant ballpark quote</a>
+        <a href="tel:{{ co.phone_e164 }}" class="px-6 py-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold">Call {{ co.phone }}</a>
+    </div>
+    <div class="mt-10 text-sm text-slate-500">
+        <a href="/" class="font-semibold text-indigo-600 hover:text-indigo-700">Home</a>
+        <span class="mx-2">·</span>
+        <a href="/services" class="font-semibold text-indigo-600 hover:text-indigo-700">Services</a>
+        <span class="mx-2">·</span>
+        <a href="/contact" class="font-semibold text-indigo-600 hover:text-indigo-700">Contact</a>
+    </div>
+</section>
+{% endblock %}

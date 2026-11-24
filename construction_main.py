@@ -1304,6 +1304,21 @@ app = FastAPI(
 )
 
 
+@app.exception_handler(404)
+async def branded_not_found(request: Request, exc):
+    """A lost visitor gets the site's navigation, not a bare JSON line.
+
+    API/static/webhook paths keep the machine-readable 404 so integrations do
+    not receive HTML.
+    """
+    if request.url.path.startswith(
+            ("/api/", "/static/", "/media/", "/uploads/", "/oauth/", "/webhooks/")):
+        return JSONResponse(
+            {"detail": getattr(exc, "detail", "Not Found")}, status_code=404)
+    return templates.TemplateResponse(
+        request=request, name="404.html", context={}, status_code=404)
+
+
 # You cannot attach a debugger to a wedged container from here, and a hung event
 # loop looks identical to a dead process from outside (2026-11-15: the site was
 # "down" while uvicorn was alive and listening). SIGUSR1 now dumps every thread's
@@ -3665,7 +3680,7 @@ async def sitemap_xml(request: Request):
     base = _site_base(request)
     today = date.today().isoformat()
     pages = ["/", "/services", "/get-started", "/instant-quote", "/portfolio", "/finance",
-             "/about", "/quote", "/contact", "/legal"]
+             "/about", "/quote", "/contact", "/rental-make-ready", "/refund-policy", "/legal"]
     urls = "".join(
         f'  <url><loc>{base}{p}</loc><lastmod>{today}</lastmod><changefreq>weekly</changefreq><priority>{"1.0" if p == "/" else "0.8"}</priority></url>\n'
         for p in pages
@@ -12905,11 +12920,25 @@ def _start_lead_source_scheduler():
     except Exception as exc:
         print(f"[zoho-mail] could not start: {exc}", flush=True)
 
-    # Gmail polling stays off by design: mail is on Zoho, not Gmail.
+    # Gmail polling stays off by design: mail is on Zoho, not Gmail. The
+    # production env still had GMAIL_INBOUND=1 with no Google token, so the
+    # loop woke every 15 minutes and logged "No valid access token" forever.
+    # Require an actual stored token before starting it.
     gmail_inbound = (os.getenv("GMAIL_INBOUND", "") or "").strip().lower() in ("1", "true", "yes", "on")
-    if gmail_inbound:
+    gmail_owner = (os.getenv("GMAIL_OWNER") or "").strip()
+    gmail_ready = False
+    if gmail_inbound and gmail_owner:
+        try:
+            import google_oauth
+            tokens = google_oauth.get_google_tokens("construction", gmail_owner)
+            gmail_ready = bool(tokens and tokens.get("access_token"))
+        except Exception as exc:
+            print(f"[gmail-inbound] token check failed: {exc}", flush=True)
+    if gmail_inbound and gmail_ready:
         threading.Thread(target=_gmail_inbound_loop, daemon=True).start()
         print("[gmail-inbound] loop started", flush=True)
+    elif gmail_inbound:
+        print("[gmail-inbound] off: no Google token; Zoho polling is the live path", flush=True)
 
     def _runner():
         print(f"[lead-source] scheduler started (every {interval_h:g}h)", flush=True)

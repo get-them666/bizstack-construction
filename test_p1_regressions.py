@@ -212,6 +212,26 @@ def test_draft_stage_failure_rolls_back_and_returns_false():
 
 # --- Public owner endpoint and API docs -------------------------------------
 
+def test_branded_404_page():
+    response = TestClient(cm.app).get("/this-page-does-not-exist")
+    assert response.status_code == 404
+    assert "Page not found" in response.text
+    assert "Get a free estimate" in response.text
+
+
+def test_api_404_stays_json():
+    response = TestClient(cm.app).get("/api/this-does-not-exist")
+    assert response.status_code == 404
+    assert response.headers["content-type"].startswith("application/json")
+
+
+def test_sitemap_lists_the_linked_public_pages():
+    response = TestClient(cm.app).get("/sitemap.xml")
+    assert response.status_code == 200
+    assert "/rental-make-ready" in response.text
+    assert "/refund-policy" in response.text
+
+
 def test_bot_health_requires_an_admin_session():
     cm.app.dependency_overrides[cm.get_db] = lambda: object()
     try:
