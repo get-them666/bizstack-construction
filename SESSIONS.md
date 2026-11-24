@@ -4,6 +4,99 @@
 
 ---
 
+## 2026-11-24 — Session 21: Engineering Guardrails & Full Live Smoke Audit
+
+### 1. Permanent rulebook (`AGENTS.md`)
+
+Rewrote `AGENTS.md` as a non-negotiable rulebook covering:
+
+- **Production is a deploy target, never an edit target.** No uncommitted
+  hotfixes; both local and `/opt/bizstack/construction` must be clean before
+  and after deploy. No `docker cp`/server edits as the primary change.
+- **Strict brand separation.** Construction = `+1 (757) 846-9275` /
+  `+17578469275`; Broom = `+1 (757) 908-7121` / `+17579087121`. A construction
+  commit must contain no Broom number in templates or `construction_main.py`.
+- **Minimal diffs only.** No unrelated refactors, renames, status-vocabulary
+  changes, or column changes without explicit permission. Additive/idempotent
+  schema changes only.
+- **Mandatory pre-commit gate:** full `pytest` with zero failures, zero blocking
+  pyflakes errors (`undefined name`/syntax), compile check, template checks,
+  regression test for every fix/feature, and no secret/PII leakage.
+- **Mandatory post-deploy smoke:** `/health`, all public pages, auth boundaries,
+  `/voice.swml`, sitemap links, static assets, branded 404, brand phone, and
+  production `git status`.
+- Workflow order, prohibited actions, database safety, and legal/compliance
+  rules.
+
+### 2. Reusable gate & smoke tooling
+
+- `scripts/quality_gate.sh` — canonical pre-commit gate. Runs full pytest,
+  compiles active modules, rejects blocking pyflakes errors, and fails on any
+  construction/Broom phone contamination.
+- `scripts/live_smoke.py` — read-only production audit. Checks:
+  - 21 public/utility pages and 7 static assets.
+  - 8 authenticated API routes (401/403) and 7 admin HTML pages (401 or 303 to
+    `/login`); documents the page-level redirect exception.
+  - `/login/otp`, `/portal/verify`, `/api/auth/logout`, invalid booking/call
+    tokens, webchat history, property lookup, embed snippet.
+  - `/docs` and `/openapi.json` disabled, JSON API 404, branded HTML 404.
+  - `/robots.txt`, `/sitemap.xml` and every sitemap URL, `/voice.swml` structure.
+  - Brand-phone consistency on `/`, `/contact`, `/get-started`, `/services`.
+  - Safe form-validation probes (`/submit-lead`, `/get-started`,
+    `/instant-quote`, `/api/newsletter`, `/api/validate-coupon`, `/api/chat`)
+    and webhook auth probes (SMS 403, Vapi 401, inbound email 401, link-lead
+    401). No production rows were created (verified: 0 smoke leads, 0 smoke
+    comms).
+  - Crawls 13 unique internal links from public pages; accepts 200/303/401/403
+    and fails only on 404/5xx.
+
+### 3. Full suite & live audit results
+
+- `./venv/bin/python -m pytest -q`: **1328 passed, 40 skipped, 0 failed**.
+- `pyflakes`: **0 blocking errors** (undefined names/syntax); 53 pre-existing
+  non-blocking unused-import/variable warnings.
+- `python3 -m py_compile` on active modules: clean.
+- Live smoke: **94 passed, 0 failed**. No broken links, 500s, or missing assets
+  found.
+- The lead-form probe may return **429** on repeated runs because the app
+  rate-limits 3 submissions/IP/10 min; both 400 and 429 are accepted, and no
+  lead is written.
+
+### 4. Test corrections and one validation fix
+
+The full gate exposed four failures; three were stale test expectations from
+earlier intentional changes, one was a real validation regression:
+
+- `test_bid_files_regression.py`: CSI-numbered `007200`/`006313` are intentionally
+  routed to **Bid Documents** (Session 14 classifier), not Contracts/RFIs.
+- `test_lead_workspace.py`: project activation/completion now writes the canonical
+  `won`, not the legacy `in_progress`/`completed` strings.
+- `test_outbound_routes.py`: inbound SWML test now overrides `get_db` so it does
+  not require a local Postgres role.
+- `construction_main.py` + `bizstack_leads/lifecycle.py`: the Copilot status tool
+  now rejects unknown status strings instead of writing them as `new`; this
+  restores the pre-P1 validation contract. Deployed as `0626f80`; no routes,
+  UI, schema, or status vocabulary changed.
+
+### 5. Deployment / git state
+
+- Local: `e6f27a7` (guardrails, scripts, tests, validation fix) pushed to
+  `origin/main`; `SESSIONS.md` entry follows.
+- Production: `0626f80` (validation fix, mirrors the local change), on top of
+  `8331705`. Production `git status` is **clean**.
+- No other live business logic, routes, templates, or database columns were
+  changed in this session.
+
+### 6. Still open (owner decisions)
+
+- Broom-owned SignalWire number; Kit bounce on `hello@bizstackperks.com`;
+  39 staged drafts; 14 open payroll runs; 2 past-due deposits; RentCast budget;
+  Google review URL; remaining key rotations (Zepto/SignalWire/Kit/OpenAI).
+- Production git **history** remains divergent from local `main` even though the
+  working tree is clean and the guardrail-affected files mirror `main`.
+
+---
+
 ## 2026-11-24 — Session 20: Phone Sync, TikTok Cleanup, Vapi Key Rotation, Bid→Lead UI
 
 ### 1. Construction phone standardized on +1 (757) 846-9275
