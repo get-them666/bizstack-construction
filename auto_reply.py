@@ -938,6 +938,61 @@ def _strip_draft_marker(notes: str) -> str:
     return _re.sub(r"\n{3,}", "\n\n", cleaned).strip()
 
 
+def _is_permit_assumed_whole_home(source, est) -> bool:
+    """True when a permit import would get the default 1,750 sq ft ballpark.
+
+    Permit feeds have no reliable square footage and often no trade. Letting
+    ``auto_quote`` fall back to the whole-home model stamped unrelated electrical
+    and alteration permits with the same $166,250–$306,250 range. A permit gets
+    an assumed whole-home number only when a real square footage is supplied.
+    """
+    if not est:
+        return False
+    if str(source or "").strip().lower() != "permit_finder":
+        return False
+    return est.get("model_key") == "whole-home" and bool(est.get("assumed_sqft"))
+
+
+def _stamp_estimate_on_lead(db, lead_id, est, source) -> bool:
+    """Persist a ballpark on a lead, with the permit-import guard applied.
+
+    The source is read from the lead itself because inbound-email replies pass
+    ``source="inbound-email"`` rather than the lead's original source.
+    """
+    if not (est and lead_id):
+        return False
+    effective_source = source
+    try:
+        with db.cursor() as cur:
+            cur.execute(
+                "SELECT source FROM leads WHERE id = %s AND company = 'construction';",
+                (int(lead_id),),
+            )
+            row = cur.fetchone()
+        if row and row.get("source"):
+            effective_source = row.get("source")
+    except Exception:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+    if _is_permit_assumed_whole_home(effective_source, est):
+        print(f"[auto-reply] skipped assumed whole-home stamp for permit lead {lead_id}", flush=True)
+        return False
+    try:
+        with db.cursor() as cur:
+            cur.execute(
+                "UPDATE leads SET estimate_low_cents = %s, estimate_high_cents = %s, estimate_json = %s "
+                "WHERE id = %s AND company = 'construction';",
+                (est["low_cents"], est["high_cents"], json.dumps(est), lead_id),
+            )
+            db.commit()
+        return True
+    except Exception as exc:
+        print(f"[auto-reply] estimate stamp failed for lead {lead_id}: {exc}", flush=True)
+        return False
+
+
 def ensure_lead_reply(db, company_key, *, name="", phone="", email="", service="", address="",
                       budget="", timeline="", message="", source="", funding=False,
                       sqft=None, lead_id=None):
@@ -958,17 +1013,8 @@ def ensure_lead_reply(db, company_key, *, name="", phone="", email="", service="
         return {"sent": False, "staged": False, "msg": ""}
 
     quote, est = _auto_quote(company_key, service, sqft)
-    if est and company_key == "construction" and lead_id:
-        try:
-            with db.cursor() as cur:
-                cur.execute(
-                    "UPDATE leads SET estimate_low_cents = %s, estimate_high_cents = %s, estimate_json = %s "
-                    "WHERE id = %s AND company = 'construction';",
-                    (est["low_cents"], est["high_cents"], json.dumps(est), lead_id),
-                )
-                db.commit()
-        except Exception as exc:
-            print(f"[auto-reply {company_key}] estimate stamp failed for lead {lead_id}: {exc}", flush=True)
+    if company_key == "construction" and lead_id:
+        _stamp_estimate_on_lead(db, lead_id, est, source)
 
     co_name = COMPANIES[company_key]["name"]
     booking_link = ""
