@@ -4,6 +4,104 @@
 
 ---
 
+## 2026-11-24 — Session 18: P1 Audit Fixes Applied & Deployed
+
+### What changed
+
+1. **Kit newsletter is live and honest** (`kit_service.py`)
+   - `PATCH /v4/sequences/2979613` set `hold=false`; the Newsletter Welcome
+     sequence is now active.
+   - `sequence_status()` reads the real hold flag, and
+     `subscribe_newsletter()` returns `ok=False` instead of promising an inbox
+     delivery when the sequence is paused or the add fails.
+   - `subscriber_state()` now checks Kit's state. A bounced/unsubscribed
+     address is rejected with a clear reason. **`hello@bizstackperks.com` is
+     itself `bounced` in Kit** (a data issue for the owner to fix), so it is
+     not a valid signup test address.
+   - Real signup call returned `ok=False, state=bounced` with the new message;
+     the stray newsletter tag was removed afterwards.
+   - `sync_lead()` now reports an incomplete sequence start; the background
+     lead sync logs it.
+2. **Opt-out parser** (`followups.py`)
+   - Drops a leading `Re:`/`Fwd:` subject line, strips the quoted tail, then
+     tests each short remaining line. `Re: …\n\nUnsubscribe` is now recognised;
+     `Can you stop by Tuesday?` and `I'd like to cancel my appointment` are not.
+   - Booking a walkthrough now moves `new`/`contacted` to `quoted`, not
+     `engaged` ("Replied — respond").
+3. **Transaction hygiene** (`inbound_email.py`, `auto_reply.py`)
+   - The inbound message is committed before lead updates, so a deadlock cannot
+     lose the email.
+   - Every swallowed DB error now rolls back: recompute, opt-out sync, auto
+     reply, draft-column ensure, draft staging, delivery bookkeeping.
+   - `send_owner_lead_digest` now checks the transport boolean instead of
+     reporting success unconditionally; `lead_alert._send_email` no longer
+     references an undefined `lead_id`.
+4. **Canonical lifecycle** (`construction_main.py`, `bizstack_leads/lifecycle.py`,
+   `lead_pipeline.py`, `followups.py`, templates)
+   - `LEAD_STATUSES` is now new/contacted/engaged/quoted/won/lost; backlog keeps
+     its own legacy statuses for historical project creation.
+   - `scheduled` maps to `quoted`; `/api/pipeline/move` and the Copilot status
+     tool write the canonical stage, not raw input.
+   - Project activation/completion writes `won`; paid deposits write `won`;
+     accepted quotes write `won`.
+   - Fixed `lead_pipeline._update_lead_status` (it wrote a non-existent
+     `leads.updated_at`) and the same column in the enrichment UPDATE. Both
+     failed silently before.
+   - Production migration: 39 `scheduled` → `quoted`, 1 `completed` → `won`;
+     all 2,018 leads recomputed. Final statuses: new 1,516, contacted 459,
+     quoted 39, engaged 2, won 2.
+5. **Bid → lead linkage** (`bid_costing.py`)
+   - When a bid becomes a project, an exact contact-email match links the
+     project to that lead and moves the lead to `won`. Imported bids without a
+     matching lead are unchanged. A manual "link this bid to a lead" UI is
+     still needed for the rest.
+6. **Security** (`construction_main.py`)
+   - `/api/bot/health` now requires an admin session (it exposed recipient
+     emails publicly).
+   - `/docs` and `/openapi.json` are disabled unless `ENABLE_API_DOCS=1`.
+     Live: `/docs` 404, `/openapi.json` 404, `/api/bot/health` 401.
+
+### Verification
+
+- New `test_p1_regressions.py` (18 tests) plus the existing suites: **163
+  passed**. `py_compile` and `pyflakes` clean.
+- Live: public pages 200; `/api/bot/health` 401; docs 404; newsletter JS shows
+  the paused/note path; TikTok pixel remains undeployed; `/voice.swml` still
+  returns the owner dial block.
+- Kit: both sequences report `hold=false`; bounced-address rejection verified
+  against the real Kit API.
+
+### Deployment
+
+- Local: `6f95e78` (P1 code/tests), `60e229d` (Kit bounced-state check), pushed
+  to `origin/main`.
+- Production: `a0c278a` (P1), `e0b5a79` (Kit state), plus hot-copied
+  `lead_pipeline.py` fixes. `base.html` still has the owner's uncommitted
+  TikTok pixel and remains the only dirty file there; the built image used a
+  clean base with the P1 newsletter JS, so the pixel is still not live.
+
+### Still open
+
+- **Secret rotation** remains owner/dashboard work (Zepto, SignalWire, Kit,
+  OpenAI; Vapi can be rotated via API on request).
+- **Broom outbound SMS** still uses the construction number; SignalWire owns
+  only `+17578469275`. Provision/port a Broom number before changing
+  `hosts.env`.
+- **Kit bounce**: `hello@bizstackperks.com` is bounced inside Kit. Resubscribe
+  or remove the suppression in Kit before using it for marketing tests.
+- **TikTok pixel**: 111 uncommitted lines in the production `base.html`; not in
+  git and not live. Commit or remove before the next full deploy.
+- **Local phone drift**: construction templates still say `908-7121` (commit
+  `9381ebd`). Live is `846-9275`; do not deploy local HEAD until the number
+  decision is confirmed.
+- **Manual bid→lead link UI** and the remaining P2 operational cleanup
+  (39 staged drafts, 14 payroll runs, 2 past-due deposits, RentCast budget,
+  review URL) are unchanged.
+- Pre-existing test isolation issue: `test_portal_credentials.py` poisons
+  `DATABASE_URL` for `test_deposit_atomicity.py` when run in that order.
+
+---
+
 ## 2026-11-23 — Session 17: P0 Audit Fixes Applied & Deployed
 
 ### What was fixed
