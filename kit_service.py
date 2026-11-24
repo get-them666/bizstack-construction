@@ -81,6 +81,23 @@ def add_tag(subscriber_id: int, name: str = TAG) -> bool:
     return r.status_code in (200, 201)
 
 
+def subscriber_state(subscriber_id: int) -> str:
+    """Kit's state for one subscriber: active, bounced, unsubscribed, ...
+
+    Returns "" when the lookup fails, so a Kit outage never blocks a lead from
+    being saved; the caller only refuses on a known-bad state.
+    """
+    try:
+        r = requests.get(f"{API}/subscribers/{int(subscriber_id)}",
+                         headers=_headers(), timeout=TIMEOUT)
+        if r.status_code == 200:
+            sub = (r.json() or {}).get("subscriber") or {}
+            return str(sub.get("state") or "").strip().lower()
+    except Exception:
+        pass
+    return ""
+
+
 def sequence_status(sequence_id: int) -> dict:
     """Whether a sequence is currently sending. Never raises.
 
@@ -115,6 +132,10 @@ def sync_lead(name: str = "", email: str = "", phone: str = "") -> dict:
         sid = subscribe(email, first, phone)
         if not sid:
             return {"ok": False, "reason": "subscriber could not be created"}
+        state = subscriber_state(sid)
+        if state and state != "active":
+            return {"ok": False, "subscriber_id": sid, "state": state,
+                    "reason": f"Kit subscriber is {state}; not adding to a sales sequence"}
         tagged = add_tag(sid)
         started = add_to_sequence(sid)
         if not started:
@@ -143,6 +164,14 @@ def subscribe_newsletter(email: str = "", first_name: str = "") -> dict:
         sid = subscribe(email, (first_name or "").strip())
         if not sid:
             return {"ok": False, "reason": "Kit did not accept that address."}
+        state = subscriber_state(sid)
+        if state and state != "active":
+            return {
+                "ok": False, "subscriber_id": sid, "state": state,
+                "reason": ("That address is on Kit's bounce or unsubscribe list, "
+                           "so it cannot receive the newsletter. Try another "
+                           "email or write to hello@bizstackperks.com."),
+            }
         tagged = add_tag(sid, NEWSLETTER_TAG)
 
         # Do not promise an inbox delivery for a sequence that is paused.

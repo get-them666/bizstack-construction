@@ -22,6 +22,7 @@ from bizstack_leads import lifecycle
 def test_newsletter_reports_a_paused_sequence(monkeypatch):
     monkeypatch.setattr(kit_service, "configured", lambda: True)
     monkeypatch.setattr(kit_service, "subscribe", lambda *a, **k: 123)
+    monkeypatch.setattr(kit_service, "subscriber_state", lambda sid: "active")
     monkeypatch.setattr(kit_service, "add_tag", lambda *a, **k: True)
     monkeypatch.setattr(kit_service, "add_to_sequence", lambda *a, **k: True)
     monkeypatch.setattr(kit_service, "sequence_status",
@@ -38,6 +39,7 @@ def test_newsletter_reports_a_paused_sequence(monkeypatch):
 def test_newsletter_reports_a_failed_sequence_start(monkeypatch):
     monkeypatch.setattr(kit_service, "configured", lambda: True)
     monkeypatch.setattr(kit_service, "subscribe", lambda *a, **k: 123)
+    monkeypatch.setattr(kit_service, "subscriber_state", lambda sid: "active")
     monkeypatch.setattr(kit_service, "add_tag", lambda *a, **k: True)
     monkeypatch.setattr(kit_service, "add_to_sequence", lambda *a, **k: False)
     monkeypatch.setattr(kit_service, "sequence_status",
@@ -50,9 +52,33 @@ def test_newsletter_reports_a_failed_sequence_start(monkeypatch):
     assert "couldn't start" in result["reason"]
 
 
+def test_newsletter_reports_a_bounced_address(monkeypatch):
+    monkeypatch.setattr(kit_service, "configured", lambda: True)
+    monkeypatch.setattr(kit_service, "subscribe", lambda *a, **k: 123)
+    monkeypatch.setattr(kit_service, "subscriber_state", lambda sid: "bounced")
+
+    result = kit_service.subscribe_newsletter("bounced@example.com")
+
+    assert result["ok"] is False
+    assert result["state"] == "bounced"
+    assert "bounce" in result["reason"]
+
+
+def test_lead_sync_reports_a_bounced_address(monkeypatch):
+    monkeypatch.setattr(kit_service, "configured", lambda: True)
+    monkeypatch.setattr(kit_service, "subscribe", lambda *a, **k: 123)
+    monkeypatch.setattr(kit_service, "subscriber_state", lambda sid: "bounced")
+
+    result = kit_service.sync_lead("Pat Doe", "bounced@example.com", "7575550100")
+
+    assert result["ok"] is False
+    assert result["state"] == "bounced"
+
+
 def test_lead_sync_reports_a_failed_sequence_start(monkeypatch):
     monkeypatch.setattr(kit_service, "configured", lambda: True)
     monkeypatch.setattr(kit_service, "subscribe", lambda *a, **k: 123)
+    monkeypatch.setattr(kit_service, "subscriber_state", lambda sid: "active")
     monkeypatch.setattr(kit_service, "add_tag", lambda *a, **k: True)
     monkeypatch.setattr(kit_service, "add_to_sequence", lambda *a, **k: False)
 
