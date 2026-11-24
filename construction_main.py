@@ -127,7 +127,6 @@ import pnc_importer
 import pdl_contact_service
 import resimply_service
 import leads_db
-import lead_alert
 import tidy_service
 # Lead pipeline (lifecycle, intake, work queue, store). Vendored in this repo at
 # bizstack_leads/ -- it is this company's own code, not a dependency on another
@@ -434,6 +433,105 @@ def _money(value):
         return f"${float(value or 0) / 100:,.0f}"
     except (TypeError, ValueError):
         return "—"
+
+
+def _owner_quote_alert(
+    *, lead_id: int, name: str = "", phone: str = "", email: str = "",
+    service: str = "", address: str = "", source: str = "",
+    quote_range: str = "", message: str = "", created_at=None,
+) -> dict:
+    """Email + SMS the owner about one quote request. Never raises.
+
+    Runs in a daemon thread via ``_notify_owner_quote_bg``. A transport failure
+    is logged and returns False; it must never affect the customer's quote
+    response or the lead row.
+    """
+    result = {"email": 0, "email_sent": 0, "sms": False, "error": ""}
+    when = (created_at or datetime.now(timezone.utc)).astimezone(APP_TZ)
+    when_label = when.strftime("%b %d, %Y %-I:%M %p %Z")
+    owner_targets = [
+        t.strip() for t in (
+            os.getenv("NOTIFY_EMAIL") or os.getenv("ADMIN_EMAIL")
+            or company().get("email") or ""
+        ).split(",") if t.strip()
+    ]
+    range_line = quote_range or "see the lead card"
+
+    try:
+        cfg = documents_service.smtp_config_from_env()
+        if not documents_service.smtp_configured(cfg):
+            raise RuntimeError("email transport not configured")
+        subject = (
+            f"New BuildStack quote #{lead_id} — {name or 'New inquiry'}"
+            + (f" — {service}" if service else "")
+        )[:180]
+        body = "\n".join([
+            f"New quote request #{lead_id}",
+            f"Submitted: {when_label}",
+            f"Name: {name or '—'}",
+            f"Phone: {phone or '—'}",
+            f"Email: {email or '—'}",
+            f"Service: {service or '—'}",
+            f"Ballpark: {range_line}",
+            f"Address: {address or '—'}",
+            f"Source: {source or '—'}",
+            "",
+            (f"Customer note: {message[:800]}" if message else ""),
+            "",
+            f"Open the lead: https://{company()['domain']}/leads/{lead_id}",
+        ])
+        for to in owner_targets:
+            result["email"] += 1
+            try:
+                delivered = auto_reply.run_coro(
+                    documents_service.send_email(cfg, to, subject, body)
+                )
+                if delivered:
+                    result["email_sent"] += 1
+                    print(f"[quote-alert] emailed {to} for lead #{lead_id}", flush=True)
+                else:
+                    result["error"] = f"email to {to} not delivered"
+                    print(f"⚠️ [quote-alert] email to {to} not delivered for lead #{lead_id}", flush=True)
+            except Exception as exc:  # noqa: BLE001
+                result["error"] = str(exc)[:200]
+                print(f"⚠️ [quote-alert] email to {to} failed for lead #{lead_id}: {exc}", flush=True)
+    except Exception as exc:  # noqa: BLE001
+        result["error"] = str(exc)[:200]
+        print(f"⚠️ [quote-alert] email path failed for lead #{lead_id}: {exc}", flush=True)
+
+    mobile = (os.getenv("OWNER_MOBILE") or "").strip()
+    if mobile:
+        sms = (
+            f"New BuildStack quote #{lead_id}: {name or 'New inquiry'}"
+            + (f", {phone}" if phone else "")
+            + (f" — {service}" if service else "")
+            + (f" — {range_line}" if quote_range else "")
+        )[:300]
+        try:
+            sw = SignalWireService()
+            if not sw.is_configured():
+                print(f"⚠️ [quote-alert] SMS skipped for lead #{lead_id}: SignalWire not configured", flush=True)
+            elif sw.send_sms(mobile, sms):
+                result["sms"] = True
+                print(f"[quote-alert] SMS sent to owner for lead #{lead_id}", flush=True)
+            else:
+                print(f"⚠️ [quote-alert] SMS to owner failed for lead #{lead_id}", flush=True)
+        except Exception as exc:  # noqa: BLE001
+            print(f"⚠️ [quote-alert] SMS path failed for lead #{lead_id}: {exc}", flush=True)
+    else:
+        print(f"⚠️ [quote-alert] OWNER_MOBILE not set; SMS skipped for lead #{lead_id}", flush=True)
+    return result
+
+
+def _notify_owner_quote_bg(**kwargs) -> None:
+    """Start the owner email/SMS alert without blocking the customer response."""
+    try:
+        threading.Thread(
+            target=_owner_quote_alert, kwargs=kwargs, daemon=True,
+            name=f"quote-alert-{kwargs.get('lead_id', 'new')}",
+        ).start()
+    except Exception as exc:  # noqa: BLE001
+        print(f"⚠️ [quote-alert] could not start notification thread: {exc}", flush=True)
 
 
 templates.env.filters["money"] = _money
@@ -4018,9 +4116,9 @@ async def submit_lead(
     if not created:
         return JSONResponse(content={"status": "success", "lead_id": lead_id, "duplicate": True})
 
-    # --- 2. SQLite mirror (isolated from notification failures) --------
+    # --- 2. SQLite mirror (best-effort; never blocks the lead) ----------
     try:
-        sqlite_id = leads_db.insert_lead(
+        leads_db.insert_lead(
             name=name_clean, phone=phone_clean, email=email_clean, address=address,
             project_type=project_type, goal=goal, budget=budget,
             timeline=timeline, message=full_description, source=src,
@@ -4028,28 +4126,25 @@ async def submit_lead(
         )
     except Exception as e:
         print(f"⚠️ [lead-notify] SQLite mirror failed for lead {lead_id}: {e}", flush=True)
-        sqlite_id = lead_id  # fallback to Postgres ID for alert
 
-    # --- 2b. Instant email alert (isolated so transport failures are visible) -
+    # --- 2b. Owner quote alert: background, never blocks the response ---
+    quote_range = ""
     try:
-        lead_alert.send_lead_alert(
-            lead_id=sqlite_id, name=name_clean, phone=phone_clean, email=email_clean,
-            address=address, project_type=project_type, goal=goal,
-            budget=budget, timeline=timeline, message=full_description,
-            source=src,
-        )
-    except Exception as e:
-        print(f"⚠️ [lead-alert] email alert failed for lead {lead_id}: {e}", flush=True)
+        _qtext, _qest = auto_reply._auto_quote("construction", project_type, None)
+        if _qest:
+            quote_range = (
+                f"${_qest['low_cents'] / 100:,.0f}–"
+                f"${_qest['high_cents'] / 100:,.0f}"
+            )
+    except Exception:
+        pass
+    _notify_owner_quote_bg(
+        lead_id=lead_id, name=name_clean, phone=phone_clean, email=email_clean,
+        service=project_type, address=address, source=src,
+        quote_range=quote_range, message=full_description,
+    )
 
-    # --- 3. Owner notification + auto-reply + follow-up + cascade --------
-    try:
-        auto_reply.notify_owner_email(
-            "construction", lead_id=lead_id, name=name_clean, phone=phone_clean, email=email_clean,
-            service=(project_type or ""), address=address,
-            budget=budget, timeline=timeline, message=description, source=src, goal=goal,
-        )
-    except Exception as e:
-        print(f"⚠️ [lead-notify] owner notify failed for lead {lead_id}: {e}", flush=True)
+    # --- 3. Customer auto-reply + follow-up + cascade ------------------
     try:
         auto_reply.auto_reply_to_lead(
             db, "construction", name=name_clean, phone=phone_clean, email=email_clean,
@@ -12192,9 +12287,9 @@ async def instant_quote_submit(
     except Exception as e:
         print(f"⚠️ instant quote lead description update failed (non-fatal): {e}", flush=True)
 
-    # --- SQLite mirror (isolated from notification failures) -----------
+    # --- SQLite mirror (best-effort) -----------------------------------
     try:
-        sqlite_id = leads_db.insert_lead(
+        leads_db.insert_lead(
             name=name, phone=phone, email=email, address=address,
             project_type=project_type, goal=rental_intent or "",
             budget="", timeline="",
@@ -12204,26 +12299,18 @@ async def instant_quote_submit(
         )
     except Exception as e:
         print(f"⚠️ [lead-notify] instant-quote SQLite mirror failed for lead {lead_id}: {e}", flush=True)
-        sqlite_id = lead_id  # fallback to Postgres ID for alert
 
-    try:
-        lead_alert.send_lead_alert(
-            lead_id=sqlite_id, name=name, phone=phone, email=email,
-            address=address, project_type=project_type,
-            message=f"Instant ballpark {est['label']} on a {est['sqft']:,} sq ft property.",
-            source="instant_quote",
-        )
-    except Exception as e:
-        print(f"⚠️ [lead-alert] instant-quote email alert failed for lead {lead_id}: {e}", flush=True)
-
-    # --- owner notification (isolated from tidy enrichment) -------------
-    try:
-        auto_reply.notify_owner_email(
-            "construction", lead_id=lead_id, name=name, phone=phone, email=email,
-            service=project_type, address=address, source="instant_quote",
-        )
-    except Exception as e:
-        print(f"⚠️ [lead-notify] instant-quote owner notify failed for lead {lead_id}: {e}", flush=True)
+    # --- Owner quote alert: background, never blocks the quote page -----
+    quote_range = (
+        f"${est['low_cents'] / 100:,.0f}–${est['high_cents'] / 100:,.0f}"
+        if est else ""
+    )
+    _notify_owner_quote_bg(
+        lead_id=lead_id, name=name, phone=phone, email=email,
+        service=project_type, address=address, source="instant_quote",
+        quote_range=quote_range,
+        message=f"Instant ballpark {est['label']} on a {est['sqft']:,} sq ft property.",
+    )
 
     def _iq_tidy_done(task):
         try:
@@ -12375,16 +12462,17 @@ async def embed_quote_submit(
     except Exception as e:
         print(f"⚠️ [lead-notify] embed quote zoho_sync.after_intake failed for lead {lead_id}: {e}", flush=True)
 
-    # Same notifications as the full form. Guarded individually so one failure
-    # does not cost the lead.
-    try:
-        auto_reply.notify_owner_email(
-            "construction", lead_id=lead_id, name=name, phone=phone, email=email,
-            service=project_type, address=address, budget="", timeline="",
-            message="Embed widget request", source="embed_quote",
-        )
-    except Exception as e:
-        print(f"⚠️ embed quote owner notify failed: {e}", flush=True)
+    # Same owner alert as the full form, but in a background thread so the
+    # embed response is never held up by a transport timeout.
+    quote_range = (
+        f"${est['low_cents'] / 100:,.0f}–${est['high_cents'] / 100:,.0f}"
+        if est else ""
+    )
+    _notify_owner_quote_bg(
+        lead_id=lead_id, name=name, phone=phone, email=email,
+        service=project_type, address=address, source="embed_quote",
+        quote_range=quote_range, message="Embed widget request",
+    )
     try:
         auto_reply.auto_reply_to_lead(
             db, "construction", name=name, phone=phone, email=email,
@@ -12490,58 +12578,35 @@ async def get_started_submit(
         print(f"⚠️ get-started lead save failed: {e}", flush=True)
         return _form_error_redirect("/get-started", "Something went wrong — please try again or call us directly", **typed)
 
-    # --- SQLite mirror + instant email alert ---------------------------------
+    # --- SQLite mirror (best-effort) -----------------------------------
     try:
-        sqlite_id = leads_db.insert_lead(
+        leads_db.insert_lead(
             name=name, phone=phone, email=email, address=address,
             project_type=project_type, goal=goal, budget=budget,
             timeline=timeline, message=full_message, source="get-started",
             ip=_client_ip(request), user_agent=(request.headers.get("user-agent") or ""),
         )
-        lead_alert.send_lead_alert(
-            lead_id=sqlite_id, name=name, phone=phone, email=email,
-            address=address, project_type=project_type, goal=goal,
-            budget=budget, timeline=timeline, message=full_message,
-            source="get-started",
-        )
     except Exception as e:
-        print(f"⚠️ get-started SQLite/alert failed (non-fatal): {e}", flush=True)
+        print(f"⚠️ get-started SQLite mirror failed (non-fatal): {e}", flush=True)
 
     await asyncio.to_thread(zoho_sync.after_intake, db, lead_id)
 
-    summary = (
-        f"🛠 New acquisition lead (#{lead_id}) — {name}, {phone}"
-        + (f", {email.strip()}" if (email or "").strip() else "")
-        + (f"\nProject: {project_type}" if project_type else "")
-        + (f"\nGoal: {goal}" if goal else "")
-        + (f"\nAddress: {address}" if address else "")
-        + (f"\nBudget: {budget}" if budget else "")
-        + (f"\nTimeline: {timeline}" if timeline else "")
-        + (f"\n{full_message[:200]}" if (full_message or "").strip() else "")
-        + (f"\nRef: {ref_code}" if ref_code else "")
-    )
-    if os.getenv("OWNER_SMS_ENABLED", "0").lower() in ("1", "true", "yes"):
-        try:
-            signalwire.send_sms(os.getenv("SIGNALWIRE_PHONE", "+17578469275"), summary[:1500])
-            with db.cursor() as cur:
-                cur.execute(
-                    "INSERT INTO comms_logs (direction, channel, sender, recipient, message_body) "
-                    "VALUES (%s, %s, %s, %s, %s);",
-                    ("outbound", "sms", "system", company()["phone_e164"], summary),
-                )
-                db.commit()
-        except Exception as e:
-            print(f"⚠️ get-started owner SMS failed: {e}", flush=True)
-
+    # --- Owner quote alert: background, never blocks the redirect -------
+    quote_range = ""
     try:
-        auto_reply.notify_owner_email(
-            "construction", lead_id=lead_id, name=name, phone=phone, email=(email or "").strip(),
-            service=(project_type or ""), address=(address or ""),
-            budget=(budget or ""), timeline=(timeline or ""),
-            message=(message or ""), source="acquisition",
-        )
-    except Exception as e:
-        print(f"⚠️ get-started owner email failed: {e}", flush=True)
+        _qtext, _qest = auto_reply._auto_quote("construction", project_type, None)
+        if _qest:
+            quote_range = (
+                f"${_qest['low_cents'] / 100:,.0f}–"
+                f"${_qest['high_cents'] / 100:,.0f}"
+            )
+    except Exception:
+        pass
+    _notify_owner_quote_bg(
+        lead_id=lead_id, name=name, phone=phone, email=email,
+        service=project_type, address=address, source="acquisition",
+        quote_range=quote_range, message=full_message,
+    )
 
     try:
         auto_reply.auto_reply_to_lead(
