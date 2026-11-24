@@ -4,6 +4,95 @@
 
 ---
 
+## 2026-11-24 — Session 25: Cleanup Verification, Deposit Follow-Up, Broom SMS Sender
+
+### 1. Payroll orphan runs — already clean, verified
+
+- The 10 empty runs (5, 6, 7, 9, 11, 12, 13, 14, 15, 16) were already closed
+  in Session 24 through the app's standard finalize route.
+- Re-verified live: **0 open** payroll runs; 17 closed, 1 paid. All 10 target
+  IDs are `closed`.
+- No payroll lines, ledger entries, invoices, or payments were changed in this
+  session.
+
+### 2. Stale permit drafts — already archived, verified
+
+- Re-verified live: **24 active drafts**, all recent `permit_finder` text drafts
+  (7–8 days old); **0 stale >14d**; **15 archived** with the marker
+  `[DRAFT ARCHIVED 2026-11-24...]`.
+- The 15 archived drafts were email drafts, not text; the 24 remaining are the
+  text drafts. No SMS or email was sent (`comms_logs` unchanged at 3,440).
+
+### 3. Past-due deposits — follow-up details
+
+**INV-2026-0007 — RP HOMES 4 LLC — $777.56 — due 2026-11-18 (6 days overdue)**
+
+- Bid `18350` — “Hallway, Runner and Bathroom Renovation”
+- Project `28` — status **cancelled**
+- Property: 520 King George Rd, Virginia Beach, VA 23462
+- Contact: RP HOMES 4 LLC
+- Email: `contractors@turnkeyassetmgt.com`
+- Phone: `954-228-0518` (`tel:+19542280518`)
+- Zelle: `hello@bizstackperks.com`, memo `INV-2026-0007`
+- ACH: PNC account ending `5216`; full routing/account and card payment are on
+  the authenticated portal page.
+- Invoice payment page:
+  https://construction.bizstackperks.com/portal/pay/18350/9
+- Admin bid page: https://construction.bizstackperks.com/bids/18350
+- Portal access currently exists under client 45
+  (`olearyshaun14@gmail.com`, owner/test), not the customer email. Send/reset
+  the customer’s portal login from the bid page before sending the link.
+
+**INV-2026-0008 — Michael Church — $5,400.00 — due 2026-11-19 (5 days overdue)**
+
+- Bid `18046` — “Harbor Rd Restaurant Rehab”
+- No project
+- Property: Harbor Road, Newport News, VA 23607
+- Contact: Michael Church
+- Email: `tchurch@alliedbuildingcorp.com`
+- Phone: **none on file** (bid, lead, and portal records); email only
+- Zelle: `hello@bizstackperks.com`, memo `INV-2026-0008`
+- ACH: PNC account ending `5216`; full details on the authenticated portal page.
+- Invoice payment page:
+  https://construction.bizstackperks.com/portal/pay/18046/10
+- Admin bid page: https://construction.bizstackperks.com/bids/18046
+- **No portal account exists for Michael Church.** Create/send credentials from
+  the bid page before sending the portal link.
+
+There is no public, no-login signed payment page for **bid invoices** in the
+current app (the signed `/pay/deposit/{token}` page is keyed to a lead, and
+neither bid has a matching lead). The portal pay page is the invoice-specific
+Zelle/ACH URL; it requires a client login.
+
+### 4. Broom Service SMS sender — exact variable
+
+- Broom outbound SMS reads **`SIGNALWIRE_PHONE`** in
+  `/opt/bizstack/hosts.env` (`bizstack-hosts/signalwire_service.py:14`).
+- Current value: `+17578469275` (the construction number — cross-brand
+  contamination that remains until a Broom number is provisioned).
+- `SIGNALWIRE_PHONE_NUMBER` is display-only; it is not the SMS sender.
+- When a Broom SignalWire number is purchased/ported, change only:
+  `SIGNALWIRE_PHONE=+17579087121` in `/opt/bizstack/hosts.env`, then recreate
+  the `hosts` container. Do not change `construction.env`.
+- Do not change it while the SignalWire account owns only the construction
+  number; the Broom number currently lives in Vapi, not SignalWire.
+
+### 5. Verification
+
+- `scripts/quality_gate.sh`: **1328 passed, 40 skipped, 0 failed**; pyflakes
+  **0 blocking errors**; brand check clean.
+- `scripts/live_smoke.py`: **94 passed, 0 failed**.
+- No SMS/email sent. No financial records, invoices, or payments altered. No
+  database rows were changed in this session.
+
+### 6. Final sync
+
+After this entry is pushed, production is fast-forwarded to the new
+`origin/main` (docs-only change), then `git status`/`git diff` are verified and
+the smoke check is rerun. Final production HEAD must equal `origin/main`.
+
+---
+
 ## 2026-11-24 — Session 24: Payroll Orphan Cleanup, Stale Draft Archive, Deposit Contacts
 
 ### 1. Production git state
