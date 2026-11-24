@@ -106,6 +106,35 @@ carries **no licence or bond claim** — see the open item below. Existing field
 already correct: website `construction.bizstackperks.com`, phone `+17578469275`,
 address `701 Dana Dr, Chesapeake, VA 23321`, email `hello@bizstackperks.com`.
 
+Also set through the Graph API: business hours (Mon–Fri 07:00–18:00, matching the
+site's openingHoursSpecification) and `price_range` `$$`. `category` cannot be
+updated with this token (`(#100) Parameters do not match any fields that can be
+updated`), and the Page has **no cover photo and no profile photo**.
+
+**Everything else needs a signed-in browser session**, which is the wall this
+session hit repeatedly. The chrome-devtools MCP runs its own profile at
+`~/.cache/chrome-devtools-mcp/chrome-profile`; signing into the owner's everyday
+Chrome does not carry over, and Chrome blocks remote debugging on the default
+profile. Cover photo, Instagram link, Business Suite, Invite Friends and local
+group posting all require that session. Do not claim these were done.
+
+### Facebook reach audit — both accounts are empty
+
+Signed into the automation profile and opened the Page, then **Invite people to
+connect → Invite friends**. The dialog reads **"No Friends To Invite"**, with
+`Not Invited (0)` and a disabled Send Invites button. The personal profile
+(`profile.php?id=61594587652608`) reads **"No friends to show"**.
+
+So there is no audience to invite from: Page 0 followers, personal profile 0
+friends. No amount of clicking grows this — the invite feature draws on the friend
+list, and it is empty. Do not re-attempt "get friends" through the UI expecting a
+different result.
+
+Realistic paths from zero: add genuine local contacts as friends by hand over time
+(bulk friend-requesting from a new account is the fastest route to a checkpoint or
+a ban), a small geo-targeted Ad Center campaign (act `1134650045812471` is already
+provisioned), and the site footer link deployed earlier.
+
 **The Page has 0 followers and 0 fans**, so the follow-prompt post reached nobody.
 Audience building is manual: inviting friends, sharing to a personal profile, and
 asking known customers to follow. The new site footer link is the durable funnel.
