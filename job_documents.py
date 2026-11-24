@@ -329,6 +329,32 @@ def send_contract_email(conn, job: dict, to_email: str, *,
     return ok
 
 
+def _synthetic_bid_id(conn, job_id: int):
+    """The bid row that anchors a non-bid job's signing request, or None.
+
+    ``create_signing_request()`` creates one synthetic bid_opportunities row per
+    project/lead and stores its id as ``project_<job_id>_bid_id``. The portal's
+    access table is keyed by bid id, so this is the only safe id to link --
+    using the project id made a client's portal open whichever unrelated bid
+    happened to share that number.
+    """
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT value FROM app_settings WHERE key = %s;",
+                (f"project_{job_id}_bid_id",),
+            )
+            row = cur.fetchone()
+    except Exception as exc:
+        logger.warning("[job-docs] synthetic bid lookup failed for project %s: %s", job_id, exc)
+        return None
+    value = row.get("value") if isinstance(row, dict) else (row[0] if row else None)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def provision_portal_account(conn, job: dict) -> dict:
     """Create or find the client portal account for this job's contact.
 
@@ -345,12 +371,19 @@ def provision_portal_account(conn, job: dict) -> dict:
     source = job.get("source", "project")
 
     # For projects/leads, use the portal_service.ensure_client_for_bid flow
-    # by constructing a bid-like dict
+    # by constructing a bid-like dict. The portal access table is keyed by
+    # bid_id, so a project must be linked through the synthetic bid created by
+    # create_signing_request() -- never through its own project id.
     if source == "bid":
         bid_dict = job
+        portal_bid_id = int(job_id)
     else:
+        portal_bid_id = _synthetic_bid_id(conn, job_id)
+        if not portal_bid_id:
+            return {"email": email, "created": False, "password": None,
+                    "error": "no signing request exists for this project yet"}
         bid_dict = {
-            "id": job_id,
+            "id": portal_bid_id,
             "contact_email": email,
             "contact_name": name,
             "name": job.get("name", ""),
@@ -358,7 +391,7 @@ def provision_portal_account(conn, job: dict) -> dict:
 
     try:
         cred = portal_service.ensure_client_for_bid(conn, bid_dict)
-        portal_service.link_bid(conn, int(cred["client_id"]), job_id)
+        portal_service.link_bid(conn, int(cred["client_id"]), portal_bid_id)
         return {
             "email": cred["email"],
             "created": cred.get("created", False),

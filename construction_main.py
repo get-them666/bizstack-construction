@@ -54,6 +54,7 @@ from loan_outreach import start_outreach_tasks
 import brand
 import documents_service
 import team_messages
+import review_requests
 import settings_status
 import today
 import followups
@@ -1229,9 +1230,12 @@ async def lifecycle(app: FastAPI):
         print(f"[scheduled-call] could not start: {exc}", flush=True)
 
     # Review requests: completed customers get asked once, and never twice.
-    # Started after the DDL block so review_requests has its table.
+    # The table is created here, not assumed to exist: `run_once` reads it, and
+    # the old function-local import left the global name undefined, so every
+    # pass failed with "name 'review_requests' is not defined".
     try:
-        import review_requests
+        with psycopg.connect(db_url, row_factory=dict_row) as _review_conn:
+            review_requests.ensure_schema(_review_conn)
 
         def _review_loop():
             time.sleep(300)
@@ -1502,6 +1506,11 @@ def _verify_inbound_webhook(request: Request) -> None:
     if not secret:
         return
     provided = (request.headers.get("X-Inbound-Secret") or "").strip()
+    # SignalWire's LaML webhook configuration has no custom-header field, so
+    # the same secret can be carried in the URL (SmsUrl/voice_url ?secret=...).
+    # Header first keeps existing callers working.
+    if not provided:
+        provided = (request.query_params.get("secret") or "").strip()
     if not hmac.compare_digest(provided, secret):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
                             detail="Inbound webhook secret missing or invalid")
@@ -10908,13 +10917,24 @@ async def voice_swml(db=Depends(get_db)):
             from datetime import datetime
             from zoneinfo import ZoneInfo
             now_et = datetime.now(ZoneInfo("America/New_York"))
-            # TEMPORARY: Forwarding 24/7 until Yelp verification complete
-            # Original: is_business_hours = (8 <= now_et.hour < 19) and (now_et.weekday() < 6)
-            is_business_hours = True  # Always forward for now
-            
+            # Business hours are 8am-7pm ET, Mon-Sat (the documented behaviour).
+            # CALL_FORWARDING_ALWAYS=1 preserves the temporary 24/7
+            # Yelp-verification routing without another code edit.
+            always = (os.getenv("CALL_FORWARDING_ALWAYS", "0") or "").strip().lower() in (
+                "1", "true", "yes", "on")
+            is_business_hours = always or ((8 <= now_et.hour < 19) and (now_et.weekday() < 6))
+            print(f"[voice.swml] forwarding enabled; mode="
+                  f"{'always' if always else 'business_hours'}; "
+                  f"now={now_et.isoformat(timespec='minutes')}; eligible={is_business_hours}",
+                  flush=True)
+
             if is_business_hours:
-                cur.execute("SELECT value FROM app_settings WHERE key = 'owner_personal_cell';")
-                row = cur.fetchone()
+                # Fresh cursor: the one above is closed once its `with` block
+                # exits. Reusing it raised "the cursor is closed" on every
+                # inbound call, so forwarding never ran.
+                with db.cursor() as cur:
+                    cur.execute("SELECT value FROM app_settings WHERE key = 'owner_personal_cell';")
+                    row = cur.fetchone()
                 owner_cell = (row["value"] or "").strip() if row else ""
                 if owner_cell:
                     print(f"[voice.swml] Forwarding call to owner at {owner_cell} (business hours)", flush=True)
@@ -18940,7 +18960,12 @@ def _apply_card_payment(db, *, bid_id: int, invoice_id: int, payment_id: str,
     inv_amount = float(inv.get("amount") or 0)
     already = float(inv.get("collected") or 0)
     pay = min(amount_cents / 100.0, max(0.0, inv_amount - already))
-    inv_status = "paid" if (already + pay) >= inv_amount - 0.005 else "partial"
+    # The value the invoice will hold after this payment. It used to be
+    # referenced as `new_collected` without ever being assigned, so a successful
+    # card payment raised NameError after recording the money and the customer
+    # was told to "call the office".
+    new_collected = round(already + pay, 2)
+    inv_status = "paid" if new_collected >= inv_amount - 0.005 else "partial"
     try:
         # Pass the delta (pay), not the cumulative total. set_invoice_status
         # ADDs the value to the existing collected, so passing the cumulative

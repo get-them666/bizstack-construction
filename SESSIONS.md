@@ -4,6 +4,115 @@
 
 ---
 
+## 2026-11-23 — Session 16: Full-Stack Audit (Read-Only) — No Fixes Applied
+
+### Scope
+
+Audited `construction_main.py` + templates + services against the live
+`construction.bizstackperks.com` deployment and the production Postgres DB.
+No code or config was changed. This entry records the findings so the next
+session does not re-discover them.
+
+### P0 defects confirmed in production (with evidence)
+
+1. **Inbound call forwarding never runs** — `voice_swml()` uses `cur` after its
+   `with db.cursor()` block closes (`construction_main.py:10902-10918`). Live
+   log: `[voice.swml] Forwarding check failed: the cursor is closed`. The
+   toggle is inert; `is_business_hours = True` is also hardcoded at 10913.
+2. **Card payment confirmation 500s after the money is recorded** —
+   `_apply_card_payment()` returns `new_collected`, which is never defined
+   (`construction_main.py:18967`, `18991`). Payment row/invoice update commit
+   first, then the route returns 500 and `_notify_card_payment` never runs.
+3. **Construction SMS is routed to the Broom Service app** — SignalWire number
+   `+17578469275` has `sms_url=https://bizstackperks.com/comms/sms-webhook`.
+   Broom replies from the construction number ("Thanks for texting Broom
+   Service!", delivered 2026-11-22). `hosts.env` also sets
+   `SIGNALWIRE_PHONE=+17578469275`.
+4. **Review requests never send** — `review_requests` is imported locally at
+   `construction_main.py:1234` but used globally at `4189`, so every pass logs
+   `name 'review_requests' is not defined`. `review_requests.ensure_schema()` is
+   called nowhere and the table does not exist.
+5. **Project-sourced portal accounts link a project id as a bid id** —
+   `job_documents.provision_portal_account()` calls
+   `portal_service.link_bid(..., job_id)` (`job_documents.py:361`) while
+   `_build_job_dict_from_project()` sets `source="project"` and `id=project id`.
+   `create_signing_request()` already creates a synthetic bid and stores
+   `project_<id>_bid_id`; the portal step ignores it. Latent cross-client view.
+
+### High-severity findings
+
+- **Local HEAD ≠ production.** Six audited files differ (hashes checked);
+  commit `9381ebd` (phone → 908-7121) is not deployed. Local templates hardcode
+  the Broom number in 10+ files (`base.html:511-512,563,567`,
+  `index.html:9,34,37,302,332-335,395-396,439`, `contact.html:3-4,17,23`, etc.).
+  Deploying HEAD as-is would replace the construction line with Broom's.
+- **Kit newsletter is paused.** Sequence `2979613` (`Newsletter Welcome`) has
+  `hold=true` and 0 subscribers. `kit_service.subscribe_newsletter()` still
+  returns `ok: True` even when tag/sequence enrollment fails
+  (`kit_service.py:112-118`); `sync_lead()` does the same (93-95).
+- **Opt-out false negative.** `followups.is_opt_out()` (`followups.py:113-120`)
+  rejects a real "Unsubscribe" reply because the subject line precedes it and
+  the 60-char cap trips. Lead 2416 was manually added to `suppression_list`
+  (`created_by='owner:manual-recovery'`) after the automated path missed it.
+- **Inbound auto-reply can be poisoned by an aborted transaction.** Swallowed
+  SQL errors in `inbound_email._ingest()` leave the connection aborted; then
+  `_ensure_draft_column` and the suppression lookup fail closed. Live log:
+  `suppression lookup failed: current transaction is aborted`.
+- **Lifecycle vs data mismatch.** `lifecycle.STAGES` has no `scheduled`,
+  `deposit`, or `in_progress`; 39 production leads sit in `scheduled` and are
+  read as `new` (`bizstack_leads/lifecycle.py:32-39,59-77`).
+  `LEAD_STATUSES` still writes the old vocabulary (`construction_main.py:200`,
+  `/api/pipeline/move` at 7487-7492). Booked walkthroughs are written as
+  `engaged`/“Replied” (`followups.py:425`).
+- **Lead ↔ bid is not linked.** `bid_opportunities` has no `lead_id`;
+  `convert_bid_to_project()` never updates the lead; `on_lead_created()` does
+  no quoting (`lead_pipeline.py:281-291`). Consult → Estimate is manual.
+- **Public `/api/bot/health`** (`construction_main.py:8994`) returns staged
+  counts and repeat-send recipient emails with no auth. `/docs` and
+  `/openapi.json` are also public.
+
+### Operational state (production DB, 2026-11-23)
+
+- 1,898 leads: 1,396 new / 459 contacted / 39 scheduled / 2 engaged / 1 won.
+- 0 leads have `walkthrough_at`; 14 deposits `pending`; 2 paid.
+- 39 leads carry an unsent `draft_reply` (mostly permit-lead texts from Nov 2).
+- 1,006 bids (986 `new`), 6 projects, 7 bid invoices (2 deposit invoices past
+  due: $5,400 and $777.56), 4 payments.
+- 18 payroll runs, 14 `open`; only runs 17/18 have lines; no payroll since
+  Nov 6.
+- 2,770 inbound emails, only 2 matched to leads; inbound is mostly Thumbtack /
+  Nextdoor / DMARC noise. Thumbtack “Great fit” emails are not turned into
+  leads.
+- ZeptoMail transport verified: internal test send returned True; DKIM selector
+  2233313, SPF (`zoho` + `zcsend`), DMARC `p=none` all present.
+- Kit API key valid; tags `estimate-request` (27), `newsletter` (0), `vendor`
+  (5); estimate sequence 29 members, newsletter sequence on hold.
+- Vapi assistant `80156d94…` points at `https://construction.bizstackperks.com/vapi/llm`
+  with a valid serverUrl; `VAPI_PHONE_NUMBER_ID` in construction.env is Broom's
+  `fc973bf0…`. `analysisPlan.summaryPlan.enabled=false`; 20 `bot_calls` stuck
+  at `dialed` because the number has no status callback.
+- Quote engine (`main.py`) is **not deployed** (no container/port 8005; nginx
+  proxy lines commented). `/schedule`, `/deposit-instructions/*`, `/review`,
+  `/areas/*` all 404 on the construction domain. If it is deployed as-is it
+  has unauthenticated `/admin/*`, public ACH routing/account numbers by
+  sequential quote id, unsigned Cal.com webhook, and `smtplib` on port 587
+  (blocked on DigitalOcean).
+
+### Verification performed
+
+- Python compile: pass. Local tests: 122 passed / 1 skipped across newsletter,
+  frontend contracts, template JS, portal credentials, deposits, reviews,
+  SMTP fallback, leads pipeline, documents service, payroll integrity, smoke.
+- Live desktop + 390px mobile: no JS console errors, no broken images, no
+  horizontal overflow. 320px has a 42px overlap between the old chat button and
+  the new call/text bar.
+- All 202 distinct internal links in `templates/construction/` resolve to a
+  registered route. `/docs` and `/api/bot/health` are the exceptions in
+  exposure, not routing.
+- No fixes applied; owner confirmation required before code/config changes.
+
+---
+
 ## 2026-11-22 — Session 15: Hampton Roads Property-Manager Vendor Applications Sent
 
 ### What went out
