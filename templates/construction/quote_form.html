@@ -231,7 +231,7 @@
     }
     function money(c) {
         if (c == null) return '—';
-        return '$' + (c / 100).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+        return '$' + (c / 100).toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0});
     }
 
     function renderLines(lines) {

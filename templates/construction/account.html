@@ -18,7 +18,7 @@
         <td>{{ q.trade }}</td>
         <td>{% if q.sqft %}{{ '{:,}'.format(q.sqft|float|int) }} sq ft{% else %}&mdash;{% endif %}
             {% if q.width_ft and q.length_ft %}<br><small class="muted">{{ q.width_ft }}&times;{{ q.length_ft }} ft</small>{% endif %}</td>
-        <td>${{ '{:,.2f}'.format(q.job_price_cents|int / 100) }}</td>
+        <td>{{ (q.job_price_cents or 0)|int|money }}</td>
         <td><small>
           {{ price_basis.get(q.price_source, price_basis['estimate']).split('.')[0] }}
           {% if q.bls_series %}<br><span class="muted">{{ q.bls_series }} @ {{ q.bls_period }}</span>{% endif %}

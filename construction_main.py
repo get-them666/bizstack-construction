@@ -11631,7 +11631,7 @@ def _swaig_tool_response_text(name: str, result) -> str:
         return str(result.get("error") or "I can't pull material pricing on that right now.")
     if name == "get_material_price":
         if result.get("ok"):
-            return f"{result.get('sku')} is about ${result.get('price_dollars'):,.2f}."
+            return f"{result.get('sku')} is about ${result.get('price_dollars'):,.0f}."
         return str(result.get("error") or "I couldn't find that material.")
     if name == "search_materials":
         items = result.get("items") or []
@@ -11647,10 +11647,10 @@ def _swaig_tool_response_text(name: str, result) -> str:
             if it.get("unit") == "sqft":
                 if it.get("price_high_dollars"):
                     return f"{brand} {it.get('name', '')} {color} at roughly ${it.get('price_dollars'):.0f} to ${it.get('price_high_dollars'):.0f} per square foot{how}"
-                return f"{brand} {it.get('name', '')} {color} at about ${it.get('price_dollars'):.2f} per square foot{how}"
+                return f"{brand} {it.get('name', '')} {color} at about ${it.get('price_dollars'):.0f} per square foot{how}"
             if it.get("price_high_dollars"):
                 return f"{brand} {it.get('name', '')} {color} roughly ${it.get('price_dollars'):,.0f} to ${it.get('price_high_dollars'):,.0f} each{how}"
-            return f"{brand} {it.get('name', '')} {color} about ${it.get('price_dollars'):,.2f} each{how}"
+            return f"{brand} {it.get('name', '')} {color} about ${it.get('price_dollars'):,.0f} each{how}"
 
         def _category_of(it):
             return str(it.get("category") or "").strip().lower()
