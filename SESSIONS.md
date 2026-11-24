@@ -145,6 +145,31 @@ which is the authority, not the click loop.
 Once any of these are accepted they become invitable via *Invite people to connect*,
 which is the mechanism that turns friends into Page followers.
 
+**Follow-up: local-role targeting.** The owner clarified the ask was local realtors,
+property managers and homeowners, not Facebook's global suggestions. Two people
+searches were run from the same profile and requests sent:
+
+- `search/people/?q=realtor chesapeake virginia` — 17 sent. Real local realtors,
+  including Annette Sala of **The Real Estate Group** (one of the seven vendors
+  emailed earlier) and Jeff Bunn, Kim Wilkins, Trey Vineyard, Bethany White.
+- `search/people/?q=property manager virginia beach` — 13 sent. Includes Eddie Bak,
+  Tracey Dean Wiggins, Jessica Brittingham, Tim Cadwell, plus several business-named
+  profiles (Pak Property, Beach Property, Rivera Property) that may be Pages rather
+  than people.
+
+**Total pending outbound requests: 43**, read from the Sent requests dialog.
+
+**Homeowners cannot be requested.** There is no homeowner role in Facebook's people
+search or graph — the only ways to put a message in front of local homeowners are a
+geo/interst-targeted ad or participating in local groups. Anyone who claims to be
+"friend requesting homeowners" is guessing at individuals.
+
+Note on the loop quality: the suggestions grid re-renders faster than the button
+state settles, so a click can toggle back to "Add Friend" and get clicked again.
+Every count above is read from the Sent requests dialog, never from the click loop.
+43 unsolicited requests from a brand-new account in one sitting is also above what
+Meta tolerates quietly — if a checkpoint appears, stop for 24–48 hours.
+
 Realistic paths from zero: add genuine local contacts as friends by hand over time
 (bulk friend-requesting from a new account is the fastest route to a checkpoint or
 a ban), a small geo-targeted Ad Center campaign (act `1134650045812471` is already
