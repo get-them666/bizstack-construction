@@ -4,6 +4,99 @@
 
 ---
 
+## 2026-11-24 — Session 26: Quote Audit + Immediate Owner SMS/Email Alerts
+
+### 1. Quotes submitted through the site
+
+The public quote form (`/quote`) posts to `/submit-lead` with
+`source=quotes_page`. That route creates a **lead**, not a `quotes` row. Live
+production has exactly two website quote requests:
+
+| Lead | Customer | Phone / Email | Service | Ballpark | Submitted (ET) | Status |
+|---|---|---|---|---|---|---|
+| `2348` | Mathew Mccloud | `(256) 866-8581` / `mccloud_m@aol.com` | Whole-Home Renovation · 115 Ollin Dr, Newport News, VA 23602 | `$78,750–$157,500` | **Nov 2, 2026, 7:26:01 AM EST** | `engaged` |
+| `1458` | Shaun OLeary (owner test) | `(252) 665-5891` / `soleary0006@gmail.com` | Whole-Home Renovation · 701 Dana Dr, Chesapeake, VA 23321 | `$78,750–$157,500` | **Oct 14, 2026, 1:57:32 PM EDT** | `contacted` |
+
+- `quotes` table: **0 rows**; `quote_lines`: **0 rows**; no `instant_quote`
+  leads exist.
+- The separate quote-engine (`POST /api/quote/submit`, `/admin/quotes`,
+  `/schedule`) is **not deployed** — those URLs return 404. Website quotes are
+  leads and live in `/leads`.
+- Admin URLs: `/leads`, `/leads/2348`, `/leads/1458`, `/dashboard`,
+  `/pipeline`; bids live at `/bids` and `/bids/{id}`.
+
+### 2. Why the owner did not notice #2348 / never got #1458
+
+- **#2348 was emailed** to `hello@bizstackperks.com` on Nov 2, 2026 at
+  12:26:01 UTC (7:26:01 AM EST), the same minute as submission. The mailbox
+  copy has subject `New BuildStack Construction lead: Mathew Mccloud` and the
+  full lead body with phone, service, address, budget, timeline, and source.
+- The owner alert was **email-only**: `_notify_owner_sms` / `OWNER_MOBILE`
+  was not added to `auto_reply.py` until commit `cab6d6a` on **Nov 11,
+  2026** — nine days *after* #2348. There was no text message to notice.
+- The same inbox received **112 identical “Homeowner” alert emails** from the
+  permit importer between Oct 22–29. A single quote email in that volume is
+  easy to miss, and the old alert had no quote range or admin link.
+- **#1458 has no owner alert in the mailbox at all.** It was submitted on
+  Oct 14, before the current alert pipeline was reliable. The old code only
+  printed failures to stdout and wrote nothing to `comms_logs`, and the
+  container has been recreated by later deploys, so that failure cannot be
+  reconstructed. This was the owner’s own test submission.
+- `comms_logs` records **customer** messages only, never owner alerts, which
+  is why the database showed no notification history.
+
+### 3. Immediate owner alerts — implemented
+
+New shared helpers in `construction_main.py`:
+
+- `_owner_quote_alert()` builds one email (submitted time in `America/New_York`,
+  name, phone, email, service, ballpark range, address, source, note, and
+  `https://construction.bizstackperks.com/leads/{id}`) and one SMS with
+  `New BuildStack quote #{id}: {name}, {phone} — {service} — {range}`.
+- `_notify_owner_quote_bg()` launches that helper in a daemon thread, so a
+  slow or failed transport can never block or fail the customer’s request.
+  Every email and SMS transport is wrapped separately; failures are logged as
+  `[quote-alert]` and never raise.
+- Targets: email `NOTIFY_EMAIL` (currently `hello@bizstackperks.com`, with
+  `ADMIN_EMAIL`/company fallback) and SMS `OWNER_MOBILE`.
+- Replaced the old duplicate/synchronous owner alerts in all four quote
+  entry points: `POST /submit-lead` (including `/quote` and the instant quote
+  cards), `POST /instant-quote`, `POST /get-started`, and
+  `POST /embed/quote`. `lead_alert` is no longer imported by
+  `construction_main.py`; the module still exists for other consumers.
+
+### 4. Regression coverage
+
+New `test_quote_owner_notification.py` (10 tests) proves:
+
+- `_owner_quote_alert` sends the email and SMS with the right target, lead
+  ID, name, phone, service, range, ET timestamp, and admin link.
+- Email and SMS transport failures are swallowed and reported, not raised.
+- The wrapper starts a daemon thread and never raises if a thread cannot
+  start.
+- `POST /submit-lead` calls `_notify_owner_quote_bg` with the new lead ID and
+  the correct `quotes_page` source/range.
+- All four quote handlers call the one shared helper and no longer call
+  `notify_owner_email` or `send_lead_alert` directly.
+
+### 5. Gate, deploy, verify
+
+- `scripts/quality_gate.sh`: **1338 passed, 40 skipped, 0 failed**; pyflakes
+  **0 blocking errors**; construction brand check clean.
+- Code commit: `1c4932c` — pushed to `origin/main`.
+- Production `/opt/bizstack/construction` reset to `1c4932c` with a clean
+  tree, rebuilt, and recreated (`docker compose build construction &&
+  docker compose up -d construction`).
+- First smoke run was issued while the recreated app was still booting and
+  returned 502s; after readiness the rerun passed **94/94**. No code or data
+  changed between those runs.
+- Live transport check inside the container: `smtp_configured=True`,
+  `signalwire_configured=True`, `OWNER_MOBILE` set, `NOTIFY_EMAIL` set to
+  `hello@bizstackperks.com`.
+- No test SMS/email was sent and no production rows were created or changed.
+
+---
+
 ## 2026-11-24 — Session 25: Cleanup Verification, Deposit Follow-Up, Broom SMS Sender
 
 ### 1. Payroll orphan runs — already clean, verified
