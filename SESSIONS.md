@@ -4,6 +4,73 @@
 
 ---
 
+## 2026-11-24 — Session 27: Whole-Dollar AI + Instant Quote Formatting
+
+### 1. Audit — where cents were leaking into view
+
+The estimate engine keeps cents internally for arithmetic (`low_cents`,
+`high_cents`), and that is correct. The leak was purely presentation:
+
+- `templates/construction/instant_quote.html` already rendered the main
+  ballpark with `{:,.0f}`, but the “The math” line printed the per-square-foot
+  rates with `{:,.2f}` — e.g. `$45.00–$90.00 / sq ft`.
+- `templates/construction/quote_form.html` (the materials quote sandbox)
+  formatted every line item, materials subtotal, estimate, and total with
+  two decimals — e.g. `$1,234.56`.
+- `templates/construction/account.html` printed saved quote totals with
+  `{:,.2f}`.
+- The AI voice/chat tool responses printed single material prices with
+  `:,.2f` in `get_material_price` and `search_materials`.
+- `templates/construction/photo_quote.html` and the `money` Jinja filter were
+  already whole dollars, so they were left unchanged.
+- Supplier/admin price screens (`materials.html`, `material_suppliers.html`)
+  and formal quote documents keep cents deliberately: those are unit prices /
+  contract documents, not customer ballparks.
+
+### 2. Changes
+
+- `templates/construction/instant_quote.html`: per-sqft rates now `{:,.0f}`
+  (`$45–$90 / sq ft`), matching the whole-dollar range beside them.
+- `templates/construction/quote_form.html`: `money()` now uses
+  `minimumFractionDigits: 0, maximumFractionDigits: 0`, so line items,
+  materials subtotal, estimated range, and total all render whole dollars.
+- `templates/construction/account.html`: quote totals now use the shared
+  `|money` filter instead of `{:,.2f}`.
+- `construction_main.py`: AI `get_material_price` and `search_materials`
+  responses round to whole dollars.
+- No estimator arithmetic, database columns, or stored cents were changed.
+
+### 3. Regression coverage
+
+New `test_quote_whole_dollars.py` (9 tests):
+
+- `estimating_service.estimate()` exposes whole-number `low_est`/`high_est`
+  that agree with the exact cents fields.
+- The `_money` filter maps `7875000` to `$78,750`.
+- The instant quote content block actually renders `$78,750–$157,500` with
+  no `.00` and shows `$45–$90 / sq ft`.
+- `quote_form.html`’s client-side `money()` rounds to whole dollars.
+- `account.html` quote totals use `|money`.
+- The photo quote formatter stays whole-dollar.
+- AI `quote_project`, `get_material_price`, and `search_materials` responses
+  contain whole-dollar amounts and no `.00` / fractional prices.
+
+### 4. Gate, deploy, verify
+
+- `scripts/quality_gate.sh`: **1347 passed, 40 skipped, 0 failed**; pyflakes
+  **0 blocking errors**; construction brand check clean.
+- Commit `f5ae825` — pushed to `origin/main`.
+- Production reset to `f5ae825`, rebuilt, and recreated. Readiness was polled
+  via `/health` before running the smoke check (avoids the post-restart 502
+  race seen in Session 26).
+- `scripts/live_smoke.py`: **94 passed, 0 failed**.
+- Production `git status` and `git diff origin/main` are empty; running
+  container has the updated template formatters.
+- No quote was submitted, no customer/owner message was sent, and no
+  production rows were changed.
+
+---
+
 ## 2026-11-24 — Session 26: Quote Audit + Immediate Owner SMS/Email Alerts
 
 ### 1. Quotes submitted through the site
