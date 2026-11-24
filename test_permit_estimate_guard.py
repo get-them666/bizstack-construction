@@ -95,3 +95,11 @@ def test_stamp_path_still_writes_for_a_website_quote():
     assert stamped is True
     assert db.committed is True
     assert "UPDATE leads SET estimate_low_cents" in db.cursor_obj.last_sql
+
+
+def test_auto_reply_uses_the_guard_instead_of_a_direct_update():
+    import inspect
+
+    source = inspect.getsource(auto_reply.ensure_lead_reply)
+    assert "_stamp_estimate_on_lead(db, lead_id, est, source)" in source
+    assert "UPDATE leads SET estimate_low_cents" not in source
