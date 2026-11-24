@@ -86,6 +86,17 @@ def to_stage(status) -> str:
     return _LEGACY.get(key, NEW)
 
 
+def is_known_status(status) -> bool:
+    """True only for a canonical stage or a documented legacy alias.
+
+    ``to_stage`` deliberately maps an unknown string to NEW so historical rows
+    are worked rather than buried. A *write* must be stricter: an AI tool or a
+    form typing "not-a-stage" should be rejected, not silently saved as new.
+    """
+    key = (status or "").strip().lower()
+    return key in STAGES or key in _LEGACY
+
+
 # --- next action ------------------------------------------------------------
 # The owner-facing work buckets. Order matters: this is the order the queue
 # lists them, most-urgent first.

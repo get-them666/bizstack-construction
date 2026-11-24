@@ -27,7 +27,8 @@ def test_lead_workspace_loads_only_the_visible_construction_lead():
 def test_project_activation_and_completion_advance_the_related_lead():
     route = _function_source("project_update")
     assert 'status_val in ("active", "completed")' in route
-    assert '"in_progress" if status_val == "active" else "completed"' in route
+    assert "UPDATE leads SET status = 'won'" in route
+    assert '"in_progress" if status_val' not in route
     assert "WHERE id = %s AND company = 'construction'" in route
 
 

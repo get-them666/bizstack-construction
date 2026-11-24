@@ -2233,9 +2233,9 @@ def build_tool_handlers(db, stripe_svc):
 
     def update_lead_status(lead_id, status):
         requested = str(status or "").strip().lower()
-        stage = lead_lifecycle.to_stage(requested)
-        if stage not in lead_lifecycle.STAGES:
+        if not lead_lifecycle.is_known_status(requested):
             return {"ok": False, "error": f"Unknown status: {status}"}
+        stage = lead_lifecycle.to_stage(requested)
         with db.cursor() as cur:
             cur.execute("UPDATE leads SET status = %s WHERE id = %s;", (stage, lead_id))
             db.commit()

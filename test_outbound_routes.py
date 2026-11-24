@@ -819,14 +819,18 @@ def test_outbound_swml_detects_machines_before_the_agent_speaks(db, monkeypatch)
     assert branch["case"]["human"][0]["ai"]["global_data"]["destination_number"] == "+17575550142"
 
 
-def test_inbound_swml_does_not_probe_for_a_machine():
+def test_inbound_swml_does_not_probe_for_a_machine(db):
     """An inbound caller has already chosen to talk to us; AMD would add silence.
 
     Inbound is either bridged to the Vapi assistant that owns the number
     (answer -> connect) or, with VAPI_INBOUND_SIP_URI=off, served by the in-app
     agent (answer -> ai). Neither may probe for an answering machine.
     """
-    response = TestClient(main.app).get("/voice.swml")
+    main.app.dependency_overrides[main.get_db] = lambda: db
+    try:
+        response = TestClient(main.app).get("/voice.swml")
+    finally:
+        main.app.dependency_overrides.pop(main.get_db, None)
     assert response.status_code == 200
     steps = [list(step)[0] for step in response.json()["sections"]["main"]]
     assert steps in (["answer", "connect"], ["answer", "ai"])
