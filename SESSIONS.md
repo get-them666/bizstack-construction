@@ -4,6 +4,72 @@
 
 ---
 
+## 2026-11-24 — Session 22: Production Git History Aligned to origin/main
+
+### Backup first
+
+- Production HEAD before the operation:
+  `0626f80f9f8f72f2c03d167deea38bb6fc5e255d`.
+- Annotated tag on production: `prod-pre-sync-2026-11-24` (tag object
+  `79d12f5`, target `0626f80`).
+- Branch on production: `prod-backup-2026-11-24` at `0626f80`.
+- Full bundle: `/opt/bizstack/backups/construction-prod-2026-11-24.bundle`
+  (28 MB), copied to `~/bizstack-prod-backups/`.
+- Local repo fetched the bundle into branch `prod-backup-2026-11-24` and tag
+  `prod-pre-sync-2026-11-24`, both at `0626f80`. The old production history is
+  recoverable locally even after the reset.
+
+### Pre-reset inspection
+
+`git fetch origin --prune` moved production's stale `origin/main` from
+`40a7d68` to `95e73f0`. The pre-reset working tree was **not** identical to
+origin/main: 51 tracked files differed (3,175 insertions / 8,740 deletions).
+The important findings:
+
+- `copilot_ops.py` was the **Broom Service version** (`build_financial_tools`
+  defaulting to `company="broom"`, querying `calendar_events`/`workers`), not
+  the construction version. This was a live Copilot defect.
+- `documents_service.py` was older and still passed `server_hostname` to
+  `aiosmtplib.send()`, the bug fixed in Session 15.
+- `templates/construction/index.html`, `settings.html`, `projects.html`,
+  `monitor.html`, `lead_workspace.html`, `dashboard.html`, and
+  `materials_picker.html` were older than origin/main and missing committed
+  construction changes.
+- Guardrail scripts, regression tests, `AGENTS.md`, and current `SESSIONS.md`
+  were missing from production.
+- The deploy dir contained quote-engine/duplicate root files not in
+  origin/main, and was missing quote-engine files that origin/main tracks.
+- `construction_main.py` itself matched origin/main.
+- Production-only `auto_reply.py` copy tweaks (company-suffix list and
+  permit wording) were not carried forward; origin/main's tested copy is
+  authoritative. They were not a route/feature regression.
+
+Resetting was therefore the correct reconciliation, not a blind fast-forward.
+
+### Reset, rebuild, verify
+
+- `git reset --hard origin/main` in `/opt/bizstack/construction`:
+  - HEAD `95e73f0` = `origin/main` `95e73f0`.
+  - `git status --short`: empty.
+  - `git diff --stat origin/main`: empty.
+- Runtime files had changed, so the container was rebuilt and restarted
+  (`docker compose build construction && docker compose up -d construction`).
+- Verified inside the container:
+  - `copilot_ops.py` now has construction
+    `build_financial_tools(db, company="construction")`.
+  - `documents_service.py` no longer passes `server_hostname`.
+- `scripts/live_smoke.py`: **94 passed, 0 failed**.
+- Backup tag/branch remain available for rollback.
+
+### Final fast-forward
+
+After this entry is pushed, production is fast-forwarded to the new
+`origin/main` (docs-only change), then `git status` and `git diff` are checked
+again and the live smoke is rerun. Final production HEAD is required to equal
+`origin/main`.
+
+---
+
 ## 2026-11-24 — Session 21: Engineering Guardrails & Full Live Smoke Audit
 
 ### 1. Permanent rulebook (`AGENTS.md`)
