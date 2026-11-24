@@ -218,6 +218,35 @@ Session 15 recorded no active DPOR licence. Not changed here because it is the
 owner's public claim to make or withdraw — but it appears on every page of the site
 and on the Page profile.
 
+### Shovels permit key replaced and credit burn re-ordered
+
+Owner reported Shovels was already integrated. It was — and returning
+`402 {"error":"Monthly credit limit exceeded.","limit":500}`. The key in both
+`.env` and `/opt/bizstack/construction.env` was replaced with the new one, the
+container restarted, and a live probe now returns real rows
+(`1691 LIBBY LN, Chesapeake, VA 23320 | Residential model - permit request`).
+
+Root cause of the exhausted allowance: `permit_service.fetch_permits()` asked
+**Shovels first for every city**, including Virginia Beach and Norfolk whose
+permits are already free public ArcGIS feeds. Every Shovels row costs a credit
+against a hard monthly cap, so the free-feed cities were consuming the budget
+that the nine feedless cities needed — and once it hit the cap, those nine got
+nothing while VB/Norfolk kept working off the free fallback.
+
+Fixed in `permit_service.py`: free municipal data first, Shovels second, with
+Shovels still the fallback when a city endpoint is empty or down. New
+`test_permit_source_order.py` pins both directions — VB and Norfolk must never
+bill Shovels, Chesapeake must, and an empty free feed must fall through.
+
+Quality gate 1360 passed / 40 skipped, pyflakes clean, brand check clean.
+Commit `86eeeb8`; production fast-forwarded, rebuilt, smoke **94 passed, 0 failed**.
+Prod and local both `86eeeb8`, both trees clean.
+
+**Security note:** the new key was pasted into the chat transcript at the
+owner's explicit instruction after being warned twice. It should be rotated in
+the Shovels dashboard once the work is done, and every place it was set updated
+again.
+
 ### Deploy: Facebook link added to the public footer
 
 `templates/construction/base.html` — the footer's first column now carries
