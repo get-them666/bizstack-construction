@@ -4,6 +4,90 @@
 
 ---
 
+## 2026-11-23 — Session 17: P0 Audit Fixes Applied & Deployed
+
+### What was fixed
+
+1. **Inbound call forwarding** (`construction_main.py:10917-10935`)
+   - The owner-cell query reused a cursor after its `with` block had closed.
+     It now opens a fresh cursor, so forwarding actually runs.
+   - Business hours are restored (8am-7pm ET, Mon-Sat). The temporary 24/7
+     Yelp behaviour is preserved with `CALL_FORWARDING_ALWAYS=1`, added to
+     `/opt/bizstack/construction.env`.
+2. **Card payment confirmation** (`construction_main.py:18964-18968,19016`)
+   - `new_collected` is now computed (`round(already + pay, 2)`) before it is
+     used. A successful card payment no longer raises `NameError` after the
+     money is recorded, so the confirmation/owner notification path runs.
+3. **Inbound webhook secret** (`construction_main.py:1506-1514`)
+   - `_verify_inbound_webhook` accepts `?secret=` as well as
+     `X-Inbound-Secret`, because SignalWire LaML has no custom-header field.
+   - SignalWire number `+17578469275` SMS URL changed to
+     `https://construction.bizstackperks.com/comms/sms-webhook?secret=…`.
+     Direct POST with the configured secret returned HTTP 200 and a
+     construction-branded AI reply.
+4. **Review requests** (`construction_main.py:57,1231-1250`)
+   - Added the module-level `import review_requests` and create the table with
+     `review_requests.ensure_schema()` at startup.
+   - Verified `public.review_requests` exists and `_run_review_requests()`
+     returns `{'due': 0, 'sent': 0, 'skipped': []}` with no NameError.
+   - `GOOGLE_REVIEW_URL` is still unset: the Places lookup found no GBP
+     listing, so the fallback search URL remains until the owner supplies the
+     real review link.
+5. **Project → portal access** (`job_documents.py:332-394`)
+   - `provision_portal_account` now resolves the synthetic bid created by
+     `create_signing_request` (`app_settings.project_<id>_bid_id`) and links
+     that, never the project id. Missing signing request returns a clear error
+     instead of linking an unrelated bid.
+
+### Tests
+
+- New `test_p0_regressions.py` (9 tests): forwarding with a closed-cursor
+  double, disabled forwarding, card-payment return value, query/header/bad
+  webhook secrets, review module global, synthetic-bid portal link, missing
+  signing request.
+- 101 passed across the P0 file, review, documents, SMTP fallback, newsletter,
+  template JS, frontend contracts, bid/deposit, leads pipeline, and smoke.
+- `py_compile` and `pyflakes` clean (no undefined names).
+- Pre-existing suite isolation issue remains: `test_portal_credentials.py`
+  sets `DATABASE_URL=…/nonexistent` at import, so `test_deposit_atomicity.py`
+  fails when run after it. Both pass in isolation; not caused by these fixes.
+
+### Deployment
+
+- Local commit `3a3c4a6` pushed to `origin/main`.
+- Hotfix applied to `/opt/bizstack/construction` with the same patch.
+  The deploy dir's uncommitted TikTok `base.html` was temporarily reverted for
+  the build and restored afterwards, so the pixel remains **undeployed** (as
+  before) and is not lost.
+- Container rebuilt/restarted; live hashes match the patched files.
+- Live checks: public pages 200; `/voice.swml` returns
+  `dial: +12526655891` and logs `mode=always; eligible=True` with no
+  "cursor is closed"; review table present; SMS webhook 200 with query secret.
+
+### Still open after this session
+
+- **Broom outbound SMS remains on the construction number.** The SignalWire
+  account owns only `+17578469275`; Broom's `+17579087121` is a Vapi number,
+  not a SignalWire number. Changing `hosts.env` to it would make every Broom
+  text fail with "From number must belong to an active campaign/not owned", so
+  it was deliberately not changed. Provision/port a Broom-owned SignalWire
+  number, then update `hosts.env`.
+- **Secret rotation deferred.** Zepto/SignalWire/Kit/OpenAI keys were displayed
+  in the audit transcript. Rotating them requires the matching dashboards and a
+  coordinated deploy; the Vapi webhook key can be rotated via API when the
+  owner confirms a maintenance window.
+- Local/prod git histories still diverge (production `450f139` + uncommitted
+  TikTok; local `3a3c4a6`). Resolve before the next full deploy.
+- Local templates still hardcode Broom's `908-7121` in 10+ construction files
+  (commit `9381ebd`). Live is correct at `846-9275`; do not deploy local HEAD
+  until this is reverted or the number decision is confirmed.
+- No real Google review URL exists yet; review asks fall back to a Google
+  search. `RENTCAST_MONTHLY_LIMIT` is exhausted for the month.
+- 39 staged permit-lead drafts, 14 open payroll runs, and 2 past-due deposit
+  invoices are operational cleanup, not code defects.
+
+---
+
 ## 2026-11-23 — Session 16: Full-Stack Audit (Read-Only) — No Fixes Applied
 
 ### Scope
