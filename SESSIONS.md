@@ -4,6 +4,46 @@
 
 ---
 
+## 2026-11-24 — Session 30: Remaining Permit Defaults Cleared
+
+Approved follow-up: clear the 47 older `permit_finder` rows that still carried
+the assumed 1,750 sq ft whole-home ballpark outside the Quoted lane.
+
+### 1. Backup
+
+- `/opt/bizstack/backups/permit-default-estimates-2026-11-24.json`
+- 107,698 bytes, 47 full lead rows
+- sha256 `4a44e27e2c1e3240cad817fa983a0b5cd2a40d652720974942f8a81a64bbf5ef`
+
+### 2. Cleared
+
+Exactly 47 rows matched `source='permit_finder'` with an
+`estimate_json` for the `whole-home` model and `assumed_sqft=true`:
+
+- **43** at `$166,250–$306,250`
+- **4** at `$78,750–$157,500`
+
+Cleared `estimate_low_cents`, `estimate_high_cents`, and `estimate_json` on
+those rows. No statuses, notes, contacts, or financial rows were changed.
+
+After verification:
+
+- remaining assumed whole-home permit estimates: **0**
+- Quoted lane remains exactly **#2348 Mathew Mccloud — `$78,750–$157,500`**
+- status counts unchanged: 1516 new, 495 contacted, 1 engaged, 1 quoted, 2 won
+
+The Session 28 safeguard remains live, so permit imports cannot be re-stamped
+with this default.
+
+### 3. Verification
+
+- `scripts/quality_gate.sh`: **1352 passed, 40 skipped, 0 failed**; pyflakes
+  **0 blocking errors**; brand check clean.
+- `scripts/live_smoke.py`: **94 passed, 0 failed**.
+- No email, SMS, or outbound call was sent. No code or template changed.
+
+---
+
 ## 2026-11-24 — Session 29: Owner Test Removed From the Quoted Lane
 
 The owner clarified that **#1458 Shaun OLeary — $78,750–$157,500** was their own
