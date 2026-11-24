@@ -4,6 +4,73 @@
 
 ---
 
+## 2026-11-24 — Session 23: Production Sync Check, Kit Bounce, Operational Backlog
+
+### 1. Production git history
+
+- Production `HEAD` was already exactly `origin/main`: `ce99c2c`.
+- `git status --short`: empty.
+- `git diff --stat origin/main`: empty (zero tracked-file difference).
+- No reset or restart was needed; no files changed.
+- Created annotated checkpoint tag `prod-synced-2026-11-24` on both
+  production and the local repo at `ce99c2c`. The previous rollback tag
+  `prod-pre-sync-2026-11-24` and branch `prod-backup-2026-11-24` remain at
+  `0626f80`.
+- Container healthy; `/health` and the full smoke passed.
+
+### 2. Kit bounce (`hello@bizstackperks.com`)
+
+- Subscriber id `4395674787`; state **bounced**; `canceled_at`
+  `2026-11-18T21:58:29Z`; stats: 3 sent, 3 bounced, 0 opened/clicked.
+- Kit account sending address is `hello@bizstackperks.com`, status
+  **confirmed**, verified, DMARC configured. The bounce is subscriber-level,
+  not domain authentication.
+- The API key can read the subscriber/account but **cannot change subscriber
+  state**. Kit v4 `PUT /v4/subscribers/{id}` only updates first name, email
+  address, and custom fields; `POST /v4/subscribers` is an upsert that does not
+  clear a bounce. No API fix was applied and no data was changed.
+- Likely cause: the subscriber is the same address as the Kit account primary
+  and sending address (self-send/mailbox bounce).
+- Manual fix: in Kit → Subscribers, find `hello@bizstackperks.com`; use
+  **Resubscribe/Reactivate** if shown. If the hard bounce blocks it, delete and
+  re-add the subscriber, or contact Kit support to clear the bounce. Prefer a
+  different real inbox (e.g. the owner's Gmail) for marketing tests and keep
+  `hello@` as the sending address only.
+
+### 3. Operational backlog (read-only)
+
+- **Past-due deposits (2):**
+  - `INV-2026-0007` — bid `18350`, project `28`, RP HOMES 4 LLC,
+    **$777.56**, due 2026-11-18, **6 days overdue**.
+  - `INV-2026-0008` — bid `18046`, no project, Michael Church,
+    **$5,400.00**, due 2026-11-19, **5 days overdue**.
+- **Payroll:** the live count is **10 open runs**, not 14 (7 closed, 1 paid).
+  Every open run has **0 lines, 0 crew, $0.00 gross**; they are empty orphan
+  runs with overlapping periods from 2026-10-02 through 2026-11-08. IDs:
+  5, 6, 7, 9, 11, 12, 13, 14, 15, 16. No rows were changed.
+- **Staged drafts:** 39, all `source=permit_finder`, all **text** drafts.
+  Status: 24 quoted, 4 contacted, 11 new. Age: 6 at 0–7d, 18 at 8–14d,
+  1 at 15–30d, 14 at >30d. Contactable 39; blocked 0; stale (>14d) 15;
+  ready by age/consent 24. Oldest draft ~65 days, newest ~7 days.
+- **RentCast:** API key configured; limit 50/month; November counter is
+  **50 used / 0 remaining**; 12 property cache rows (last updated 2026-10-31)
+  and 2,436 skiptrace cache rows. Lookups are cache-only until the December
+  reset.
+
+### 4. Verification
+
+- `scripts/live_smoke.py`: **94 passed, 0 failed**.
+- No production database rows, Kit subscribers, emails, or SMS were changed.
+- No live business logic was modified in this session.
+
+### 5. Final sync
+
+After this entry is pushed, production is fast-forwarded to the new
+`origin/main` (docs-only change), `git status`/`git diff` are verified again,
+and the smoke check is rerun. Final production HEAD must equal `origin/main`.
+
+---
+
 ## 2026-11-24 — Session 22: Production Git History Aligned to origin/main
 
 ### Backup first
