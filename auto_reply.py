@@ -343,6 +343,10 @@ def _ensure_draft_column(db):
             cur.execute("ALTER TABLE leads ADD COLUMN IF NOT EXISTS draft_reply TEXT;")
             db.commit()
     except Exception as exc:
+        try:
+            db.rollback()
+        except Exception:
+            pass
         print(f"[auto-reply] draft column ensure failed: {exc}", flush=True)
 
 
@@ -865,6 +869,10 @@ def _stage_draft(db, lead_id, company_key, channel, recipient, body):
         print(f"[auto-reply {company_key}] staged draft on leads#{lead_id} ({channel})", flush=True)
         return True
     except Exception as exc:
+        try:
+            db.rollback()
+        except Exception:
+            pass
         print(f"[auto-reply {company_key}] draft stage failed for lead {lead_id}: {exc}", flush=True)
         return False
 
@@ -900,6 +908,10 @@ def _fire_sent_effect(db, lead_id, company_key, channel, recipient, body):
         except Exception as exc:
             # The message is already out. A queue refresh failure must not turn
             # a delivered send into a "staged draft" that goes out twice.
+            try:
+                db.rollback()
+            except Exception:
+                pass
             print(f"[auto-reply {company_key}] queue refresh failed for lead {lead_id}: {exc}", flush=True)
         print(f"[auto-reply {company_key}] sent {channel} to {recipient} (lead #{lead_id})", flush=True)
         return True
@@ -908,6 +920,10 @@ def _fire_sent_effect(db, lead_id, company_key, channel, recipient, body):
         # "not delivered", so the reply bot staged a draft AND sent the other
         # channel as well -- one email became email + text + a queued draft.
         # A bookkeeping failure must never be mistaken for a delivery failure.
+        try:
+            db.rollback()
+        except Exception:
+            pass
         print(f"[auto-reply {company_key}] DELIVERED but bookkeeping failed for "
               f"lead {lead_id}: {exc}", flush=True)
         return True
@@ -1002,6 +1018,7 @@ def ensure_lead_reply(db, company_key, *, name="", phone="", email="", service="
                     else:
                         print(f"[auto-reply {company_key}] email to {email} not delivered (provider returned False); staging draft", flush=True)
                 except Exception as exc:
+                    db.rollback()
                     print(f"[auto-reply {company_key}] email failed for {email}: {exc}", flush=True)
             else:
                 print(f"[auto-reply {company_key}] email to {email} skipped — {why}", flush=True)
@@ -1043,6 +1060,7 @@ def ensure_lead_reply(db, company_key, *, name="", phone="", email="", service="
                     else:
                         print(f"[auto-reply {company_key}] sms to {to} not delivered (provider returned False); staging draft", flush=True)
                 except Exception as exc:
+                    db.rollback()
                     print(f"[auto-reply {company_key}] sms failed for {to}: {exc}", flush=True)
             else:
                 print(f"[auto-reply {company_key}] sms to {to} skipped — {why}", flush=True)
@@ -1384,9 +1402,13 @@ def send_owner_lead_digest(db, company_key, items):
         if not to:
             continue
         try:
-            run_coro(documents_service.send_email(cfg, to, subject_line, digest))
-            ok = True
-            print(f"[owner-digest {company_key}] emailed {len(items)} draft(s) to {to}", flush=True)
+            delivered = run_coro(documents_service.send_email(cfg, to, subject_line, digest))
+            if delivered:
+                ok = True
+                print(f"[owner-digest {company_key}] emailed {len(items)} draft(s) to {to}", flush=True)
+            else:
+                print(f"[owner-digest {company_key}] digest to {to} not delivered "
+                      f"(provider returned False)", flush=True)
         except Exception as exc:
             print(f"[owner-digest {company_key}] digest to {to} failed: {exc}", flush=True)
     if ok and db is not None:

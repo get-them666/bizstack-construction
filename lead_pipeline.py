@@ -51,6 +51,7 @@ LEAD_STATUS_QUOTED = "quoted"
 LEAD_STATUS_DEPOSIT_PENDING = "deposit"
 LEAD_STATUS_IN_PROGRESS = "in_progress"
 LEAD_STATUS_COMPLETED = "completed"
+LEAD_STATUS_WON = "won"
 LEAD_STATUS_LOST = "lost"
 
 LEAD_STATUSES = [
@@ -103,16 +104,24 @@ def _get_lead(db, lead_id: int) -> Optional[Dict]:
 
 
 def _update_lead_status(db, lead_id: int, new_status: str) -> bool:
-    """Move lead to a new status."""
+    """Move lead to a new status.
+
+    `leads` has no updated_at column; including one made every call raise
+    UndefinedColumn and silently leave the lead at its old stage.
+    """
     try:
         with db.cursor() as cur:
             cur.execute(
-                "UPDATE leads SET status = %s, updated_at = NOW() WHERE id = %s",
+                "UPDATE leads SET status = %s WHERE id = %s",
                 (new_status, lead_id),
             )
         db.commit()
         return True
     except Exception as e:
+        try:
+            db.rollback()
+        except Exception:
+            pass
         logger.error(f"Failed to update lead {lead_id} status: {e}")
         return False
 
@@ -164,8 +173,7 @@ def _enrich_lead_internal(db, lead_id: int) -> Dict:
                             email = CASE WHEN %s <> '' THEN %s ELSE email END,
                             phone = CASE WHEN %s <> '' THEN %s ELSE phone END,
                             analysis_json = CASE WHEN analysis_json IS NULL THEN %s
-                                                ELSE analysis_json::jsonb || %s::jsonb END,
-                            updated_at = NOW()
+                                                ELSE analysis_json::jsonb || %s::jsonb END
                         WHERE id = %s
                         """,
                         (
@@ -352,7 +360,7 @@ def on_quote_accepted(db, quote_id: int):
                   details=f"project {project_id} created from quote")
         
         # Update lead status
-        _update_lead_status(db, lead_id, LEAD_STATUS_DEPOSIT_PENDING)
+        _update_lead_status(db, lead_id, LEAD_STATUS_WON)
         
         logger.info(f"✅ Project {project_id} created from accepted quote {quote_id}")
         

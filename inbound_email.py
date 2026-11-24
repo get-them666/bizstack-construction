@@ -197,6 +197,10 @@ def _ingest(db, company_key, msgs, mailbox_from):
                 deduped += 1
                 continue
             inserted += 1
+            # Persist the message before touching the lead. A later lead update
+            # can fail on a deadlock or a bad row; rolling that back must not
+            # also lose the email itself.
+            db.commit()
             if not lead:
                 # Still recorded in comms_logs above, but there is no lead row to
                 # hang the reply note on. Previously this `continue`d and the
@@ -215,7 +219,12 @@ def _ingest(db, company_key, msgs, mailbox_from):
                 cur.execute("UPDATE comms_logs SET lead_id = %s WHERE id = %s;",
                             (lead_id, row["id"]))
             except Exception as exc:
+                # The inbound row is already committed above; only the link is
+                # lost. Roll back so the suppression/reply path does not inherit
+                # an aborted transaction ("current transaction is aborted").
+                db.rollback()
                 print(f"[inbound-email] could not attach comms log to lead {lead_id}: {exc}", flush=True)
+                continue
             cur.execute("SELECT id, email, name, notes, status, phone FROM leads WHERE id = %s;", (lead_id,))
             lead = cur.fetchone()
             notes = lead.get("notes") or ""
@@ -241,6 +250,7 @@ def _ingest(db, company_key, msgs, mailbox_from):
                 from bizstack_leads import store as lead_store
                 lead_store.recompute(db, lead_id)
             except Exception as exc:
+                db.rollback()
                 print(f"[inbound-email] recompute failed for lead {lead_id}: {exc}", flush=True)
             # "Reply STOP" has been in every email; this is the first thing that
             # honours it. An opt-out ends every automated touch for the lead and
@@ -253,10 +263,12 @@ def _ingest(db, company_key, msgs, mailbox_from):
                         import zoho_sync
                         zoho_sync.on_opt_out(db, lead_id)
                     except Exception as exc:
+                        db.rollback()
                         print(f"[inbound-email] zoho opt-out sync failed: {exc}", flush=True)
                     print(f"[inbound-email] lead #{lead_id} opted out", flush=True)
                     continue
             except Exception as exc:
+                db.rollback()
                 print(f"[inbound-email] opt-out check failed for #{lead_id}: {exc}", flush=True)
             try:
                 import auto_reply
@@ -272,6 +284,7 @@ def _ingest(db, company_key, msgs, mailbox_from):
                     lead_id=lead_id,
                 )
             except Exception as exc:
+                db.rollback()
                 print(f"[email-inbound] auto-reply failed for lead {lead_id}: {exc}", flush=True)
         db.commit()
     return {"matched": matched, "inserted": inserted, "deduped": deduped,

@@ -198,11 +198,14 @@ SIGNALWIRE_NUMBER = os.getenv("SIGNALWIRE_PHONE", "") or "system"
 vapi = vapi_service.VapiService(default_base="https://construction.bizstackperks.com")
 APP_TZ = ZoneInfo(os.getenv("APP_TIMEZONE", "America/New_York"))
 
-LEAD_STATUSES = ["new", "contacted", "quoted", "deposit", "in_progress", "completed", "lost"]
+LEAD_STATUSES = ["new", "contacted", "engaged", "quoted", "won", "lost"]
 STATUS_LABELS = {
-    "new": "New", "contacted": "Contacted", "quoted": "Quoted", "deposit": "Deposit paid",
-    "in_progress": "In progress", "completed": "Completed", "lost": "Lost",
+    "new": "New", "contacted": "Contacted", "engaged": "Replied",
+    "quoted": "Quoted", "won": "Won", "lost": "Lost",
 }
+# Back-logged work is recorded after the fact; these legacy stage names drive
+# the project status on creation and are not part of the live lead funnel.
+BACKLOG_STATUSES = ["completed", "in_progress", "deposit"]
 
 # Permits carry no phone or email, so they can never move through the pipeline
 # above. They get their own actions instead: work the address, then record the
@@ -1291,7 +1294,14 @@ async def lifecycle(app: FastAPI):
         close_db_pool()
 
 
-app = FastAPI(title=brand.name(), lifespan=lifecycle)
+_docs_enabled = (os.getenv("ENABLE_API_DOCS", "") or "").strip().lower() in (
+    "1", "true", "yes", "on")
+app = FastAPI(
+    title=brand.name(), lifespan=lifecycle,
+    docs_url="/docs" if _docs_enabled else None,
+    redoc_url=None,
+    openapi_url="/openapi.json" if _docs_enabled else None,
+)
 
 
 # You cannot attach a debugger to a wedged container from here, and a hung event
@@ -2208,16 +2218,17 @@ def build_tool_handlers(db, stripe_svc):
 
     def update_lead_status(lead_id, status):
         requested = str(status or "").strip().lower()
-        if requested not in set(LEAD_STATUSES) | set(lead_lifecycle.STAGES):
+        stage = lead_lifecycle.to_stage(requested)
+        if stage not in lead_lifecycle.STAGES:
             return {"ok": False, "error": f"Unknown status: {status}"}
         with db.cursor() as cur:
-            cur.execute("UPDATE leads SET status = %s WHERE id = %s;", (requested, lead_id))
+            cur.execute("UPDATE leads SET status = %s WHERE id = %s;", (stage, lead_id))
             db.commit()
         # The leads board reads cached queue state, so a status write is not
         # finished until the canonical stage and next action are recomputed.
         saved = lead_store.recompute(db, lead_id)
         return {"ok": True, "lead_id": lead_id,
-                "status": saved.get("status", lead_lifecycle.to_stage(requested)),
+                "status": saved.get("status", stage),
                 "next_action": saved.get("next_action")}
 
     def send_sms_message(to, body):
@@ -7488,17 +7499,19 @@ async def pipeline_move(
         with db.cursor() as cur:
             cur.execute("UPDATE job_leads SET status = %s WHERE id = %s;", (status, item_id))
     elif stream == "backlog":
-        if status not in LEAD_STATUSES:
+        stage = lead_lifecycle.to_stage(status)
+        if stage not in lead_lifecycle.STAGES:
             raise HTTPException(status_code=400, detail="Unknown status")
         with db.cursor() as cur:
             cur.execute("UPDATE leads SET status = %s WHERE id = %s AND source = 'backlog' AND company = 'construction';",
-                        (status, item_id))
+                        (stage, item_id))
     elif stream == "leads":
-        if status not in LEAD_STATUSES:
+        stage = lead_lifecycle.to_stage(status)
+        if stage not in lead_lifecycle.STAGES:
             raise HTTPException(status_code=400, detail="Unknown status")
         with db.cursor() as cur:
             cur.execute("UPDATE leads SET status = %s WHERE id = %s AND company = 'construction';",
-                        (status, item_id))
+                        (stage, item_id))
     else:
         raise HTTPException(status_code=400, detail="Unknown stream")
     db.commit()
@@ -9004,10 +9017,13 @@ async def fire_lead_draft_route(lead_id: int, request: Request, db=Depends(get_d
 async def bot_health_route(request: Request, db=Depends(get_db)):
     """Owner glance: bot activity right now as JSON (no log scrolling).
 
-    Reports how many review drafts were sent today (email + text, honoring the
-    daily caps), how many leads are still staged with a draft, and today's
-    remaining cap budget per channel. Lets the owner confirm 'any leads got
-    contacted' at a glance without grepping logs."""
+    Admin-only: the response names repeat recipients, which is customer PII.
+    The dashboard calls it with the owner session cookie. It also reports how
+    many review drafts were sent today (email + text, honoring the daily caps),
+    how many leads are still staged with a draft, and today's send counts per
+    channel.
+    """
+    require_admin(request)
     try:
         return auto_reply.bot_health(db)
     except Exception as exc:
@@ -9261,7 +9277,8 @@ async def payments_webhook(request: Request, db=Depends(get_db)):
                         return Response(content='{"received": true}', media_type="application/json")
                 cur.execute(
                     "UPDATE leads SET deposit_status = 'paid', stripe_session_id = %s, deposit_cents = %s, "
-                    "status = CASE WHEN status IN ('completed','in_progress') THEN status ELSE 'deposit' END "
+                    "status = CASE WHEN status IN ('lost','cancelled','canceled','closed','archived') "
+                    "              THEN status ELSE 'won' END "
                     "WHERE id = %s;",
                     (session.get("id"), amount_total, int(lead_id)),
                 )
@@ -9917,8 +9934,11 @@ def _follow_up_new_lead(lead_id: int) -> None:
             if email and not email.endswith("@lead.local") and source != "permit_finder":
                 try:
                     import kit_service
-                    kit_service.sync_lead(row.get("name") or "", email,
-                                          row.get("phone") or "")
+                    kit = kit_service.sync_lead(row.get("name") or "", email,
+                                                row.get("phone") or "")
+                    if not kit.get("ok"):
+                        print(f"📧[kit] lead {lead_id} sync incomplete: "
+                              f"{kit.get('reason') or kit}", flush=True)
                 except Exception as exc:
                     print(f"📧[kit] lead sync failed: {exc}", flush=True)
             from zoneinfo import ZoneInfo
@@ -15266,10 +15286,13 @@ async def project_update(request: Request, project_id: int, db=Depends(get_db),
         )
         project = cur.fetchone()
         if project and project.get("lead_id") and status_val in ("active", "completed"):
-            lead_status = "in_progress" if status_val == "active" else "completed"
+            # A started or finished project is a converted lead. Writing the
+            # legacy 'in_progress'/'completed' strings here forced the lifecycle
+            # to translate them on every read and left the lead funnel showing
+            # a stage that no longer exists in the vocabulary.
             cur.execute(
-                "UPDATE leads SET status = %s WHERE id = %s AND company = 'construction';",
-                (lead_status, project["lead_id"]),
+                "UPDATE leads SET status = 'won' WHERE id = %s AND company = 'construction';",
+                (project["lead_id"],),
             )
         db.commit()
     return RedirectResponse(url=request.headers.get("referer") or "/projects", status_code=status.HTTP_303_SEE_OTHER)
@@ -15429,7 +15452,7 @@ async def backlog_page(request: Request, db=Depends(get_db)):
         request=request, name="backlog.html",
         context={
             "entries": entries, "totals": totals, "collected": collected,
-            "statuses": LEAD_STATUSES, "today": date.today().isoformat(),
+            "statuses": BACKLOG_STATUSES, "today": date.today().isoformat(),
             "project_types": INSTANT_PROJECT_TYPES,
         },
     )
@@ -15453,7 +15476,7 @@ async def backlog_create(
 ):
     require_admin(request)
     when = _backlog_when(entry_date)
-    lead_status = status_val if status_val in LEAD_STATUSES else "completed"
+    lead_status = status_val if status_val in BACKLOG_STATUSES else "completed"
     low_cents, high_cents = _backlog_cents(low_dollars), _backlog_cents(high_dollars)
     paid_cents = _backlog_cents(paid_dollars)
     with db.cursor() as cur:

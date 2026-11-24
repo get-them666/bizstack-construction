@@ -138,15 +138,8 @@ async def _send_email(to: str, subject: str, body: str) -> bool:
     import documents_service
     cfg = documents_service.smtp_config_from_env()
     if not documents_service.smtp_configured(cfg):
-        print(f"⚠️ [lead-alert] SMTP not configured; cannot send alert for lead #{lead_id}", flush=True)
+        print(f"⚠️ [lead-alert] SMTP not configured; cannot send alert to {to}", flush=True)
         return False
-    # Build a plain-text MIME message.
-    from email.message import EmailMessage
-    msg = EmailMessage()
-    msg["From"] = cfg.get("from", "hello@bizstackperks.com")
-    msg["To"] = to
-    msg["Subject"] = subject
-    msg.set_content(body)
     try:
         delivered = await documents_service.send_email(cfg, to, subject, body.replace("\n", "<br>"))
         return bool(delivered)

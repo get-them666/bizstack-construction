@@ -643,6 +643,38 @@ def ensure_job_for_bid(conn, bid_id: int, company: str = "construction") -> dict
     return {"id": row["id"], "name": row["name"], "created": True}
 
 
+def _link_bid_lead_to_project(cur, bid, company: str, project_id: int) -> None:
+    """Attach a project to the lead that matches the bid's contact email.
+
+    Imported bids have no lead id, so the only reliable join available today is
+    the exact contact email. When it matches, the project becomes visible on
+    the lead workspace and the lead moves to the canonical 'won' stage instead
+    of sitting in 'new' forever. A missing match is normal and does nothing.
+    """
+    email = (bid.get("contact_email") or "").strip().lower()
+    if not email:
+        return
+    cur.execute(
+        "SELECT id FROM leads WHERE company = %s AND LOWER(email) = %s "
+        "AND COALESCE(status, '') NOT IN ('lost', 'won') "
+        "ORDER BY created_at DESC LIMIT 1;",
+        (company, email),
+    )
+    row = cur.fetchone()
+    lead_id = row.get("id") if isinstance(row, dict) else (row[0] if row else None)
+    if not lead_id:
+        return
+    cur.execute(
+        "UPDATE projects SET lead_id = COALESCE(lead_id, %s) WHERE id = %s;",
+        (int(lead_id), int(project_id)),
+    )
+    cur.execute(
+        "UPDATE leads SET status = 'won' WHERE id = %s AND company = %s "
+        "AND COALESCE(status, '') <> 'lost';",
+        (int(lead_id), company),
+    )
+
+
 def convert_bid_to_project(conn, bid_id: int, company: str = "construction",
                            start_date: str = "") -> int:
     """Turn a won bid into a project so crew hours land against it.
@@ -668,7 +700,8 @@ def convert_bid_to_project(conn, bid_id: int, company: str = "construction",
                 cur.execute(
                     "UPDATE projects SET status = 'active' "
                     "WHERE id = %s AND status = 'planned'", (found["id"],))
-                conn.commit()
+            _link_bid_lead_to_project(cur, bid, company, found["id"])
+            conn.commit()
             return found["id"]
         cur.execute("SELECT column_name FROM information_schema.columns "
                     "WHERE table_name = 'projects' AND column_name = 'company'")
@@ -693,6 +726,7 @@ def convert_bid_to_project(conn, bid_id: int, company: str = "construction",
             f"INSERT INTO projects ({','.join(cols)}) VALUES ({','.join(['%s'] * len(cols))}) "
             f"RETURNING id", vals)
         pid = cur.fetchone()["id"]
+        _link_bid_lead_to_project(cur, bid, company, pid)
     conn.commit()
     return pid
 

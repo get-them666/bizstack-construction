@@ -68,6 +68,7 @@ _LEGACY = {
     "archived": LOST,
     # construction vocabulary
     "deposit": QUOTED,
+    "scheduled": QUOTED,
     "in_progress": WON,
     "completed": WON,
     "lost": LOST,

@@ -82,10 +82,10 @@
                                 <span class="inline-block px-2.5 py-1 text-xs font-bold rounded-full
                                     {% if lead.status == 'new' %}bg-amber-50 text-amber-700 border border-amber-200
                                     {% elif lead.status == 'contacted' %}bg-blue-50 text-blue-700 border border-blue-200
+                                    {% elif lead.status == 'engaged' %}bg-indigo-50 text-indigo-700 border border-indigo-200
                                     {% elif lead.status == 'quoted' %}bg-violet-50 text-violet-700 border border-violet-200
-                                    {% elif lead.status == 'deposit' %}bg-emerald-50 text-emerald-700 border border-emerald-200
-                                    {% elif lead.status == 'in_progress' %}bg-indigo-50 text-indigo-700 border border-indigo-200
-                                    {% elif lead.status == 'completed' %}bg-slate-100 text-slate-700 border border-slate-200
+                                    {% elif lead.status == 'won' %}bg-emerald-50 text-emerald-700 border border-emerald-200
+                                    {% elif lead.status == 'lost' %}bg-slate-100 text-slate-700 border border-slate-200
                                     {% else %}bg-slate-50 text-slate-400 border border-slate-200{% endif %}">
                                     {{ status_labels.get(lead.status, lead.status) }}
                                 </span>

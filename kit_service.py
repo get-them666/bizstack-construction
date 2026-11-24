@@ -81,8 +81,33 @@ def add_tag(subscriber_id: int, name: str = TAG) -> bool:
     return r.status_code in (200, 201)
 
 
+def sequence_status(sequence_id: int) -> dict:
+    """Whether a sequence is currently sending. Never raises.
+
+    Kit returns 200 when a subscriber is added to a paused sequence, so the
+    add call alone cannot tell us whether an email will ever go out. This is
+    the only way to be honest in the signup response.
+    """
+    try:
+        r = requests.get(f"{API}/sequences/{int(sequence_id)}",
+                         headers=_headers(), timeout=TIMEOUT)
+        if r.status_code == 200:
+            seq = (r.json() or {}).get("sequence") or {}
+            return {"ok": True, "hold": bool(seq.get("hold")),
+                    "active": seq.get("active", True),
+                    "name": seq.get("name") or ""}
+        return {"ok": False, "reason": f"HTTP {r.status_code}"}
+    except Exception as exc:
+        return {"ok": False, "reason": str(exc)[:200]}
+
+
 def sync_lead(name: str = "", email: str = "", phone: str = "") -> dict:
-    """Subscribe + tag + start the new-estimate sequence. Never raises."""
+    """Subscribe + tag + start the new-estimate sequence. Never raises.
+
+    ``ok`` now means the sequence was actually started. A subscriber who is
+    tagged but not enrolled is not a complete sync, and the caller logs the
+    incomplete result instead of assuming success.
+    """
     if not configured():
         return {"ok": False, "reason": "KIT_API_KEY is not set"}
     try:
@@ -90,9 +115,14 @@ def sync_lead(name: str = "", email: str = "", phone: str = "") -> dict:
         sid = subscribe(email, first, phone)
         if not sid:
             return {"ok": False, "reason": "subscriber could not be created"}
-        add_tag(sid)
+        tagged = add_tag(sid)
         started = add_to_sequence(sid)
-        return {"ok": True, "subscriber_id": sid, "sequence_started": started}
+        if not started:
+            return {"ok": False, "subscriber_id": sid, "tagged": tagged,
+                    "sequence_started": False,
+                    "reason": "subscriber saved but the estimate sequence was not started"}
+        return {"ok": True, "subscriber_id": sid, "tagged": tagged,
+                "sequence_started": True}
     except Exception as exc:
         return {"ok": False, "reason": str(exc)[:200]}
 
@@ -113,8 +143,27 @@ def subscribe_newsletter(email: str = "", first_name: str = "") -> dict:
         sid = subscribe(email, (first_name or "").strip())
         if not sid:
             return {"ok": False, "reason": "Kit did not accept that address."}
-        add_tag(sid, NEWSLETTER_TAG)
+        tagged = add_tag(sid, NEWSLETTER_TAG)
+
+        # Do not promise an inbox delivery for a sequence that is paused.
+        status = sequence_status(NEWSLETTER_SEQUENCE)
+        if status.get("ok") and status.get("hold"):
+            return {
+                "ok": True, "subscriber_id": sid, "tagged": tagged,
+                "sequence_started": False, "paused": True,
+                "note": ("You're on the list. The next issue will go out when "
+                         "the newsletter resumes."),
+            }
+
         started = add_to_sequence(sid, NEWSLETTER_SEQUENCE)
-        return {"ok": True, "sequence_started": started}
+        if not started:
+            return {
+                "ok": False, "subscriber_id": sid, "tagged": tagged,
+                "sequence_started": False,
+                "reason": ("We couldn't start the welcome email. Please try "
+                           "again or email hello@bizstackperks.com."),
+            }
+        return {"ok": True, "subscriber_id": sid, "tagged": tagged,
+                "sequence_started": True}
     except Exception as exc:
         return {"ok": False, "reason": str(exc)[:200]}

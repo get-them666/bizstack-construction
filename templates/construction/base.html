@@ -399,7 +399,10 @@
                         const json = await res.json();
                         if (json.ok) {
                             newsletterForm.reset();
-                            if (newsletterMsg) { newsletterMsg.textContent = "You're in. Check your inbox for the first one."; newsletterMsg.className = 'block mt-2 text-xs text-emerald-300'; }
+                            if (newsletterMsg) {
+                                newsletterMsg.textContent = json.note || "You're in. Check your inbox for the first one.";
+                                newsletterMsg.className = 'block mt-2 text-xs ' + (json.paused ? 'text-amber-300' : 'text-emerald-300');
+                            }
                         } else if (newsletterMsg) {
                             newsletterMsg.textContent = json.reason || 'That did not work. Try again.';
                             newsletterMsg.className = 'block mt-2 text-xs text-amber-300';

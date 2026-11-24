@@ -51,9 +51,12 @@ WINDOWS = (("morning", 8, 11, "8–11 am"), ("midday", 11, 14, "11 am–2 pm"), 
 BOOKING_DAYS_AHEAD = 10
 
 _OPT_OUT = re.compile(
-    r"^\s*(?:please\s+)?(?:stop(?:\s+(?:all|texting|emailing|contacting\s+me))?|unsubscribe|"
-    r"remove\s+me|take\s+me\s+off(?:\s+(?:your|the)\s+list)?|opt\s*out|do\s+not\s+contact(?:\s+me)?|"
-    r"no\s+thanks?|not\s+interested|cancel|quit|end)\s*[.!]*\s*$", re.I)
+    r"^\s*(?:please\s+)?(?:stop(?:\s+(?:all|texting|emailing|contacting)(?:\s+me)?)?|unsubscribe|"
+    r"remove\s+me(?:\s+from\s+(?:your|the)\s+list)?|take\s+me\s+off(?:\s+(?:your|the)\s+list)?|"
+    r"opt\s*out|do\s+not\s+contact(?:\s+me)?|no\s+thanks?|not\s+interested|cancel|quit|end)"
+    r"\s*[.!]*\s*$",
+    re.I,
+)
 
 _SCHEMA_READY = False
 
@@ -111,13 +114,25 @@ def ensure_schema(conn, force: bool = False) -> None:
 # --- opt-out -------------------------------------------------------------------
 
 def is_opt_out(text: str) -> bool:
-    """True when the whole message is an opt-out, not when STOP appears in a sentence."""
+    """True when the message is an opt-out, not when STOP appears in a sentence.
+
+    Email clients put the subject above the reply, so a real opt-out often
+    arrives as ``Re: Free estimate for 123 Main St\n\nUnsubscribe``. The old
+    check required the whole body (subject included) to be a single opt-out
+    token under 60 characters, so it silently missed those replies. Now the
+    quoted tail is discarded, a leading Re:/Fwd: subject line is dropped, and
+    each remaining short line is tested on its own. A sentence such as
+    "Can you stop by Tuesday?" still does not match.
+    """
     body = (text or "").strip()
     if not body:
         return False
     # Strip quoted reply tails and signatures for email.
     body = re.split(r"\n\s*(?:>|On .* wrote:|-- ?\n|Sent from)", body, maxsplit=1)[0].strip()
-    return bool(_OPT_OUT.match(body)) and len(body) <= 60
+    lines = [line.strip() for line in body.splitlines() if line.strip()]
+    if lines and re.match(r"^(?:re|fw|fwd|aw|sv|tr)\s*:", lines[0], re.I):
+        lines = lines[1:]
+    return any(len(line) <= 60 and _OPT_OUT.match(line) for line in lines)
 
 
 def mark_opted_out(conn, lead_id: int, channel: str = "", body: str = "") -> bool:
@@ -422,7 +437,7 @@ def book(conn, lead_id: int, when: _dt.datetime, note: str = "", phone: str = ""
             """UPDATE leads
                   SET walkthrough_at = %s,
                       walkthrough_note = %s,
-                      status = CASE WHEN COALESCE(status,'new') IN ('new','contacted') THEN 'engaged' ELSE status END,
+                      status = CASE WHEN COALESCE(status,'new') IN ('new','contacted') THEN 'quoted' ELSE status END,
                       phone = CASE WHEN COALESCE(phone,'') = '' THEN %s ELSE phone END,
                       email = CASE WHEN COALESCE(email,'') = '' OR email LIKE '%%@lead.local' THEN %s ELSE email END
                 WHERE id = %s
