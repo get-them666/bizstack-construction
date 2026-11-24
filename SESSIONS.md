@@ -247,6 +247,34 @@ owner's explicit instruction after being warned twice. It should be rotated in
 the Shovels dashboard once the work is done, and every place it was set updated
 again.
 
+### "Zero found" was a dedupe run, not a failure
+
+Owner reported the scan showing zero after the re-order. Verified on production:
+
+```
+permit-scan] added=0 job_leads, auto_leads=0, ok        <- everything already on file
+[permit-scan] 24 new permit lead(s) queued for enrichment
+permit leads last 2h: 27        permit leads today: 147
+fetch_permits: VB=100 Norfolk=100 Chesapeake=30 Hampton=75
+```
+
+`added=0` is the dedupe path doing its job — those permits were already stored.
+The following run added 24. 147 permit leads landed today.
+
+### AGENTS.md updated with the rules this session learned
+
+- **§7** — changing published copy, ad creative, ad budgets or Page profile
+  fields now requires approval *for that specific change*; approval of one change
+  is not standing permission. Written after the licence-copy incident.
+- **§9** — corrected: **the business IS licensed**; the number is withheld by
+  choice and supplied directly on request. "Licensed, bonded & insured" copy is
+  approved and must not be stripped. The old wording said the opposite and is what
+  caused the ad copy to be rewritten.
+- **§10 (new)** — permit source order and why it must not be reversed, which
+  jurisdictions have free feeds, the Chesapeake eBUILD restriction, the "verify
+  before wiring a jurisdiction" rule, and the Meta 2FA boundary (Ad Center open;
+  Ads Manager / Business Suite / Planner closed).
+
 ### Deploy: Facebook link added to the public footer
 
 `templates/construction/base.html` — the footer's first column now carries

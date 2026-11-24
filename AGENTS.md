@@ -137,6 +137,7 @@ If any check fails, treat the deploy as failed: fix before declaring success, or
 - Running real outbound email/SMS/AI calls during an audit. Use validation-only requests (missing fields, bad payloads, honeypots) instead.
 - Committing secrets, `.env` files, customer PII, or generated bank details.
 - Declaring a deploy successful without the post-deploy smoke check.
+- Changing published copy, ad creative, ad budgets, Page profile fields, or any other public-facing content without explicit approval for **that specific change**. Approval of one change is never standing permission for the next one. If a claim looks inaccurate, say so and wait — do not "correct" it.
 
 ---
 
@@ -151,7 +152,27 @@ If any check fails, treat the deploy as failed: fix before declaring success, or
 
 ## 9. Brand, Legal & Compliance Notes
 
-- Do not claim a contractor licence that the business does not hold. `CONTRACTOR_LICENSE` is empty; do not add "licensed" copy without a real licence number.
+- **The business is licensed — never publish the licence number.** The owner supplies it directly when someone asks. "Licensed, bonded & insured" copy on the website, ads and the Facebook Page is approved and must not be stripped out. `CONTRACTOR_LICENSE` is empty *by choice* (the number is deliberately not in config or templates, so it cannot leak into a page); it is not evidence that no licence exists. An earlier version of this rule said the opposite and caused published copy to be rewritten without permission — do not repeat that.
 - Every marketing email must retain the physical address and an opt-out path (STOP/unsubscribe).
 - Suppression/DNC checks are mandatory on every outbound path. Never bypass `suppression.py`.
 - The AI voice assistant must identify itself as automated and honour "stop"/"remove me" immediately.
+
+---
+
+## 10. External Data Sources & Platform Access
+
+### Permit data
+
+- Source order in `permit_service.fetch_permits()` is **free municipal feed → Shovels → empty**. Do not reverse it. Shovels bills per row against a hard monthly cap (500 on the base plan), and calling it first for Virginia Beach and Norfolk — which publish free feeds — is what exhausted the allowance and starved the nine cities that have no feed. `test_permit_source_order.py` pins this.
+- Free feeds: **Virginia Beach** and **Norfolk** (ArcGIS open data). Shovels covers the rest: Chesapeake, Hampton, Newport News, Portsmouth, Suffolk, Williamsburg, York County, Richmond, Currituck County, Elizabeth City.
+- **Chesapeake has no public permit feed.** Its permits live in eBUILD (Accela), session-only; `docs/records-request.md` is the legitimate route. Never import its ArcGIS "Development Tracking" layer — that is land-use records with no applicant fields, and it looks like live permit supply.
+- Adding a jurisdiction is allowed only after verifying the endpoint returns real permit rows containing an address and a scope. "The city has an open-data portal" is not evidence of a permit feed — Richmond's portal, for example, has no permit dataset at all.
+
+### Facebook / Meta
+
+- `FB_PAGE_ID` and `FB_PAGE_TOKEN` are set in production; posting and Page-field updates work through the Graph API.
+- **Ad Center** (`/ad_center/create/...`) works without 2FA. **Ads Manager, Business Suite inbox and Planner are all gated behind Business Manager 2FA**, which is not enrolled. Do not promise messages, scheduling or campaign dashboards until it is.
+- Browser automation runs its own Chrome profile at `~/.cache/chrome-devtools-mcp/chrome-profile`. Signing into the owner's everyday Chrome does not carry over, and Chrome blocks remote debugging on the default profile.
+- Ads spend real money and budgets persist after the session ends. Never change a budget, schedule or creative without approval for that change (see §7).
+
+---
