@@ -55,7 +55,8 @@
 ### Deployment
 
 - Local commit `3a3c4a6` pushed to `origin/main`.
-- Hotfix applied to `/opt/bizstack/construction` with the same patch.
+- Hotfix applied to `/opt/bizstack/construction` with the same patch; the
+  deploy dir committed it as `224c011` on its own (still divergent) branch.
   The deploy dir's uncommitted TikTok `base.html` was temporarily reverted for
   the build and restored afterwards, so the pixel remains **undeployed** (as
   before) and is not lost.
