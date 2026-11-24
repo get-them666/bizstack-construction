@@ -4,6 +4,49 @@
 
 ---
 
+## 2026-11-24 — Session 19: P2 Cleanup (404, SEO, mobile, Gmail, tests)
+
+### What changed
+
+- **Branded 404** (`templates/construction/404.html`,
+  `construction_main.py:1302-1318`): human-facing misses render the site's
+  navigation and estimate CTAs; `/api/*`, `/static/*`, `/media/*`, `/uploads/*`,
+  `/oauth/*`, and `/webhooks/*` still return JSON.
+- **Sitemap** (`construction_main.py:3678`): added `/rental-make-ready` and
+  `/refund-policy`, both live and linked from the footer.
+- **Mobile overlap**: the old “Chat with us” launcher moved from `bottom-4` to
+  `bottom-20` so it no longer collides with the sticky call/text bar at 320 px.
+- **Dead Gmail poller**: the Gmail loop now requires a stored Google token
+  before starting. Production has `GMAIL_INBOUND=off`, so the previous
+  every-15-minute “No valid access token” noise is gone; Zoho remains the live
+  inbound path.
+- **Test isolation**: removed the `DATABASE_URL` monkeypatch from
+  `test_portal_credentials.py`; `test_deposit_atomicity.py` now skips cleanly
+  unless `TEST_DATABASE_URL` is set. The combined suite passes in one run.
+- Added tests for the branded 404, API JSON 404, and the complete sitemap.
+
+### Verification
+
+- 153 passed, 1 skipped across P0/P1/P2, portal, follow-ups, lifecycle,
+  pipeline, bid/deposit, documents, site smoke, and frontend contracts.
+- Live: `/this-page-does-not-exist` returns the branded page; `/api/nope`
+  returns JSON; `/sitemap.xml` lists both new pages; chat launcher has
+  `bottom-20`; TikTok pixel remains undeployed; `/voice.swml` still dials the
+  owner.
+
+### Deployment
+
+- Local `d79bfc8`; production `30c54d2` (mirrors it). `base.html` remains the
+  only dirty production file because of the owner's uncommitted TikTok pixel.
+
+### Still owner-decision / P2
+
+- Secret rotation; Broom-owned SignalWire number; TikTok pixel commit/remove;
+  local `908-7121` phone drift; manual bid→lead link UI; 39 staged drafts;
+  14 open payroll runs; 2 past-due deposits; RentCast budget; Google review URL.
+
+---
+
 ## 2026-11-24 — Session 18: P1 Audit Fixes Applied & Deployed
 
 ### What changed
