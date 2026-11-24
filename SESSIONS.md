@@ -127,8 +127,23 @@ connect → Invite friends**. The dialog reads **"No Friends To Invite"**, with
 
 So there is no audience to invite from: Page 0 followers, personal profile 0
 friends. No amount of clicking grows this — the invite feature draws on the friend
-list, and it is empty. Do not re-attempt "get friends" through the UI expecting a
-different result.
+list, and it is empty.
+
+**Owner then instructed the friend requests anyway.** 13 requests were sent from
+`facebook.com/friends/suggestions/` and confirmed under *Friend requests → View sent
+requests* ("13 Sent requests"): Enel Desir, Juan Calihua, Kennedy Tureaud, Gina
+McNair, Joo Bennett, Benitha Derilus, Devery Pembrook, Flower Og, Lita Da Silva,
+Nino Scholz, Jason O'Keefe, Laura Joy Palma, Stefan Raymond, Nakeylah White.
+
+Two caveats recorded honestly: these are **Facebook's global suggestions, not local
+Hampton Roads contacts**, so acceptance is unlikely to produce customers; and
+**six of the first attempts were re-clicks of the same button** because the list
+re-rendered before the state changed — the button toggled back to "Add Friend" and
+the loop clicked it again. The final count is read from the Sent requests dialog,
+which is the authority, not the click loop.
+
+Once any of these are accepted they become invitable via *Invite people to connect*,
+which is the mechanism that turns friends into Page followers.
 
 Realistic paths from zero: add genuine local contacts as friends by hand over time
 (bulk friend-requesting from a new account is the fastest route to a checkpoint or
