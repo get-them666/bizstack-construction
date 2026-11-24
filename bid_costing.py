@@ -644,24 +644,40 @@ def ensure_job_for_bid(conn, bid_id: int, company: str = "construction") -> dict
 
 
 def _link_bid_lead_to_project(cur, bid, company: str, project_id: int) -> None:
-    """Attach a project to the lead that matches the bid's contact email.
+    """Attach a project to the bid's linked lead, falling back to email.
 
-    Imported bids have no lead id, so the only reliable join available today is
-    the exact contact email. When it matches, the project becomes visible on
-    the lead workspace and the lead moves to the canonical 'won' stage instead
-    of sitting in 'new' forever. A missing match is normal and does nothing.
+    A manual link is authoritative. Imported bids have no lead id, so the exact
+    contact email is the fallback. When either matches, the project becomes
+    visible on the lead workspace and the lead moves to the canonical 'won'
+    stage instead of sitting in 'new' forever. A missing match is normal.
     """
-    email = (bid.get("contact_email") or "").strip().lower()
-    if not email:
-        return
-    cur.execute(
-        "SELECT id FROM leads WHERE company = %s AND LOWER(email) = %s "
-        "AND COALESCE(status, '') NOT IN ('lost', 'won') "
-        "ORDER BY created_at DESC LIMIT 1;",
-        (company, email),
-    )
-    row = cur.fetchone()
-    lead_id = row.get("id") if isinstance(row, dict) else (row[0] if row else None)
+    lead_id = None
+    explicit = bid.get("lead_id")
+    if explicit:
+        try:
+            cur.execute(
+                "SELECT id FROM leads WHERE id = %s AND company = %s "
+                "AND COALESCE(status, '') <> 'lost' LIMIT 1;",
+                (int(explicit), company),
+            )
+            row = cur.fetchone()
+            lead_id = row.get("id") if isinstance(row, dict) else (row[0] if row else None)
+        except (TypeError, ValueError):
+            lead_id = None
+
+    if not lead_id:
+        email = (bid.get("contact_email") or "").strip().lower()
+        if not email:
+            return
+        cur.execute(
+            "SELECT id FROM leads WHERE company = %s AND LOWER(email) = %s "
+            "AND COALESCE(status, '') NOT IN ('lost', 'won') "
+            "ORDER BY created_at DESC LIMIT 1;",
+            (company, email),
+        )
+        row = cur.fetchone()
+        lead_id = row.get("id") if isinstance(row, dict) else (row[0] if row else None)
+
     if not lead_id:
         return
     cur.execute(

@@ -470,6 +470,10 @@ def ensure_schema(conn) -> None:
         cur.execute("ALTER TABLE bid_opportunities ADD COLUMN IF NOT EXISTS notes TEXT;")
         cur.execute("ALTER TABLE bid_opportunities ADD COLUMN IF NOT EXISTS source VARCHAR(40) DEFAULT 'manual';")
         cur.execute("ALTER TABLE bid_opportunities ADD COLUMN IF NOT EXISTS company VARCHAR(40) DEFAULT 'construction';")
+        # Manual link from a bid to the customer lead it came from. Bids pulled
+        # from a feed usually have no lead row; the office can attach one on the
+        # bid card so the project, portal and lead timeline share a customer.
+        cur.execute("ALTER TABLE bid_opportunities ADD COLUMN IF NOT EXISTS lead_id INTEGER;")
         # A revision is a numbered snapshot of the price the customer was shown.
         # 0 means the original; the first saved change is Revision 1.
         cur.execute("ALTER TABLE bid_opportunities ADD COLUMN IF NOT EXISTS revision INTEGER DEFAULT 0;")

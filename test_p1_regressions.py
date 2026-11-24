@@ -139,6 +139,16 @@ def test_bid_project_links_the_matching_lead_and_marks_it_won():
     assert any("UPDATE leads SET status = 'won'" in sql for sql in sqls)
 
 
+def test_bid_explicit_lead_link_wins_over_email():
+    cur = _Cursor({"id": 88})
+    bid_costing._link_bid_lead_to_project(
+        cur, {"lead_id": 88, "contact_email": "other@example.com"},
+        "construction", 42)
+    sqls = [" ".join(sql.split()) for sql, _ in cur.executed]
+    assert any("WHERE id = %s AND company = %s" in sql for sql in sqls)
+    assert any("UPDATE projects SET lead_id" in sql for sql in sqls)
+
+
 def test_bid_without_a_contact_email_links_nothing():
     cur = _Cursor({"id": 77})
     bid_costing._link_bid_lead_to_project(cur, {}, "construction", 42)

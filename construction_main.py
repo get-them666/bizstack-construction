@@ -399,7 +399,7 @@ def company() -> dict:
         "entity_id": brand.entity_id(),
         "entity_line": brand.entity_line(),
         "address": brand.mailing_address(),
-        "phone": os.getenv("COMPANY_PHONE", "+1 (757) 908-7121"),
+        "phone": os.getenv("COMPANY_PHONE", "+1 (757) 846-9275"),
         "phone_e164": os.getenv("VAPI_PHONE", "+17578469275"),
         "email": os.getenv("COMPANY_EMAIL", "hello@bizstackperks.com"),
         "domain": os.getenv("COMPANY_DOMAIN", "construction.bizstackperks.com"),
@@ -7605,6 +7605,101 @@ async def api_bid_owner_save(bid_id: int, request: Request,
     return JSONResponse(content={"ok": True})
 
 
+@app.get("/api/leads/search")
+async def lead_search(request: Request, q: str = "", db=Depends(get_db)):
+    """Typeahead for the bid card's manual lead link. Admin only."""
+    require_admin(request)
+    term = (q or "").strip()
+    if len(term) < 2:
+        return JSONResponse(content={"leads": []})
+    like = f"%{term}%"
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT id, name, email, phone, address, status, project_type "
+            "FROM leads WHERE company = 'construction' AND ("
+            "  name ILIKE %s OR email ILIKE %s OR phone ILIKE %s OR address ILIKE %s"
+            ") ORDER BY created_at DESC LIMIT 12;",
+            (like, like, like, like),
+        )
+        rows = cur.fetchall()
+    return JSONResponse(content={"leads": [dict(r) for r in rows]})
+
+
+@app.post("/api/bids/{bid_id}/link-lead")
+async def bid_link_lead(bid_id: int, request: Request, lead_id: str = Form(""),
+                        db=Depends(get_db)):
+    """Attach (or detach) the customer lead for a bid.
+
+    Imported bids often have no lead row. This is the manual bridge so the bid,
+    the project, the portal and the lead timeline point at the same customer.
+    Contact fields are filled only where the bid is blank; an existing contact
+    is never overwritten.
+    """
+    require_admin(request)
+    bid_opportunities.ensure_schema(db)
+    bid = bid_opportunities.get_bid(db, bid_id, _BID_COMPANY)
+    if not bid:
+        raise HTTPException(status_code=404, detail="Bid not found")
+
+    raw = (lead_id or "").strip()
+    if not raw:
+        with db.cursor() as cur:
+            cur.execute(
+                "UPDATE bid_opportunities SET lead_id = NULL, updated_at = now() "
+                "WHERE id = %s AND company = %s;",
+                (bid_id, _BID_COMPANY),
+            )
+        db.commit()
+        return JSONResponse(content={"ok": True, "bid_id": bid_id, "linked": None})
+
+    try:
+        lid = int(raw)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="lead_id must be a number")
+
+    try:
+        bid_costing.ensure_accounting_schema(db)
+    except Exception as exc:
+        db.rollback()
+        print(f"[bids] accounting schema unavailable for lead link: {exc}", flush=True)
+
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT id, name, email, phone, address, status "
+            "FROM leads WHERE id = %s AND company = 'construction';",
+            (lid,),
+        )
+        lead = cur.fetchone()
+        if not lead:
+            raise HTTPException(status_code=404, detail="Lead not found")
+
+        cur.execute(
+            """UPDATE bid_opportunities SET
+                   lead_id = %s,
+                   contact_name = COALESCE(NULLIF(contact_name, ''), %s),
+                   contact_email = COALESCE(NULLIF(contact_email, ''), %s),
+                   contact_phone = COALESCE(NULLIF(contact_phone, ''), %s),
+                   updated_at = now()
+                 WHERE id = %s AND company = %s;""",
+            (lid, lead.get("name") or "", lead.get("email") or "",
+             lead.get("phone") or "", bid_id, _BID_COMPANY),
+        )
+        if (bid.get("status") or "").lower() == "won":
+            cur.execute(
+                "UPDATE leads SET status = 'won' WHERE id = %s "
+                "AND company = 'construction' AND COALESCE(status, '') <> 'lost';",
+                (lid,),
+            )
+        cur.execute(
+            "UPDATE projects SET lead_id = %s WHERE bid_id = %s "
+            "AND (lead_id IS NULL OR lead_id = %s);",
+            (lid, bid_id, lid),
+        )
+    db.commit()
+    return JSONResponse(content={"ok": True, "bid_id": bid_id,
+                                 "linked": lid, "lead": dict(lead)})
+
+
 async def _skiptrace_result(db, street: str, city: str, state: str,
                             zip_code: str, user_email: str) -> JSONResponse:
     """Cache-first owner lookup, shared by the address form and the bid card.
@@ -9800,9 +9895,9 @@ def _notify_owner_call(from_number: str, call_sid: str) -> None:
 async def vapi_events(request: Request, db=Depends(get_db)):
     """Vapi call events: log the call and alert the owner.
 
-    Vapi owns 757-908-7121 and answers it with the custom-LLM assistant. Without
-    this webhook the call existed only inside Vapi: no row in /monitor and no
-    text or email to the owner.
+    Vapi owns the Broom Service line and answers it with the custom-LLM
+    assistant. Without this webhook the call existed only inside Vapi: no row
+    in /monitor and no text or email to the owner.
     """
     expected = (os.getenv("VAPI_WEBHOOK_SECRET")
                 or os.getenv("INBOUND_WEBHOOK_SECRET") or "").strip()
@@ -13682,6 +13777,19 @@ async def bid_detail_page(bid_id: int, request: Request, db=Depends(get_db)):
     except Exception as exc:
         print(f"[bids] portal messages unavailable for bid {bid_id}: {exc}", flush=True)
 
+    linked_lead = None
+    if bid.get("lead_id"):
+        try:
+            with db.cursor() as cur:
+                cur.execute(
+                    "SELECT id, name, email, phone, address, status, project_type "
+                    "FROM leads WHERE id = %s AND company = 'construction';",
+                    (bid["lead_id"],),
+                )
+                linked_lead = cur.fetchone()
+        except Exception as exc:
+            print(f"[bids] linked lead unavailable for bid {bid_id}: {exc}", flush=True)
+
     # The bid's file cabinet: permits, photos, inspection reports, change
     # orders, correspondence -- everything that belongs to the job but is not
     # part of the SOW/quote/contract package sent to the GC.
@@ -13740,6 +13848,7 @@ async def bid_detail_page(bid_id: int, request: Request, db=Depends(get_db)):
             "deposit_amount": bid_deposit.deposit_amount(dict(bid)),
             "deposit_pct": bid_package_pdf.DEPOSIT_PCT,
             "project": project,
+            "linked_lead": linked_lead,
             "signature": signature,
             "signing_request": signing_request,
             "sign_link": sign_link,
