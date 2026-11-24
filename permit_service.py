@@ -371,6 +371,17 @@ def fetch_permits(city: str, state: str = "", days: int = 21, limit: int = 25):
     if not city:
         return []
 
+    # Municipal open data first. It is keyless, published for reuse, and free —
+    # while every Shovels result costs a credit from a hard monthly allowance
+    # (500 on the base plan). Spending those credits re-fetching Virginia Beach
+    # and Norfolk permits, which the cities already publish, is what pushed the
+    # account into "Monthly credit limit exceeded" and cut the nine cities that
+    # have no feed at all. Free first, paid second, and paid still covers us when
+    # a city's endpoint is down.
+    open_rows = fetch_open_data(city, days=max(int(days or 21), 1), limit=max(int(limit or 25), 25) * 4)
+    if open_rows:
+        return open_rows
+
     if is_configured():
         per_geo = 4
         try:
@@ -384,11 +395,6 @@ def fetch_permits(city: str, state: str = "", days: int = 21, limit: int = 25):
         )
         if rows:
             return rows
-
-    # Municipal open data is keyless and published for reuse.
-    open_rows = fetch_open_data(city, days=max(int(days or 21), 1), limit=max(int(limit or 25), 25) * 4)
-    if open_rows:
-        return open_rows
 
     return []
 
