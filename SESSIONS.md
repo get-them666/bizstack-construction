@@ -4,6 +4,79 @@
 
 ---
 
+## 2026-11-24 — Session 20: Phone Sync, TikTok Cleanup, Vapi Key Rotation, Bid→Lead UI
+
+### 1. Construction phone standardized on +1 (757) 846-9275
+
+- Replaced every `908-7121` / `+17579087121` reference in
+  `templates/construction/` with the construction number (about, base, contact,
+  deposit_pay, get_started, index, instant_quote, materials_picker, quote,
+  quote_form, services).
+- `construction_main.py` company fallback changed to `+1 (757) 846-9275`; the
+  stale Vapi comment no longer claims the construction line.
+- Verified: `grep 908-7121|9087121|17579087121 templates/construction/` → 0;
+  live pages show only 846-9275 and `tel:+17578469275` / `sms:+17578469275`.
+- Local and production now agree on the construction number.
+
+### 2. TikTok pixel removed from production
+
+- Inspected the uncommitted production `base.html`: the only extra code was the
+  TikTok Pixel (`DC1FRFRC77U7MFIGUU8G`) plus its Lead/Contact/Click/ViewContent
+  event helper (`sha256` advanced matching). No non-TikTok tracking was mixed in.
+- Backed it up to
+  `/opt/bizstack/backups/base.html.tiktok-2026-11-24.bak`, then replaced
+  production `base.html` with the synced `main` version (P1 newsletter JS,
+  `bottom-20` chat launcher, construction phone) and committed it as `9b49d2d`.
+- Production `git status` is now completely clean; live page contains no
+  `TiktokAnalyticsObject`.
+
+### 3. Vapi webhook key rotated
+
+- Generated a new `VAPI_WEBHOOK_SECRET`, updated
+  `/opt/bizstack/construction.env`, and PATCHed Vapi assistant `80156d94…`
+  (`bizstack-voice`) to the matching
+  `https://construction.bizstackperks.com/api/voice/vapi-events?key=…` server URL.
+- Recreated the construction container to reload the env.
+- Verified: new key → 200 `{"ok":true}`; old key → 401; no key → 401; Vapi
+  assistant URL matches the env key. The old key file was deleted afterwards.
+
+### 4. Manual bid → lead link
+
+- Added `bid_opportunities.lead_id` (idempotent `ALTER TABLE` in
+  `bid_opportunities.ensure_schema`).
+- New admin endpoints in `construction_main.py`:
+  - `GET /api/leads/search?q=` — name/email/phone/address typeahead, 12 rows.
+  - `POST /api/bids/{bid_id}/link-lead` — validates the lead, fills blank bid
+    contact fields, links any existing project, marks the lead `won` only when
+    the bid is already won, and supports `lead_id=` to unlink.
+- Bid detail card: a “Linked lead” panel shows the linked customer with
+  “Open lead” / “Unlink”, plus a debounced search-and-link control. JS is parsed
+  by `test_template_js.py`.
+- `bid_costing._link_bid_lead_to_project` now prefers the explicit `lead_id`
+  and falls back to contact-email matching.
+- Live E2E: searched `Christian`, linked bid `18431` to lead `2785`, confirmed
+  the bid card rendered the lead and the DB row, then unlinked and confirmed
+  `lead_id` returned to NULL.
+- Tests: `test_bid_lead_link.py` (5) plus an explicit-lead-id case in
+  `test_p1_regressions.py`.
+
+### Verification & deployment
+
+- 159 passed, 1 skipped; `py_compile` and `pyflakes` clean.
+- Local `28a4f72` pushed to `origin/main`.
+- Production commits: `9b49d2d` (base/TikTok), `8331705` (phone + bid→lead UI).
+  Production `git status` clean; `/health` 200; `/voice.swml` still dials the
+  owner; `/api/bot/health` 401; docs 404.
+
+### Still open
+
+- Broom-owned SignalWire number (Broom outbound SMS still uses the construction
+  line); Kit bounce on `hello@bizstackperks.com`; 39 staged drafts; 14 open
+  payroll runs; 2 past-due deposits; RentCast budget; Google review URL;
+  remaining key rotations (Zepto/SignalWire/Kit/OpenAI dashboards).
+
+---
+
 ## 2026-11-24 — Session 19: P2 Cleanup (404, SEO, mobile, Gmail, tests)
 
 ### What changed
