@@ -4,6 +4,102 @@
 
 ---
 
+## 2026-11-24 — Session 28: Quoted-Lane Cleanup + Permit Quote Guard
+
+### 1. Quoted lane cleaned up
+
+Pre-cleanup backup (full rows for all 39 quoted leads, the four Michelle
+Knight duplicates, and their scheduled calls):
+
+- `/opt/bizstack/backups/quoted-cleanup-2026-11-24.json` — 94,423 bytes
+- sha256 `1611177aaedd170122eb818e40556237eab6a4680031566755582a0bc7d49ee2`
+
+Before: **39 quoted** — 33 status-only records, 6 permit records carrying a
+default whole-home ballpark.
+
+Actions, in one verified transaction:
+
+- Moved the 33 status-only records (32 `permit_finder` + 1 `ai-assistant`)
+  back to `contacted`.
+- Cleared `estimate_low_cents`, `estimate_high_cents`, and `estimate_json` from
+  the six permit records `216, 499, 570, 619, 617, 618`, and moved them to
+  `contacted`.
+- Merged Michelle Knight's duplicates into **#216**:
+  - appended a merge note,
+  - removed the three duplicate scheduled calls (kept #216’s one),
+  - deleted leads `499, 570, 619`.
+- Set the only two genuine website quote requests to `quoted`:
+  - **#1458** Shaun OLeary — `$78,750–$157,500`
+  - **#2348** Mathew Mccloud — `$78,750–$157,500`
+- Re-derived the shared queue state for every surviving changed lead.
+
+After: **2 quoted**, both website quotes. Status counts:
+
+| Stage | Before | After |
+|---|---:|---:|
+| new | 1516 | 1516 |
+| contacted | 459 | 494 |
+| engaged | 2 | 1 |
+| quoted | 39 | **2** |
+| won | 2 | 2 |
+
+Total leads fell by exactly the three deleted duplicates (2018 → 2015).
+`quotes` and `quote_lines` remain empty; no financial rows, messages, or
+comms records were changed.
+
+### 2. Safeguard against default permit ballparks
+
+`auto_reply.py` now refuses to stamp a lead when all three are true:
+
+1. the lead’s own source is `permit_finder`,
+2. the estimate is the `whole-home` model, and
+3. `assumed_sqft` is true (the default 1,750 sq ft fallback).
+
+The source is read from the lead inside the stamp helper, because inbound-email
+replies pass `source="inbound-email"` instead of the original source. An
+explicit square footage, a real project model (kitchen, roof, etc.), or a
+non-permit lead stamps normally. New tests in `test_permit_estimate_guard.py`
+(5) cover the guard, the inbound-email bypass path, the explicit-sqft escape
+hatch, the website path, and the wiring in `ensure_lead_reply`.
+
+### 3. Notifications + whole-dollar formatting
+
+Both were already delivered and are live from Sessions 26–27:
+
+- `_notify_owner_quote_bg` / `_owner_quote_alert` fire on `/submit-lead`,
+  `/instant-quote`, `/get-started`, and `/embed/quote`, in a daemon thread with
+  per-transport exception handling.
+- Whole-dollar formatting is live on the instant quote math line, materials
+  quote form, account quote totals, photo quote, and AI material answers.
+- Re-ran the 10 notification tests and 9 whole-dollar tests in the gate.
+- Live config re-checked: SMTP configured, SignalWire configured,
+  `OWNER_MOBILE` set, `NOTIFY_EMAIL=hello@bizstackperks.com`.
+
+### 4. Gate, deploy, verify
+
+- `scripts/quality_gate.sh`: **1352 passed, 40 skipped, 0 failed**; pyflakes
+  **0 blocking errors**; construction brand check clean.
+- Code commit `a63e514` (guard) + test commit `faf3e20`; pushed to
+  `origin/main`.
+- Production rebuilt at `a63e514`, then fast-forwarded to `faf3e20` for the
+  test-only commit. `git status` and `git diff origin/main` are empty.
+- `scripts/live_smoke.py`: **94 passed, 0 failed**.
+- No email, SMS, or outbound call was sent by this session.
+
+### 5. Remaining data issue (not in the approved six)
+
+A read-only scan found **47 older permit_finder records** outside the quoted
+lane that still carry the same assumed whole-home defaults:
+
+- 43 at `$166,250–$306,250`
+- 4 at `$78,750–$157,500`
+
+They are in `new`/`contacted`, predate the guard, and were not part of the
+approved six-record cleanup, so they were left untouched. Clearing them is a
+safe follow-up using the same backup-and-verify procedure.
+
+---
+
 ## 2026-11-24 — Session 27: Whole-Dollar AI + Instant Quote Formatting
 
 ### 1. Audit — where cents were leaking into view
