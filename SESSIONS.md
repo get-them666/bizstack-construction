@@ -4,6 +4,35 @@
 
 ---
 
+## 2026-11-24 — Session 29: Owner Test Removed From the Quoted Lane
+
+The owner clarified that **#1458 Shaun OLeary — $78,750–$157,500** was their own
+test submission, not a genuine customer quote.
+
+### 1. Correction
+
+- Backed up the row to
+  `/opt/bizstack/backups/test-lead-1458-2026-11-24.json` (sha256
+  `126198e99a89d0bc16e0a091ec63396a94420f5a9a8f1e53929dcf0ec46ab047`).
+- Moved **#1458** from `quoted` back to `contacted`, with a note recording that
+  it was an owner test.
+- Re-derived the shared queue state for #1458.
+- **Quoted lane is now exactly one row:** **#2348 Mathew Mccloud —
+  `$78,750–$157,500`**.
+
+No code, templates, or configuration changed; the Session 28 guard,
+Session 26 owner notifications, and Session 27 whole-dollar formatting remain
+live.
+
+### 2. Verification
+
+- `scripts/quality_gate.sh`: **1352 passed, 40 skipped, 0 failed**; pyflakes
+  **0 blocking errors**; brand check clean.
+- `scripts/live_smoke.py`: **94 passed, 0 failed**.
+- No email, SMS, or outbound call was sent.
+
+---
+
 ## 2026-11-24 — Session 28: Quoted-Lane Cleanup + Permit Quote Guard
 
 ### 1. Quoted lane cleaned up
