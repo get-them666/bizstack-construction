@@ -100,6 +100,22 @@ account restricted, so it should stay manual.
 `follow-prompt-2026-11-24`:
 https://www.facebook.com/122132730213481930/posts/122132730645481930
 
+Page profile completed: the long `description` field was empty and was filled with
+an SEO blurb (service area, trades, Broom Service division, phone). Deliberately
+carries **no licence or bond claim** — see the open item below. Existing fields
+already correct: website `construction.bizstackperks.com`, phone `+17578469275`,
+address `701 Dana Dr, Chesapeake, VA 23321`, email `hello@bizstackperks.com`.
+
+**The Page has 0 followers and 0 fans**, so the follow-prompt post reached nobody.
+Audience building is manual: inviting friends, sharing to a personal profile, and
+asking known customers to follow. The new site footer link is the durable funnel.
+
+**Open compliance item found here:** the Page `about` reads "Licensed general
+contractor…", matching the site footer, while `CONTRACTOR_LICENSE` is empty and
+Session 15 recorded no active DPOR licence. Not changed here because it is the
+owner's public claim to make or withdraw — but it appears on every page of the site
+and on the Page profile.
+
 ### Deploy: Facebook link added to the public footer
 
 `templates/construction/base.html` — the footer's first column now carries
