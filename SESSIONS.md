@@ -4,6 +4,100 @@
 
 ---
 
+## 2026-11-24 — Session 31: Property-Manager Vendor Outreach, Round 2 (7 sent)
+
+Owner drafted ten vendor-partner introductions and gave explicit approval to send.
+Seven had email addresses; three are portal-only and were not sent.
+
+### What went out
+
+| # | Recipient | Prospect |
+|---|---|---|
+| 1 | office@renteasyva.com (+ cc adrake@) | RentEasy |
+| 2 | sevainfo@renterswarehouse.com | RENOSY by Renters Warehouse |
+| 3 | jjones@thinkallaccess.com | All Access Property Management |
+| 4 | assistant@limehousepm.com | Limehouse Property Management |
+| 5 | info@ospreypm.com | Osprey Property Management |
+| 6 | info@keyrenterhamptonroads.com | Keyrenter Hampton Roads |
+| 7 | dlevine@krsholdings.com | KRS Holdings |
+
+Transport: Zoho SMTP (`smtp.zoho.com:587`) from the owner's Mac as
+`hello@bizstackperks.com`, display name `Shaun O'Leary, BuildStack Construction`.
+RENOSY auto-acknowledged at 11:45 UTC, which confirms delivery on that leg.
+All eight addresses (including the cc) passed `suppression.check_outbound` on
+production before sending, and all seven rows were inserted into `comms_logs`.
+
+### Problems this created — read before round 3
+
+1. **Two duplicate contacts.** Keyrenter and Osprey were already emailed on
+   2026-11-22 in Session 15 with different subject lines. They received a second
+   cold touch inside 48 hours. Cause: the send used raw `smtplib` instead of the
+   app's send path, so the `auto_reply` cadence policy — which exists to catch
+   exactly this — never ran. Round 3 must go through the application, not a script.
+2. **An unbacked document offer.** Every email offers "our W-9 and Certificate of
+   Insurance (COI)". The W-9 now exists (see below) but is **unsigned**, and there
+   is still **no COI file anywhere** on the machine or in the repo — consistent with
+   Session 15. "Bonded and insured" also needs a COI to stand behind it. Seven
+   property managers have been told these documents can be produced on request.
+3. Session 15 recorded Zoho SMTP as refused from the Mac (`550 5.4.6 unusual
+   sending activity`). That block has cleared; auth and delivery both succeeded
+   today. ZeptoMail remains the preferred transport for `documents_service`.
+
+### Copy changes made before sending
+
+- BuildStack URL corrected to `construction.bizstackperks.com` in drafts 1–4; the
+  owner's later drafts already used it. Broom stays `bizstackperks.com`.
+- Added a CAN-SPAM footer to every message: physical address plus a STOP opt-out.
+  The owner's drafts had neither.
+- Sent as multipart HTML + plain-text fallback, slate/amber to match the site.
+
+### Related work in this session
+
+- `~/Desktop/BuildStack-Construction-W9.pdf` — the W-9 the emails refer to. Official
+  IRS form (Rev. March 2024), disregarded single-member LLC: owner name on line 1,
+  LLC on line 2, box 3a, EIN in Part I. **Signature and date are blank and must be
+  completed before it is sent to anyone.**
+
+### Facebook — three project posts published
+
+Same session, owner asked for the weekly Facebook tasks. Worked through the
+connected Page token on production (`FB_PAGE_ID` / `FB_PAGE_TOKEN`), **not** by
+logging into the owner's personal account.
+
+Three project posts published and verified by permalink:
+
+| Post | Time (UTC) | Permalink |
+|---|---|---|
+| Whole-home remodel | 12:05:51 | /posts/122132729793481930 |
+| Kitchen remodel | 12:05:56 | /posts/122132729853481930 |
+| Bathroom remodel | 12:06:00 | /posts/122132729925481930 |
+
+Images came from the existing `static/listing/projects2/{slug}-before-after.jpg`
+convention, all returning 200 before sending. Records written to `social_posts`,
+so the marketing page now shows 3 of 12 as posted and will not offer them again.
+
+**Bug hit and fixed:** `facebook_page.post_photo` returns `{"ok": True, "post_id": ...}`,
+not `{"id": ...}`. A caller checking `res.get("id")` reads success as failure, posts a
+duplicate on retry, and never calls `record_post`. Worth a regression test if this
+path is ever driven by a script rather than the admin UI.
+
+**Token scope gap:** the Page token can read `/feed` but not `/conversations`
+(`#200 requires pages_messaging`). Messenger replies are not reachable from here;
+the admin UI or the owner's account is the only route. No unanswered comments on
+any post — all ten recent posts show `comments=0`.
+
+**Site has no social links.** `facebook.com/BuildStackConstructionLLC` appears only
+in `templates/construction/marketing.html`; the public footer links no social
+profile at all. A footer follow link is the honest way to convert site traffic into
+followers — not yet added.
+
+**Not possible via API, needs the owner:** inviting friends to follow the Page,
+posting into local groups, Nextdoor (monthly), Craigslist (48-hour cadence), and the
+Yelp/Houzz/BBB claims. Bulk friend-inviting is also the fastest way to get a personal
+account restricted, so it should stay manual.
+
+---
+
 ## 2026-11-24 — Session 30: Remaining Permit Defaults Cleared
 
 Approved follow-up: clear the 47 older `permit_finder` rows that still carried
