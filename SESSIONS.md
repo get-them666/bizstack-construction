@@ -96,6 +96,30 @@ posting into local groups, Nextdoor (monthly), Craigslist (48-hour cadence), and
 Yelp/Houzz/BBB claims. Bulk friend-inviting is also the fastest way to get a personal
 account restricted, so it should stay manual.
 
+**Follow prompt published** in the same shape as the project posts, recorded as
+`follow-prompt-2026-11-24`:
+https://www.facebook.com/122132730213481930/posts/122132730645481930
+
+### Deploy: Facebook link added to the public footer
+
+`templates/construction/base.html` — the footer's first column now carries
+"Follow the build on Facebook" pointing at the Page. Before this the Page URL
+existed only in the admin marketing screen, so no visitor could find it.
+
+- New test `test_footer_social_links.py` pins the Page URL (not a share dialog),
+  `target="_blank"` + `rel="noopener"`, and the section 1 rule that the Broom
+  number never appears in the construction footer.
+- Quality gate: 1355 passed, 40 skipped; pyflakes 0 blocking; brand check clean.
+- Commit `9f2f147` (footer + test), `f04fa3e` (session log), pushed to origin/main.
+- Production fast-forwarded from `9028125` to `f04fa3e` with a clean tree, image
+  rebuilt and recreated.
+- **First smoke run reported 18 failures / HTTP 502** — the script ran while the
+  proxy was still pointing at the recreated container. Re-run immediately after:
+  **94 passed, 0 failed.** Nothing was rolled back; the 502 window was the restart,
+  not a code fault. Worth adding a short settle wait to the deploy runbook.
+- Verified live: the footer link renders on `/`, and `908-7121` appears nowhere on
+  the page. Production and local `HEAD` both `f04fa3e`, both trees clean.
+
 ---
 
 ## 2026-11-24 — Session 30: Remaining Permit Defaults Cleared
