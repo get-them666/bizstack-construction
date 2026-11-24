@@ -4,6 +4,78 @@
 
 ---
 
+## 2026-11-24 — Session 24: Payroll Orphan Cleanup, Stale Draft Archive, Deposit Contacts
+
+### 1. Production git state
+
+- Production was already at `origin/main` (`e5bc2ea`), clean and zero-diff.
+- Checkpoint tag `prod-synced-2026-11-24` remains at `ce99c2c`; rollback
+  tag/branch at `0626f80` remain available.
+- No code or file changes; no rebuild was needed.
+
+### 2. Empty orphan payroll runs — closed
+
+- Pre-check confirmed exactly 10 open runs, all 0 lines, 0 crew, $0.00 gross:
+  IDs 5, 6, 7, 9, 11, 12, 13, 14, 15, 16.
+- Closed them through the app's standard finalize route
+  (`POST /api/payroll/run/{id}/finalize`) so the normal status transition and
+  ledger no-op path were used. All returned 303.
+- After: **0 open** runs, 17 closed, 1 paid. `payroll_lines` remained 2 and
+  `ledger_entries` remained 22 — no financial records were created or changed.
+
+### 3. Stale permit drafts — archived
+
+- Pre-check found 39 active drafts. The 15 older than 14 days were **email
+  drafts**, not text drafts (the 24 recent drafts are the text ones). Important
+  correction to the earlier summary.
+- Archived all 15 stale permit drafts: appended
+  `[DRAFT ARCHIVED 2026-11-24: stale <channel> draft older than 14 days; no
+  message sent]` plus the draft text to `leads.notes`, then cleared
+  `draft_reply`.
+- Archived IDs: 205, 216, 219, 232, 440, 441, 499, 570, 617, 619, 1883, 1886,
+  1888, 1915, 2220.
+- After: **24 active drafts remain**, all `permit_finder` text drafts aged 7–8
+  days; 0 stale. `comms_logs` count unchanged at 3440 — no SMS or email was
+  sent or logged.
+
+### 4. Past-due deposit contacts / links
+
+**INV-2026-0007 — RP HOMES 4 LLC — $777.56 — due 2026-11-18 — 6 days overdue**
+
+- Bid `18350`, project `28` (project status `cancelled`).
+- Email: `contractors@turnkeyassetmgt.com`
+- Phone: `954-228-0518` (`tel:+19542280518`)
+- Portal payment page: https://construction.bizstackperks.com/portal/pay/18350/9
+  (requires portal sign-in; access currently exists under client 45,
+  `olearyshaun14@gmail.com` — not the customer’s email).
+- Admin bid page: https://construction.bizstackperks.com/bids/18350
+
+**INV-2026-0008 — Michael Church — $5,400.00 — due 2026-11-19 — 5 days overdue**
+
+- Bid `18046`, no project.
+- Email: `tchurch@alliedbuildingcorp.com`
+- Phone: **none on file** on the bid or matching lead; email only.
+- Portal payment page: https://construction.bizstackperks.com/portal/pay/18046/10
+  (requires portal sign-in; **no portal account exists yet** — create/send
+  credentials from the admin bid page before sending this link).
+- Admin bid page: https://construction.bizstackperks.com/bids/18046
+
+### 5. Verification
+
+- `scripts/quality_gate.sh`: **1328 passed, 40 skipped, 0 failed**; pyflakes
+  **0 blocking errors**; brand check clean.
+- `scripts/live_smoke.py`: **94 passed, 0 failed**.
+- No SMS or email was sent. No financial records, invoices, or payments were
+  altered.
+
+### 6. Final sync
+
+After this entry is pushed, production is fast-forwarded to the new
+`origin/main` (docs-only change), then `git status`/`git diff` are verified and
+the smoke check is rerun. Final production HEAD must equal `origin/main`.
+
+---
+
 ## 2026-11-24 — Session 23: Production Sync Check, Kit Bounce, Operational Backlog
 
 ### 1. Production git history
