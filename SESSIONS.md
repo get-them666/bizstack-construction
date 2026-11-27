@@ -59,12 +59,20 @@ found the workers running and the send path starved, not crashed.
 - `construction_main.py`: permit incremental window 2 → 7 days; watchdog call.
 - `call_list.py`: normalise crew phones to E.164 before `send_sms`.
 - `scripts/load_dnc_scrub.py` (new): loads an FTC/registry DNC download
-  (CSV/TXT/ZIP or stdin), intersects it with the 446 distinct numbers on open
-  leads, imports only the DNC matches through `outbound_campaign.import_dnc`,
-  and records the 31-day scrub date. A wholesale import would have suppressed
-  every clean lead and bloated `suppression_list`.
+  (CSV/TXT/ZIP or stdin), intersects it with the numbers on open leads that are
+  actually in the calling area, imports only the DNC matches through
+  `outbound_campaign.import_dnc`, and records the 31-day scrub date. A
+  wholesale import would have suppressed every clean lead and bloated
+  `suppression_list`.
+- `outbound_campaign.py` / `scheduled_calls.py`: cold permit calls are limited
+  to the local calling area (757/252; `OUTBOUND_CALL_AREA_CODES`). The enriched
+  owner mobiles span **136 area codes**, so an FTC download for all of them
+  would be the national file. Inbound leads are exempt — they contacted us and
+  chose the number. The candidate query filters too, so out-of-area rows cannot
+  starve the dialable batch.
 - Tests: `test_outbound_watchdog.py` (10), `test_permit_scan_window.py` (2), one
-  `test_call_list.py` case, `test_load_dnc_scrub.py` (6).
+  `test_call_list.py` case, `test_load_dnc_scrub.py` (6), four calling-area
+  cases in `test_outbound_campaign.py`.
 
 ### Gate, deploy, verify
 
@@ -82,9 +90,13 @@ found the workers running and the send path starved, not crashed.
 - DNC loader commit `a51b71f` rebuilt and deployed; `live_smoke` **94 passed, 0
   failed**. Production dry run of the loader reported **446 lead numbers** and
   parsed the fixture correctly.
-- Owner chose the FTC download route. Safari opened to
-  `https://telemarketing.donotcall.gov/`; the download for area codes 757 and
-  252 is the remaining manual step. The loader runs as
+- Calling-area guard commit `0467926` rebuilt and deployed; `live_smoke` **94
+  passed, 0 failed**. The loader dry run now reports **213 callable numbers**
+  (757/252) and ignores the out-of-area fixture number.
+- Owner chose the FTC download route, scoped to area codes **757 and 252** so
+  the file stays loadable and matches the guarded calling area. Safari is open
+  at `https://telemarketing.donotcall.gov/`; the registry download is the
+  remaining manual step. The loader runs as
   `python scripts/load_dnc_scrub.py <file>` inside the container.
 
 ### Still owner action (cannot be fixed from here)
@@ -94,10 +106,11 @@ found the workers running and the send path starved, not crashed.
 2. **SignalWire 10DLC** — brand/campaign pending since 2026-10-21; needs a
    SignalWire support ticket, with the Broom number in the samples corrected.
    SMS remains down, so this notification is email-only.
-3. **DNC scrub** — owner chose the FTC download. The loader is deployed
-   (`scripts/load_dnc_scrub.py`); the remaining step is the registry download
-   for area codes 757/252. Loading it records the 31-day scrub and unlocks cold
-   permit dialling; the 36 discarded callbacks can then be requeued.
+3. **DNC scrub** — owner chose the FTC download for area codes **757 and
+   252**. The loader is deployed (`scripts/load_dnc_scrub.py`); the remaining
+   step is the registry download. Loading it records the 31-day scrub and
+   unlocks cold permit dialling for the 213 local numbers; the 36 discarded
+   callbacks can then be requeued.
 4. **Meta ad account disabled** — appeal/reactivate account `2951098035230260`
    so the only paid lead source can deliver again.
 
