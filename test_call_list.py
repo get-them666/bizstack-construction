@@ -166,6 +166,14 @@ def test_the_text_carries_the_link_and_the_count():
     assert "/calllist/" in body and cl.call_token(7, DAY) in body
 
 
+def test_crew_phone_is_normalised_to_e164():
+    assert cl._e164("7575551234") == "+17575551234"
+    assert cl._e164("(757) 555-1234") == "+17575551234"
+    assert cl._e164("+1 757 555 1234") == "+17575551234"
+    assert cl._e164("") == ""
+    assert cl._e164("555-1234") == ""
+
+
 @pytest.mark.parametrize("state", sorted(cl.OUTCOMES))
 def test_every_advertised_outcome_is_writable(state):
     conn = _Conn()

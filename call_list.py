@@ -313,6 +313,21 @@ def sms_text(crew_name: str, crew_id: int, count: int, for_date=None) -> str:
             f"hottest first. Tap to call and log each one: {call_url(crew_id, day)}")
 
 
+def _e164(phone: str) -> str:
+    """SignalWire needs +1XXXXXXXXXX, not the 10 digits stored on a crew row.
+
+    Sending the raw column produced a daily ``422 To is invalid`` that also
+    overwrote the real SMS failure in transport_health, hiding
+    `inactive_campaign` behind a data-format error.
+    """
+    digits = re.sub(r"\D", "", str(phone or ""))
+    if len(digits) == 10:
+        return "+1" + digits
+    if len(digits) == 11 and digits.startswith("1"):
+        return "+" + digits
+    return ""
+
+
 # --- the daily plan -----------------------------------------------------------------
 
 def crew_ids_from_env() -> list:
@@ -362,7 +377,7 @@ def auto_plan(conn, company: str = "construction", limit: int = 20,
             res = assign(conn, cid, company, limit, day)
             entry = {"crew_id": cid, "name": crew.get("name"), "count": res["total"],
                      "url": call_url(cid, day), "texted": False}
-            phone = (crew.get("phone") or "").strip()
+            phone = _e164(crew.get("phone"))
             if sender and phone and res["total"]:
                 try:
                     entry["texted"] = bool(sender.send_sms(

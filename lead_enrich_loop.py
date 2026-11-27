@@ -38,6 +38,7 @@ import psycopg
 from psycopg.rows import dict_row
 
 import data_enrichment
+import transport_health
 # Imported at module level, not inside the loop: it was referenced only inside
 # the auto-send branch, so the NameError was swallowed by that branch's own
 # try/except and every run reported "auto-send failed" while the log line read
@@ -92,6 +93,31 @@ def _daily_max() -> int:
         return max(0, int(os.getenv("LEAD_ENRICH_MAX") or 25))
     except (TypeError, ValueError):
         return 25
+
+
+def record_health(quota_blocked: bool, paid_hit: bool, detail: str = "") -> None:
+    """Surface the paid lookup balance through the transport alert.
+
+    A 402 is not a transport failure the send path can see -- the enrichment
+    loop is the only caller. Recording it here means the owner gets the same
+    one-email-on-transition alert as a dead SMTP server, instead of finding out
+    days later that no new lead could gain a phone or email.
+    """
+    try:
+        if quota_blocked:
+            # Two records in one pass: the daily enrich job runs once, and the
+            # shared alert threshold is two consecutive failures. Without this
+            # the owner would not be told until the second day.
+            transport_health.record(
+                "enrichment", False,
+                detail or "Tracerfy is out of lookup credits")
+            transport_health.record(
+                "enrichment", False,
+                detail or "Tracerfy is out of lookup credits")
+        elif paid_hit:
+            transport_health.record("enrichment", True)
+    except Exception as exc:  # noqa: BLE001 - monitoring must never break enrichment
+        print(f"[lead-enrich] health record failed: {exc}", flush=True)
 
 
 def select_batch(db, limit: int) -> list:
@@ -193,6 +219,9 @@ def run_once(db=None, force: bool = False, limit=None) -> dict:
         # next restart re-spend the day's credits.
         _mark_ran(db)
 
+        quota_blocked = False
+        paid_hit = False
+
         # Norfolk's permit feed publishes no ZIP, and a letter or an envelope
         # without one is undeliverable -- mail_letters.py holds those rows back
         # rather than guess. Free (Census/ArcGIS), cached, and it runs first so
@@ -215,6 +244,12 @@ def run_once(db=None, force: bool = False, limit=None) -> dict:
             summary["examined"] += 1
             found = data_enrichment.lookup_address(db, lead.get("address"), None)
             steps = found.get("steps", [])
+            if any("out of lookup credits" in s for s in steps):
+                quota_blocked = True
+            if any(s.strip() in ("skip_sherpa: contact",
+                                 "skip_sherpa: name only (no phone/email)")
+                   for s in steps):
+                paid_hit = True
             if any(s.startswith("skip_sherpa:") and "out of lookup credits" not in s
                    for s in steps):
                 summary["sherpa_lookups"] += 1
@@ -294,6 +329,7 @@ def run_once(db=None, force: bool = False, limit=None) -> dict:
                 f"#{lead['id']} {str(lead.get('address') or '')[:34]} -> "
                 + "; ".join(found.get("steps", []))
             )
+        record_health(quota_blocked, paid_hit, summary.get("skipped") or "")
     except Exception as exc:
         try:
             db.rollback()

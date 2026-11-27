@@ -611,6 +611,11 @@ def _transport_health_loop() -> None:
                     cfg, to, subject, body.replace("\n", "<br>")))
 
             _probe_external_limits()
+            try:
+                import outbound_watchdog
+                outbound_watchdog.check_and_record()
+            except Exception as exc:  # noqa: BLE001 - a monitor must never kill the loop
+                print(f"[transport-health] outbound watchdog failed: {exc}", flush=True)
             transport_health.maybe_alert(_notify)
         except Exception as exc:  # noqa: BLE001 - a monitor must never kill the app
             print(f"[transport-health] loop error: {exc}", flush=True)
@@ -13525,9 +13530,14 @@ def run_permit_import():
         except (TypeError, ValueError):
             backfill = 21
         try:
-            incremental = int(os.getenv("PERMIT_INCREMENTAL_DAYS", "2") or 2)
+            # A 2-day window silently skipped every permit issued while a feed
+            # was down or a city office was closed (Thanksgiving 2026 left two
+            # days with no rows, and the next scan could never look back far
+            # enough to catch them). Dedupe makes the overlap free; the paid
+            # city's per-geo cap keeps Shovels spend unchanged.
+            incremental = int(os.getenv("PERMIT_INCREMENTAL_DAYS", "7") or 7)
         except (TypeError, ValueError):
-            incremental = 2
+            incremental = 7
         days = backfill if not _permit_backfilled else incremental
         permits = []
         for city in cities:
