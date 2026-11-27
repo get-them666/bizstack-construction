@@ -251,6 +251,43 @@ def _plausible(number: str) -> bool:
     return True
 
 
+# Cold permit calls are local work. The enriched owner mobile can be anywhere
+# (the permit list currently spans 136 area codes), and a Hampton Roads permit
+# is not a reason to cold-call a number in another state. The FTC registry is
+# downloaded per area code, so this also keeps the scrub file small enough to
+# load. INBOUND_SOURCES are exempt: those people contacted us and chose the
+# number. Set OUTBOUND_CALL_AREA_CODES=all to disable the guard.
+_DEFAULT_CALL_AREA_CODES = ("757", "252")
+
+
+def call_area_codes() -> set:
+    raw = (os.getenv("OUTBOUND_CALL_AREA_CODES") or "").strip()
+    if not raw:
+        return set(_DEFAULT_CALL_AREA_CODES)
+    if raw.lower() in ("all", "any", "*"):
+        return set()
+    codes = set()
+    for part in raw.split(","):
+        digits = re.sub(r"\D", "", part)
+        if len(digits) >= 3:
+            codes.add(digits[-3:])
+    return codes or set(_DEFAULT_CALL_AREA_CODES)
+
+
+def in_calling_area(number: str) -> bool:
+    codes = call_area_codes()
+    if not codes:
+        return True
+    digits = re.sub(r"\D", "", str(number or ""))
+    if len(digits) == 11 and digits.startswith("1"):
+        digits = digits[1:]
+    return len(digits) >= 10 and digits[:3] in codes
+
+
+def is_inbound_source(source: str) -> bool:
+    return (source or "").strip().lower() in _INBOUND_SOURCES
+
+
 def in_call_window(now=None) -> tuple:
     """(ok, reason). Weekday business hours in the leads' timezone."""
     try:
@@ -340,6 +377,18 @@ def candidates(db, limit: int = _DEFAULT_LIMIT, include_permits: bool = False,
     source_clause = ""
     if sources:
         source_clause = "AND lower(coalesce(l.source,'')) = ANY(%(sources)s)"
+    area_clause = ""
+    if include_permits and call_area_codes():
+        # Filter in the query, not only in run(): run() takes a bounded batch,
+        # and a page full of out-of-area owner mobiles would starve the local
+        # numbers that are actually dialable.
+        params["inbound_sources"] = list(_INBOUND_SOURCES)
+        params["area_prefixes"] = [code + "%" for code in sorted(call_area_codes())]
+        area_clause = (
+            "AND (lower(coalesce(l.source,'')) = ANY(%(inbound_sources)s) "
+            "OR right(regexp_replace(coalesce(l.phone,''), '\\D', '', 'g'), 10) "
+            "LIKE ANY(%(area_prefixes)s))"
+        )
     sql = f"""
         SELECT l.id, l.name, l.phone, l.email, l.source, l.status, l.project_type,
                l.address
@@ -360,6 +409,7 @@ def candidates(db, limit: int = _DEFAULT_LIMIT, include_permits: bool = False,
                   WHERE k.lead_id = l.id
                     AND k.claimed_at >= NOW() - (%(claim_ttl)s * INTERVAL '1 second'))
            {source_clause}
+           {area_clause}
          ORDER BY CASE
                     WHEN lower(coalesce(l.status,'new')) IN ('engaged','replied','contacted') THEN 0
                     WHEN lower(coalesce(l.status,'new')) = 'new' THEN 1
@@ -551,6 +601,13 @@ def run(db, limit=None, apply: bool = False, include_permits: bool = False,
                  "phone": to, "source": row.get("source") or ""}
         if not to or not _plausible(to):
             report["skipped"].append({**label, "reason": "no usable phone"})
+            continue
+        if not is_inbound_source(row.get("source")) and not in_calling_area(to):
+            report["skipped"].append({
+                **label,
+                "reason": "outside the calling area ("
+                          + ", ".join(sorted(call_area_codes())) + ")",
+            })
             continue
         # Never ring the business's own line. The old single-lead follow-up
         # checked this; the campaign did not, and the production dry run

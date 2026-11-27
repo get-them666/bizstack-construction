@@ -104,13 +104,14 @@ def run_due(conn) -> dict:
 
     import signalwire_service
     import suppression
+    import outbound_campaign
 
     signalwire = signalwire_service.SignalWireService()
 
     summary = {"due": len(rows), "dialed": 0, "skipped": []}
     for row in rows:
         with conn.cursor() as cur:
-            cur.execute("SELECT id, name, phone, status, opted_out_at FROM leads "
+            cur.execute("SELECT id, name, phone, status, opted_out_at, source FROM leads "
                         "WHERE id = %s AND company = 'construction';", (row["lead_id"],))
             lead = cur.fetchone()
 
@@ -133,6 +134,12 @@ def run_due(conn) -> dict:
             summary["skipped"].append(f"#{row['lead_id']}: no phone")
             continue
         to = ("+" + digits) if digits.startswith("1") else ("+1" + digits)
+
+        if not outbound_campaign.is_inbound_source(lead.get("source")) \
+                and not outbound_campaign.in_calling_area(to):
+            _finish(conn, row["id"], "skipped", "outside the calling area")
+            summary["skipped"].append(f"#{row['lead_id']}: outside the calling area")
+            continue
 
         with conn.cursor() as cur:
             cur.execute("SELECT 1 FROM bot_calls WHERE lead_id = %s LIMIT 1;", (row["lead_id"],))

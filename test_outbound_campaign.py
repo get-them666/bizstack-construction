@@ -64,3 +64,97 @@ def test_dry_run_never_dials(monkeypatch):
     assert result["ok"] is True
     assert result["dialed"] == []
     assert len(result["would_call"]) == 1
+
+
+def test_cold_calls_are_limited_to_the_local_area_codes(monkeypatch):
+    import outbound_campaign as oc
+
+    monkeypatch.delenv("OUTBOUND_CALL_AREA_CODES", raising=False)
+    assert oc.in_calling_area("+17572271234") is True
+    assert oc.in_calling_area("+12522271234") is True
+    assert oc.in_calling_area("+18042771234") is False
+    assert oc.in_calling_area("+16192771234") is False
+
+
+def test_area_codes_can_be_overridden(monkeypatch):
+    import outbound_campaign as oc
+
+    monkeypatch.setenv("OUTBOUND_CALL_AREA_CODES", "804")
+    assert oc.in_calling_area("+18042771234") is True
+    assert oc.in_calling_area("+17572271234") is False
+
+    monkeypatch.setenv("OUTBOUND_CALL_AREA_CODES", "all")
+    assert oc.in_calling_area("+16192771234") is True
+
+
+def test_out_of_area_permit_is_skipped_but_inbound_lead_is_kept(monkeypatch):
+    import outbound_campaign as oc
+
+    monkeypatch.delenv("OUTBOUND_CALL_AREA_CODES", raising=False)
+    monkeypatch.setattr(oc, "candidates", lambda *a, **k: [
+        {"id": 1, "name": "Permit 804", "phone": "804-277-1234",
+         "source": "permit_finder", "address": "Norfolk, VA 23510"},
+        {"id": 2, "name": "Inbound 804", "phone": "804-277-5678",
+         "source": "quotes_page", "address": "Norfolk, VA 23510"},
+        {"id": 3, "name": "Permit 757", "phone": "757-227-1234",
+         "source": "permit_finder", "address": "Norfolk, VA 23510"},
+    ])
+    monkeypatch.setattr(oc.suppression, "check_outbound", lambda *a, **k: (True, ""))
+
+    result = oc.run(None, limit=5, apply=False)
+
+    assert [row["lead_id"] for row in result["would_call"]] == [2, 3]
+    assert any(row["lead_id"] == 1 and "calling area" in row["reason"]
+               for row in result["skipped"])
+
+
+class _CaptureCursor:
+    def __init__(self):
+        self.sql = ""
+        self.params = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def execute(self, sql, params=None):
+        self.sql = sql
+        self.params = params
+
+    def fetchall(self):
+        return []
+
+
+class _CaptureConnection:
+    def __init__(self):
+        self.cur = _CaptureCursor()
+
+    def cursor(self):
+        return self.cur
+
+
+def test_candidate_query_filters_out_of_area_cold_numbers(monkeypatch):
+    import outbound_campaign as oc
+
+    monkeypatch.delenv("OUTBOUND_CALL_AREA_CODES", raising=False)
+    monkeypatch.setattr(oc, "_ensure_tables", lambda db: None)
+    db = _CaptureConnection()
+
+    oc.candidates(db, limit=10, include_permits=True)
+
+    assert set(db.cur.params["area_prefixes"]) == {"757%", "252%"}
+    assert "inbound_sources" in db.cur.params
+
+
+def test_inbound_only_candidate_query_has_no_area_filter(monkeypatch):
+    import outbound_campaign as oc
+
+    monkeypatch.delenv("OUTBOUND_CALL_AREA_CODES", raising=False)
+    monkeypatch.setattr(oc, "_ensure_tables", lambda db: None)
+    db = _CaptureConnection()
+
+    oc.candidates(db, limit=10, include_permits=False)
+
+    assert "area_prefixes" not in db.cur.params

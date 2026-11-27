@@ -138,7 +138,8 @@ def main(argv=None) -> int:
     import outbound_campaign
 
     with psycopg.connect(url, row_factory=dict_row) as db:
-        leads = lead_numbers(db)
+        leads = {number for number in lead_numbers(db)
+                 if outbound_campaign.in_calling_area("+1" + number)}
         matches = sorted(leads & scrub)
         if args.dry_run:
             print(json.dumps({
