@@ -58,8 +58,13 @@ found the workers running and the send path starved, not crashed.
   on the next paid hit.
 - `construction_main.py`: permit incremental window 2 → 7 days; watchdog call.
 - `call_list.py`: normalise crew phones to E.164 before `send_sms`.
+- `scripts/load_dnc_scrub.py` (new): loads an FTC/registry DNC download
+  (CSV/TXT/ZIP or stdin), intersects it with the 446 distinct numbers on open
+  leads, imports only the DNC matches through `outbound_campaign.import_dnc`,
+  and records the 31-day scrub date. A wholesale import would have suppressed
+  every clean lead and bloated `suppression_list`.
 - Tests: `test_outbound_watchdog.py` (10), `test_permit_scan_window.py` (2), one
-  `test_call_list.py` case.
+  `test_call_list.py` case, `test_load_dnc_scrub.py` (6).
 
 ### Gate, deploy, verify
 
@@ -74,6 +79,13 @@ found the workers running and the send path starved, not crashed.
   `enrichment` will alert on the next 00:11 ET pass.
 - `permit-scan` boot backfill added 0 (all rows already held); the 7-day window
   prevents the next gap from being skipped.
+- DNC loader commit `a51b71f` rebuilt and deployed; `live_smoke` **94 passed, 0
+  failed**. Production dry run of the loader reported **446 lead numbers** and
+  parsed the fixture correctly.
+- Owner chose the FTC download route. Safari opened to
+  `https://telemarketing.donotcall.gov/`; the download for area codes 757 and
+  252 is the remaining manual step. The loader runs as
+  `python scripts/load_dnc_scrub.py <file>` inside the container.
 
 ### Still owner action (cannot be fixed from here)
 
@@ -82,9 +94,10 @@ found the workers running and the send path starved, not crashed.
 2. **SignalWire 10DLC** — brand/campaign pending since 2026-10-21; needs a
    SignalWire support ticket, with the Broom number in the samples corrected.
    SMS remains down, so this notification is email-only.
-3. **DNC scrub** — `outbound_dnc_scrub` is empty. Buy/download a national/state
-   scrub and load it with `outbound_campaign.py --import-dnc <file>`; then the 36
-   discarded callbacks can be requeued and permit dialling unlocks for 31 days.
+3. **DNC scrub** — owner chose the FTC download. The loader is deployed
+   (`scripts/load_dnc_scrub.py`); the remaining step is the registry download
+   for area codes 757/252. Loading it records the 31-day scrub and unlocks cold
+   permit dialling; the 36 discarded callbacks can then be requeued.
 4. **Meta ad account disabled** — appeal/reactivate account `2951098035230260`
    so the only paid lead source can deliver again.
 
