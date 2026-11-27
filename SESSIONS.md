@@ -4,6 +4,95 @@
 
 ---
 
+## 2026-11-26 — Session 32: Outbound Silence — Diagnosed, Watched, Partly Fixed
+
+Owner reported no outbound calls or emails since 2026-11-23. A read-only audit
+of production (database, container logs, SignalWire registry, Tracerfy balance)
+found the workers running and the send path starved, not crashed.
+
+### What was actually happening
+
+- **Calls:** last dial 2026-11-23 08:23 ET. The 09:00 ET campaign ran every day
+  (24th, 25th, 26th) and dialled 0 of 4 considered: all four are owner/internal
+  numbers or have no phone. Permit leads are address-only, and cold permit
+  dialling is gated on `outbound_dnc_scrub`, which has **0 rows**.
+- **Discarded callbacks:** 36 `scheduled_calls` queued for 2026-11-23 08:00 were
+  skipped with `status scheduled` because the lead status was still the legacy
+  value when the queue ran, then migrated to `contacted` hours later. All 36
+  have phones and 20 have emails. Left skipped deliberately: requeueing them
+  would cold-call permit numbers without a DNC scrub.
+- **Emails:** last automated batch 2026-11-22 (68 bid inquiries + 5 vendor
+  applications); the 7 on 2026-11-24 were the manual Session 31 vendor batch.
+  **Tracerfy balance is 0** (`/analytics/` endpoint), so the enrichment loop has
+  been unable to add a phone or email since the newest enriched permit lead
+  (2026-11-17). All 196 permit leads imported 2026-11-18..24 carry only
+  `con-permit-…@lead.local`; there has been no website quote lead since
+  2026-11-02; the inbound-only follow-up sweep has nobody inside its 14-day
+  window; the 24 staged permit drafts are manual-only.
+- **SMS:** still dead. SignalWire 10DLC brand `460486de-…` and campaign
+  `a76073da-…` have been **pending since 2026-10-21**; every send is rejected
+  `inactive_campaign` (289 consecutive failures). The campaign samples also cite
+  the Broom number (757) 908-7121 on a construction campaign — correct this in
+  the support request.
+- **Permit scan:** the 2-day incremental window would permanently skip permits
+  issued during a feed gap or holiday. Nov 21–26 had no new rows, so the scans
+  added 0; the boot backfill already held those rows, which is why the 21-day
+  pass also added 0.
+- **Crew SMS:** the daily call-list text sent a 10-digit crew phone instead of
+  E.164, producing a daily `422 To is invalid` that masked the real
+  `inactive_campaign` error in `transport_health`.
+- **Ad account disabled:** Meta emailed `hello@` at 2026-11-26 22:31 UTC that
+  ad account `2951098035230260` is disabled and its ads are paused. The ad
+  produced 6 site clicks on Nov 24 and none after; this needs a Meta appeal or
+  billing fix before it can feed new leads again.
+
+### Changes (minimal)
+
+- `outbound_watchdog.py` (new): records an `outbound` channel in
+  `transport_health` when the latest outbound email **or** call is older than
+  `OUTBOUND_SILENCE_HOURS` (default 48); the detail names the campaign zero-dial
+  streak. Wired into the existing 10-minute transport loop, so the owner gets the
+  same one-email-on-transition alert as a dead SMTP server.
+- `lead_enrich_loop.py`: records `enrichment` down when Tracerfy returns 402
+  (twice in the same pass so the two-failure alert is not delayed a day), and up
+  on the next paid hit.
+- `construction_main.py`: permit incremental window 2 → 7 days; watchdog call.
+- `call_list.py`: normalise crew phones to E.164 before `send_sms`.
+- Tests: `test_outbound_watchdog.py` (10), `test_permit_scan_window.py` (2), one
+  `test_call_list.py` case.
+
+### Gate, deploy, verify
+
+- `scripts/quality_gate.sh`: **1373 passed, 40 skipped, 0 failed**; pyflakes 0
+  blocking; brand check clean.
+- Commit `5eb10c8`, pushed to `origin/main`; production fast-forwarded from
+  `5e014fe` to `5eb10c8`, rebuilt and recreated.
+- `/health` 200; `scripts/live_smoke.py`: **94 passed, 0 failed**.
+- `transport_health.outbound` is recorded; the second loop tick sent the alert.
+  Verified delivered in the `hello@` inbox: subject
+  `[BuildStack] outbound transport is DOWN`, 2026-11-27 02:44:22 UTC.
+  `enrichment` will alert on the next 00:11 ET pass.
+- `permit-scan` boot backfill added 0 (all rows already held); the 7-day window
+  prevents the next gap from being skipped.
+
+### Still owner action (cannot be fixed from here)
+
+1. **Tracerfy credits — balance 0.** Top up; then enrichment, drafts and emails
+   resume. No credits were purchased in this session.
+2. **SignalWire 10DLC** — brand/campaign pending since 2026-10-21; needs a
+   SignalWire support ticket, with the Broom number in the samples corrected.
+   SMS remains down, so this notification is email-only.
+3. **DNC scrub** — `outbound_dnc_scrub` is empty. Buy/download a national/state
+   scrub and load it with `outbound_campaign.py --import-dnc <file>`; then the 36
+   discarded callbacks can be requeued and permit dialling unlocks for 31 days.
+4. **Meta ad account disabled** — appeal/reactivate account `2951098035230260`
+   so the only paid lead source can deliver again.
+
+No email, SMS, or outbound call was sent by this session other than the
+transport alert above.
+
+---
+
 ## 2026-11-24 — Session 31: Property-Manager Vendor Outreach, Round 2 (7 sent)
 
 Owner drafted ten vendor-partner introductions and gave explicit approval to send.
