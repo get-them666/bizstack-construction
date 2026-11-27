@@ -4,6 +4,35 @@
 
 ---
 
+## 2026-11-27 — Session 33: FTC DNC Account Has No Active Subscription
+
+The owner completed the FTC login attempt, but no scrub file was produced. The
+portal state is the blocker, not the download step:
+
+- The session was logged in as **Downloader**. The profile link title reads
+  "Only the Authorized Representative has permission to access this area of the
+  Web site. Please log in using the Representative password."
+- `Download Full List` reports **"Your organization does not have a current
+  subscription to area codes."**
+- The "Subscribe to area codes or add area codes to your current subscription"
+  link is disabled for the Downloader role. Only the Authorized Representative
+  can certify or subscribe.
+- The standard `login/login.aspx` link 302s to a broken B2C logout
+  (`AADB2C90272: id_token_hint parameter has not been specified`).
+  `LoginHome.aspx` starts the working authorize flow; Chrome is open on it.
+- No new file in Downloads, Desktop, Documents, iCloud, or `/Volumes`; Safari's
+  download history still holds only the leads CSV.
+
+**Next:** log in as the Authorized Representative, complete Read and Certify,
+then Manage/Renew Subscriptions → area codes **757 and 252** (five or fewer area
+codes are free; a first subscription is reviewed by the FTC in up to one
+business day). Once the subscription is active, download the Full List and load
+it with `scripts/load_dnc_scrub.py`.
+
+No code changed, no scrub was loaded, and no outbound message or call was sent.
+
+---
+
 ## 2026-11-26 — Session 32: Outbound Silence — Diagnosed, Watched, Partly Fixed
 
 Owner reported no outbound calls or emails since 2026-11-23. A read-only audit
